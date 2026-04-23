@@ -11,13 +11,32 @@ import {
   Settings,
   Zap,
   ChevronRight,
+  Inbox,
+  CheckSquare,
+  FolderOpen,
+  Plug,
 } from "lucide-react";
+import type { WorkspaceMode } from "@/lib/types";
 
-const navItems = [
+interface NavItem {
+  href: string;
+  label: string;
+  icon: React.ElementType;
+  /** If set, only show when mode is in this list */
+  modes?: WorkspaceMode[];
+  /** If set, hide when mode is in this list */
+  hideModes?: WorkspaceMode[];
+}
+
+const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/contacts", label: "Contacts", icon: Users },
-  { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
+  { href: "/pipeline", label: "Pipeline", icon: KanbanSquare, hideModes: ["pm"] },
   { href: "/agents", label: "Agents", icon: Bot },
+  { href: "/inbox", label: "Inbox", icon: Inbox },
+  { href: "/tasks", label: "Tasks", icon: CheckSquare, hideModes: ["sales"] },
+  { href: "/projects", label: "Projects", icon: FolderOpen, hideModes: ["sales"] },
+  { href: "/connectors", label: "Connectors", icon: Plug },
 ];
 
 const agentStatuses = [
@@ -34,8 +53,18 @@ const statusDot = {
   error: "bg-rose-400",
 };
 
-export default function Sidebar() {
+interface SidebarProps {
+  mode?: WorkspaceMode;
+}
+
+export default function Sidebar({ mode = "sales" }: SidebarProps) {
   const pathname = usePathname();
+
+  const visibleItems = navItems.filter((item) => {
+    if (item.hideModes && item.hideModes.includes(mode)) return false;
+    if (item.modes && !item.modes.includes(mode)) return false;
+    return true;
+  });
 
   return (
     <aside className="fixed left-0 top-0 h-full w-60 border-r border-zinc-800 bg-zinc-950 flex flex-col z-30">
@@ -51,8 +80,8 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-0.5" aria-label="Main navigation">
-        {navItems.map(({ href, label, icon: Icon }) => {
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto" aria-label="Main navigation">
+        {visibleItems.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || pathname.startsWith(href + "/");
           return (
             <Link
