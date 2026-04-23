@@ -1,75 +1,69 @@
 # CRM-agentic Build Progress
 
 ## Completed
-- [2026-04-23] Phase 1: Monorepo restructure (Task 1a)
-- [2026-04-23] Phase 1: Unified 11-table Supabase schema (Task 1b)
-- [2026-04-23] Phase 1: Supabase client + types update (Task 1c)
-- [2026-04-23] Phase 1: Auth pages — login, onboarding, auth guard (Task 1d)
-- [2026-04-23] Phase 1: Hooks wired to real Supabase, Realtime enabled (Task 1e)
-- [2026-04-23] Phase 1: Sidebar extended with PM routes (Task 1f)
-- [2026-04-23] Phase 1: Seed script updated for multi-tenant schema (Task 1g)
-- [2026-04-22] Phase 2: FastAPI scaffold — main.py, config.py, database.py, Dockerfile, requirements.txt (Task 2a)
-- [2026-04-22] Phase 2: SQLAlchemy ORM models for all 11 tables (Task 2b)
-- [2026-04-22] Phase 2: Auth service (Supabase JWT verify), dependencies (get_current_user, get_workspace_id) (Task 2c)
-- [2026-04-22] Phase 2: Crypto service — Fernet encrypt/decrypt with SHA-256 derived key (Task 2d)
-- [2026-04-22] Phase 2: Core routers — auth, workspaces, contacts, deals, agents, messages, tasks (Task 2e)
-- [2026-04-22] Phase 2: Gmail OAuth flow — /auth URL, /callback, /sync, DELETE connector (Task 2f)
-- [2026-04-22] Phase 2: Celery workers — celery_app.py, ingest task with dedup + Claude extraction (Task 2g)
-- [2026-04-22] Phase 2: Claude extraction service — claude-haiku-4-5, returns JSON task list (Task 2h)
-- [2026-04-22] Phase 2: docker-compose.yml updated — api builds from apps/api/, worker service added (Task 2i)
+- [2026-04-23] Phase 1: Full monorepo + auth + Supabase schema + hooks (Tasks 1a-1h)
+- [2026-04-23] Phase 2: FastAPI service + Gmail OAuth + Celery + Claude extraction (Tasks 2a-2i)
+- [2026-04-23] Phase 3: PM UI pages — /connectors, /inbox, /tasks, /projects + dashboard KPIs (Tasks 3a-3g)
+- [2026-04-23] Phase 4: Sales intelligence — email composer, lead scorer, pipeline optimizer, sentiment analyzer, Celery Beat (Tasks 4a-4g)
 
 ## Current Phase
-Phase 3 — Frontend wiring to FastAPI + UI polish
+Phase 5 — Slack connector + advanced ML models (future)
 
-## Next Task
-Task 3a: Update Next.js api-client.ts to call FastAPI endpoints (replace Supabase direct calls for Gmail/agents/tasks flows)
-Task 3b: Add Connectors page (Gmail OAuth button → /connectors?connected=gmail landing)
-Task 3c: Tasks page — list + create + status toggle, wired to FastAPI /workspaces/{id}/tasks
+## Next Tasks
+- 5a: Slack OAuth flow (mirror Gmail pattern)
+- 5b: pgvector or Qdrant for semantic contact embeddings
+- 5c: Call Summarizer (Whisper + Claude Sonnet)
+- 5d: XGBoost lead scorer trained on real data (requires 100+ contacts with outcomes)
 
-## Blockers
-- Supabase project not yet created — env vars (NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY) need to be filled in .env before the app can connect to a real database
-- Google Cloud OAuth credentials needed for Gmail connector — GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET in .env
-- ANTHROPIC_API_KEY needed for Claude extraction (claude-haiku-4-5)
+## Blockers (must be resolved before first run)
+- Supabase project: create at supabase.com, fill NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY + SUPABASE_SERVICE_ROLE_KEY + SUPABASE_JWT_SECRET
+- Google Cloud: create OAuth 2.0 client, fill GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET, add redirect URI http://localhost:8000/auth/gmail/callback
+- ANTHROPIC_API_KEY: needed for email composer + extraction + sentiment
+- SECRET_KEY: any 32+ char random string for Fernet encryption
 
-## Phase 2 Architecture Summary
+## Phase 3 Architecture Summary
 
-### apps/api/ structure (35 files)
+### New pages added
 ```
-apps/api/
-├── Dockerfile                    FROM python:3.12-slim, uvicorn on port 8000
-├── requirements.txt              fastapi, uvicorn, sqlalchemy[asyncio], asyncpg,
-│                                 python-jose, cryptography, celery[redis], httpx,
-│                                 anthropic, pydantic-settings
-├── .env.example                  all required env vars documented
-└── app/
-    ├── main.py                   FastAPI app, CORS, lifespan, all routers mounted
-    ├── config.py                 Pydantic BaseSettings reading from .env
-    ├── database.py               async SQLAlchemy engine + AsyncSession factory
-    ├── dependencies.py           get_current_user, get_workspace_id Depends()
-    ├── models/                   11 SQLAlchemy ORM models (1 per table)
-    │   ├── workspace.py, user.py, contact.py, deal.py, agent.py
-    │   ├── activity_event.py, connector.py, message.py, task.py
-    │   ├── metric_template.py, clarity_score.py
-    ├── routers/                  8 routers
-    │   ├── auth.py               POST /auth/verify (auto-provisions users row)
-    │   ├── workspaces.py         GET/POST /workspaces
-    │   ├── contacts.py           GET contacts + POST score stub
-    │   ├── deals.py              GET deals
-    │   ├── agents.py             GET agents + POST /{id}/run stub
-    │   ├── messages.py           GET messages
-    │   ├── tasks.py              GET/POST/PUT tasks
-    │   └── gmail.py              OAuth URL, callback, sync trigger, delete
-    ├── services/
-    │   ├── auth.py               verify_supabase_jwt, extract_supabase_uid
-    │   ├── crypto.py             Fernet encrypt/decrypt (SHA-256 of SECRET_KEY)
-    │   ├── gmail_client.py       GmailClient (httpx, 401→refresh flow)
-    │   └── extraction.py         extract_tasks() → claude-haiku-4-5 → JSON tasks
-    └── workers/
-        ├── celery_app.py         Celery instance with Redis broker
-        └── ingest.py             process_gmail_sync task: fetch→dedup→store→extract
+apps/web/src/app/(app)/
+├── connectors/page.tsx     Gmail OAuth connect/sync/disconnect cards
+├── inbox/page.tsx          Message list + slide-out detail drawer
+├── tasks/page.tsx          Kanban board (dnd-kit) — Open/In Progress/Done
+└── projects/page.tsx       Client-side grouping of tasks by contact_id
 ```
 
-### docker-compose.yml changes
-- api service: now builds from `./apps/api` with all env vars wired through
-- worker service: added (same image, celery worker entrypoint)
-- redis: unchanged
+### Modified pages
+- `dashboard/page.tsx` — PM KPI cards (Tasks Extracted, Avg Clarity, Open Tasks, Messages Ingested) gated on workspace mode 'pm'|'both'
+- `contacts/page.tsx` — Messages tab in drawer + AI Email Composer modal (calls POST /compose)
+
+### api-client.ts additions
+- getConnectors, getGmailAuthUrl, triggerGmailSync, deleteConnector
+- createTask, updateTask
+- composeEmail
+
+## Phase 4 Architecture Summary
+
+### New FastAPI endpoints
+- `POST /workspaces/{id}/contacts/{contact_id}/compose` — Claude Sonnet email draft
+- `POST /workspaces/{id}/contacts/{contact_id}/score` — enqueues score_lead Celery task
+
+### New Celery workers
+```
+apps/api/app/workers/
+├── score_contact.py    Heuristic lead scorer — base 50, status/revenue/deal adjustments
+└── pipeline.py         Heuristic pipeline optimizer — stage bonus + staleness penalty
+```
+
+### New services
+```
+apps/api/app/services/
+└── sentiment.py        Claude Haiku sentiment analysis — wired into ingest.py
+```
+
+### Celery Beat
+- `celery_app.py` — beat_schedule: nightly-pipeline-optimize at 2am UTC
+- `docker-compose.yml` — `beat` service added (same image as worker)
+
+### Agents page
+- Start button calls `apiClient.triggerAgent()` — shows job_id toast
+- Polls `GET /agents` every 5s while any agent is status=processing
