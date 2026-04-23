@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
@@ -8,11 +8,32 @@ import Avatar from "@/components/ui/Avatar";
 import Button from "@/components/ui/Button";
 import { mockContacts } from "@/lib/mock-data";
 import { cn, formatCurrency, leadScoreConfig } from "@/lib/utils";
+import { apiClient } from "@/lib/api-client";
+import { createBrowserClient } from "@/lib/supabase";
 import {
   Search, SlidersHorizontal, Brain, Sparkles, TrendingUp,
-  TrendingDown, Minus, ChevronRight, Filter, UserPlus,
+  TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
+
+interface IngestedMessage {
+  id: string;
+  subject: string | null;
+  received_at: string | null;
+  clarity_score?: { score: number } | null;
+  contact_id: string | null;
+}
+
+function formatRelative(dateStr: string | null): string {
+  if (!dateStr) return "";
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
 
 const statusConfig: Record<ContactStatus, { label: string; variant: "indigo" | "emerald" | "amber" | "rose" | "zinc" }> = {
   lead: { label: "Lead", variant: "zinc" },
@@ -132,25 +153,72 @@ function ContactRow({ contact, onClick }: { contact: Contact; onClick: () => voi
   );
 }
 
-function ContactDrawer({ contact, onClose }: { contact: Contact; onClose: () => void }) {
+type DrawerTab = "overview" | "messages";
+
+function ContactDrawer({ contact, onClose, workspaceId, token }: {
+  contact: Contact;
+  onClose: () => void;
+  workspaceId: string | null;
+  token: string | null;
+}) {
   const leadCfg = leadScoreConfig[contact.mlScore.label];
+  const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
+  const [messages, setMessages] = useState<IngestedMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+
+  // Fetch messages when the Messages tab is opened
+  useEffect(() => {
+    if (activeTab !== "messages" || !workspaceId || !token) return;
+    setMessagesLoading(true);
+    apiClient
+      .getMessages(workspaceId, token)
+      .then((data: IngestedMessage[]) => {
+        const linked = Array.isArray(data)
+          ? data.filter((m) => m.contact_id === contact.id)
+          : [];
+        setMessages(linked);
+      })
+      .catch(() => setMessages([]))
+      .finally(() => setMessagesLoading(false));
+  }, [activeTab, workspaceId, token, contact.id]);
+
   return (
     <aside
       className="fixed right-0 top-0 h-full w-96 border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto animate-slide-up"
       aria-label={`Contact details for ${contact.name}`}
     >
-      <div className="sticky top-0 flex items-center justify-between border-b border-zinc-800 bg-zinc-950/90 backdrop-blur px-5 py-4">
-        <p className="text-sm font-semibold text-zinc-100">Contact Details</p>
-        <button
-          onClick={onClose}
-          className="text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors"
-          aria-label="Close contact details"
-        >
-          ✕
-        </button>
+      <div className="sticky top-0 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur z-10">
+        <div className="flex items-center justify-between px-5 py-4">
+          <p className="text-sm font-semibold text-zinc-100">Contact Details</p>
+          <button
+            onClick={onClose}
+            className="text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors"
+            aria-label="Close contact details"
+          >
+            ✕
+          </button>
+        </div>
+        {/* Tabs */}
+        <div className="flex border-t border-zinc-800">
+          {(["overview", "messages"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                "flex-1 py-2.5 text-xs font-medium transition-colors cursor-pointer",
+                activeTab === tab
+                  ? "border-b-2 border-indigo-500 text-indigo-400"
+                  : "text-zinc-500 hover:text-zinc-300"
+              )}
+            >
+              {tab === "overview" ? "Overview" : "Messages"}
+            </button>
+          ))}
+        </div>
       </div>
+
       <div className="p-5 space-y-6">
-        {/* Identity */}
+        {/* Identity — always shown */}
         <div className="flex items-center gap-4">
           <Avatar initials={contact.avatar} size="lg" />
           <div>
@@ -160,81 +228,140 @@ function ContactDrawer({ contact, onClose }: { contact: Contact; onClose: () => 
           </div>
         </div>
 
-        {/* ML Score Panel */}
-        <Card className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Brain className="h-4 w-4 text-indigo-400" aria-hidden="true" />
-            <p className="text-xs font-semibold text-zinc-300">ML Score Analysis</p>
-          </div>
-          <div className="flex items-center justify-between">
+        {activeTab === "overview" && (
+          <>
+            {/* ML Score Panel */}
+            <Card className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Brain className="h-4 w-4 text-indigo-400" aria-hidden="true" />
+                <p className="text-xs font-semibold text-zinc-300">ML Score Analysis</p>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className={cn("text-2xl font-bold font-mono", leadCfg.text)}>
+                    {contact.mlScore.value}
+                  </span>
+                  <div className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs", leadCfg.bg, leadCfg.text)}>
+                    <span className={cn("h-1.5 w-1.5 rounded-full", leadCfg.dot)} />
+                    {leadCfg.label}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 text-xs text-zinc-500">
+                  {trendIcon[contact.mlScore.trend]}
+                  {contact.mlScore.trend === "up"
+                    ? "Rising"
+                    : contact.mlScore.trend === "down"
+                    ? "Falling"
+                    : "Stable"}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest">Signals</p>
+                {contact.mlScore.signals.map((sig) => (
+                  <div key={sig} className="flex items-center gap-2 text-xs text-zinc-300">
+                    <span className="h-1 w-1 rounded-full bg-indigo-400 flex-shrink-0" />
+                    {sig}
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            {/* Semantic Tags */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" aria-hidden="true" />
+                <p className="text-xs font-semibold text-zinc-300">Semantic Classification</p>
+              </div>
+              {contact.semanticTags.map((tag) => (
+                <div key={tag.label} className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+                  <Badge variant={tag.color} size="sm">{tag.label}</Badge>
+                  <div className="text-right">
+                    <p className="text-xs font-mono text-zinc-300">{(tag.confidence * 100).toFixed(0)}%</p>
+                    <p className="text-[10px] text-zinc-600">confidence</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Stats */}
+            <div className="grid grid-cols-2 gap-3">
+              <Card className="text-center">
+                <p className="text-xl font-bold font-mono text-zinc-100">
+                  {contact.revenue > 0 ? formatCurrency(contact.revenue) : "—"}
+                </p>
+                <p className="text-xs text-zinc-500 mt-1">Total Revenue</p>
+              </Card>
+              <Card className="text-center">
+                <p className="text-xl font-bold font-mono text-zinc-100">{contact.deals}</p>
+                <p className="text-xs text-zinc-500 mt-1">Active Deals</p>
+              </Card>
+            </div>
+
+            {/* Actions */}
+            <div className="flex flex-col gap-2">
+              <Button variant="primary" className="w-full justify-center">Compose AI Email</Button>
+              <Button variant="secondary" className="w-full justify-center">View Timeline</Button>
+              <Button variant="ghost" className="w-full justify-center text-rose-400 hover:text-rose-300 hover:bg-rose-500/10">
+                Flag At-Risk
+              </Button>
+            </div>
+          </>
+        )}
+
+        {activeTab === "messages" && (
+          <div className="space-y-3">
             <div className="flex items-center gap-2">
-              <span className={cn("text-2xl font-bold font-mono", leadCfg.text)}>
-                {contact.mlScore.value}
-              </span>
-              <div className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs", leadCfg.bg, leadCfg.text)}>
-                <span className={cn("h-1.5 w-1.5 rounded-full", leadCfg.dot)} />
-                {leadCfg.label}
-              </div>
+              <Mail className="h-4 w-4 text-indigo-400" aria-hidden="true" />
+              <p className="text-xs font-semibold text-zinc-300">Messages from this contact</p>
             </div>
-            <div className="flex items-center gap-1 text-xs text-zinc-500">
-              {trendIcon[contact.mlScore.trend]}
-              {contact.mlScore.trend === "up"
-                ? "Rising"
-                : contact.mlScore.trend === "down"
-                ? "Falling"
-                : "Stable"}
-            </div>
-          </div>
-          <div className="space-y-1">
-            <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest">Signals</p>
-            {contact.mlScore.signals.map((sig) => (
-              <div key={sig} className="flex items-center gap-2 text-xs text-zinc-300">
-                <span className="h-1 w-1 rounded-full bg-indigo-400 flex-shrink-0" />
-                {sig}
+
+            {messagesLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-16 rounded-xl border border-zinc-800 bg-zinc-900 animate-pulse" />
+                ))}
               </div>
-            ))}
-          </div>
-        </Card>
-
-        {/* Semantic Tags */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-indigo-400" aria-hidden="true" />
-            <p className="text-xs font-semibold text-zinc-300">Semantic Classification</p>
-          </div>
-          {contact.semanticTags.map((tag) => (
-            <div key={tag.label} className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
-              <Badge variant={tag.color} size="sm">{tag.label}</Badge>
-              <div className="text-right">
-                <p className="text-xs font-mono text-zinc-300">{(tag.confidence * 100).toFixed(0)}%</p>
-                <p className="text-[10px] text-zinc-600">confidence</p>
+            ) : messages.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 py-10 text-center">
+                <Mail className="h-8 w-8 text-zinc-700" />
+                <p className="text-xs text-zinc-500">No messages from this contact yet.</p>
               </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-2 gap-3">
-          <Card className="text-center">
-            <p className="text-xl font-bold font-mono text-zinc-100">
-              {contact.revenue > 0 ? formatCurrency(contact.revenue) : "—"}
-            </p>
-            <p className="text-xs text-zinc-500 mt-1">Total Revenue</p>
-          </Card>
-          <Card className="text-center">
-            <p className="text-xl font-bold font-mono text-zinc-100">{contact.deals}</p>
-            <p className="text-xs text-zinc-500 mt-1">Active Deals</p>
-          </Card>
-        </div>
-
-        {/* Actions */}
-        <div className="flex flex-col gap-2">
-          <Button variant="primary" className="w-full justify-center">Compose AI Email</Button>
-          <Button variant="secondary" className="w-full justify-center">View Timeline</Button>
-          <Button variant="ghost" className="w-full justify-center text-rose-400 hover:text-rose-300 hover:bg-rose-500/10">
-            Flag At-Risk
-          </Button>
-        </div>
+            ) : (
+              <div className="space-y-2">
+                {messages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className="rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 space-y-1"
+                  >
+                    <p className="text-xs font-medium text-zinc-200 truncate">
+                      {msg.subject ?? "(No subject)"}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-zinc-500 font-mono">
+                        {formatRelative(msg.received_at)}
+                      </span>
+                      {msg.clarity_score && (
+                        <Badge
+                          variant={
+                            msg.clarity_score.score >= 70
+                              ? "emerald"
+                              : msg.clarity_score.score >= 40
+                              ? "amber"
+                              : "rose"
+                          }
+                          size="sm"
+                        >
+                          <Brain className="h-2.5 w-2.5 mr-1" />
+                          {msg.clarity_score.score}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -245,6 +372,18 @@ export default function ContactsPage() {
   const [filterStatus, setFilterStatus] = useState<ContactStatus | "all">("all");
   const [filterScore, setFilterScore] = useState<LeadScore | "all">("all");
   const [selected, setSelected] = useState<Contact | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        setToken(session.access_token);
+        setWorkspaceId(session.user.user_metadata?.workspace_id ?? null);
+      }
+    });
+  }, []);
 
   const filtered = useMemo(() => {
     return mockContacts.filter((c) => {
@@ -412,7 +551,7 @@ export default function ContactsPage() {
             onClick={() => setSelected(null)}
             aria-hidden="true"
           />
-          <ContactDrawer contact={selected} onClose={() => setSelected(null)} />
+          <ContactDrawer contact={selected} onClose={() => setSelected(null)} workspaceId={workspaceId} token={token} />
         </>
       )}
     </div>
