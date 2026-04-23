@@ -5,6 +5,7 @@ import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import { mockKPIs, mockActivity, revenueChartData, agentAccuracyData, mockAgents } from "@/lib/mock-data";
+import { demoDashboard } from "@/lib/demo-data";
 import { formatCurrency } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
@@ -141,12 +142,25 @@ function PMKpiCard({
   );
 }
 
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+
 export default function DashboardPage() {
   const [activeAgents] = useState(mockAgents.filter((a) => a.status !== "idle"));
   const [pmKpis, setPmKpis] = useState<PMKpis | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<"sales" | "pm" | "both">("sales");
 
   useEffect(() => {
+    if (DEMO_MODE) {
+      setWorkspaceMode("both");
+      setPmKpis({
+        tasksExtractedToday: demoDashboard.tasksExtractedToday,
+        avgClarityScore: demoDashboard.avgClarityScore,
+        openTasks: demoDashboard.openTasks,
+        messagesIngested: demoDashboard.messagesIngested,
+      });
+      return;
+    }
+
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) return;

@@ -496,6 +496,11 @@ export default function ContactsPage() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') {
+      setToken('demo-token');
+      setWorkspaceId('demo-workspace-1');
+      return;
+    }
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {

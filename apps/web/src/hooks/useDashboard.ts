@@ -5,6 +5,8 @@ import { createBrowserClient } from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import type { KPI } from "@/lib/types";
 import type { ContactRow, DealRow, AgentRow, ActivityEventRow } from "@/lib/supabase";
+import { isDemoMode } from "@/lib/demo-mode";
+import { demoKPIs, demoDashboard } from "@/lib/demo-data";
 
 interface DashboardData {
   totalRevenue: number;
@@ -60,12 +62,20 @@ function dataToKPIs(d: DashboardData): KPI[] {
 }
 
 export function useDashboard() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [kpis, setKpis] = useState<KPI[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<DashboardData | null>(
+    isDemoMode ? (demoDashboard as unknown as DashboardData) : null
+  );
+  const [kpis, setKpis] = useState<KPI[]>(isDemoMode ? demoKPIs : []);
+  const [loading, setLoading] = useState(!isDemoMode);
   const [error, setError] = useState<string | null>(null);
 
   const fetchDashboard = useCallback(async () => {
+    if (isDemoMode) {
+      setData(demoDashboard as unknown as DashboardData);
+      setKpis(demoKPIs);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -128,6 +138,7 @@ export function useDashboard() {
   }, []);
 
   useEffect(() => {
+    if (isDemoMode) return;
     fetchDashboard();
   }, [fetchDashboard]);
 

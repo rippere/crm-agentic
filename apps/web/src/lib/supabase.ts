@@ -235,7 +235,18 @@ export function createBrowserClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+
   if (!url || !key) {
+    if (isDemoMode) {
+      // In demo mode, create a stub client with placeholder credentials.
+      // Hooks will short-circuit before making any real Supabase calls.
+      _browserClient = _createBrowserClient<Database>(
+        "http://localhost:54321",
+        "demo-key"
+      );
+      return _browserClient;
+    }
     throw new Error(
       "Missing Supabase credentials.\n" +
       "Copy .env.example → .env.local and add your Project URL and anon key."

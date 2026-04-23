@@ -65,8 +65,15 @@ export default function ConnectorsPage() {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
   }, []);
 
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
   // Bootstrap auth
   useEffect(() => {
+    if (isDemoMode) {
+      setToken('demo-token');
+      setWorkspaceId('demo-workspace-1');
+      return;
+    }
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
@@ -74,7 +81,7 @@ export default function ConnectorsPage() {
         setWorkspaceId(session.user.user_metadata?.workspace_id ?? null);
       }
     });
-  }, []);
+  }, [isDemoMode]);
 
   const fetchConnectors = useCallback(async () => {
     if (!workspaceId || !token) return;

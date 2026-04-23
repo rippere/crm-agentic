@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import { createBrowserClient } from "@/lib/supabase";
 import type { Agent } from "@/lib/types";
 import type { AgentRow } from "@/lib/supabase";
+import { isDemoMode } from "@/lib/demo-mode";
+import { demoAgents } from "@/lib/demo-data";
 
 function rowToAgent(row: AgentRow): Agent {
   return {
@@ -22,11 +24,16 @@ function rowToAgent(row: AgentRow): Agent {
 }
 
 export function useAgents() {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [agents, setAgents] = useState<Agent[]>(isDemoMode ? demoAgents : []);
+  const [loading, setLoading] = useState(!isDemoMode);
   const [error, setError] = useState<string | null>(null);
 
   const fetchAgents = useCallback(async () => {
+    if (isDemoMode) {
+      setAgents(demoAgents);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -53,10 +60,12 @@ export function useAgents() {
   }, []);
 
   useEffect(() => {
+    if (isDemoMode) return;
     fetchAgents();
   }, [fetchAgents]);
 
   const runAgent = async (id: string) => {
+    if (isDemoMode) return { id, status: "processing" };
     // Triggers the FastAPI agent runner; falls back to status update if API unavailable
     const supabase = createBrowserClient();
     const { data, error: updateError } = await supabase
@@ -72,6 +81,7 @@ export function useAgents() {
   };
 
   const updateAgent = async (id: string, payload: { status?: Agent["status"] }) => {
+    if (isDemoMode) return { id, ...payload };
     const supabase = createBrowserClient();
     const { data, error: updateError } = await supabase
       .from("agents")

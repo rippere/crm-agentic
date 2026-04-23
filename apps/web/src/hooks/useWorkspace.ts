@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { createBrowserClient } from "@/lib/supabase";
 import type { Workspace } from "@/lib/types";
+import { isDemoMode } from "@/lib/demo-mode";
+import { demoWorkspace } from "@/lib/demo-data";
 
 interface UseWorkspaceResult {
   workspace: Workspace | null;
@@ -11,11 +13,15 @@ interface UseWorkspaceResult {
 }
 
 export function useWorkspace(): UseWorkspaceResult {
-  const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [workspace, setWorkspace] = useState<Workspace | null>(
+    isDemoMode ? demoWorkspace : null
+  );
+  const [isLoading, setIsLoading] = useState(!isDemoMode);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (isDemoMode) return;
+
     let cancelled = false;
 
     async function fetchWorkspace() {

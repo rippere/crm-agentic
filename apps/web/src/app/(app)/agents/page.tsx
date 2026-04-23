@@ -346,6 +346,10 @@ export default function AgentsPage() {
   }, []);
 
   useEffect(() => {
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') {
+      setToken('demo-token');
+      return;
+    }
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) setToken(session.access_token);

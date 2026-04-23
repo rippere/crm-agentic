@@ -159,7 +159,16 @@ export default function InboxPage() {
   const [token, setToken] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
 
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
   useEffect(() => {
+    if (isDemoMode) {
+      apiClient.getMessages('demo-workspace-1', 'demo-token')
+        .then((data) => setMessages(Array.isArray(data) ? data : []))
+        .catch(() => setMessages([]))
+        .finally(() => setLoading(false));
+      return;
+    }
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
@@ -167,16 +176,17 @@ export default function InboxPage() {
         setWorkspaceId(session.user.user_metadata?.workspace_id ?? null);
       }
     });
-  }, []);
+  }, [isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return; // already loaded above
     if (!workspaceId || !token) return;
     apiClient
       .getMessages(workspaceId, token)
       .then((data) => setMessages(Array.isArray(data) ? data : []))
       .catch(() => setMessages([]))
       .finally(() => setLoading(false));
-  }, [workspaceId, token]);
+  }, [workspaceId, token, isDemoMode]);
 
   const filtered = useMemo(() => {
     if (!search) return messages;

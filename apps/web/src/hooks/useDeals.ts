@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import { createBrowserClient } from "@/lib/supabase";
 import type { Deal } from "@/lib/types";
 import type { DealRow } from "@/lib/supabase";
+import { isDemoMode } from "@/lib/demo-mode";
+import { demoDeals } from "@/lib/demo-data";
 
 function rowToDeal(row: DealRow): Deal {
   return {
@@ -21,12 +23,26 @@ function rowToDeal(row: DealRow): Deal {
   };
 }
 
+function filterDemoDeals(deals: Deal[], stage?: string): Deal[] {
+  if (stage && stage !== "all") {
+    return deals.filter((d) => d.stage === stage);
+  }
+  return deals;
+}
+
 export function useDeals(stage?: string) {
-  const [deals, setDeals] = useState<Deal[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [deals, setDeals] = useState<Deal[]>(
+    isDemoMode ? filterDemoDeals(demoDeals, stage) : []
+  );
+  const [loading, setLoading] = useState(!isDemoMode);
   const [error, setError] = useState<string | null>(null);
 
   const fetchDeals = useCallback(async () => {
+    if (isDemoMode) {
+      setDeals(filterDemoDeals(demoDeals, stage));
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -61,10 +77,15 @@ export function useDeals(stage?: string) {
   }, [stage]);
 
   useEffect(() => {
+    if (isDemoMode) {
+      setDeals(filterDemoDeals(demoDeals, stage));
+      return;
+    }
     fetchDeals();
   }, [fetchDeals]);
 
   const createDeal = async (payload: Partial<Deal>) => {
+    if (isDemoMode) return {};
     const supabase = createBrowserClient();
     const { data: { user } } = await supabase.auth.getUser();
     const workspaceId = user?.user_metadata?.workspace_id as string;
@@ -82,6 +103,7 @@ export function useDeals(stage?: string) {
   };
 
   const updateDeal = async (id: string, payload: Partial<Deal> & { stage?: Deal["stage"] }) => {
+    if (isDemoMode) return {};
     const supabase = createBrowserClient();
     const { data, error: updateError } = await supabase
       .from("deals")
@@ -96,6 +118,7 @@ export function useDeals(stage?: string) {
   };
 
   const deleteDeal = async (id: string) => {
+    if (isDemoMode) return;
     const supabase = createBrowserClient();
     const { error: deleteError } = await supabase.from("deals").delete().eq("id", id);
     if (deleteError) throw new Error(deleteError.message);

@@ -202,7 +202,19 @@ export default function TasksPage() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
   useEffect(() => {
+    if (isDemoMode) {
+      // In demo mode, skip auth and load mock data directly
+      apiClient.getTasks('demo-workspace-1', 'demo-token')
+        .then((data) => setTasks(Array.isArray(data) ? data : []))
+        .catch(() => setTasks([]))
+        .finally(() => setLoading(false));
+      setWorkspaceId('demo-workspace-1');
+      setToken('demo-token');
+      return;
+    }
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
@@ -210,16 +222,17 @@ export default function TasksPage() {
         setWorkspaceId(session.user.user_metadata?.workspace_id ?? null);
       }
     });
-  }, []);
+  }, [isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return; // already loaded above
     if (!workspaceId || !token) return;
     apiClient
       .getTasks(workspaceId, token)
       .then((data) => setTasks(Array.isArray(data) ? data : []))
       .catch(() => setTasks([]))
       .finally(() => setLoading(false));
-  }, [workspaceId, token]);
+  }, [workspaceId, token, isDemoMode]);
 
   const tasksByColumn = useMemo(() => {
     const visible = filter === "all" ? tasks : tasks.filter((t) => t.status === filter);

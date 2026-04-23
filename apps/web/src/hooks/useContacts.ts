@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import { createBrowserClient } from "@/lib/supabase";
 import type { Contact } from "@/lib/types";
 import type { ContactRow } from "@/lib/supabase";
+import { isDemoMode } from "@/lib/demo-mode";
+import { demoContacts } from "@/lib/demo-data";
 
 // Map DB snake_case row → frontend camelCase Contact type
 function rowToContact(row: ContactRow): Contact {
@@ -24,6 +26,26 @@ function rowToContact(row: ContactRow): Contact {
   };
 }
 
+function filterDemoContacts(contacts: Contact[], options: UseContactsOptions): Contact[] {
+  let filtered = [...contacts];
+  if (options.status && options.status !== "all") {
+    filtered = filtered.filter((c) => c.status === options.status);
+  }
+  if (options.search) {
+    const q = options.search.toLowerCase();
+    filtered = filtered.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.email.toLowerCase().includes(q) ||
+        c.company.toLowerCase().includes(q)
+    );
+  }
+  if (options.score && options.score !== "all") {
+    filtered = filtered.filter((c) => c.mlScore.label === options.score);
+  }
+  return filtered;
+}
+
 interface UseContactsOptions {
   status?: string;
   search?: string;
@@ -31,11 +53,18 @@ interface UseContactsOptions {
 }
 
 export function useContacts(options: UseContactsOptions = {}) {
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [contacts, setContacts] = useState<Contact[]>(
+    isDemoMode ? filterDemoContacts(demoContacts, options) : []
+  );
+  const [loading, setLoading] = useState(!isDemoMode);
   const [error, setError] = useState<string | null>(null);
 
   const fetchContacts = useCallback(async () => {
+    if (isDemoMode) {
+      setContacts(filterDemoContacts(demoContacts, options));
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -83,10 +112,15 @@ export function useContacts(options: UseContactsOptions = {}) {
   }, [options.status, options.search, options.score]);
 
   useEffect(() => {
+    if (isDemoMode) {
+      setContacts(filterDemoContacts(demoContacts, options));
+      return;
+    }
     fetchContacts();
   }, [fetchContacts]);
 
   const createContact = async (payload: Partial<Contact>) => {
+    if (isDemoMode) return {};
     const supabase = createBrowserClient();
     const { data: { user } } = await supabase.auth.getUser();
     const workspaceId = user?.user_metadata?.workspace_id as string;
@@ -104,6 +138,7 @@ export function useContacts(options: UseContactsOptions = {}) {
   };
 
   const updateContact = async (id: string, payload: Partial<Contact>) => {
+    if (isDemoMode) return {};
     const supabase = createBrowserClient();
     const { data, error: updateError } = await supabase
       .from("contacts")
@@ -118,6 +153,7 @@ export function useContacts(options: UseContactsOptions = {}) {
   };
 
   const deleteContact = async (id: string) => {
+    if (isDemoMode) return;
     const supabase = createBrowserClient();
     const { error: deleteError } = await supabase.from("contacts").delete().eq("id", id);
     if (deleteError) throw new Error(deleteError.message);

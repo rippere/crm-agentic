@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import { createBrowserClient } from "@/lib/supabase";
 import type { ActivityEvent } from "@/lib/types";
 import type { ActivityEventRow } from "@/lib/supabase";
+import { isDemoMode } from "@/lib/demo-mode";
+import { demoActivity } from "@/lib/demo-data";
 
 function rowToEvent(row: ActivityEventRow): ActivityEvent {
   // Format relative timestamp
@@ -30,11 +32,18 @@ function rowToEvent(row: ActivityEventRow): ActivityEvent {
 }
 
 export function useActivity(limit = 50) {
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [events, setEvents] = useState<ActivityEvent[]>(
+    isDemoMode ? demoActivity.slice(0, limit) : []
+  );
+  const [loading, setLoading] = useState(!isDemoMode);
   const [error, setError] = useState<string | null>(null);
 
   const fetchActivity = useCallback(async () => {
+    if (isDemoMode) {
+      setEvents(demoActivity.slice(0, limit));
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -63,6 +72,8 @@ export function useActivity(limit = 50) {
   }, [limit]);
 
   useEffect(() => {
+    if (isDemoMode) return;
+
     let workspaceId: string | null = null;
     let channelCleanup: (() => void) | null = null;
 
