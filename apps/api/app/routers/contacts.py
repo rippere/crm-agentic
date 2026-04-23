@@ -1,0 +1,76 @@
+import uuid
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy import select, insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.dependencies import get_current_user
+from app.models.user import User
+from app.models.contact import Contact
+from app.models.activity_event import ActivityEvent
+
+router = APIRouter()
+
+
+class ContactResponse(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    name: str | None
+    email: str | None
+    company: str | None
+    role: str | None
+    status: str
+    ml_score: dict
+    revenue: float
+    deal_count: int
+    last_activity: str
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/workspaces/{workspace_id}/contacts", response_model=list[ContactResponse])
+async def list_contacts(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ContactResponse]:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(select(Contact).where(Contact.workspace_id == workspace_id))
+    contacts = result.scalars().all()
+    return [ContactResponse.model_validate(c) for c in contacts]
+
+
+@router.post("/workspaces/{workspace_id}/contacts/{contact_id}/score", status_code=status.HTTP_200_OK)
+async def score_contact(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Stub: trigger ML scoring for a contact. Logs activity and returns 200."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="score_contact",
+        agent_name="ScoringAgent",
+        description=f"Scoring triggered for contact {contact_id}",
+        severity="info",
+    )
+    db.add(event)
+    await db.commit()
+
+    return {"status": "queued", "contact_id": str(contact_id)}
