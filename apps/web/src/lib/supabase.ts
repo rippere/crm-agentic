@@ -1,8 +1,29 @@
-import { createClient } from "@supabase/supabase-js";
+import { createBrowserClient as _createBrowserClient } from "@supabase/ssr";
+import { createServerClient as _createServerClient } from "@supabase/ssr";
+import type { CookieOptions } from "@supabase/ssr";
+import type { ReadonlyRequestCookies } from "next/dist/server/web/spec-extension/adapters/request-cookies";
 
-// ─── DB row types (snake_case, matches Supabase columns) ─────
+// ─── DB row types (snake_case, matches Supabase columns) ─────────────────────
+export interface WorkspaceRow {
+  id: string;
+  name: string;
+  slug: string;
+  mode: "sales" | "pm" | "both";
+  created_at: string;
+}
+
+export interface UserRow {
+  id: string;
+  supabase_uid: string;
+  workspace_id: string;
+  email: string;
+  role: "admin" | "member";
+  created_at: string;
+}
+
 export interface ContactRow {
   id: string;
+  workspace_id: string;
   name: string;
   email: string;
   company: string;
@@ -29,6 +50,7 @@ export interface ContactRow {
 
 export interface DealRow {
   id: string;
+  workspace_id: string;
   title: string;
   company: string;
   contact_name: string;
@@ -45,6 +67,7 @@ export interface DealRow {
 
 export interface AgentRow {
   id: string;
+  workspace_id: string;
   name: string;
   type: string;
   status: "active" | "processing" | "idle" | "error";
@@ -67,6 +90,7 @@ export interface AgentRow {
 
 export interface ActivityEventRow {
   id: string;
+  workspace_id: string;
   type: string;
   agent_name: string;
   description: string;
@@ -75,10 +99,81 @@ export interface ActivityEventRow {
   created_at: string;
 }
 
-// ─── Supabase Database type (tells the client about our tables) ─
+export interface ConnectorRow {
+  id: string;
+  workspace_id: string;
+  service: "gmail" | "slack" | "teams";
+  encrypted_token: string;
+  refresh_token: string | null;
+  token_expiry: string | null;
+  external_email: string | null;
+  message_count: number;
+  task_count: number;
+  last_sync: string | null;
+  created_at: string;
+}
+
+export interface MessageRow {
+  id: string;
+  workspace_id: string;
+  connector_id: string | null;
+  external_id: string;
+  subject: string | null;
+  body_plain: string;
+  sender_email: string | null;
+  received_at: string | null;
+  contact_id: string | null;
+  processed: boolean;
+  created_at: string;
+}
+
+export interface TaskRow {
+  id: string;
+  workspace_id: string;
+  message_id: string | null;
+  contact_id: string | null;
+  title: string;
+  description: string;
+  status: "open" | "in_progress" | "done" | "cancelled";
+  due_date: string | null;
+  assignee_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MetricTemplateRow {
+  id: string;
+  workspace_id: string;
+  name: string | null;
+  description: string | null;
+  data_type: "text" | "number" | "boolean" | "date" | null;
+  created_at: string;
+}
+
+export interface ClarityScoreRow {
+  id: string;
+  workspace_id: string;
+  message_id: string | null;
+  score: number | null;
+  rationale: string | null;
+  model_used: string;
+  created_at: string;
+}
+
+// ─── Supabase Database type (tells the client about our tables) ───────────────
 export interface Database {
   public: {
     Tables: {
+      workspaces: {
+        Row: WorkspaceRow;
+        Insert: Omit<WorkspaceRow, "id" | "created_at">;
+        Update: Partial<Omit<WorkspaceRow, "id" | "created_at">>;
+      };
+      users: {
+        Row: UserRow;
+        Insert: Omit<UserRow, "id" | "created_at">;
+        Update: Partial<Omit<UserRow, "id" | "created_at">>;
+      };
       contacts: {
         Row: ContactRow;
         Insert: Omit<ContactRow, "id" | "created_at" | "updated_at">;
@@ -99,6 +194,31 @@ export interface Database {
         Insert: Omit<ActivityEventRow, "id" | "created_at">;
         Update: Partial<Omit<ActivityEventRow, "id" | "created_at">>;
       };
+      connectors: {
+        Row: ConnectorRow;
+        Insert: Omit<ConnectorRow, "id" | "created_at">;
+        Update: Partial<Omit<ConnectorRow, "id" | "created_at">>;
+      };
+      messages: {
+        Row: MessageRow;
+        Insert: Omit<MessageRow, "id" | "created_at">;
+        Update: Partial<Omit<MessageRow, "id" | "created_at">>;
+      };
+      tasks: {
+        Row: TaskRow;
+        Insert: Omit<TaskRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<TaskRow, "id" | "created_at" | "updated_at">>;
+      };
+      metric_templates: {
+        Row: MetricTemplateRow;
+        Insert: Omit<MetricTemplateRow, "id" | "created_at">;
+        Update: Partial<Omit<MetricTemplateRow, "id" | "created_at">>;
+      };
+      clarity_scores: {
+        Row: ClarityScoreRow;
+        Insert: Omit<ClarityScoreRow, "id" | "created_at">;
+        Update: Partial<Omit<ClarityScoreRow, "id" | "created_at">>;
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
@@ -106,15 +226,11 @@ export interface Database {
   };
 }
 
-// ─── Lazy singleton client ────────────────────────────────────
-// We don't pass the Database generic to createClient — the newer SDK's
-// overload resolution fights manual Database types. Zod validates inputs;
-// we cast outputs to our typed interfaces at the call site.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _client: ReturnType<typeof createClient<any>> | null = null;
+// ─── Browser client (singleton) ──────────────────────────────────────────────
+let _browserClient: ReturnType<typeof _createBrowserClient<Database>> | null = null;
 
-export function getSupabase() {
-  if (_client) return _client;
+export function createBrowserClient() {
+  if (_browserClient) return _browserClient;
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -122,10 +238,36 @@ export function getSupabase() {
   if (!url || !key) {
     throw new Error(
       "Missing Supabase credentials.\n" +
-      "Copy .env.local.example → .env.local and add your Project URL and anon key."
+      "Copy .env.example → .env.local and add your Project URL and anon key."
     );
   }
 
-  _client = createClient(url, key);
-  return _client;
+  _browserClient = _createBrowserClient<Database>(url, key);
+  return _browserClient;
+}
+
+// ─── Server client (per-request, uses cookies) ───────────────────────────────
+export function createServerClient(cookieStore: ReadonlyRequestCookies) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+  return _createServerClient<Database>(url, key, {
+    cookies: {
+      get(name: string) {
+        return cookieStore.get(name)?.value;
+      },
+      set(_name: string, _value: string, _options: CookieOptions) {
+        // Server components can't set cookies directly; handled by middleware
+      },
+      remove(_name: string, _options: CookieOptions) {
+        // Server components can't remove cookies directly; handled by middleware
+      },
+    },
+  });
+}
+
+// ─── Legacy export (kept for backward compat during migration) ───────────────
+/** @deprecated Use createBrowserClient() instead */
+export function getSupabase() {
+  return createBrowserClient();
 }

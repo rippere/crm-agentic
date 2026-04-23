@@ -116,3 +116,96 @@ export interface KPI {
   icon: string;
   sparkData: number[];
 }
+
+// ─── Workspace ────────────────────────────────────────────────────────────────
+export type WorkspaceMode = "sales" | "pm" | "both";
+
+export interface Workspace {
+  id: string;
+  name: string;
+  slug: string;
+  mode: WorkspaceMode;
+  created_at: string;
+}
+
+// ─── App User ─────────────────────────────────────────────────────────────────
+export interface AppUser {
+  id: string;
+  supabase_uid: string;
+  workspace_id: string;
+  email: string;
+  role: "admin" | "member";
+  created_at: string;
+}
+
+// ─── Connector ────────────────────────────────────────────────────────────────
+export type ConnectorService = "gmail" | "slack" | "teams";
+
+export interface Connector {
+  id: string;
+  workspace_id: string;
+  service: ConnectorService;
+  encrypted_token: string;
+  refresh_token: string | null;
+  token_expiry: string | null;
+  external_email: string | null;
+  message_count: number;
+  task_count: number;
+  last_sync: string | null;
+  created_at: string;
+}
+
+// ─── Message ──────────────────────────────────────────────────────────────────
+export interface Message {
+  id: string;
+  workspace_id: string;
+  connector_id: string | null;
+  external_id: string;
+  subject: string | null;
+  body_plain: string;
+  sender_email: string | null;
+  received_at: string | null;
+  contact_id: string | null;
+  processed: boolean;
+  created_at: string;
+}
+
+// ─── Task ─────────────────────────────────────────────────────────────────────
+export type TaskStatus = "open" | "in_progress" | "done" | "cancelled";
+
+export interface Task {
+  id: string;
+  workspace_id: string;
+  message_id: string | null;
+  contact_id: string | null;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  due_date: string | null;
+  assignee_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Clarity Score ────────────────────────────────────────────────────────────
+export interface ClarityScore {
+  id: string;
+  workspace_id: string;
+  message_id: string | null;
+  score: number | null;
+  rationale: string | null;
+  model_used: string;
+  created_at: string;
+}
+
+// ─── Metric Template ──────────────────────────────────────────────────────────
+export type MetricDataType = "text" | "number" | "boolean" | "date";
+
+export interface MetricTemplate {
+  id: string;
+  workspace_id: string;
+  name: string | null;
+  description: string | null;
+  data_type: MetricDataType | null;
+  created_at: string;
+}
