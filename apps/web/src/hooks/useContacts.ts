@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { createBrowserClient } from "@/lib/supabase";
 import type { Contact } from "@/lib/types";
 import type { ContactRow } from "@/lib/supabase";
 
@@ -38,16 +39,42 @@ export function useContacts(options: UseContactsOptions = {}) {
     setLoading(true);
     setError(null);
 
-    const params = new URLSearchParams();
-    if (options.status && options.status !== "all") params.set("status", options.status);
-    if (options.search) params.set("search", options.search);
-    if (options.score && options.score !== "all") params.set("score", options.score);
-
     try {
-      const res = await fetch(`/api/contacts?${params.toString()}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: ContactRow[] = await res.json();
-      setContacts(data.map(rowToContact));
+      const supabase = createBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      const workspaceId = user?.user_metadata?.workspace_id as string | undefined;
+      if (!workspaceId) {
+        setError("No workspace found");
+        return;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let query: any = supabase
+        .from("contacts")
+        .select("*")
+        .eq("workspace_id", workspaceId)
+        .order("created_at", { ascending: false });
+
+      if (options.status && options.status !== "all") {
+        query = query.eq("status", options.status);
+      }
+      if (options.search) {
+        query = query.or(
+          `name.ilike.%${options.search}%,email.ilike.%${options.search}%,company.ilike.%${options.search}%`
+        );
+      }
+
+      const { data, error: fetchError } = await query;
+      if (fetchError) throw new Error(fetchError.message);
+
+      let rows = (data ?? []) as ContactRow[];
+
+      // Client-side score filter (ml_score is JSONB)
+      if (options.score && options.score !== "all") {
+        rows = rows.filter((r) => r.ml_score?.label === options.score);
+      }
+
+      setContacts(rows.map(rowToContact));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load contacts");
     } finally {
@@ -60,30 +87,40 @@ export function useContacts(options: UseContactsOptions = {}) {
   }, [fetchContacts]);
 
   const createContact = async (payload: Partial<Contact>) => {
-    const res = await fetch("/api/contacts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(await res.text());
+    const supabase = createBrowserClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    const workspaceId = user?.user_metadata?.workspace_id as string;
+
+    const { data, error: insertError } = await supabase
+      .from("contacts")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .insert({ ...payload, workspace_id: workspaceId } as any)
+      .select()
+      .single();
+
+    if (insertError) throw new Error(insertError.message);
     await fetchContacts();
-    return res.json();
+    return data;
   };
 
   const updateContact = async (id: string, payload: Partial<Contact>) => {
-    const res = await fetch(`/api/contacts/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(await res.text());
+    const supabase = createBrowserClient();
+    const { data, error: updateError } = await supabase
+      .from("contacts")
+      .update(payload as Partial<ContactRow>)
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (updateError) throw new Error(updateError.message);
     await fetchContacts();
-    return res.json();
+    return data;
   };
 
   const deleteContact = async (id: string) => {
-    const res = await fetch(`/api/contacts/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new Error(await res.text());
+    const supabase = createBrowserClient();
+    const { error: deleteError } = await supabase.from("contacts").delete().eq("id", id);
+    if (deleteError) throw new Error(deleteError.message);
     await fetchContacts();
   };
 

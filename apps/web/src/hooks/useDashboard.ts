@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { createBrowserClient } from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import type { KPI } from "@/lib/types";
+import type { ContactRow, DealRow, AgentRow, ActivityEventRow } from "@/lib/supabase";
 
 interface DashboardData {
   totalRevenue: number;
@@ -67,11 +69,57 @@ export function useDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/dashboard");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: DashboardData = await res.json();
-      setData(json);
-      setKpis(dataToKPIs(json));
+      const supabase = createBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      const workspaceId = user?.user_metadata?.workspace_id as string | undefined;
+      if (!workspaceId) {
+        setError("No workspace found");
+        return;
+      }
+
+      // Parallel aggregate queries
+      const [contactsRes, dealsRes, agentsRes, activityRes] = await Promise.all([
+        supabase.from("contacts").select("revenue").eq("workspace_id", workspaceId),
+        supabase.from("deals").select("value, stage, ml_win_probability").eq("workspace_id", workspaceId),
+        supabase.from("agents").select("status, accuracy, tasks_today").eq("workspace_id", workspaceId),
+        supabase
+          .from("activity_events")
+          .select("id")
+          .eq("workspace_id", workspaceId)
+          .gte("created_at", new Date(new Date().setHours(0, 0, 0, 0)).toISOString()),
+      ]);
+
+      const contacts = (contactsRes.data ?? []) as Pick<ContactRow, "revenue">[];
+      const deals = (dealsRes.data ?? []) as Pick<DealRow, "value" | "stage" | "ml_win_probability">[];
+      const agents = (agentsRes.data ?? []) as Pick<AgentRow, "status" | "accuracy" | "tasks_today">[];
+      const todayActivity = (activityRes.data ?? []) as Pick<ActivityEventRow, "id">[];
+
+      const totalRevenue = contacts.reduce((sum, c) => sum + (c.revenue ?? 0), 0);
+      const activeDeals = deals.filter((d) => !["closed_won", "closed_lost"].includes(d.stage)).length;
+      const closedWonValue = deals.filter((d) => d.stage === "closed_won").reduce((sum, d) => sum + (d.value ?? 0), 0);
+      const avgWinProbability = deals.length
+        ? Math.round(deals.reduce((sum, d) => sum + (d.ml_win_probability ?? 0), 0) / deals.length)
+        : 0;
+      const activeAgents = agents.filter((a) => a.status === "active" || a.status === "processing").length;
+      const avgAccuracy = agents.length
+        ? Math.round(agents.reduce((sum, a) => sum + (a.accuracy ?? 0), 0) / agents.length)
+        : 0;
+      const tasksToday = agents.reduce((sum, a) => sum + (a.tasks_today ?? 0), 0);
+
+      const dashboardData: DashboardData = {
+        totalRevenue,
+        activeDeals,
+        totalDeals: deals.length,
+        avgAccuracy,
+        activeAgents,
+        totalAgents: agents.length,
+        tasksToday: tasksToday || todayActivity.length,
+        closedWonValue,
+        avgWinProbability,
+      };
+
+      setData(dashboardData);
+      setKpis(dataToKPIs(dashboardData));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load dashboard");
     } finally {

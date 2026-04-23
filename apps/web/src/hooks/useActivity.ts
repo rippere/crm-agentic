@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { createBrowserClient } from "@/lib/supabase";
 import type { ActivityEvent } from "@/lib/types";
 import type { ActivityEventRow } from "@/lib/supabase";
 
@@ -37,10 +38,23 @@ export function useActivity(limit = 50) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/activity?limit=${limit}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: ActivityEventRow[] = await res.json();
-      setEvents(data.map(rowToEvent));
+      const supabase = createBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      const workspaceId = user?.user_metadata?.workspace_id as string | undefined;
+      if (!workspaceId) {
+        setError("No workspace found");
+        return;
+      }
+
+      const { data, error: fetchError } = await supabase
+        .from("activity_events")
+        .select("*")
+        .eq("workspace_id", workspaceId)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+      if (fetchError) throw new Error(fetchError.message);
+      setEvents((data ?? []).map((r: ActivityEventRow) => rowToEvent(r)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load activity");
     } finally {
@@ -49,10 +63,44 @@ export function useActivity(limit = 50) {
   }, [limit]);
 
   useEffect(() => {
-    fetchActivity();
-    // Poll every 30 seconds for new events
-    const interval = setInterval(fetchActivity, 30_000);
-    return () => clearInterval(interval);
+    let workspaceId: string | null = null;
+    let channelCleanup: (() => void) | null = null;
+
+    async function init() {
+      await fetchActivity();
+
+      const supabase = createBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      workspaceId = user?.user_metadata?.workspace_id ?? null;
+      if (!workspaceId) return;
+
+      // Subscribe to Realtime INSERT events for this workspace
+      const channel = supabase
+        .channel("activity-realtime")
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "activity_events",
+            filter: `workspace_id=eq.${workspaceId}`,
+          },
+          (payload) => {
+            setEvents((prev) => [rowToEvent(payload.new as ActivityEventRow), ...prev]);
+          }
+        )
+        .subscribe();
+
+      channelCleanup = () => {
+        supabase.removeChannel(channel);
+      };
+    }
+
+    init();
+
+    return () => {
+      channelCleanup?.();
+    };
   }, [fetchActivity]);
 
   return { events, loading, error, refetch: fetchActivity };

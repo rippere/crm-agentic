@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { createBrowserClient } from "@/lib/supabase";
 import type { Deal } from "@/lib/types";
 import type { DealRow } from "@/lib/supabase";
 
@@ -28,14 +29,30 @@ export function useDeals(stage?: string) {
   const fetchDeals = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const params = new URLSearchParams();
-    if (stage && stage !== "all") params.set("stage", stage);
 
     try {
-      const res = await fetch(`/api/deals?${params.toString()}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: DealRow[] = await res.json();
-      setDeals(data.map(rowToDeal));
+      const supabase = createBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      const workspaceId = user?.user_metadata?.workspace_id as string | undefined;
+      if (!workspaceId) {
+        setError("No workspace found");
+        return;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let query: any = supabase
+        .from("deals")
+        .select("*")
+        .eq("workspace_id", workspaceId);
+
+      if (stage && stage !== "all") {
+        query = query.eq("stage", stage);
+      }
+
+      const { data, error: fetchError } = await query;
+      if (fetchError) throw new Error(fetchError.message);
+
+      setDeals((data ?? []).map((r: DealRow) => rowToDeal(r)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load deals");
     } finally {
@@ -48,30 +65,40 @@ export function useDeals(stage?: string) {
   }, [fetchDeals]);
 
   const createDeal = async (payload: Partial<Deal>) => {
-    const res = await fetch("/api/deals", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(await res.text());
+    const supabase = createBrowserClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    const workspaceId = user?.user_metadata?.workspace_id as string;
+
+    const { data, error: insertError } = await supabase
+      .from("deals")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .insert({ ...payload, workspace_id: workspaceId } as any)
+      .select()
+      .single();
+
+    if (insertError) throw new Error(insertError.message);
     await fetchDeals();
-    return res.json();
+    return data;
   };
 
   const updateDeal = async (id: string, payload: Partial<Deal> & { stage?: Deal["stage"] }) => {
-    const res = await fetch(`/api/deals/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(await res.text());
+    const supabase = createBrowserClient();
+    const { data, error: updateError } = await supabase
+      .from("deals")
+      .update(payload as Partial<DealRow>)
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (updateError) throw new Error(updateError.message);
     await fetchDeals();
-    return res.json();
+    return data;
   };
 
   const deleteDeal = async (id: string) => {
-    const res = await fetch(`/api/deals/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new Error(await res.text());
+    const supabase = createBrowserClient();
+    const { error: deleteError } = await supabase.from("deals").delete().eq("id", id);
+    if (deleteError) throw new Error(deleteError.message);
     await fetchDeals();
   };
 
