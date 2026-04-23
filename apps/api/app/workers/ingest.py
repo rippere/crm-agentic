@@ -56,10 +56,12 @@ def _decode_body(payload: dict[str, Any]) -> str:
 
 async def _run_sync(connector_id: str) -> dict[str, Any]:
     from app.models.connector import Connector
+    from app.models.contact import Contact
     from app.models.message import Message
     from app.models.task import Task
     from app.services.gmail_client import GmailClient
     from app.services.extraction import extract_tasks
+    from app.services.sentiment import analyze_sentiment
 
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
     google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -155,6 +157,28 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                         task_count += 1
                 except Exception:
                     pass  # extraction failure must not block ingestion
+
+                # Sentiment analysis — store result in contact's ml_score.signals if linked
+                try:
+                    sentiment_result = analyze_sentiment(body_plain)
+                    if message.contact_id and sentiment_result.get("signals"):
+                        contact_result = await db.execute(
+                            select(Contact).where(Contact.id == message.contact_id)
+                        )
+                        contact = contact_result.scalar_one_or_none()
+                        if contact is not None:
+                            existing_score: dict = dict(contact.ml_score or {})
+                            existing_signals: list = list(existing_score.get("signals", []))
+                            # Prepend latest sentiment signals (avoid duplicates)
+                            for sig in sentiment_result["signals"]:
+                                sentiment_signal = f"[{sentiment_result['sentiment']}] {sig}"
+                                if sentiment_signal not in existing_signals:
+                                    existing_signals.insert(0, sentiment_signal)
+                            existing_score["signals"] = existing_signals[:10]  # cap at 10
+                            contact.ml_score = existing_score  # type: ignore[assignment]
+                            db.add(contact)
+                except Exception:
+                    pass  # sentiment failure must not block ingestion
 
             message.processed = True  # type: ignore[assignment]
             db.add(message)
