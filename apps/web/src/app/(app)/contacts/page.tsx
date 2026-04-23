@@ -13,8 +13,14 @@ import { createBrowserClient } from "@/lib/supabase";
 import {
   Search, SlidersHorizontal, Brain, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
+  Copy, ExternalLink, X, Loader2,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
+
+interface EmailDraft {
+  subject: string;
+  body: string;
+}
 
 interface IngestedMessage {
   id: string;
@@ -153,6 +159,80 @@ function ContactRow({ contact, onClick }: { contact: Contact; onClick: () => voi
   );
 }
 
+function EmailComposerModal({
+  draft,
+  contact,
+  onClose,
+}: {
+  draft: EmailDraft;
+  contact: Contact;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(`Subject: ${draft.subject}\n\n${draft.body}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const mailtoLink = `mailto:${contact.email}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`;
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+          <div className="flex items-center gap-2">
+            <Mail className="h-4 w-4 text-indigo-400" />
+            <p className="text-sm font-semibold text-zinc-100">AI-Generated Email Draft</p>
+          </div>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-100 cursor-pointer">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div>
+            <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest mb-1">Subject</p>
+            <p className="text-sm font-medium text-zinc-100 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+              {draft.subject}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest mb-1">Body</p>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-3 max-h-64 overflow-y-auto">
+              <pre className="text-sm text-zinc-200 whitespace-pre-wrap font-sans leading-relaxed">
+                {draft.body}
+              </pre>
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <Button variant="primary" className="flex-1 justify-center" onClick={handleCopy}>
+              <Copy className="h-3.5 w-3.5" />
+              {copied ? "Copied!" : "Copy to Clipboard"}
+            </Button>
+            <Button
+              variant="secondary"
+              className="flex-1 justify-center"
+              onClick={() => window.open(mailtoLink, "_blank")}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open in Gmail
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type DrawerTab = "overview" | "messages";
 
 function ContactDrawer({ contact, onClose, workspaceId, token }: {
@@ -165,6 +245,9 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
   const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
   const [messages, setMessages] = useState<IngestedMessage[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
+  const [composeError, setComposeError] = useState<string | null>(null);
 
   // Fetch messages when the Messages tab is opened
   useEffect(() => {
@@ -183,6 +266,7 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
   }, [activeTab, workspaceId, token, contact.id]);
 
   return (
+    <>
     <aside
       className="fixed right-0 top-0 h-full w-96 border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto animate-slide-up"
       aria-label={`Contact details for ${contact.name}`}
@@ -299,7 +383,33 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
 
             {/* Actions */}
             <div className="flex flex-col gap-2">
-              <Button variant="primary" className="w-full justify-center">Compose AI Email</Button>
+              <Button
+                variant="primary"
+                className="w-full justify-center"
+                disabled={composing}
+                onClick={async () => {
+                  if (!workspaceId || !token) return;
+                  setComposing(true);
+                  setComposeError(null);
+                  try {
+                    const result = await apiClient.composeEmail(workspaceId, contact.id, token);
+                    setEmailDraft({ subject: result.subject, body: result.body });
+                  } catch {
+                    setComposeError("Email composer unavailable — check API connection");
+                  } finally {
+                    setComposing(false);
+                  }
+                }}
+              >
+                {composing ? (
+                  <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating draft...</>
+                ) : (
+                  <><Mail className="h-3.5 w-3.5" /> Compose AI Email</>
+                )}
+              </Button>
+              {composeError && (
+                <p className="text-xs text-rose-400 text-center">{composeError}</p>
+              )}
               <Button variant="secondary" className="w-full justify-center">View Timeline</Button>
               <Button variant="ghost" className="w-full justify-center text-rose-400 hover:text-rose-300 hover:bg-rose-500/10">
                 Flag At-Risk
@@ -364,6 +474,16 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
         )}
       </div>
     </aside>
+
+    {/* Email composer modal — rendered outside aside so it can be full-screen */}
+    {emailDraft && (
+      <EmailComposerModal
+        draft={emailDraft}
+        contact={contact}
+        onClose={() => setEmailDraft(null)}
+      />
+    )}
+  </>
   );
 }
 
