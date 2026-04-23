@@ -1,3 +1,5 @@
+import json
+import os
 import uuid
 from datetime import datetime
 
@@ -11,6 +13,13 @@ from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.contact import Contact
 from app.models.activity_event import ActivityEvent
+
+# TODO: needs ANTHROPIC_API_KEY in env
+try:
+    import anthropic as _anthropic
+    _anthropic_client = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+except Exception:
+    _anthropic_client = None  # type: ignore[assignment]
 
 router = APIRouter()
 
@@ -74,3 +83,72 @@ async def score_contact(
     await db.commit()
 
     return {"status": "queued", "contact_id": str(contact_id)}
+
+
+class EmailDraftResponse(BaseModel):
+    subject: str
+    body: str
+
+
+@router.post("/workspaces/{workspace_id}/contacts/{contact_id}/compose", response_model=EmailDraftResponse)
+async def compose_email(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> EmailDraftResponse:
+    """
+    Generate a personalised outreach email draft for a contact using Claude Sonnet.
+    # TODO: needs ANTHROPIC_API_KEY in env
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    if _anthropic_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email composer unavailable — ANTHROPIC_API_KEY not configured",
+        )
+
+    system_prompt = (
+        "You are a sales professional. Write a personalized outreach email for the following contact. "
+        'Return JSON only: {"subject": "<subject line>", "body": "<email body>"}'
+    )
+    user_content = (
+        f"Contact name: {contact.name or 'Unknown'}\n"
+        f"Company: {contact.company or 'Unknown'}\n"
+        f"Role: {contact.role or 'Unknown'}\n"
+        f"Status: {contact.status}\n"
+        f"Semantic tags: {json.dumps(contact.semantic_tags or [])}\n"
+        f"Revenue: {contact.revenue}\n"
+    )
+
+    message = _anthropic_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_content}],
+    )
+
+    raw = message.content[0].text if message.content else "{}"
+
+    # Strip markdown code fence if present
+    if raw.strip().startswith("```"):
+        lines = raw.strip().splitlines()
+        raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+    try:
+        data = json.loads(raw)
+        return EmailDraftResponse(subject=data.get("subject", ""), body=data.get("body", ""))
+    except (json.JSONDecodeError, KeyError):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to parse email draft from Claude response",
+        )
