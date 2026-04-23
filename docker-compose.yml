@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  web:
+    build: ./apps/web
+    ports: ["3000:3000"]
+    env_file: .env
+  api:
+    image: python:3.12-slim
+    working_dir: /app
+    ports: ["8000:8000"]
+    command: echo "FastAPI service - not yet implemented"
+    env_file: .env
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
