@@ -61,7 +61,7 @@ async def score_contact(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Stub: trigger ML scoring for a contact. Logs activity and returns 200."""
+    """Enqueue heuristic lead scoring for a contact via Celery."""
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
@@ -72,17 +72,11 @@ async def score_contact(
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
-    event = ActivityEvent(
-        workspace_id=workspace_id,
-        type="score_contact",
-        agent_name="ScoringAgent",
-        description=f"Scoring triggered for contact {contact_id}",
-        severity="info",
-    )
-    db.add(event)
-    await db.commit()
+    # Import here to avoid circular-import at module load time
+    from app.workers.score_contact import score_lead  # noqa: PLC0415
+    task = score_lead.delay(str(contact_id), str(workspace_id))
 
-    return {"status": "queued", "contact_id": str(contact_id)}
+    return {"status": "queued", "contact_id": str(contact_id), "job_id": task.id}
 
 
 class EmailDraftResponse(BaseModel):
