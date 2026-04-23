@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import { mockKPIs, mockActivity, revenueChartData, agentAccuracyData, mockAgents } from "@/lib/mock-data";
 import { formatCurrency } from "@/lib/utils";
+import { apiClient } from "@/lib/api-client";
+import { createBrowserClient } from "@/lib/supabase";
 import {
   AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
@@ -13,8 +15,16 @@ import {
 import {
   DollarSign, Briefcase, Brain, Bot, TrendingUp, TrendingDown,
   Minus, Activity, CheckCircle, AlertTriangle, Info,
+  ListTodo, Mail, BarChart2, CheckSquare,
 } from "lucide-react";
 import type { KPI, ActivityEvent } from "@/lib/types";
+
+interface PMKpis {
+  tasksExtractedToday: number;
+  avgClarityScore: number | null;
+  openTasks: number;
+  messagesIngested: number;
+}
 
 const kpiIcons: Record<string, React.ReactNode> = {
   dollar: <DollarSign className="h-4 w-4" />,
@@ -109,8 +119,82 @@ function KPICard({ kpi }: { kpi: KPI }) {
   );
 }
 
+function PMKpiCard({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <Card className="flex items-center gap-4">
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex-shrink-0">
+        {icon}
+      </div>
+      <div>
+        <p className="text-2xl font-bold font-mono text-zinc-100">{value}</p>
+        <p className="text-xs text-zinc-500 mt-0.5">{label}</p>
+      </div>
+    </Card>
+  );
+}
+
 export default function DashboardPage() {
   const [activeAgents] = useState(mockAgents.filter((a) => a.status !== "idle"));
+  const [pmKpis, setPmKpis] = useState<PMKpis | null>(null);
+  const [workspaceMode, setWorkspaceMode] = useState<"sales" | "pm" | "both">("sales");
+
+  useEffect(() => {
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) return;
+      const workspaceId: string | undefined = session.user.user_metadata?.workspace_id;
+
+      // Fetch workspace mode
+      if (workspaceId) {
+        const { data: ws } = await supabase.from("workspaces").select("mode").eq("id", workspaceId).single();
+        if (ws?.mode) setWorkspaceMode(ws.mode as "sales" | "pm" | "both");
+      }
+
+      // Fetch PM aggregate KPIs
+      if (!workspaceId) return;
+      try {
+        const [tasksData, messagesData] = await Promise.all([
+          apiClient.getTasks(workspaceId, session.access_token).catch(() => []),
+          apiClient.getMessages(workspaceId, session.access_token).catch(() => []),
+        ]);
+
+        const today = new Date().toISOString().slice(0, 10);
+        const tasks: Array<{ status: string; created_at?: string; clarity_score?: { score: number } | null }> =
+          Array.isArray(tasksData) ? tasksData : [];
+        const messages: Array<unknown> = Array.isArray(messagesData) ? messagesData : [];
+
+        const tasksExtractedToday = tasks.filter(
+          (t) => t.created_at?.startsWith(today)
+        ).length;
+        const openTasks = tasks.filter((t) => t.status === "open").length;
+        const scoredTasks = tasks.filter((t) => t.clarity_score?.score != null);
+        const avgClarityScore =
+          scoredTasks.length > 0
+            ? Math.round(
+                scoredTasks.reduce((s, t) => s + (t.clarity_score?.score ?? 0), 0) /
+                  scoredTasks.length
+              )
+            : null;
+
+        setPmKpis({
+          tasksExtractedToday,
+          avgClarityScore,
+          openTasks,
+          messagesIngested: messages.length,
+        });
+      } catch {
+        // Non-critical — dashboard still renders with sales KPIs
+      }
+    });
+  }, []);
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -128,6 +212,40 @@ export default function DashboardPage() {
           ))}
         </div>
       </section>
+
+      {/* PM KPI Cards — only visible in pm or both modes */}
+      {(workspaceMode === "pm" || workspaceMode === "both") && pmKpis && (
+        <section aria-labelledby="pm-kpi-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="pm-kpi-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              PM Intelligence
+            </h2>
+            <Badge variant="indigo" size="sm" dot>Live</Badge>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <PMKpiCard
+              icon={<ListTodo className="h-4 w-4" />}
+              label="Tasks Extracted Today"
+              value={pmKpis.tasksExtractedToday}
+            />
+            <PMKpiCard
+              icon={<BarChart2 className="h-4 w-4" />}
+              label="Avg Clarity Score"
+              value={pmKpis.avgClarityScore !== null ? pmKpis.avgClarityScore : "—"}
+            />
+            <PMKpiCard
+              icon={<CheckSquare className="h-4 w-4" />}
+              label="Open Tasks"
+              value={pmKpis.openTasks}
+            />
+            <PMKpiCard
+              icon={<Mail className="h-4 w-4" />}
+              label="Messages Ingested"
+              value={pmKpis.messagesIngested}
+            />
+          </div>
+        </section>
+      )}
 
       {/* Charts Row */}
       <section aria-labelledby="charts-heading" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
