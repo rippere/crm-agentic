@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
@@ -8,12 +8,20 @@ import Button from "@/components/ui/Button";
 import Avatar from "@/components/ui/Avatar";
 import { mockAgents } from "@/lib/mock-data";
 import { cn, agentStatusConfig } from "@/lib/utils";
+import { apiClient } from "@/lib/api-client";
+import { createBrowserClient } from "@/lib/supabase";
 import {
   Brain, Sparkles, Mail, Mic, TrendingUp, Heart,
   Play, Pause, Settings, ChevronRight, Cpu, Target,
   ArrowRight, GitBranch, Zap,
 } from "lucide-react";
 import type { Agent, AgentType, WorkflowNode } from "@/lib/types";
+
+interface Toast {
+  id: number;
+  message: string;
+  type: "success" | "error" | "info";
+}
 
 const agentTypeIcon: Record<AgentType, React.ReactNode> = {
   semantic_sorter: <Sparkles className="h-4 w-4" />,
@@ -174,7 +182,17 @@ function AgentCard({ agent, onSelect }: { agent: Agent; onSelect: () => void }) 
   );
 }
 
-function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => void }) {
+function AgentDetailPanel({
+  agent,
+  onClose,
+  token,
+  onRun,
+}: {
+  agent: Agent;
+  onClose: () => void;
+  token: string | null;
+  onRun: (agentId: string) => Promise<void>;
+}) {
   const [running, setRunning] = useState(agent.status === "active" || agent.status === "processing");
   const statusCfg = agentStatusConfig[running ? "active" : "idle"];
 
@@ -218,7 +236,12 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
             <Button
               variant={running ? "secondary" : "cta"}
               size="sm"
-              onClick={() => setRunning(!running)}
+              onClick={async () => {
+                if (!running) {
+                  await onRun(agent.id);
+                }
+                setRunning(!running);
+              }}
             >
               {running ? (
                 <><Pause className="h-3.5 w-3.5" aria-hidden="true" /> Pause</>
@@ -311,15 +334,92 @@ function AgentDetailPanel({ agent, onClose }: { agent: Agent; onClose: () => voi
 
 export default function AgentsPage() {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
+  const [agents, setAgents] = useState(mockAgents);
+  const [token, setToken] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const activeCount = mockAgents.filter((a) => a.status === "active").length;
-  const processingCount = mockAgents.filter((a) => a.status === "processing").length;
+  const addToast = useCallback((message: string, type: Toast["type"] = "info") => {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000);
+  }, []);
+
+  useEffect(() => {
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) setToken(session.access_token);
+    });
+  }, []);
+
+  // Poll /agents every 5s if any agent is processing
+  const pollAgents = useCallback(async () => {
+    if (!token) return;
+    try {
+      const data = await fetch(
+        `${process.env.NEXT_PUBLIC_FASTAPI_URL || "http://localhost:8000"}/agents`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (data.ok) {
+        const updated = await data.json();
+        if (Array.isArray(updated)) setAgents(updated);
+      }
+    } catch {
+      // silently ignore polling failures
+    }
+  }, [token]);
+
+  useEffect(() => {
+    const hasProcessing = agents.some((a) => a.status === "processing");
+    if (hasProcessing) {
+      pollRef.current = setInterval(pollAgents, 5000);
+    } else {
+      if (pollRef.current) clearInterval(pollRef.current);
+    }
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [agents, pollAgents]);
+
+  const handleRun = useCallback(async (agentId: string) => {
+    if (!token) return;
+    try {
+      const result = await apiClient.triggerAgent(agentId, token);
+      const jobId = result?.job_id ?? result?.id ?? "unknown";
+      addToast(`Agent started — job ${jobId}`, "success");
+      // Mark as processing
+      setAgents((prev) => prev.map((a) => a.id === agentId ? { ...a, status: "processing" as const } : a));
+    } catch {
+      addToast("Failed to start agent — check API connection", "error");
+    }
+  }, [token, addToast]);
+
+  const activeCount = agents.filter((a) => a.status === "active").length;
+  const processingCount = agents.filter((a) => a.status === "processing").length;
   const avgAccuracy = (
-    mockAgents.reduce((sum, a) => sum + a.accuracy, 0) / mockAgents.length
+    agents.reduce((sum, a) => sum + a.accuracy, 0) / agents.length
   ).toFixed(1);
 
   return (
     <div className="flex flex-col gap-6 p-6">
+      {/* Toast stack */}
+      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className={`rounded-xl border px-4 py-3 text-sm font-medium shadow-xl animate-slide-up pointer-events-auto ${
+              t.type === "success"
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                : t.type === "error"
+                ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                : "border-indigo-500/40 bg-indigo-600/10 text-indigo-300"
+            }`}
+          >
+            {t.message}
+          </div>
+        ))}
+      </div>
+
       <Header
         title="Agents"
         subtitle={`${activeCount} active · ${processingCount} processing · avg accuracy ${avgAccuracy}%`}
@@ -360,7 +460,7 @@ export default function AgentsPage() {
 
       {/* Agent grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3" role="list" aria-label="AI Agents">
-        {mockAgents.map((agent) => (
+        {agents.map((agent) => (
           <div key={agent.id} role="listitem">
             <AgentCard agent={agent} onSelect={() => setSelectedAgent(agent)} />
           </div>
@@ -378,6 +478,8 @@ export default function AgentsPage() {
           <AgentDetailPanel
             agent={selectedAgent}
             onClose={() => setSelectedAgent(null)}
+            token={token}
+            onRun={handleRun}
           />
         </>
       )}
