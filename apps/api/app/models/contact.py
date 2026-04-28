@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime
+from typing import Optional
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import String, DateTime, ForeignKey, Numeric, Integer, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -24,6 +26,7 @@ class Contact(Base):
     last_activity: Mapped[str] = mapped_column(String, nullable=False, default="Never")
     revenue: Mapped[float] = mapped_column(Numeric, nullable=False, default=0)
     deal_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(384), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

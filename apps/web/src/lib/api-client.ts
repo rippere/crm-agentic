@@ -86,4 +86,15 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ score: 85, label: 'hot', trend: 'up' })
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/score`, { method: 'POST' }, token)
   },
+
+  // Semantic search
+  semanticSearchContacts: (workspaceId: string, query: string, token: string) => {
+    if (isDemoMode) return Promise.resolve([])
+    const params = new URLSearchParams({ q: query, limit: '15' })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/search?${params}`, {}, token)
+  },
+  triggerEmbedContacts: (workspaceId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ job_id: 'demo-embed', status: 'queued' })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/embed`, { method: 'POST' }, token)
+  },
 }

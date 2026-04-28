@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
@@ -13,7 +13,7 @@ import { createBrowserClient } from "@/lib/supabase";
 import {
   Search, SlidersHorizontal, Brain, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
-  Copy, ExternalLink, X, Loader2,
+  Copy, ExternalLink, X, Loader2, Zap,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -79,7 +79,7 @@ function MLScoreBar({ score, label }: { score: number; label: LeadScore }) {
   );
 }
 
-function ContactRow({ contact, onClick }: { contact: Contact; onClick: () => void }) {
+function ContactRow({ contact, onClick, similarity }: { contact: Contact; onClick: () => void; similarity?: number | null }) {
   const statusCfg = statusConfig[contact.status];
   const leadCfg = leadScoreConfig[contact.mlScore.label];
 
@@ -147,9 +147,18 @@ function ContactRow({ contact, onClick }: { contact: Contact; onClick: () => voi
         <p className="text-xs text-zinc-600">{contact.deals} deals</p>
       </td>
 
-      {/* Last Activity */}
+      {/* Last Activity / Similarity */}
       <td className="px-4 py-3 text-right">
-        <p className="text-xs text-zinc-500 font-mono">{contact.lastActivity}</p>
+        {similarity != null ? (
+          <span className={cn(
+            "text-xs font-mono font-medium",
+            similarity >= 0.7 ? "text-emerald-400" : similarity >= 0.5 ? "text-amber-400" : "text-zinc-400"
+          )}>
+            {Math.round(similarity * 100)}%
+          </span>
+        ) : (
+          <p className="text-xs text-zinc-500 font-mono">{contact.lastActivity}</p>
+        )}
         <ChevronRight
           className="h-4 w-4 text-zinc-700 group-hover:text-zinc-400 transition-colors ml-auto mt-1"
           aria-hidden="true"
@@ -487,6 +496,19 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
   );
 }
 
+interface SemanticResult {
+  id: string;
+  name: string | null;
+  email: string | null;
+  company: string | null;
+  role: string | null;
+  status: string;
+  ml_score: Record<string, unknown>;
+  revenue: number;
+  deal_count: number;
+  similarity: number | null;
+}
+
 export default function ContactsPage() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<ContactStatus | "all">("all");
@@ -494,6 +516,11 @@ export default function ContactsPage() {
   const [selected, setSelected] = useState<Contact | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [semanticMode, setSemanticMode] = useState(false);
+  const [semanticResults, setSemanticResults] = useState<SemanticResult[]>([]);
+  const [semanticLoading, setSemanticLoading] = useState(false);
+  const [indexing, setIndexing] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') {
@@ -509,6 +536,39 @@ export default function ContactsPage() {
       }
     });
   }, []);
+
+  // Debounced semantic search
+  useEffect(() => {
+    if (!semanticMode || !workspaceId || !token || !search.trim()) {
+      setSemanticResults([]);
+      return;
+    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setSemanticLoading(true);
+      try {
+        const results = await apiClient.semanticSearchContacts(workspaceId, search.trim(), token);
+        setSemanticResults(Array.isArray(results) ? results : []);
+      } catch {
+        setSemanticResults([]);
+      } finally {
+        setSemanticLoading(false);
+      }
+    }, 400);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [semanticMode, search, workspaceId, token]);
+
+  const handleIndex = useCallback(async () => {
+    if (!workspaceId || !token || indexing) return;
+    setIndexing(true);
+    try {
+      await apiClient.triggerEmbedContacts(workspaceId, token);
+    } finally {
+      setTimeout(() => setIndexing(false), 3000);
+    }
+  }, [workspaceId, token, indexing]);
 
   const filtered = useMemo(() => {
     return mockContacts.filter((c) => {
@@ -558,44 +618,87 @@ export default function ContactsPage() {
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-52 max-w-sm">
-          <Search
-            className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500"
-            aria-hidden="true"
-          />
+          {semanticLoading ? (
+            <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-400 animate-spin" />
+          ) : semanticMode ? (
+            <Sparkles className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-400" aria-hidden="true" />
+          ) : (
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" aria-hidden="true" />
+          )}
           <input
             type="search"
-            placeholder="Search by name, company, email…"
+            placeholder={semanticMode ? "Semantic search: e.g. 'fintech exec with funding needs'…" : "Search by name, company, email…"}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-xl border border-zinc-800 bg-zinc-900 py-2 pl-9 pr-4 text-sm text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50 focus:shadow-glow-sm transition-all duration-200"
+            className={cn(
+              "w-full rounded-xl border bg-zinc-900 py-2 pl-9 pr-4 text-sm text-zinc-300 placeholder-zinc-600 outline-none transition-all duration-200",
+              semanticMode
+                ? "border-indigo-500/50 focus:border-indigo-400/70"
+                : "border-zinc-800 focus:border-indigo-500/50 focus:shadow-glow-sm"
+            )}
             aria-label="Search contacts"
           />
         </div>
 
-        {/* Score filter */}
-        <div className="flex items-center gap-1">
-          <Filter className="h-3.5 w-3.5 text-zinc-500" aria-hidden="true" />
-          {(["all", "hot", "warm", "cold"] as const).map((score) => (
-            <button
-              key={score}
-              onClick={() => setFilterScore(score)}
-              className={cn(
-                "rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-200 cursor-pointer",
-                filterScore === score
-                  ? score === "hot"
-                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
-                    : score === "warm"
-                    ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
-                    : score === "cold"
-                    ? "border-zinc-600 bg-zinc-700 text-zinc-300"
-                    : "border-indigo-500/40 bg-indigo-600/10 text-indigo-400"
-                  : "border-zinc-800 bg-zinc-900 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
-              )}
-            >
-              {score === "all" ? "All" : score.charAt(0).toUpperCase() + score.slice(1)}
-            </button>
-          ))}
-        </div>
+        {/* Semantic mode toggle */}
+        <button
+          onClick={() => { setSemanticMode((v) => !v); setSearch(""); setSemanticResults([]); }}
+          className={cn(
+            "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-200 cursor-pointer",
+            semanticMode
+              ? "border-indigo-500/40 bg-indigo-600/10 text-indigo-400"
+              : "border-zinc-800 bg-zinc-900 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
+          )}
+          title="Toggle semantic (vector) search"
+        >
+          <Sparkles className="h-3 w-3" />
+          AI Search
+        </button>
+
+        {/* Score filter — hidden in semantic mode */}
+        {!semanticMode && (
+          <div className="flex items-center gap-1">
+            <Filter className="h-3.5 w-3.5 text-zinc-500" aria-hidden="true" />
+            {(["all", "hot", "warm", "cold"] as const).map((score) => (
+              <button
+                key={score}
+                onClick={() => setFilterScore(score)}
+                className={cn(
+                  "rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-200 cursor-pointer",
+                  filterScore === score
+                    ? score === "hot"
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                      : score === "warm"
+                      ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
+                      : score === "cold"
+                      ? "border-zinc-600 bg-zinc-700 text-zinc-300"
+                      : "border-indigo-500/40 bg-indigo-600/10 text-indigo-400"
+                    : "border-zinc-800 bg-zinc-900 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
+                )}
+              >
+                {score === "all" ? "All" : score.charAt(0).toUpperCase() + score.slice(1)}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Index contacts button — only when semantic mode and authed */}
+        {semanticMode && workspaceId && token && (
+          <button
+            onClick={handleIndex}
+            disabled={indexing}
+            className={cn(
+              "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-200 cursor-pointer",
+              indexing
+                ? "border-zinc-700 text-zinc-600 cursor-not-allowed"
+                : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-indigo-500/40 hover:text-indigo-400"
+            )}
+            title="Build semantic embeddings for all contacts"
+          >
+            {indexing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+            {indexing ? "Indexing…" : "Index Contacts"}
+          </button>
+        )}
 
         <Button variant="cta" size="sm" className="ml-auto">
           <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
@@ -634,12 +737,64 @@ export default function ContactsPage() {
                   Revenue
                 </th>
                 <th scope="col" className="px-4 py-3 text-right text-xs font-semibold text-zinc-500 uppercase tracking-wider">
-                  Activity
+                  {semanticMode ? "Match" : "Activity"}
                 </th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length > 0 ? (
+              {semanticMode ? (
+                !search.trim() ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-12 text-center text-sm text-zinc-500">
+                      <Sparkles className="h-5 w-5 text-indigo-500 mx-auto mb-2" />
+                      Type a natural language query to search semantically.
+                    </td>
+                  </tr>
+                ) : semanticLoading ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-10 text-center">
+                      <Loader2 className="h-5 w-5 text-indigo-400 mx-auto animate-spin" />
+                    </td>
+                  </tr>
+                ) : semanticResults.length > 0 ? (
+                  semanticResults.map((r) => {
+                    const contact: Contact = {
+                      id: r.id,
+                      name: r.name ?? "Unknown",
+                      email: r.email ?? "",
+                      company: r.company ?? "",
+                      role: r.role ?? "",
+                      avatar: (r.name ?? "?").slice(0, 2).toUpperCase(),
+                      status: (r.status as ContactStatus) || "lead",
+                      mlScore: {
+                        value: (r.ml_score as Record<string, number>)?.value ?? 50,
+                        label: ((r.ml_score as Record<string, string>)?.label ?? "warm") as LeadScore,
+                        trend: ((r.ml_score as Record<string, string>)?.trend ?? "stable") as "up" | "down" | "stable",
+                        signals: [],
+                      },
+                      semanticTags: [],
+                      revenue: r.revenue,
+                      deals: r.deal_count,
+                      lastActivity: "—",
+                      createdAt: new Date().toISOString(),
+                    };
+                    return (
+                      <ContactRow
+                        key={r.id}
+                        contact={contact}
+                        onClick={() => setSelected(contact)}
+                        similarity={r.similarity}
+                      />
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-12 text-center text-sm text-zinc-500">
+                      No semantic matches found. Try indexing contacts first.
+                    </td>
+                  </tr>
+                )
+              ) : filtered.length > 0 ? (
                 filtered.map((contact) => (
                   <ContactRow
                     key={contact.id}
@@ -659,11 +814,24 @@ export default function ContactsPage() {
         </div>
         <div className="flex items-center justify-between border-t border-zinc-800 px-4 py-3">
           <p className="text-xs text-zinc-500 font-mono">
-            {filtered.length} of {mockContacts.length} contacts
+            {semanticMode
+              ? semanticResults.length > 0
+                ? `${semanticResults.length} semantic matches`
+                : "Semantic search active"
+              : `${filtered.length} of ${mockContacts.length} contacts`}
           </p>
           <div className="flex items-center gap-2">
-            <SlidersHorizontal className="h-3.5 w-3.5 text-zinc-500" aria-hidden="true" />
-            <span className="text-xs text-zinc-500">AI-sorted by ML score</span>
+            {semanticMode ? (
+              <>
+                <Sparkles className="h-3.5 w-3.5 text-indigo-400" aria-hidden="true" />
+                <span className="text-xs text-indigo-400">Vector similarity search</span>
+              </>
+            ) : (
+              <>
+                <SlidersHorizontal className="h-3.5 w-3.5 text-zinc-500" aria-hidden="true" />
+                <span className="text-xs text-zinc-500">AI-sorted by ML score</span>
+              </>
+            )}
           </div>
         </div>
       </Card>

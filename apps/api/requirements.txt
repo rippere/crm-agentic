@@ -10,3 +10,5 @@ anthropic==0.34.2
 python-dotenv==1.0.1
 pydantic-settings==2.5.2
 pydantic==2.9.2
+pgvector>=0.4.0
+sentence-transformers>=3.0.0
