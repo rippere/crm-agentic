@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     SLACK_CLIENT_ID: str = ""
     SLACK_CLIENT_SECRET: str = ""
+    HUNTER_API_KEY: str = ""
 
 
 settings = Settings()

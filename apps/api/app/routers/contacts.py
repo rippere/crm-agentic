@@ -146,3 +146,25 @@ async def compose_email(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to parse email draft from Claude response",
         )
+
+
+@router.post("/workspaces/{workspace_id}/contacts/{contact_id}/enrich", status_code=202)
+async def enrich_contact_endpoint(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Enqueue contact enrichment: Hunter.io email lookup + Claude Haiku inference from messages."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.workers.enrich_contact import enrich_contact
+    task = enrich_contact.delay(str(contact_id))
+    return {"status": "queued", "contact_id": str(contact_id), "job_id": task.id}

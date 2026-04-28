@@ -257,6 +257,8 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
   const [composing, setComposing] = useState(false);
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichDone, setEnrichDone] = useState(false);
 
   // Fetch messages when the Messages tab is opened
   useEffect(() => {
@@ -419,6 +421,31 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
               {composeError && (
                 <p className="text-xs text-rose-400 text-center">{composeError}</p>
               )}
+              <Button
+                variant="secondary"
+                className="w-full justify-center"
+                disabled={enriching || enrichDone}
+                onClick={async () => {
+                  if (!workspaceId || !token) return;
+                  setEnriching(true);
+                  try {
+                    await apiClient.enrichContact(workspaceId, contact.id, token);
+                    setEnrichDone(true);
+                  } catch {
+                    // silent — background task, will surface via data refresh
+                  } finally {
+                    setEnriching(false);
+                  }
+                }}
+              >
+                {enriching ? (
+                  <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Enriching…</>
+                ) : enrichDone ? (
+                  <><Sparkles className="h-3.5 w-3.5 text-emerald-400" /> Enrichment Queued</>
+                ) : (
+                  <><Sparkles className="h-3.5 w-3.5" /> Auto-Enrich Contact</>
+                )}
+              </Button>
               <Button variant="secondary" className="w-full justify-center">View Timeline</Button>
               <Button variant="ghost" className="w-full justify-center text-rose-400 hover:text-rose-300 hover:bg-rose-500/10">
                 Flag At-Risk

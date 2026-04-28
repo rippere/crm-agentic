@@ -86,6 +86,10 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ score: 85, label: 'hot', trend: 'up' })
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/score`, { method: 'POST' }, token)
   },
+  enrichContact: (workspaceId: string, contactId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ status: 'queued', fields_updated: ['company', 'role', 'semantic_tags'] })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/enrich`, { method: 'POST' }, token)
+  },
 
   // Calls
   uploadCall: (workspaceId: string, formData: FormData, token: string) => {
