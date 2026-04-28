@@ -16,8 +16,9 @@ import {
 import {
   DollarSign, Briefcase, Brain, Bot, TrendingUp, TrendingDown,
   Minus, Activity, CheckCircle, AlertTriangle, Info,
-  ListTodo, Mail, BarChart2, CheckSquare,
+  ListTodo, Mail, BarChart2, CheckSquare, Heart,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { KPI, ActivityEvent } from "@/lib/types";
 
 interface PMKpis {
@@ -27,6 +28,16 @@ interface PMKpis {
   messagesIngested: number;
 }
 
+interface StaleDeal {
+  id: string;
+  title: string;
+  company: string;
+  stage: string;
+  value: number;
+  health_score: number;
+  signals: string[];
+}
+
 const kpiIcons: Record<string, React.ReactNode> = {
   dollar: <DollarSign className="h-4 w-4" />,
   briefcase: <Briefcase className="h-4 w-4" />,
@@ -34,8 +45,10 @@ const kpiIcons: Record<string, React.ReactNode> = {
   bot: <Bot className="h-4 w-4" />,
 };
 
+const SIGNAL = "#00C896";
+
 const severityIcon: Record<ActivityEvent["severity"], React.ReactNode> = {
-  success: <CheckCircle className="h-3.5 w-3.5 text-emerald-400 flex-shrink-0" />,
+  success: <CheckCircle className="h-3.5 w-3.5 flex-shrink-0" style={{ color: SIGNAL }} />,
   warning: <AlertTriangle className="h-3.5 w-3.5 text-amber-400 flex-shrink-0" />,
   info: <Info className="h-3.5 w-3.5 text-indigo-400 flex-shrink-0" />,
 };
@@ -61,60 +74,71 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
 
 function KPICard({ kpi }: { kpi: KPI }) {
   const delta = kpi.deltaType;
+  const accent = delta === "positive" ? "signal" : delta === "negative" ? "rose" : undefined;
+  const sparkColor = delta === "positive" ? SIGNAL : delta === "negative" ? "#F43F5E" : "#6366F1";
+  const sparkId = `spark-${kpi.id}`;
+
   return (
-    <Card className="flex flex-col gap-4" hover>
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-xs text-zinc-500 font-medium">{kpi.label}</p>
-          <p className="mt-1.5 text-2xl font-bold text-zinc-100 font-mono">{kpi.value}</p>
-        </div>
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
-          {kpiIcons[kpi.icon]}
-        </div>
-      </div>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          {delta === "positive" ? (
-            <TrendingUp className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
-          ) : delta === "negative" ? (
-            <TrendingDown className="h-3.5 w-3.5 text-rose-400" aria-hidden="true" />
-          ) : (
-            <Minus className="h-3.5 w-3.5 text-zinc-400" aria-hidden="true" />
+    <Card compact hover accent={accent as "signal" | "rose" | undefined} className="flex flex-col gap-3">
+      {/* Label + inline icon */}
+      <div className="flex items-center gap-1.5">
+        <span
+          className={cn(
+            "h-3.5 w-3.5 flex-shrink-0",
+            delta === "positive" ? "text-[#00C896]" : delta === "negative" ? "text-rose-400" : "text-zinc-600"
           )}
-          <span
-            className={`text-xs font-mono font-medium ${
-              delta === "positive"
-                ? "text-emerald-400"
-                : delta === "negative"
-                ? "text-rose-400"
-                : "text-zinc-400"
-            }`}
-          >
-            {kpi.delta}
-          </span>
-          <span className="text-xs text-zinc-600">vs last month</span>
-        </div>
+          aria-hidden="true"
+        >
+          {kpiIcons[kpi.icon]}
+        </span>
+        <p className="text-[11px] text-zinc-500 font-medium tracking-wide">{kpi.label}</p>
       </div>
+
+      {/* Value */}
+      <p className="text-[26px] font-bold text-zinc-100 font-mono tabular-nums leading-none">
+        {kpi.value}
+      </p>
+
       {/* Sparkline */}
-      <div className="h-10 -mx-1">
+      <div className="h-8 -mx-1">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={kpi.sparkData.map((v, i) => ({ v, i }))}>
             <defs>
-              <linearGradient id={`spark-${kpi.id}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#6366F1" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="#6366F1" stopOpacity={0} />
+              <linearGradient id={sparkId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={sparkColor} stopOpacity={0.22} />
+                <stop offset="95%" stopColor={sparkColor} stopOpacity={0} />
               </linearGradient>
             </defs>
             <Area
               type="monotone"
               dataKey="v"
-              stroke="#6366F1"
+              stroke={sparkColor}
               strokeWidth={1.5}
-              fill={`url(#spark-${kpi.id})`}
+              fill={`url(#${sparkId})`}
               dot={false}
             />
           </AreaChart>
         </ResponsiveContainer>
+      </div>
+
+      {/* Delta row */}
+      <div className="flex items-center gap-1.5">
+        {delta === "positive" ? (
+          <TrendingUp className="h-3 w-3 flex-shrink-0" style={{ color: SIGNAL }} aria-hidden="true" />
+        ) : delta === "negative" ? (
+          <TrendingDown className="h-3 w-3 text-rose-400 flex-shrink-0" aria-hidden="true" />
+        ) : (
+          <Minus className="h-3 w-3 text-zinc-600 flex-shrink-0" aria-hidden="true" />
+        )}
+        <span
+          className={cn(
+            "text-[10px] font-mono font-semibold",
+            delta === "positive" ? "text-[#00C896]" : delta === "negative" ? "text-rose-400" : "text-zinc-500"
+          )}
+        >
+          {kpi.delta}
+        </span>
+        <span className="text-[10px] text-zinc-700">vs last mo</span>
       </div>
     </Card>
   );
@@ -130,13 +154,11 @@ function PMKpiCard({
   value: string | number;
 }) {
   return (
-    <Card className="flex items-center gap-4">
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex-shrink-0">
-        {icon}
-      </div>
+    <Card compact accent="violet" className="flex items-center gap-3">
+      <span className="flex-shrink-0 text-indigo-400" aria-hidden="true">{icon}</span>
       <div>
-        <p className="text-2xl font-bold font-mono text-zinc-100">{value}</p>
-        <p className="text-xs text-zinc-500 mt-0.5">{label}</p>
+        <p className="text-xl font-bold font-mono tabular-nums text-zinc-100 leading-none">{value}</p>
+        <p className="text-[11px] text-zinc-500 mt-1 font-medium">{label}</p>
       </div>
     </Card>
   );
@@ -148,6 +170,7 @@ export default function DashboardPage() {
   const [activeAgents] = useState(mockAgents.filter((a) => a.status !== "idle"));
   const [pmKpis, setPmKpis] = useState<PMKpis | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<"sales" | "pm" | "both">("sales");
+  const [staleDeals, setStaleDeals] = useState<StaleDeal[]>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -158,6 +181,9 @@ export default function DashboardPage() {
         openTasks: demoDashboard.openTasks,
         messagesIngested: demoDashboard.messagesIngested,
       });
+      apiClient.getStaleDeals("demo-workspace-1", "demo-token").then((data) => {
+        setStaleDeals(Array.isArray(data) ? data : []);
+      }).catch(() => {});
       return;
     }
 
@@ -172,12 +198,14 @@ export default function DashboardPage() {
         if (ws?.mode) setWorkspaceMode(ws.mode as "sales" | "pm" | "both");
       }
 
-      // Fetch PM aggregate KPIs
       if (!workspaceId) return;
+
+      // Fetch PM aggregate KPIs + stale deals in parallel
       try {
-        const [tasksData, messagesData] = await Promise.all([
+        const [tasksData, messagesData, staleData] = await Promise.all([
           apiClient.getTasks(workspaceId, session.access_token).catch(() => []),
           apiClient.getMessages(workspaceId, session.access_token).catch(() => []),
+          apiClient.getStaleDeals(workspaceId, session.access_token).catch(() => []),
         ]);
 
         const today = new Date().toISOString().slice(0, 10);
@@ -204,6 +232,7 @@ export default function DashboardPage() {
           openTasks,
           messagesIngested: messages.length,
         });
+        setStaleDeals(Array.isArray(staleData) ? staleData : []);
       } catch {
         // Non-critical — dashboard still renders with sales KPIs
       }
@@ -258,6 +287,62 @@ export default function DashboardPage() {
               value={pmKpis.messagesIngested}
             />
           </div>
+        </section>
+      )}
+
+      {/* Deal Health Alerts — only show when stale deals exist */}
+      {staleDeals.length > 0 && (
+        <section aria-labelledby="health-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="health-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Deal Health Alerts
+            </h2>
+            <Badge variant="rose" size="sm" dot>{staleDeals.length} at risk</Badge>
+          </div>
+          <Card className="border-rose-500/10 overflow-hidden p-0">
+            <div className="divide-y divide-zinc-800">
+              {staleDeals.map((deal) => (
+                <div key={deal.id} className="flex items-center gap-4 px-4 py-3 hover:bg-zinc-800/40 transition-colors">
+                  {/* Health bar */}
+                  <div className="flex items-center gap-2 w-28 flex-shrink-0">
+                    <div className="flex-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                      <div
+                        className={cn(
+                          "h-full rounded-full",
+                          deal.health_score >= 40 ? "bg-amber-400" : "bg-rose-500"
+                        )}
+                        style={{ width: `${deal.health_score}%` }}
+                      />
+                    </div>
+                    <span className={cn(
+                      "text-xs font-mono font-bold w-6 text-right flex-shrink-0",
+                      deal.health_score >= 40 ? "text-amber-400" : "text-rose-400"
+                    )}>
+                      {deal.health_score}
+                    </span>
+                  </div>
+
+                  {/* Deal info */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-zinc-100 truncate">{deal.title}</p>
+                    <p className="text-xs text-zinc-500 truncate">{deal.company}</p>
+                  </div>
+
+                  {/* Stage + value */}
+                  <div className="text-right flex-shrink-0 hidden sm:block">
+                    <p className="text-xs text-zinc-400 capitalize">{deal.stage.replace("_", " ")}</p>
+                    <p className="text-xs font-mono text-zinc-300">${(deal.value / 1000).toFixed(0)}K</p>
+                  </div>
+
+                  {/* Top signal */}
+                  <div className="hidden lg:flex items-center gap-1.5 flex-shrink-0 max-w-xs">
+                    <AlertTriangle className="h-3 w-3 text-rose-400 flex-shrink-0" />
+                    <span className="text-[11px] text-zinc-500 truncate">{deal.signals[0]}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
         </section>
       )}
 
@@ -360,13 +445,13 @@ export default function DashboardPage() {
                 className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 px-3 py-2.5 transition-all duration-200 hover:border-zinc-700 cursor-pointer"
               >
                 <div
-                  className={`h-2 w-2 rounded-full flex-shrink-0 ${
-                    agent.status === "active"
-                      ? "bg-emerald-400 agent-pulse"
-                      : agent.status === "processing"
-                      ? "bg-indigo-400"
-                      : "bg-zinc-500"
-                  }`}
+                  className={cn(
+                    "h-2 w-2 rounded-full flex-shrink-0",
+                    agent.status === "active" && "agent-pulse",
+                    agent.status === "processing" ? "bg-indigo-400" : "bg-zinc-600"
+                  )}
+                  style={agent.status === "active" ? { backgroundColor: SIGNAL } : undefined}
+                  aria-hidden="true"
                 />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-semibold text-zinc-200 truncate">{agent.name}</p>

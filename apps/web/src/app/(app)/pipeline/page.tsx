@@ -7,29 +7,40 @@ import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { mockDeals } from "@/lib/mock-data";
 import { cn, formatCurrency, stageConfig, dealStageOrder } from "@/lib/utils";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign } from "lucide-react";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
+const SIGNAL = "#00C896";
+
 function WinProbabilityBar({ value }: { value: number }) {
-  const color =
-    value >= 70 ? "bg-emerald-400" : value >= 40 ? "bg-amber-400" : "bg-rose-400";
+  const gradient =
+    value >= 70
+      ? `linear-gradient(90deg, #059669, ${SIGNAL})`
+      : value >= 40
+      ? "linear-gradient(90deg, #D97706, #FBBF24)"
+      : "linear-gradient(90deg, #BE123C, #FB7185)";
+
+  const textColor =
+    value >= 70 ? SIGNAL : value >= 40 ? "#FBBF24" : "#FB7185";
+
   return (
     <div className="flex items-center gap-2">
       <div
-        className="h-1.5 flex-1 rounded-full bg-zinc-800 overflow-hidden"
+        className="h-1 flex-1 rounded-full bg-zinc-800/80 overflow-hidden"
         role="progressbar"
         aria-valuenow={value}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label={`Win probability: ${value}%`}
       >
-        <div className={cn("h-full rounded-full", color)} style={{ width: `${value}%` }} />
+        <div
+          className="h-full rounded-full"
+          style={{ width: `${value}%`, background: gradient }}
+        />
       </div>
       <span
-        className={cn(
-          "text-xs font-mono flex-shrink-0 w-9 text-right",
-          value >= 70 ? "text-emerald-400" : value >= 40 ? "text-amber-400" : "text-rose-400"
-        )}
+        className="text-[10px] font-mono flex-shrink-0 w-8 text-right font-semibold"
+        style={{ color: textColor }}
       >
         {value}%
       </span>
@@ -37,11 +48,22 @@ function WinProbabilityBar({ value }: { value: number }) {
   );
 }
 
+const stageBorderColor: Record<string, string> = {
+  discovery:   "#52525B",
+  qualified:   "#6366F1",
+  proposal:    "#FBBF24",
+  negotiation: "#A78BFA",
+  closed_won:  "#00C896",
+  closed_lost: "#F43F5E",
+};
+
 function DealCard({ deal }: { deal: Deal }) {
   const stage = stageConfig[deal.stage];
+  const borderColor = stageBorderColor[deal.stage] ?? "#52525B";
   return (
     <div
-      className="group rounded-xl border border-zinc-800 bg-zinc-900 p-3.5 hover:border-zinc-700 hover:bg-zinc-800/80 transition-all duration-200 cursor-pointer space-y-3"
+      className="group rounded-xl border border-zinc-800/70 bg-zinc-900/70 p-3.5 hover:border-zinc-700/80 hover:bg-zinc-900 transition-all duration-200 cursor-pointer space-y-2.5 border-l-2"
+      style={{ borderLeftColor: borderColor }}
       tabIndex={0}
       role="article"
       aria-label={`${deal.title} — ${formatCurrency(deal.value)}`}
@@ -70,6 +92,34 @@ function DealCard({ deal }: { deal: Deal }) {
             <span className="text-[10px] text-zinc-500 font-mono">ML Win Probability</span>
           </div>
           <WinProbabilityBar value={deal.mlWinProbability} />
+        </div>
+      )}
+
+      {/* Health score */}
+      {deal.stage !== "closed_won" && deal.stage !== "closed_lost" && (
+        <div className="flex items-center gap-1.5">
+          {deal.healthScore >= 70 ? (
+            <Heart className="h-3 w-3 text-emerald-400" aria-hidden="true" />
+          ) : deal.healthScore >= 40 ? (
+            <AlertTriangle className="h-3 w-3 text-amber-400" aria-hidden="true" />
+          ) : (
+            <AlertTriangle className="h-3 w-3 text-rose-400" aria-hidden="true" />
+          )}
+          <div className="flex-1 h-1 rounded-full bg-zinc-800 overflow-hidden">
+            <div
+              className={cn(
+                "h-full rounded-full transition-all",
+                deal.healthScore >= 70 ? "bg-emerald-400" : deal.healthScore >= 40 ? "bg-amber-400" : "bg-rose-500"
+              )}
+              style={{ width: `${deal.healthScore}%` }}
+            />
+          </div>
+          <span className={cn(
+            "text-[10px] font-mono w-6 text-right flex-shrink-0",
+            deal.healthScore >= 70 ? "text-emerald-400" : deal.healthScore >= 40 ? "text-amber-400" : "text-rose-400"
+          )}>
+            {deal.healthScore}
+          </span>
         </div>
       )}
 
@@ -145,6 +195,10 @@ export default function PipelinePage() {
     .filter((d) => d.stage !== "closed_won" && d.stage !== "closed_lost")
     .reduce((sum, d, _, arr) => sum + d.mlWinProbability / arr.length, 0);
 
+  const staleCount = deals.filter(
+    (d) => d.healthScore < 40 && d.stage !== "closed_won" && d.stage !== "closed_lost"
+  ).length;
+
   return (
     <div className="flex flex-col gap-6 p-6 min-h-screen">
       <Header
@@ -153,7 +207,7 @@ export default function PipelinePage() {
       />
 
       {/* Summary bar */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Card className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex-shrink-0">
             <DollarSign className="h-4 w-4 text-indigo-400" aria-hidden="true" />
@@ -192,6 +246,20 @@ export default function PipelinePage() {
             </p>
           </div>
         </Card>
+        <Card className={cn("flex items-center gap-3", staleCount > 0 && "border-rose-500/20 bg-rose-500/5")}>
+          <div className={cn(
+            "flex h-9 w-9 items-center justify-center rounded-xl flex-shrink-0",
+            staleCount > 0 ? "bg-rose-500/10 border border-rose-500/20" : "bg-zinc-700/50 border border-zinc-700"
+          )}>
+            <AlertTriangle className={cn("h-4 w-4", staleCount > 0 ? "text-rose-400" : "text-zinc-400")} aria-hidden="true" />
+          </div>
+          <div>
+            <p className="text-xs text-zinc-500">Stale Deals</p>
+            <p className={cn("text-base font-bold font-mono", staleCount > 0 ? "text-rose-400" : "text-zinc-100")}>
+              {staleCount}
+            </p>
+          </div>
+        </Card>
       </div>
 
       {/* Pipeline Board */}
@@ -200,7 +268,7 @@ export default function PipelinePage() {
           <div className="flex items-center gap-2">
             <Brain className="h-4 w-4 text-indigo-400" aria-hidden="true" />
             <span className="text-xs text-zinc-400 font-mono">
-              ML win probability scored by Lead Scorer agent
+              ML win probability · Deal health (stage staleness + engagement)
             </span>
           </div>
           <Button variant="cta" size="sm">

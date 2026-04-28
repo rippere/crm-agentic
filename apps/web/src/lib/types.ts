@@ -42,6 +42,7 @@ export interface Deal {
   value: number;
   stage: DealStage;
   mlWinProbability: number; // 0-100
+  healthScore: number;      // 0-100, 100 = healthy
   expectedClose: string;
   assignedAgent: string;
   notes: string;

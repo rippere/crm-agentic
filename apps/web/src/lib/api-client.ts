@@ -87,6 +87,31 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/score`, { method: 'POST' }, token)
   },
 
+  // Deal health
+  triggerDealHealth: (workspaceId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ job_id: 'demo-health', status: 'queued' })
+    return apiFetch(`/workspaces/${workspaceId}/deals/health`, { method: 'POST' }, token)
+  },
+  getStaleDeals: (workspaceId: string, token: string, threshold = 40) => {
+    if (isDemoMode) {
+      const { demoDeals } = require('./demo-data')
+      return Promise.resolve(
+        demoDeals
+          .filter((d: { healthScore: number; stage: string }) =>
+            d.healthScore <= threshold && !['closed_won', 'closed_lost'].includes(d.stage)
+          )
+          .sort((a: { healthScore: number }, b: { healthScore: number }) => a.healthScore - b.healthScore)
+          .slice(0, 5)
+          .map((d: { id: string; title: string; company: string; stage: string; value: number; healthScore: number }) => ({
+            id: d.id, title: d.title, company: d.company,
+            stage: d.stage, value: d.value, health_score: d.healthScore,
+            signals: ['Stale — no recent activity'],
+          }))
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/stale?threshold=${threshold}`, {}, token)
+  },
+
   // Semantic search
   semanticSearchContacts: (workspaceId: string, query: string, token: string) => {
     if (isDemoMode) return Promise.resolve([])

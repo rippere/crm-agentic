@@ -16,6 +16,7 @@ function rowToDeal(row: DealRow): Deal {
     value: row.value,
     stage: row.stage,
     mlWinProbability: row.ml_win_probability,
+    healthScore: (row as unknown as Record<string, number>).health_score ?? 100,
     expectedClose: row.expected_close,
     assignedAgent: row.assigned_agent,
     notes: row.notes,

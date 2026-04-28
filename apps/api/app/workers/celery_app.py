@@ -10,7 +10,7 @@ celery_app = Celery(
     "crm_agentic",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["app.workers.ingest", "app.workers.score_contact", "app.workers.pipeline", "app.workers.slack_ingest", "app.workers.embed_contacts"],
+    include=["app.workers.ingest", "app.workers.score_contact", "app.workers.pipeline", "app.workers.slack_ingest", "app.workers.embed_contacts", "app.workers.deal_health_worker"],
 )
 
 celery_app.conf.update(
@@ -22,10 +22,14 @@ celery_app.conf.update(
     task_track_started=True,
     beat_schedule={
         "nightly-pipeline-optimize": {
-            # TODO: workspace_id needed — iterate all workspaces when multi-tenant Beat support is added
             "task": "app.workers.pipeline.optimize_pipeline",
-            "schedule": crontab(hour=2, minute=0),  # 2am UTC daily
-            "args": [],  # workspace_id left empty — needs workspace-aware Beat runner
+            "schedule": crontab(hour=2, minute=0),
+            "args": [],
+        },
+        "nightly-deal-health": {
+            "task": "app.workers.deal_health_worker.compute_deal_health",
+            "schedule": crontab(hour=2, minute=15),
+            "args": [],
         },
     },
 )
