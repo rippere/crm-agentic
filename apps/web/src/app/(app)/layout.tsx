@@ -1,19 +1,16 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { createServerClient } from "@/lib/supabase";
-import Sidebar from "@/components/layout/Sidebar";
+import ClientShell from "@/components/layout/ClientShell";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  // In demo mode, bypass all auth checks and render with "both" sidebar
+  // In demo mode, bypass all auth checks
   if (DEMO_MODE) {
     return (
       <div className="flex h-screen overflow-hidden bg-zinc-950">
-        <Sidebar mode="both" />
-        <main className="ml-60 flex-1 overflow-y-auto min-h-screen">
-          {children}
-        </main>
+        <ClientShell mode="both">{children}</ClientShell>
       </div>
     );
   }
@@ -33,7 +30,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect("/onboarding");
   }
 
-  // Fetch workspace to get mode for sidebar gating
   const { data: workspace } = await supabase
     .from("workspaces")
     .select("mode")
@@ -44,10 +40,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950">
-      <Sidebar mode={mode} />
-      <main className="ml-60 flex-1 overflow-y-auto min-h-screen">
-        {children}
-      </main>
+      <ClientShell mode={mode}>{children}</ClientShell>
     </div>
   );
 }

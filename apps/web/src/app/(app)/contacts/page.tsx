@@ -6,6 +6,8 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Avatar from "@/components/ui/Avatar";
 import Button from "@/components/ui/Button";
+import LogActivityModal from "@/components/ui/LogActivityModal";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { mockContacts } from "@/lib/mock-data";
 import { cn, formatCurrency, leadScoreConfig } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
@@ -13,7 +15,7 @@ import { createBrowserClient } from "@/lib/supabase";
 import {
   Search, SlidersHorizontal, Brain, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
-  Copy, ExternalLink, X, Loader2, Zap,
+  Copy, ExternalLink, X, Loader2, Zap, ClipboardList,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -259,6 +261,8 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
   const [composeError, setComposeError] = useState<string | null>(null);
   const [enriching, setEnriching] = useState(false);
   const [enrichDone, setEnrichDone] = useState(false);
+  const [logActivityOpen, setLogActivityOpen] = useState(false);
+  const [flagConfirmOpen, setFlagConfirmOpen] = useState(false);
 
   // Fetch messages when the Messages tab is opened
   useEffect(() => {
@@ -447,11 +451,46 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
                 )}
               </Button>
               <Button variant="secondary" className="w-full justify-center">View Timeline</Button>
-              <Button variant="ghost" className="w-full justify-center text-rose-400 hover:text-rose-300 hover:bg-rose-500/10">
+              <Button
+                variant="secondary"
+                className="w-full justify-center"
+                onClick={() => setLogActivityOpen(true)}
+              >
+                <ClipboardList className="h-3.5 w-3.5" />
+                Log Activity
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full justify-center text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                onClick={() => setFlagConfirmOpen(true)}
+              >
                 Flag At-Risk
               </Button>
             </div>
           </>
+        )}
+
+        {/* Log Activity Modal */}
+        {logActivityOpen && (
+          <LogActivityModal
+            contactName={contact.name}
+            onClose={() => setLogActivityOpen(false)}
+            onSubmit={({ type, note }) => {
+              console.log("[Activity logged]", { contactId: contact.id, type, note });
+            }}
+          />
+        )}
+
+        {/* Flag At-Risk Confirmation */}
+        {flagConfirmOpen && (
+          <ConfirmDialog
+            title="Flag contact as at-risk?"
+            description={`This will mark ${contact.name} as at-risk and alert assigned agents.`}
+            actionLabel="Flag At-Risk"
+            variant="warning"
+            onConfirm={() => console.log("[Flagged at-risk]", contact.id)}
+            onClose={() => setFlagConfirmOpen(false)}
+          />
         )}
 
         {activeTab === "messages" && (

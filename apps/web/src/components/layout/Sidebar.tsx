@@ -3,28 +3,41 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { motion } from "framer-motion";
 import {
-  LayoutDashboard,
-  Users,
-  KanbanSquare,
-  Bot,
-  Settings,
-  Zap,
-  Inbox,
-  CheckSquare,
-  FolderOpen,
-  Plug,
-  Search,
-  PhoneCall,
+  LayoutDashboard, Users, KanbanSquare, Bot, Settings,
+  Zap, Inbox, CheckSquare, FolderOpen, Plug, Search,
+  PhoneCall, ChevronsUpDown, LogOut, UserCircle,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
+import { useState } from "react";
+
+/* ─── Framer variants (borrowed from 21st.dev SessionNavBar) ─── */
+
+const sidebarVariants = {
+  open:   { width: "15rem"   },
+  closed: { width: "3.5rem"  },
+};
+
+const transitionProps = {
+  type: "tween" as const,
+  ease: "easeOut" as const,
+  duration: 0.2,
+};
+
+const labelVariants = {
+  open:   { opacity: 1, x: 0,   display: "block", transition: { delay: 0.05 } },
+  closed: { opacity: 0, x: -8,  transitionEnd: { display: "none" } },
+};
+
+/* ─── Nav structure ─── */
 
 interface NavItem {
   href: string;
   label: string;
   icon: React.ElementType;
-  modes?: WorkspaceMode[];
   hideModes?: WorkspaceMode[];
+  badge?: string;
 }
 
 interface NavGroup {
@@ -38,20 +51,20 @@ const navGroups: NavGroup[] = [
     id: "workspace",
     label: "Workspace",
     items: [
-      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/contacts", label: "Contacts", icon: Users },
-      { href: "/pipeline", label: "Pipeline", icon: KanbanSquare, hideModes: ["pm"] },
+      { href: "/dashboard",  label: "Dashboard", icon: LayoutDashboard },
+      { href: "/contacts",   label: "Contacts",  icon: Users           },
+      { href: "/pipeline",   label: "Pipeline",  icon: KanbanSquare,   hideModes: ["pm"] },
     ],
   },
   {
     id: "intelligence",
     label: "Intelligence",
     items: [
-      { href: "/agents", label: "Agents", icon: Bot },
-      { href: "/inbox", label: "Inbox", icon: Inbox },
-      { href: "/calls", label: "Calls", icon: PhoneCall },
-      { href: "/tasks", label: "Tasks", icon: CheckSquare, hideModes: ["sales"] },
-      { href: "/projects", label: "Projects", icon: FolderOpen, hideModes: ["sales"] },
+      { href: "/agents",   label: "Agents",   icon: Bot,         badge: "LIVE" },
+      { href: "/inbox",    label: "Inbox",    icon: Inbox                       },
+      { href: "/calls",    label: "Calls",    icon: PhoneCall                   },
+      { href: "/tasks",    label: "Tasks",    icon: CheckSquare, hideModes: ["sales"] },
+      { href: "/projects", label: "Projects", icon: FolderOpen,  hideModes: ["sales"] },
     ],
   },
   {
@@ -64,86 +77,130 @@ const navGroups: NavGroup[] = [
 ];
 
 const agentNexus = [
-  { name: "Semantic Sorter",   status: "active"     as const, metric: "12/min" },
-  { name: "Lead Scorer",       status: "active"     as const, metric: "8/min"  },
-  { name: "Email Composer",    status: "processing" as const, metric: "ready"  },
-  { name: "Sentiment Analyzer", status: "active"    as const, metric: "15/min" },
+  { name: "Semantic Sorter",    status: "active"     as const, metric: "12/min" },
+  { name: "Lead Scorer",        status: "active"     as const, metric: "8/min"  },
+  { name: "Email Composer",     status: "processing" as const, metric: "ready"  },
+  { name: "Sentiment Analyzer", status: "active"     as const, metric: "15/min" },
 ];
 
 interface SidebarProps {
   mode?: WorkspaceMode;
+  onSearchClick?: () => void;
 }
 
-export default function Sidebar({ mode = "sales" }: SidebarProps) {
+export default function Sidebar({ mode = "sales", onSearchClick }: SidebarProps) {
   const pathname = usePathname();
+  const [isCollapsed, setIsCollapsed] = useState(true);
 
   return (
-    <aside
-      className="fixed left-0 top-0 h-full w-60 flex flex-col z-30 border-r border-zinc-800/50"
+    <motion.aside
+      className="fixed left-0 top-0 h-full z-30 flex flex-col border-r border-zinc-800/50 overflow-hidden"
       style={{ backgroundColor: "#08080C" }}
+      initial="closed"
+      animate={isCollapsed ? "closed" : "open"}
+      variants={sidebarVariants}
+      transition={transitionProps}
+      onMouseEnter={() => setIsCollapsed(false)}
+      onMouseLeave={() => setIsCollapsed(true)}
     >
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-zinc-800/50">
+      <div className="flex h-[54px] shrink-0 items-center gap-3 px-3 border-b border-zinc-800/50">
         <div
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 flex-shrink-0"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600"
           style={{ boxShadow: "0 0 14px rgba(99,102,241,0.45)" }}
         >
           <Zap className="h-4 w-4 text-white" aria-hidden="true" />
         </div>
-        <div className="flex-1 min-w-0">
+        <motion.div variants={labelVariants} className="min-w-0 flex-1 overflow-hidden whitespace-nowrap">
           <p className="text-sm font-semibold text-zinc-100 leading-none tracking-tight">NovaCRM</p>
           <p className="text-[10px] text-zinc-500 mt-0.5 font-mono">Agentic Intelligence</p>
-        </div>
-        <div
+        </motion.div>
+        <motion.div
+          variants={labelVariants}
           className="flex items-center gap-1 flex-shrink-0"
-          aria-label="System live"
           title="All systems operational"
         >
           <span className="h-1.5 w-1.5 rounded-full bg-[#00C896] agent-pulse" />
           <span className="text-[9px] font-mono font-semibold text-[#00C896] tracking-widest">LIVE</span>
-        </div>
+        </motion.div>
+      </div>
+
+      {/* Search / ⌘K */}
+      <div className="px-2 pt-3 pb-1">
+        <button
+          onClick={onSearchClick}
+          className="group w-full flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-2 text-sm text-zinc-600 hover:text-zinc-400 hover:border-zinc-700 transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500"
+          aria-label="Open command palette (⌘K)"
+        >
+          <Search className="h-4 w-4 shrink-0 text-zinc-700 group-hover:text-zinc-500 transition-colors" aria-hidden="true" />
+          <motion.span variants={labelVariants} className="flex-1 text-left text-xs whitespace-nowrap">
+            Search…
+          </motion.span>
+          <motion.kbd
+            variants={labelVariants}
+            className="flex items-center rounded border border-zinc-800 bg-zinc-900/60 px-1.5 py-0.5 text-[9px] font-mono text-zinc-700"
+          >
+            ⌘K
+          </motion.kbd>
+        </button>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-2 py-4 overflow-y-auto" aria-label="Main navigation">
-        <div className="space-y-5">
+      <nav className="flex-1 px-2 py-2 overflow-y-auto overflow-x-hidden" aria-label="Main navigation">
+        <div className="space-y-4">
           {navGroups.map(({ id, label, items }) => {
             const visible = items.filter((item) => {
               if (item.hideModes?.includes(mode)) return false;
-              if (item.modes && !item.modes.includes(mode)) return false;
               return true;
             });
             if (visible.length === 0) return null;
 
             return (
               <div key={id}>
-                <p className="px-3 mb-1 text-[9px] font-semibold uppercase tracking-[0.14em] font-mono text-zinc-600">
+                <motion.p
+                  variants={labelVariants}
+                  className="px-2.5 mb-1 text-[9px] font-semibold uppercase tracking-[0.14em] font-mono text-zinc-600 whitespace-nowrap overflow-hidden"
+                >
                   {label}
-                </p>
+                </motion.p>
                 <div className="space-y-0.5">
-                  {visible.map(({ href, label: itemLabel, icon: Icon }) => {
+                  {visible.map(({ href, label: itemLabel, icon: Icon, badge }) => {
                     const active = pathname === href || pathname.startsWith(href + "/");
                     return (
                       <Link
                         key={href}
                         href={href}
                         className={cn(
-                          "group relative flex items-center gap-3 rounded-r-lg px-3 py-2 text-sm font-medium transition-all duration-150",
-                          "border-l-2",
+                          "group relative flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium transition-all duration-150 whitespace-nowrap",
                           active
-                            ? "border-l-indigo-500 bg-indigo-500/8 text-zinc-100"
-                            : "border-l-transparent text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/25"
+                            ? "bg-indigo-500/10 text-zinc-100"
+                            : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/40"
                         )}
                         aria-current={active ? "page" : undefined}
+                        title={itemLabel}
                       >
+                        {/* Active indicator bar */}
+                        {active && (
+                          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-full bg-indigo-500" />
+                        )}
                         <Icon
                           className={cn(
-                            "h-4 w-4 flex-shrink-0 transition-colors duration-150",
+                            "h-4 w-4 shrink-0 transition-colors duration-150",
                             active ? "text-indigo-400" : "text-zinc-600 group-hover:text-zinc-400"
                           )}
                           aria-hidden="true"
                         />
-                        {itemLabel}
+                        <motion.span variants={labelVariants} className="flex-1 overflow-hidden">
+                          {itemLabel}
+                        </motion.span>
+                        {badge && (
+                          <motion.span
+                            variants={labelVariants}
+                            className="text-[8px] font-mono font-semibold text-[#00C896] border border-[#00C896]/30 rounded px-1 py-0.5 leading-none bg-[#00C896]/5"
+                          >
+                            {badge}
+                          </motion.span>
+                        )}
                       </Link>
                     );
                   })}
@@ -151,82 +208,89 @@ export default function Sidebar({ mode = "sales" }: SidebarProps) {
               </div>
             );
           })}
-
-          {/* Command palette shortcut */}
-          <button
-            className="group w-full flex items-center gap-3 rounded-r-lg border-l-2 border-l-transparent px-3 py-2 text-sm font-medium text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800/20 transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500"
-            aria-label="Open command palette (⌘K)"
-          >
-            <Search className="h-4 w-4 flex-shrink-0 text-zinc-700 group-hover:text-zinc-500 transition-colors" aria-hidden="true" />
-            <span>Search</span>
-            <kbd className="ml-auto flex items-center gap-0.5 rounded border border-zinc-800 bg-zinc-900/60 px-1.5 py-0.5 text-[9px] font-mono text-zinc-700">
-              ⌘K
-            </kbd>
-          </button>
         </div>
       </nav>
 
-      {/* Nexus — live agent status with throughput */}
-      <div className="px-4 py-3 border-t border-zinc-800/50">
-        <div className="flex items-center justify-between mb-2.5">
-          <p className="text-[9px] font-mono font-semibold uppercase tracking-[0.14em] text-zinc-600">
-            Nexus
-          </p>
-          <span className="text-[9px] font-mono text-zinc-700">
-            {agentNexus.filter(a => a.status === "active").length} active
-          </span>
-        </div>
-        <div className="space-y-1.5">
-          {agentNexus.map((agent) => (
-            <div key={agent.name} className="flex items-center gap-2.5">
-              <span
-                className={cn(
-                  "h-1.5 w-1.5 rounded-full flex-shrink-0",
-                  agent.status === "active"
-                    ? "bg-[#00C896] agent-pulse"
-                    : agent.status === "processing"
-                    ? "bg-indigo-400"
-                    : "bg-zinc-600"
-                )}
-              />
-              <span className="text-[11px] text-zinc-500 flex-1 truncate min-w-0 font-medium">
-                {agent.name}
-              </span>
-              <span
-                className={cn(
-                  "text-[10px] font-mono flex-shrink-0",
+      {/* Nexus — agent status */}
+      <div className="px-3 py-3 border-t border-zinc-800/50 shrink-0">
+        <motion.div variants={labelVariants}>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[9px] font-mono font-semibold uppercase tracking-[0.14em] text-zinc-600">
+              Nexus
+            </p>
+            <span className="text-[9px] font-mono text-zinc-700">
+              {agentNexus.filter((a) => a.status === "active").length} active
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {agentNexus.map((agent) => (
+              <div key={agent.name} className="flex items-center gap-2.5">
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full shrink-0",
+                    agent.status === "active"
+                      ? "bg-[#00C896] agent-pulse"
+                      : agent.status === "processing"
+                      ? "bg-indigo-400"
+                      : "bg-zinc-600"
+                  )}
+                />
+                <span className="text-[11px] text-zinc-500 flex-1 truncate font-medium">{agent.name}</span>
+                <span className={cn(
+                  "text-[10px] font-mono shrink-0",
                   agent.status === "active" ? "text-[#00C896]/60" : "text-zinc-600"
-                )}
-              >
-                {agent.metric}
-              </span>
-            </div>
+                )}>
+                  {agent.metric}
+                </span>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+
+        {/* Collapsed: just dots */}
+        <motion.div
+          initial={false}
+          animate={isCollapsed ? { opacity: 1 } : { opacity: 0 }}
+          transition={{ duration: 0.1 }}
+          className={cn("space-y-1.5 absolute", isCollapsed ? "pointer-events-none" : "hidden")}
+        >
+          {agentNexus.map((agent) => (
+            <span
+              key={agent.name}
+              className={cn(
+                "h-1.5 w-1.5 rounded-full block",
+                agent.status === "active" ? "bg-[#00C896] agent-pulse" : "bg-zinc-700"
+              )}
+            />
           ))}
-        </div>
+        </motion.div>
       </div>
 
       {/* Settings + User */}
-      <div className="px-2 py-3 border-t border-zinc-800/50 space-y-0.5">
+      <div className="px-2 py-2 border-t border-zinc-800/50 space-y-0.5 shrink-0">
         <Link
           href="/settings"
-          className="group flex items-center gap-3 rounded-r-lg border-l-2 border-l-transparent px-3 py-2 text-sm font-medium text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/25 transition-all duration-150 cursor-pointer"
+          className="group flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/40 transition-all whitespace-nowrap"
+          title="Settings"
         >
-          <Settings
-            className="h-4 w-4 flex-shrink-0 text-zinc-600 group-hover:text-zinc-400 transition-colors"
-            aria-hidden="true"
-          />
-          Settings
+          <Settings className="h-4 w-4 shrink-0 text-zinc-600 group-hover:text-zinc-400 transition-colors" aria-hidden="true" />
+          <motion.span variants={labelVariants}>Settings</motion.span>
         </Link>
-        <div className="flex items-center gap-3 px-3 py-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-indigo-500/15 border border-indigo-500/25 text-[10px] font-semibold text-indigo-300 font-mono flex-shrink-0">
+
+        {/* User row — org-switcher inspired by SessionNavBar */}
+        <div className="flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-zinc-800/40 transition-all cursor-pointer whitespace-nowrap group">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-500/15 border border-indigo-500/25 text-[10px] font-semibold text-indigo-300 font-mono">
             BR
           </div>
-          <div className="min-w-0 flex-1">
+          <motion.div variants={labelVariants} className="flex-1 min-w-0 overflow-hidden">
             <p className="text-xs font-semibold text-zinc-300 truncate leading-none">Ben Wilson</p>
-            <p className="text-[10px] text-zinc-600 truncate font-mono mt-0.5">Admin · Pro</p>
-          </div>
+            <p className="text-[10px] text-zinc-600 font-mono mt-0.5">Admin · Pro</p>
+          </motion.div>
+          <motion.div variants={labelVariants} className="shrink-0 flex gap-1.5">
+            <ChevronsUpDown className="h-3.5 w-3.5 text-zinc-700 group-hover:text-zinc-500 transition-colors" />
+          </motion.div>
         </div>
       </div>
-    </aside>
+    </motion.aside>
   );
 }
