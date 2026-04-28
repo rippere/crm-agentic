@@ -8,8 +8,8 @@ import Avatar from "@/components/ui/Avatar";
 import Button from "@/components/ui/Button";
 import LogActivityModal from "@/components/ui/LogActivityModal";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
-import { mockContacts } from "@/lib/mock-data";
 import { cn, formatCurrency, leadScoreConfig } from "@/lib/utils";
+import { useContacts } from "@/hooks/useContacts";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import {
@@ -585,6 +585,69 @@ interface SemanticResult {
   similarity: number | null;
 }
 
+interface NewContactPayload { name: string; email: string; company: string; role: string; status: ContactStatus }
+
+function NewContactModal({ onClose, onCreate }: { onClose: () => void; onCreate: (p: NewContactPayload) => Promise<void> }) {
+  const [form, setForm] = useState<NewContactPayload>({ name: "", email: "", company: "", role: "", status: "lead" });
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+    setSaving(true);
+    await onCreate(form);
+    setSaving(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+          <p className="text-sm font-semibold text-zinc-100">New Contact</p>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer"><X className="h-4 w-4" /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {([
+            { label: "Full name *", key: "name", placeholder: "Sarah Chen" },
+            { label: "Email", key: "email", placeholder: "sarah@example.com" },
+            { label: "Company", key: "company", placeholder: "Acme Corp" },
+            { label: "Role", key: "role", placeholder: "VP of Engineering" },
+          ] as const).map(({ label, key, placeholder }) => (
+            <div key={key}>
+              <label className="block text-xs font-medium text-zinc-400 mb-1.5">{label}</label>
+              <input
+                type={key === "email" ? "email" : "text"}
+                value={form[key]}
+                onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                placeholder={placeholder}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+              />
+            </div>
+          ))}
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1.5">Status</label>
+            <select
+              value={form.status}
+              onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as ContactStatus }))}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-sm text-zinc-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+            >
+              {(["lead", "prospect", "customer", "churned"] as ContactStatus[]).map((s) => (
+                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button type="button" variant="secondary" className="flex-1 justify-center" onClick={onClose}>Cancel</Button>
+            <Button type="submit" variant="primary" className="flex-1 justify-center" disabled={saving || !form.name.trim()}>
+              {saving ? "Creating…" : "Create Contact"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function ContactsPage() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<ContactStatus | "all">("all");
@@ -596,7 +659,10 @@ export default function ContactsPage() {
   const [semanticResults, setSemanticResults] = useState<SemanticResult[]>([]);
   const [semanticLoading, setSemanticLoading] = useState(false);
   const [indexing, setIndexing] = useState(false);
+  const [newContactOpen, setNewContactOpen] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { contacts, createContact } = useContacts();
 
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') {
@@ -647,7 +713,7 @@ export default function ContactsPage() {
   }, [workspaceId, token, indexing]);
 
   const filtered = useMemo(() => {
-    return mockContacts.filter((c) => {
+    return contacts.filter((c) => {
       const matchSearch =
         !search ||
         c.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -657,13 +723,13 @@ export default function ContactsPage() {
       const matchScore = filterScore === "all" || c.mlScore.label === filterScore;
       return matchSearch && matchStatus && matchScore;
     });
-  }, [search, filterStatus, filterScore]);
+  }, [contacts, search, filterStatus, filterScore]);
 
   return (
     <div className="flex flex-col gap-6 p-6">
       <Header
         title="Contacts"
-        subtitle={`${mockContacts.length} total · AI-classified`}
+        subtitle={`${contacts.length} total · AI-classified`}
       />
 
       {/* Stats row */}
@@ -671,8 +737,8 @@ export default function ContactsPage() {
         {(["all", "lead", "prospect", "customer"] as const).map((status) => {
           const count =
             status === "all"
-              ? mockContacts.length
-              : mockContacts.filter((c) => c.status === status).length;
+              ? contacts.length
+              : contacts.filter((c) => c.status === status).length;
           return (
             <button
               key={status}
@@ -776,7 +842,7 @@ export default function ContactsPage() {
           </button>
         )}
 
-        <Button variant="cta" size="sm" className="ml-auto">
+        <Button variant="cta" size="sm" className="ml-auto" onClick={() => setNewContactOpen(true)}>
           <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
           Add Contact
         </Button>
@@ -894,7 +960,7 @@ export default function ContactsPage() {
               ? semanticResults.length > 0
                 ? `${semanticResults.length} semantic matches`
                 : "Semantic search active"
-              : `${filtered.length} of ${mockContacts.length} contacts`}
+              : `${filtered.length} of ${contacts.length} contacts`}
           </p>
           <div className="flex items-center gap-2">
             {semanticMode ? (
@@ -922,6 +988,17 @@ export default function ContactsPage() {
           />
           <ContactDrawer contact={selected} onClose={() => setSelected(null)} workspaceId={workspaceId} token={token} />
         </>
+      )}
+
+      {/* New Contact Modal */}
+      {newContactOpen && (
+        <NewContactModal
+          onClose={() => setNewContactOpen(false)}
+          onCreate={async (payload) => {
+            await createContact(payload as Partial<Contact>);
+            setNewContactOpen(false);
+          }}
+        />
       )}
     </div>
   );
