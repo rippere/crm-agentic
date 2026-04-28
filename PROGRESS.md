@@ -12,12 +12,13 @@
 - [2026-04-28] Phase 5c: Call Summarizer — Whisper transcription + Claude Sonnet summary + action items, /calls UI page
 - [2026-04-28] Phase 5e: Contact auto-enrich — Hunter.io email finder + Claude Haiku inference from messages, "Auto-Enrich" button in contact drawer
 
-## Current Phase
-Phase 5 — COMPLETE
+- [2026-04-28] Phase 6: Production readiness — Docker Compose full stack (postgres+pgvector, redis, api, worker, beat, web), init_docker.sql, Web Dockerfile, README quickstart, PyJWT fix
 
-## Next Tasks
-- 5d: XGBoost lead scorer trained on real data (DEFERRED — requires 100+ contacts with labeled outcomes)
-- Phase 6: Production readiness — env var docs, Docker Compose full stack, README quickstart
+## Current Phase
+COMPLETE — all phases shipped
+
+## Deferred
+- 5d: XGBoost lead scorer (requires 100+ labeled contacts with outcomes)
 
 ## Blockers (must be resolved before first run)
 - Supabase project: create at supabase.com, fill NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY + SUPABASE_SERVICE_ROLE_KEY + SUPABASE_JWT_SECRET
