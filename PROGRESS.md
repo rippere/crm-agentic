@@ -9,14 +9,15 @@
 - [2026-04-28] Phase 5a: Slack OAuth connector + ingest pipeline (Tasks 5a)
 - [2026-04-28] Phase 5b: pgvector semantic contact embeddings + AI search (Tasks 5b)
 - [2026-04-28] Phase 5f: Deal health scoring — stage staleness + engagement decay, stale deal alerts (Tasks 5f)
+- [2026-04-28] Phase 5c: Call Summarizer — Whisper transcription + Claude Sonnet summary + action items, /calls UI page
+- [2026-04-28] Phase 5e: Contact auto-enrich — Hunter.io email finder + Claude Haiku inference from messages, "Auto-Enrich" button in contact drawer
 
 ## Current Phase
-Phase 5 — Advanced ML (5c, 5d, 5e remaining)
+Phase 5 — COMPLETE
 
 ## Next Tasks
-- 5c: Call Summarizer (Whisper + Claude Sonnet) — audio upload → transcript → summary + action items
-- 5d: XGBoost lead scorer trained on real data (requires 100+ contacts with outcomes)
-- 5e: Contact auto-enrich — pull LinkedIn/Clearbit data on new contacts
+- 5d: XGBoost lead scorer trained on real data (DEFERRED — requires 100+ contacts with labeled outcomes)
+- Phase 6: Production readiness — env var docs, Docker Compose full stack, README quickstart
 
 ## Blockers (must be resolved before first run)
 - Supabase project: create at supabase.com, fill NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY + SUPABASE_SERVICE_ROLE_KEY + SUPABASE_JWT_SECRET
