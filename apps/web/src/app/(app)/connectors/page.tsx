@@ -8,7 +8,7 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { apiClient } from "@/lib/api-client";
-import { Mail, Slack, RefreshCw, Trash2, Link, CheckCircle, Clock, MessageSquare } from "lucide-react";
+import { Mail, Hash, RefreshCw, Trash2, Link, CheckCircle, Clock, MessageSquare } from "lucide-react";
 
 interface Connector {
   id: string;
@@ -31,7 +31,7 @@ const serviceConfig: Record<string, { icon: React.ReactNode; label: string; colo
     color: "text-rose-400 bg-rose-500/10 border-rose-500/20",
   },
   slack: {
-    icon: <Slack className="h-6 w-6" />,
+    icon: <Hash className="h-6 w-6" />,
     label: "Slack",
     color: "text-purple-400 bg-purple-500/10 border-purple-500/20",
   },
@@ -79,17 +79,21 @@ export default function ConnectorsPage() {
       if (session) {
         setToken(session.access_token);
         setWorkspaceId(session.user.user_metadata?.workspace_id ?? null);
+      } else {
+        setLoading(false);
       }
     });
   }, [isDemoMode]);
 
   const fetchConnectors = useCallback(async () => {
-    if (!workspaceId || !token) return;
+    if (!workspaceId || !token) {
+      setLoading(false);
+      return;
+    }
     try {
       const data = await apiClient.getConnectors(workspaceId, token);
       setConnectors(Array.isArray(data) ? data : []);
     } catch {
-      // API may not be running — show empty state gracefully
       setConnectors([]);
     } finally {
       setLoading(false);
@@ -100,24 +104,36 @@ export default function ConnectorsPage() {
     if (workspaceId && token) fetchConnectors();
   }, [workspaceId, token, fetchConnectors]);
 
-  // Handle ?connected=gmail redirect from OAuth callback
+  // Handle ?connected=... redirect from OAuth callback
   useEffect(() => {
     const connected = searchParams.get("connected");
+    const error = searchParams.get("error");
     if (connected === "gmail") {
       addToast("Gmail connected successfully!", "success");
       fetchConnectors();
+    } else if (connected === "slack") {
+      addToast("Slack connected successfully!", "success");
+      fetchConnectors();
+    } else if (error === "slack_oauth_denied") {
+      addToast("Slack connection was cancelled", "error");
     }
   }, [searchParams, addToast, fetchConnectors]);
 
   const handleConnect = async (service: string) => {
     if (!workspaceId || !token) return;
     try {
+      let auth_url: string;
       if (service === "gmail") {
         const data = await apiClient.getGmailAuthUrl(workspaceId, token);
-        window.open(data.auth_url, "_blank");
+        auth_url = data.auth_url;
+      } else if (service === "slack") {
+        const data = await apiClient.getSlackAuthUrl(workspaceId, token);
+        auth_url = data.auth_url;
       } else {
         addToast(`${service} connector coming soon`, "info");
+        return;
       }
+      window.location.href = auth_url;
     } catch {
       addToast(`Failed to get auth URL for ${service}`, "error");
     }
@@ -127,7 +143,11 @@ export default function ConnectorsPage() {
     if (!workspaceId || !token) return;
     setSyncing(service);
     try {
-      await apiClient.triggerGmailSync(workspaceId, token);
+      if (service === "gmail") {
+        await apiClient.triggerGmailSync(workspaceId, token);
+      } else if (service === "slack") {
+        await apiClient.triggerSlackSync(workspaceId, token);
+      }
       addToast("Sync started", "success");
     } catch {
       addToast("Sync failed — check API connection", "error");

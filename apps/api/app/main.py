@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail
+from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack
 
 
 @asynccontextmanager
@@ -44,6 +44,7 @@ app.include_router(agents.router, tags=["agents"])
 app.include_router(messages.router, tags=["messages"])
 app.include_router(tasks.router, tags=["tasks"])
 app.include_router(gmail.router, tags=["gmail"])
+app.include_router(slack.router, tags=["slack"])
 
 
 @app.get("/health")

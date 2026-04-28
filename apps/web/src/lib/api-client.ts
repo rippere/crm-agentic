@@ -36,6 +36,14 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ status: 'ok' })
     return apiFetch(`/workspaces/${_workspaceId}/connectors/gmail/sync`, { method: 'POST' }, _token)
   },
+  getSlackAuthUrl: (_workspaceId: string, _token: string) => {
+    if (isDemoMode) return Promise.resolve({ auth_url: '#' })
+    return apiFetch(`/workspaces/${_workspaceId}/connectors/slack/auth`, {}, _token)
+  },
+  triggerSlackSync: (_workspaceId: string, _token: string) => {
+    if (isDemoMode) return Promise.resolve({ status: 'ok' })
+    return apiFetch(`/workspaces/${_workspaceId}/connectors/slack/sync`, { method: 'POST' }, _token)
+  },
   deleteConnector: (_workspaceId: string, _connectorId: string, _token: string) => {
     if (isDemoMode) return Promise.resolve({ status: 'ok' })
     return apiFetch(`/workspaces/${_workspaceId}/connectors/${_connectorId}`, { method: 'DELETE' }, _token)

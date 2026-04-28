@@ -15,7 +15,7 @@ import uuid as uuid_mod
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -184,13 +184,38 @@ async def gmail_sync(
 # ── 4. Delete connector ──────────────────────────────────────────
 
 
-@router.delete("/workspaces/{workspace_id}/connectors/{connector_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.get("/workspaces/{workspace_id}/connectors")
+async def list_connectors(
+    workspace_id: uuid_mod.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Connector).where(Connector.workspace_id == workspace_id)
+    )
+    rows = result.scalars().all()
+    return [
+        {
+            "id": str(c.id),
+            "service": c.service,
+            "status": "active",
+            "last_sync": c.last_sync.isoformat() if c.last_sync else None,
+            "message_count": c.message_count,
+        }
+        for c in rows
+    ]
+
+
+@router.delete("/workspaces/{workspace_id}/connectors/{connector_id}")
 async def delete_connector(
     workspace_id: uuid_mod.UUID,
     connector_id: uuid_mod.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> None:
+) -> Response:
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
@@ -206,3 +231,4 @@ async def delete_connector(
 
     await db.delete(connector)
     await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

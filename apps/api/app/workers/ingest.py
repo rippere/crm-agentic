@@ -27,11 +27,13 @@ from app.workers.celery_app import celery_app
 
 
 def _get_async_session() -> async_sessionmaker[AsyncSession]:
-    url = os.getenv("SUPABASE_URL", "")
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-    elif url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    url = os.getenv("DATABASE_URL", "")
+    if not url:
+        url = os.getenv("SUPABASE_URL", "")
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
     engine = create_async_engine(url, echo=False)
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
