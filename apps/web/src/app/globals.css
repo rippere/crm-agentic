@@ -1,13 +1,23 @@
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fira+Code:wght@400;500;600;700&display=swap');
 
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", sans-serif;
+  --font-sans: "DM Sans", "Inter", sans-serif;
   --font-mono: "Fira Code", monospace;
+
+  /* Signal green — the live/agentic accent color */
+  --color-signal-300: #6EFFD5;
+  --color-signal-400: #2DD4AA;
+  --color-signal-500: #00C896;
+  --color-signal-600: #00A07A;
+  --color-signal-700: #007A5C;
+
+  /* Void — true OLED base with slight violet undertone */
+  --color-void: #08080C;
 }
 
-/* Base OLED dark background */
+/* Base */
 html, body {
   background-color: #09090B;
   color: #FAFAFA;
@@ -27,22 +37,22 @@ html, body {
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #6366F1;
+  background: #00C896;
 }
 
 /* Custom selection */
 ::selection {
-  background: rgba(99, 102, 241, 0.3);
+  background: rgba(99, 102, 241, 0.25);
   color: #E0E7FF;
 }
 
-/* Agent pulse dot */
+/* Agent pulse — signal green glow */
 @keyframes agentPulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16,185,129,0.4); }
-  50% { opacity: 0.85; box-shadow: 0 0 0 6px rgba(16,185,129,0); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0, 200, 150, 0.5); }
+  50% { opacity: 0.9; box-shadow: 0 0 0 5px rgba(0, 200, 150, 0); }
 }
 .agent-pulse {
-  animation: agentPulse 2s ease-in-out infinite;
+  animation: agentPulse 2.4s ease-in-out infinite;
 }
 
 /* Streaming text cursor */

@@ -64,8 +64,8 @@ export const stageConfig: Record<DealStage, { label: string; color: string; bg: 
   discovery: { label: "Discovery", color: "text-zinc-400", bg: "bg-zinc-700/50" },
   qualified: { label: "Qualified", color: "text-indigo-400", bg: "bg-indigo-500/10" },
   proposal: { label: "Proposal", color: "text-amber-400", bg: "bg-amber-500/10" },
-  negotiation: { label: "Negotiation", color: "text-primary-300", bg: "bg-primary-500/15" },
-  closed_won: { label: "Closed Won", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+  negotiation: { label: "Negotiation", color: "text-violet-400", bg: "bg-violet-500/10" },
+  closed_won: { label: "Closed Won", color: "text-[#00C896]", bg: "bg-[#00C896]/8" },
   closed_lost: { label: "Closed Lost", color: "text-rose-400", bg: "bg-rose-500/10" },
 };
 
