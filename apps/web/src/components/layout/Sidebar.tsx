@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 import {
   LayoutDashboard, Users, KanbanSquare, Bot, Settings,
   Zap, Inbox, CheckSquare, FolderOpen, Plug, Search,
-  PhoneCall, ChevronsUpDown, LogOut, UserCircle,
+  PhoneCall, ChevronsUpDown, LogOut, UserCircle, BarChart2,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 import { useState } from "react";
@@ -51,9 +51,10 @@ const navGroups: NavGroup[] = [
     id: "workspace",
     label: "Workspace",
     items: [
-      { href: "/dashboard",  label: "Dashboard", icon: LayoutDashboard },
-      { href: "/contacts",   label: "Contacts",  icon: Users           },
-      { href: "/pipeline",   label: "Pipeline",  icon: KanbanSquare,   hideModes: ["pm"] },
+      { href: "/dashboard",  label: "Dashboard", icon: LayoutDashboard                   },
+      { href: "/contacts",   label: "Contacts",  icon: Users                             },
+      { href: "/pipeline",   label: "Pipeline",  icon: KanbanSquare,  hideModes: ["pm"] },
+      { href: "/reports",    label: "Reports",   icon: BarChart2,     hideModes: ["pm"] },
     ],
   },
   {

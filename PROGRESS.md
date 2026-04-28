@@ -14,8 +14,16 @@
 
 - [2026-04-28] Phase 6: Production readiness — Docker Compose full stack (postgres+pgvector, redis, api, worker, beat, web), init_docker.sql, Web Dockerfile, README quickstart, PyJWT fix
 
+- [2026-04-28] Phase 7: Real data wiring + AI assistant
+  - 7a: Pipeline page wired to useDeals — real data, loading skeletons, NewDealModal, DealDetailPanel with stage-move
+  - 7b: MessageResponse includes body_plain
+  - 7c: Dashboard activity feed fetches live events from /api/activity
+  - 7d: POST /workspaces/{id}/ai/query (Claude Haiku + workspace context); CommandPalette shows Nova AI response
+  - 7e: /settings page (workspace name/mode, integrations link, account, danger zone)
+  - 7f: LogActivityModal POSTs to /api/activity (was console.log)
+
 ## Current Phase
-COMPLETE — all phases shipped
+Phase 8: UX polish + remaining gaps
 
 ## Deferred
 - 5d: XGBoost lead scorer (requires 100+ labeled contacts with outcomes)

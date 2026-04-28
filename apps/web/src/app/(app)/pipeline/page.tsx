@@ -334,8 +334,9 @@ export default function PipelinePage() {
       company: form.company,
       value: form.value ? parseFloat(form.value) : 0,
       stage: form.stage,
-      expectedClose: form.expectedClose || undefined,
-    } as Partial<Deal>);
+      // Supabase column is expected_close (snake_case) — cast through unknown
+      ...({ expected_close: form.expectedClose || null } as unknown as Partial<Deal>),
+    });
   }, [createDeal]);
 
   return (
