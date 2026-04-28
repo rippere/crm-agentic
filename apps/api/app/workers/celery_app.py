@@ -10,7 +10,7 @@ celery_app = Celery(
     "crm_agentic",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["app.workers.ingest", "app.workers.score_contact", "app.workers.pipeline", "app.workers.slack_ingest", "app.workers.embed_contacts", "app.workers.deal_health_worker"],
+    include=["app.workers.ingest", "app.workers.score_contact", "app.workers.pipeline", "app.workers.slack_ingest", "app.workers.embed_contacts", "app.workers.deal_health_worker", "app.workers.transcribe"],
 )
 
 celery_app.conf.update(

@@ -87,6 +87,32 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/score`, { method: 'POST' }, token)
   },
 
+  // Calls
+  uploadCall: (workspaceId: string, formData: FormData, token: string) => {
+    if (isDemoMode) return Promise.resolve({ call_summary_id: `demo-call-${Date.now()}`, job_id: 'demo-job', status: 'processing' })
+    return fetch(`${FASTAPI_URL}/workspaces/${workspaceId}/calls/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    }).then((r) => { if (!r.ok) throw new Error(`API error ${r.status}`); return r.json() })
+  },
+  getCalls: (workspaceId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'call-001', contact_id: null, title: 'Q2 Strategy Review', duration_seconds: 1847, summary: 'Discussed Q2 roadmap priorities, alignment on enterprise expansion, and headcount planning for the engineering org.', action_items: [{ owner: 'Sarah', task: 'Send updated roadmap doc', due: '2024-05-10' }, { owner: 'Marcus', task: 'Schedule headcount review with HR', due: '2024-05-08' }], participants: 'Sarah Chen, Marcus Rivera', call_date: new Date(Date.now() - 86400000).toISOString(), processing: false },
+      { id: 'call-002', contact_id: null, title: 'TechCorp Deal Sync', duration_seconds: 924, summary: 'TechCorp confirmed interest in the enterprise tier. Legal review expected to complete by end of week. Price sensitivity is low.', action_items: [{ owner: 'You', task: 'Send final SLA draft', due: '2024-05-12' }], participants: 'James Whitfield, Claire Dupont', call_date: new Date(Date.now() - 172800000).toISOString(), processing: false },
+      { id: 'call-003', contact_id: null, title: 'Onboarding — BuildRight', duration_seconds: 0, summary: '', action_items: [], participants: 'Amara Osei', call_date: new Date().toISOString(), processing: true },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/calls`, {}, token)
+  },
+  getCall: (workspaceId: string, callId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: callId, transcript: 'This is a demo transcript of the call recording.', summary: 'Demo summary.', action_items: [], processing: false })
+    return apiFetch(`/workspaces/${workspaceId}/calls/${callId}`, {}, token)
+  },
+  deleteCall: (workspaceId: string, callId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({})
+    return apiFetch(`/workspaces/${workspaceId}/calls/${callId}`, { method: 'DELETE' }, token)
+  },
+
   // Deal health
   triggerDealHealth: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve({ job_id: 'demo-health', status: 'queued' })

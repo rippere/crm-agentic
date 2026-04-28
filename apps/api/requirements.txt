@@ -12,3 +12,5 @@ pydantic-settings==2.5.2
 pydantic==2.9.2
 pgvector>=0.4.0
 sentence-transformers>=3.0.0
+openai-whisper>=20240930
+python-multipart>=0.0.9
