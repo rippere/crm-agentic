@@ -6,14 +6,17 @@
 - [2026-04-23] Phase 3: PM UI pages — /connectors, /inbox, /tasks, /projects + dashboard KPIs (Tasks 3a-3g)
 - [2026-04-23] Phase 4: Sales intelligence — email composer, lead scorer, pipeline optimizer, sentiment analyzer, Celery Beat (Tasks 4a-4g)
 
+- [2026-04-28] Phase 5a: Slack OAuth connector + ingest pipeline (Tasks 5a)
+- [2026-04-28] Phase 5b: pgvector semantic contact embeddings + AI search (Tasks 5b)
+
 ## Current Phase
-Phase 5 — Slack connector + advanced ML models (future)
+Phase 5 — Advanced ML (5c, 5d remaining)
 
 ## Next Tasks
-- 5a: Slack OAuth flow (mirror Gmail pattern)
-- 5b: pgvector or Qdrant for semantic contact embeddings
-- 5c: Call Summarizer (Whisper + Claude Sonnet)
+- 5c: Call Summarizer (Whisper + Claude Sonnet) — audio upload → transcript → summary
 - 5d: XGBoost lead scorer trained on real data (requires 100+ contacts with outcomes)
+- 5e: Contact auto-enrich — pull LinkedIn/Clearbit data on new contacts
+- 5f: Deal health scoring — time-in-stage decay + engagement signals
 
 ## Blockers (must be resolved before first run)
 - Supabase project: create at supabase.com, fill NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY + SUPABASE_SERVICE_ROLE_KEY + SUPABASE_JWT_SECRET
