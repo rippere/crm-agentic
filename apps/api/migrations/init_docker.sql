@@ -182,3 +182,28 @@ CREATE INDEX IF NOT EXISTS idx_contacts_embedding ON contacts USING hnsw (embedd
 CREATE INDEX IF NOT EXISTS idx_deals_workspace_health ON deals (workspace_id, health_score);
 CREATE INDEX IF NOT EXISTS idx_call_summaries_workspace ON call_summaries (workspace_id, call_date DESC);
 CREATE INDEX IF NOT EXISTS idx_call_summaries_contact ON call_summaries (contact_id);
+
+-- ─── SEED DATA ────────────────────────────────────────────────────────────────
+-- Default workspace so a fresh deployment has something to show.
+-- Skipped if workspace already exists.
+
+DO $$
+DECLARE
+  ws_id UUID;
+BEGIN
+  SELECT id INTO ws_id FROM workspaces LIMIT 1;
+  IF ws_id IS NULL THEN
+    INSERT INTO workspaces (id, name, slug, mode)
+    VALUES (gen_random_uuid(), 'NovaCRM Demo', 'novaCRM-demo', 'sales')
+    RETURNING id INTO ws_id;
+
+    INSERT INTO agents (workspace_id, name, type, description, model, status, accuracy, tasks_today)
+    VALUES
+      (ws_id, 'Semantic Sorter',    'semantic_sorter',    'Categorises inbound messages by topic and urgency using embeddings.',    'all-MiniLM-L6-v2',    'active',     94.2, 312),
+      (ws_id, 'Lead Scorer',        'lead_scorer',        'Scores contacts 0-100 based on engagement, revenue signals, and stage.',  'heuristic',           'active',     87.1, 148),
+      (ws_id, 'Email Composer',     'email_composer',     'Drafts personalised outreach emails using Claude Sonnet.',               'claude-sonnet-4-6',   'idle',       91.8,   0),
+      (ws_id, 'Call Summarizer',    'call_summarizer',    'Transcribes calls with Whisper then extracts action items via Claude.',   'whisper-base',        'active',     89.5,  24),
+      (ws_id, 'Pipeline Optimizer', 'pipeline_optimizer', 'Detects stale deals and recommends next actions each night.',            'heuristic',           'active',     85.3,  67),
+      (ws_id, 'Sentiment Analyzer', 'sentiment_analyzer', 'Runs Claude Haiku over every ingested message for tone signals.',        'claude-haiku-4-5',    'active',     92.0, 203);
+  END IF;
+END $$;

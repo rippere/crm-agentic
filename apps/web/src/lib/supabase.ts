@@ -58,9 +58,11 @@ export interface DealRow {
   value: number;
   stage: "discovery" | "qualified" | "proposal" | "negotiation" | "closed_won" | "closed_lost";
   ml_win_probability: number;
-  expected_close: string;
-  assigned_agent: string;
-  notes: string;
+  expected_close: string | null;
+  assigned_agent: string | null;
+  notes: string | null;
+  health_score: number;
+  stage_changed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -161,63 +163,78 @@ export interface ClarityScoreRow {
 }
 
 // ─── Supabase Database type (tells the client about our tables) ───────────────
+// Relationships array required by supabase-js >=2.90 type inference
+type R = [];
+
 export interface Database {
+  __InternalSupabase: { PostgrestVersion: "12" };
   public: {
     Tables: {
       workspaces: {
         Row: WorkspaceRow;
         Insert: Omit<WorkspaceRow, "id" | "created_at">;
         Update: Partial<Omit<WorkspaceRow, "id" | "created_at">>;
+        Relationships: R;
       };
       users: {
         Row: UserRow;
         Insert: Omit<UserRow, "id" | "created_at">;
         Update: Partial<Omit<UserRow, "id" | "created_at">>;
+        Relationships: R;
       };
       contacts: {
         Row: ContactRow;
         Insert: Omit<ContactRow, "id" | "created_at" | "updated_at">;
         Update: Partial<Omit<ContactRow, "id" | "created_at" | "updated_at">>;
+        Relationships: R;
       };
       deals: {
         Row: DealRow;
         Insert: Omit<DealRow, "id" | "created_at" | "updated_at">;
         Update: Partial<Omit<DealRow, "id" | "created_at" | "updated_at">>;
+        Relationships: R;
       };
       agents: {
         Row: AgentRow;
         Insert: Omit<AgentRow, "id" | "created_at" | "updated_at">;
         Update: Partial<Omit<AgentRow, "id" | "created_at" | "updated_at">>;
+        Relationships: R;
       };
       activity_events: {
         Row: ActivityEventRow;
         Insert: Omit<ActivityEventRow, "id" | "created_at">;
         Update: Partial<Omit<ActivityEventRow, "id" | "created_at">>;
+        Relationships: R;
       };
       connectors: {
         Row: ConnectorRow;
         Insert: Omit<ConnectorRow, "id" | "created_at">;
         Update: Partial<Omit<ConnectorRow, "id" | "created_at">>;
+        Relationships: R;
       };
       messages: {
         Row: MessageRow;
         Insert: Omit<MessageRow, "id" | "created_at">;
         Update: Partial<Omit<MessageRow, "id" | "created_at">>;
+        Relationships: R;
       };
       tasks: {
         Row: TaskRow;
         Insert: Omit<TaskRow, "id" | "created_at" | "updated_at">;
         Update: Partial<Omit<TaskRow, "id" | "created_at" | "updated_at">>;
+        Relationships: R;
       };
       metric_templates: {
         Row: MetricTemplateRow;
         Insert: Omit<MetricTemplateRow, "id" | "created_at">;
         Update: Partial<Omit<MetricTemplateRow, "id" | "created_at">>;
+        Relationships: R;
       };
       clarity_scores: {
         Row: ClarityScoreRow;
         Insert: Omit<ClarityScoreRow, "id" | "created_at">;
         Update: Partial<Omit<ClarityScoreRow, "id" | "created_at">>;
+        Relationships: R;
       };
     };
     Views: Record<string, never>;

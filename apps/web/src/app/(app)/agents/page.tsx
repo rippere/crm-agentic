@@ -356,6 +356,29 @@ export default function AgentsPage() {
     });
   }, []);
 
+  const normalizeAgent = (a: Record<string, unknown>): Agent => ({
+    ...(a as unknown as Agent),
+    tasksToday: (a.tasks_today ?? a.tasksToday ?? 0) as number,
+    lastRun: (a.last_run ?? a.lastRun ?? "Never") as string,
+    metrics: (a.metrics ?? []) as Agent["metrics"],
+    workflow: (a.workflow ?? []) as Agent["workflow"],
+  });
+
+  // Initial fetch from API
+  useEffect(() => {
+    if (!token) return;
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') return;
+    fetch(
+      `${process.env.NEXT_PUBLIC_FASTAPI_URL || "http://localhost:8000"}/agents`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) setAgents(data.map(normalizeAgent));
+      })
+      .catch(() => {});
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Poll /agents every 5s if any agent is processing
   const pollAgents = useCallback(async () => {
     if (!token) return;
@@ -366,7 +389,7 @@ export default function AgentsPage() {
       );
       if (data.ok) {
         const updated = await data.json();
-        if (Array.isArray(updated)) setAgents(updated);
+        if (Array.isArray(updated)) setAgents(updated.map(normalizeAgent));
       }
     } catch {
       // silently ignore polling failures
@@ -446,7 +469,7 @@ export default function AgentsPage() {
           </div>
           <div>
             <p className="text-xl font-bold font-mono text-zinc-100">
-              {mockAgents.reduce((s, a) => s + a.tasksToday, 0).toLocaleString()}
+              {agents.reduce((s, a) => s + a.tasksToday, 0).toLocaleString()}
             </p>
             <p className="text-xs text-zinc-500">Tasks Today</p>
           </div>

@@ -184,7 +184,7 @@ export default function ReportsPage() {
                         <Cell key={b.label} fill={b.color} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(v: number) => [`${v} deals`, ""]} contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }} />
+                    <Tooltip formatter={(v) => [`${v} deals`, ""]} contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }} />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
