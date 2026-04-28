@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
-import { mockKPIs, mockActivity, revenueChartData, agentAccuracyData, mockAgents } from "@/lib/mock-data";
+import { mockKPIs, revenueChartData, agentAccuracyData, mockAgents, mockActivity } from "@/lib/mock-data";
 import { demoDashboard } from "@/lib/demo-data";
 import { formatCurrency } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
@@ -171,6 +171,7 @@ export default function DashboardPage() {
   const [pmKpis, setPmKpis] = useState<PMKpis | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<"sales" | "pm" | "both">("sales");
   const [staleDeals, setStaleDeals] = useState<StaleDeal[]>([]);
+  const [liveActivity, setLiveActivity] = useState<ActivityEvent[]>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -186,6 +187,31 @@ export default function DashboardPage() {
       }).catch(() => {});
       return;
     }
+
+    // Fetch live activity feed
+    fetch("/api/activity?limit=20")
+      .then((r) => r.json())
+      .then((data: Array<{ id: string; type: string; agent_name: string; description: string; meta?: string; severity: string; created_at: string }>) => {
+        if (!Array.isArray(data)) return;
+        setLiveActivity(data.map((e) => ({
+          id: e.id,
+          type: e.type as ActivityEvent["type"],
+          agentName: e.agent_name,
+          description: e.description,
+          meta: e.meta,
+          severity: e.severity as ActivityEvent["severity"],
+          timestamp: (() => {
+            const diff = Date.now() - new Date(e.created_at).getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 1) return "Just now";
+            if (mins < 60) return `${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return `${hrs}h ago`;
+            return `${Math.floor(hrs / 24)}d ago`;
+          })(),
+        })));
+      })
+      .catch(() => {});
 
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -476,7 +502,7 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-            {mockActivity.map((event) => (
+            {(liveActivity.length > 0 ? liveActivity : mockActivity).map((event) => (
               <div
                 key={event.id}
                 className="flex items-start gap-2.5 rounded-lg px-2.5 py-2 hover:bg-zinc-800/50 transition-colors duration-150 cursor-default"

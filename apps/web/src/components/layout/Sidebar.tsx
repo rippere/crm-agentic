@@ -71,7 +71,8 @@ const navGroups: NavGroup[] = [
     id: "system",
     label: "System",
     items: [
-      { href: "/connectors", label: "Connectors", icon: Plug },
+      { href: "/connectors", label: "Connectors", icon: Plug     },
+      { href: "/settings",   label: "Settings",   icon: Settings },
     ],
   },
 ];

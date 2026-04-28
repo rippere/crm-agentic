@@ -19,6 +19,7 @@ class MessageResponse(BaseModel):
     workspace_id: uuid.UUID
     external_id: str
     subject: str | None
+    body_plain: str
     sender_email: str | None
     received_at: datetime | None
     contact_id: uuid.UUID | None

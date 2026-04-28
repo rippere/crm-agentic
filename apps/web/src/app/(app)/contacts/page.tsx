@@ -476,7 +476,17 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
             contactName={contact.name}
             onClose={() => setLogActivityOpen(false)}
             onSubmit={({ type, note }) => {
-              console.log("[Activity logged]", { contactId: contact.id, type, note });
+              fetch("/api/activity", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  type,
+                  agent_name: "User",
+                  description: note,
+                  meta: `contact:${contact.id}`,
+                  severity: "info",
+                }),
+              }).catch(() => {});
             }}
           />
         )}

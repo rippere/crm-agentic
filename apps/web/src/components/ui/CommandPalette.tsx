@@ -3,9 +3,11 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
-  ArrowUp, Paperclip, X, Brain, Mail, Users,
+  ArrowUp, X, Brain, Mail, Users,
   ClipboardList, Plus, Sparkles, Loader2,
 } from "lucide-react";
+import { apiClient } from "@/lib/api-client";
+import { createBrowserClient } from "@/lib/supabase";
 
 function useAutoResizeTextarea({ minHeight, maxHeight }: { minHeight: number; maxHeight?: number }) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -28,12 +30,12 @@ function useAutoResizeTextarea({ minHeight, maxHeight }: { minHeight: number; ma
 }
 
 const CRM_CHIPS = [
-  { icon: <Brain className="h-3.5 w-3.5" />, label: "Summarize Deal" },
-  { icon: <Mail className="h-3.5 w-3.5" />, label: "Draft Follow-up" },
-  { icon: <Users className="h-3.5 w-3.5" />, label: "Find Contact" },
-  { icon: <ClipboardList className="h-3.5 w-3.5" />, label: "Log Activity" },
-  { icon: <Plus className="h-3.5 w-3.5" />, label: "New Deal" },
-  { icon: <Sparkles className="h-3.5 w-3.5" />, label: "AI Enrichment" },
+  { icon: <Brain className="h-3.5 w-3.5" />, label: "Summarize pipeline" },
+  { icon: <Mail className="h-3.5 w-3.5" />, label: "Draft follow-up for" },
+  { icon: <Users className="h-3.5 w-3.5" />, label: "Find contact" },
+  { icon: <ClipboardList className="h-3.5 w-3.5" />, label: "What's stale?" },
+  { icon: <Plus className="h-3.5 w-3.5" />, label: "New deal ideas" },
+  { icon: <Sparkles className="h-3.5 w-3.5" />, label: "Top leads this week" },
 ];
 
 interface CommandPaletteProps {
@@ -41,9 +43,10 @@ interface CommandPaletteProps {
   onSubmit?: (value: string) => void;
 }
 
-export default function CommandPalette({ onClose, onSubmit }: CommandPaletteProps) {
+export default function CommandPalette({ onClose }: CommandPaletteProps) {
   const [value, setValue] = useState("");
   const [loading, setLoading] = useState(false);
+  const [answer, setAnswer] = useState<string | null>(null);
   const { ref, adjust } = useAutoResizeTextarea({ minHeight: 60, maxHeight: 200 });
 
   useEffect(() => {
@@ -65,19 +68,36 @@ export default function CommandPalette({ onClose, onSubmit }: CommandPaletteProp
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!value.trim() || loading) return;
     setLoading(true);
-    onSubmit?.(value.trim());
-    setTimeout(() => {
+    setAnswer(null);
+
+    try {
+      const supabase = createBrowserClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "demo-token";
+      const workspaceId = session?.user?.user_metadata?.workspace_id ?? "demo-workspace-1";
+
+      const result = await apiClient.aiQuery(workspaceId, value.trim(), token);
+      setAnswer(result?.answer ?? "No response.");
+    } catch {
+      setAnswer("Nova is unavailable right now. Check that ANTHROPIC_API_KEY is configured.");
+    } finally {
       setLoading(false);
-      setValue("");
-      adjust(true);
-    }, 2000);
+    }
   };
 
   const handleChip = (label: string) => {
-    setValue(label + ": ");
+    setValue(label + " ");
+    setAnswer(null);
+    ref.current?.focus();
+  };
+
+  const handleReset = () => {
+    setValue("");
+    setAnswer(null);
+    adjust(true);
     ref.current?.focus();
   };
 
@@ -111,7 +131,7 @@ export default function CommandPalette({ onClose, onSubmit }: CommandPaletteProp
             <textarea
               ref={ref}
               value={value}
-              onChange={(e) => { setValue(e.target.value); adjust(); }}
+              onChange={(e) => { setValue(e.target.value); adjust(); setAnswer(null); }}
               onKeyDown={handleKeyDown}
               placeholder="Ask anything about your deals, contacts, or pipeline…"
               className={cn(
@@ -124,13 +144,10 @@ export default function CommandPalette({ onClose, onSubmit }: CommandPaletteProp
           </div>
 
           <div className="flex items-center justify-between px-4 pb-4 pt-1">
-            <button
-              type="button"
-              title="Attach file"
-              className="p-2 rounded-lg text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800 transition-colors"
-            >
-              <Paperclip className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1.5">
+              <div className="h-1.5 w-1.5 rounded-full bg-[#00C896] agent-pulse" />
+              <span className="text-[10px] font-mono text-zinc-600">Nova AI</span>
+            </div>
             <button
               type="button"
               onClick={handleSubmit}
@@ -148,22 +165,50 @@ export default function CommandPalette({ onClose, onSubmit }: CommandPaletteProp
                 : <ArrowUp className="h-4 w-4" />}
             </button>
           </div>
+
+          {/* AI Response */}
+          {(loading || answer) && (
+            <div className="border-t border-zinc-800 px-5 py-4">
+              {loading ? (
+                <div className="flex items-center gap-2 text-xs text-zinc-500">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />
+                  Nova is thinking…
+                </div>
+              ) : answer ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="h-1.5 w-1.5 rounded-full bg-[#00C896]" />
+                    <span className="text-[10px] font-mono font-semibold text-[#00C896] tracking-widest">NOVA</span>
+                  </div>
+                  <p className="text-sm text-zinc-200 leading-relaxed">{answer}</p>
+                  <button
+                    onClick={handleReset}
+                    className="text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors font-mono"
+                  >
+                    Ask another question →
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          )}
         </div>
 
-        {/* CRM Action chips */}
-        <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
-          {CRM_CHIPS.map(({ icon, label }) => (
-            <button
-              key={label}
-              type="button"
-              onClick={() => handleChip(label)}
-              className="flex items-center gap-2 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 rounded-full border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-all text-xs font-medium"
-            >
-              <span className="text-indigo-400">{icon}</span>
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* CRM Action chips — hidden while showing answer */}
+        {!answer && (
+          <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
+            {CRM_CHIPS.map(({ icon, label }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => handleChip(label)}
+                className="flex items-center gap-2 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 rounded-full border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-all text-xs font-medium"
+              >
+                <span className="text-indigo-400">{icon}</span>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
         <p className="text-center text-[11px] text-zinc-700 mt-3 font-mono">
           <kbd className="px-1.5 py-0.5 rounded border border-zinc-800 bg-zinc-900 text-zinc-600">⌘K</kbd>

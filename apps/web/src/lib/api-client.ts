@@ -152,4 +152,12 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ job_id: 'demo-embed', status: 'queued' })
     return apiFetch(`/workspaces/${workspaceId}/contacts/embed`, { method: 'POST' }, token)
   },
+
+  // AI query
+  aiQuery: (workspaceId: string, query: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({
+      answer: `Nova here. Your pipeline looks healthy — 6 active deals, $1.2M in value. The TechCorp deal in Negotiation has a health score of 32, meaning it hasn't moved in a while. I'd suggest reaching out to James Whitfield to re-engage. You can use the AI Search on /contacts to find similar prospects, or check the Deal Health Alerts on /dashboard for a full stale-deal view.`
+    })
+    return apiFetch(`/workspaces/${workspaceId}/ai/query`, { method: 'POST', body: JSON.stringify({ query }) }, token)
+  },
 }
