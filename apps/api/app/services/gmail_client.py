@@ -103,3 +103,20 @@ class GmailClient:
         """Return the authenticated Gmail user profile."""
         resp = await self._request("GET", "/users/me/profile")
         return resp.json()
+
+    async def send_message(self, to: str, subject: str, body: str) -> dict[str, Any]:
+        """Send an email via Gmail API using stored OAuth token."""
+        import base64
+        import email.mime.text
+
+        profile = await self.get_profile()
+        sender = profile.get("emailAddress", "me")
+
+        msg = email.mime.text.MIMEText(body, "plain")
+        msg["To"] = to
+        msg["From"] = sender
+        msg["Subject"] = subject
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+        resp = await self._request("POST", "/users/me/messages/send", json={"raw": raw})
+        return resp.json()

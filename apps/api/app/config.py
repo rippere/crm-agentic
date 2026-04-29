@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     SLACK_CLIENT_ID: str = ""
     SLACK_CLIENT_SECRET: str = ""
+    SLACK_SIGNING_SECRET: str = ""
+    SLACK_HITL_CHANNEL: str = "general"
     HUNTER_API_KEY: str = ""
 
 

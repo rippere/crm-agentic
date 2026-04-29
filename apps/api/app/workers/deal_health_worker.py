@@ -32,18 +32,29 @@ def _make_session() -> async_sessionmaker[AsyncSession]:
     )
 
 
+_NEXT_BEST_ACTION: dict[str, str] = {
+    "discovery": "Schedule a discovery call to qualify the opportunity",
+    "qualified": "Send a tailored proposal or case study",
+    "proposal": "Follow up on proposal — ask for feedback and objections",
+    "negotiation": "Re-engage with a concession or alternative pricing",
+}
+
+
 async def _run(workspace_id: str) -> dict[str, Any]:
     from app.models.deal import Deal
     from app.models.message import Message
+    from app.models.activity_event import ActivityEvent
     from app.services.deal_health import compute_health
 
     factory = _make_session()
     updated = 0
+    alerts_fired = 0
+    ws_uuid = uuid.UUID(workspace_id)
 
     async with factory() as db:
         result = await db.execute(
             select(Deal).where(
-                Deal.workspace_id == uuid.UUID(workspace_id),
+                Deal.workspace_id == ws_uuid,
                 Deal.stage.not_in(["closed_won", "closed_lost"]),
             )
         )
@@ -65,7 +76,7 @@ async def _run(workspace_id: str) -> dict[str, Any]:
             if stage_changed_at is None:
                 stage_changed_at = datetime.now(tz=timezone.utc)
 
-            score, _ = compute_health(
+            score, signals = compute_health(
                 stage=deal.stage,
                 stage_changed_at=stage_changed_at,
                 last_message_at=last_msg_at,
@@ -74,9 +85,24 @@ async def _run(workspace_id: str) -> dict[str, Any]:
             db.add(deal)
             updated += 1
 
+            # Fire a proactive alert for critical deals (score ≤ 25)
+            if score <= 25:
+                nba = _NEXT_BEST_ACTION.get(deal.stage, "Review deal and re-engage the contact")
+                signal_text = signals[0] if signals else "Health score critical"
+                alert = ActivityEvent(
+                    workspace_id=ws_uuid,
+                    type="deal_alert",
+                    agent_name="DealHealthAgent",
+                    description=f'⚠ {deal.title or "Deal"} at {deal.company or ""}: {signal_text}. Suggested action: {nba}',
+                    meta=f"deal:{deal.id}",
+                    severity="warning",
+                )
+                db.add(alert)
+                alerts_fired += 1
+
         await db.commit()
 
-    return {"workspace_id": workspace_id, "deals_scored": updated}
+    return {"workspace_id": workspace_id, "deals_scored": updated, "alerts_fired": alerts_fired}
 
 
 @celery_app.task(name="app.workers.deal_health_worker.compute_deal_health", bind=True)

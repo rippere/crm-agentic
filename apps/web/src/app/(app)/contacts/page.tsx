@@ -16,7 +16,7 @@ import { createBrowserClient } from "@/lib/supabase";
 import {
   Search, SlidersHorizontal, Brain, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
-  Copy, ExternalLink, X, Loader2, Zap, ClipboardList,
+  Copy, X, Loader2, Zap, ClipboardList, CheckSquare, Square, Tag,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -82,18 +82,41 @@ function MLScoreBar({ score, label }: { score: number; label: LeadScore }) {
   );
 }
 
-function ContactRow({ contact, onClick, similarity }: { contact: Contact; onClick: () => void; similarity?: number | null }) {
+function ContactRow({
+  contact, onClick, similarity, selected, onSelect,
+}: {
+  contact: Contact;
+  onClick: () => void;
+  similarity?: number | null;
+  selected?: boolean;
+  onSelect?: (id: string, checked: boolean) => void;
+}) {
   const statusCfg = statusConfig[contact.status];
   const leadCfg = leadScoreConfig[contact.mlScore.label];
 
   return (
     <tr
-      className="group border-b border-zinc-800 hover:bg-zinc-800/40 transition-colors duration-150 cursor-pointer"
+      className={cn(
+        "group border-b border-zinc-800 hover:bg-zinc-800/40 transition-colors duration-150 cursor-pointer",
+        selected && "bg-indigo-600/5"
+      )}
       onClick={onClick}
       tabIndex={0}
       onKeyDown={(e) => e.key === "Enter" && onClick()}
       role="row"
     >
+      {/* Checkbox */}
+      <td className="pl-4 py-3 w-8" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={() => onSelect?.(contact.id, !selected)}
+          className="text-zinc-500 hover:text-indigo-400 transition-colors"
+          aria-label={selected ? "Deselect contact" : "Select contact"}
+        >
+          {selected
+            ? <CheckSquare className="h-4 w-4 text-indigo-400" />
+            : <Square className="h-4 w-4" />}
+        </button>
+      </td>
       {/* Contact */}
       <td className="px-4 py-3">
         <div className="flex items-center gap-3">
@@ -171,16 +194,83 @@ function ContactRow({ contact, onClick, similarity }: { contact: Contact; onClic
   );
 }
 
+function BulkActionBar({
+  count,
+  onStatusChange,
+  onEnrich,
+  onClear,
+  busy,
+}: {
+  count: number;
+  onStatusChange: (status: ContactStatus) => void;
+  onEnrich: () => void;
+  onClear: () => void;
+  busy: boolean;
+}) {
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
+  return (
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-2xl border border-indigo-500/30 bg-zinc-900/95 backdrop-blur px-5 py-3 shadow-2xl animate-slide-up">
+      <span className="text-sm font-medium text-indigo-300 whitespace-nowrap">
+        {count} selected
+      </span>
+      <div className="w-px h-4 bg-zinc-700 flex-shrink-0" />
+      <div className="relative">
+        <button
+          onClick={() => setStatusMenuOpen((v) => !v)}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:text-zinc-100 disabled:opacity-50 transition"
+        >
+          <Tag className="h-3.5 w-3.5" /> Set Status
+        </button>
+        {statusMenuOpen && (
+          <div className="absolute bottom-full mb-2 left-0 rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl overflow-hidden min-w-36">
+            {(["lead", "prospect", "customer", "churned"] as ContactStatus[]).map((s) => (
+              <button
+                key={s}
+                onClick={() => { onStatusChange(s); setStatusMenuOpen(false); }}
+                className="w-full px-4 py-2 text-left text-xs text-zinc-300 hover:bg-zinc-800 transition capitalize"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <button
+        onClick={onEnrich}
+        disabled={busy}
+        className="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:text-zinc-100 disabled:opacity-50 transition"
+      >
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+        Enrich All
+      </button>
+      <div className="w-px h-4 bg-zinc-700 flex-shrink-0" />
+      <button onClick={onClear} className="text-zinc-500 hover:text-zinc-300 transition">
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
 function EmailComposerModal({
   draft,
   contact,
   onClose,
+  hasGmailConnector,
+  workspaceId,
+  token,
 }: {
   draft: EmailDraft;
   contact: Contact;
   onClose: () => void;
+  hasGmailConnector: boolean;
+  workspaceId: string | null;
+  token: string | null;
 }) {
   const [copied, setCopied] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendSuccess, setSendSuccess] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(`Subject: ${draft.subject}\n\n${draft.body}`);
@@ -188,7 +278,23 @@ function EmailComposerModal({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const mailtoLink = `mailto:${contact.email}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`;
+  const handleSend = async () => {
+    if (!workspaceId || !token || sending || sendSuccess) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      await apiClient.sendEmail(workspaceId, contact.id, {
+        to: contact.email,
+        subject: draft.subject,
+        body: draft.body,
+      }, token);
+      setSendSuccess(true);
+    } catch {
+      setSendError("Send failed — check Gmail connection");
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <div
@@ -230,28 +336,54 @@ function EmailComposerModal({
               <Copy className="h-3.5 w-3.5" />
               {copied ? "Copied!" : "Copy to Clipboard"}
             </Button>
-            <Button
-              variant="secondary"
-              className="flex-1 justify-center"
-              onClick={() => window.open(mailtoLink, "_blank")}
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Open in Gmail
-            </Button>
+            {hasGmailConnector ? (
+              <Button
+                variant="secondary"
+                className="flex-1 justify-center"
+                onClick={handleSend}
+                disabled={sending || sendSuccess}
+              >
+                {sending ? (
+                  <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Sending…</>
+                ) : sendSuccess ? (
+                  <><span className="text-emerald-400 font-bold">✓</span> Sent!</>
+                ) : (
+                  <><Mail className="h-3.5 w-3.5" /> Send via Gmail</>
+                )}
+              </Button>
+            ) : (
+              <Button variant="secondary" className="flex-1 justify-center opacity-40" disabled>
+                <Mail className="h-3.5 w-3.5" />
+                No Gmail
+              </Button>
+            )}
           </div>
+          {sendError && (
+            <p className="text-xs text-rose-400 text-center">{sendError}</p>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-type DrawerTab = "overview" | "messages";
+type DrawerTab = "overview" | "messages" | "timeline";
 
-function ContactDrawer({ contact, onClose, workspaceId, token }: {
+interface TimelineEvent {
+  id: string;
+  type: "message" | "call" | "deal_stage" | "activity";
+  title: string;
+  body: string;
+  ts: string | null;
+  meta: Record<string, unknown>;
+}
+
+function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector }: {
   contact: Contact;
   onClose: () => void;
   workspaceId: string | null;
   token: string | null;
+  hasGmailConnector: boolean;
 }) {
   const leadCfg = leadScoreConfig[contact.mlScore.label];
   const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
@@ -263,6 +395,20 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
   const enrichPoller = useJobPoller();
   const [logActivityOpen, setLogActivityOpen] = useState(false);
   const [flagConfirmOpen, setFlagConfirmOpen] = useState(false);
+  const [briefing, setBriefing] = useState(false);
+  const [briefText, setBriefText] = useState<string | null>(null);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+
+  useEffect(() => {
+    if (activeTab !== "timeline" || !workspaceId || !token) return;
+    setTimelineLoading(true);
+    apiClient
+      .getContactTimeline(workspaceId, contact.id, token)
+      .then((data: TimelineEvent[]) => setTimeline(Array.isArray(data) ? data : []))
+      .catch(() => setTimeline([]))
+      .finally(() => setTimelineLoading(false));
+  }, [activeTab, workspaceId, token, contact.id]);
 
   // Fetch messages when the Messages tab is opened
   useEffect(() => {
@@ -299,7 +445,7 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
         </div>
         {/* Tabs */}
         <div className="flex border-t border-zinc-800">
-          {(["overview", "messages"] as const).map((tab) => (
+          {(["overview", "timeline", "messages"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -310,7 +456,7 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
                   : "text-zinc-500 hover:text-zinc-300"
               )}
             >
-              {tab === "overview" ? "Overview" : "Messages"}
+              {tab === "overview" ? "Overview" : tab === "timeline" ? "Timeline" : "Messages"}
             </button>
           ))}
         </div>
@@ -447,7 +593,29 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
                   <><Sparkles className="h-3.5 w-3.5" /> Auto-Enrich Contact</>
                 )}
               </Button>
-              <Button variant="secondary" className="w-full justify-center">View Timeline</Button>
+              <Button variant="secondary" className="w-full justify-center" onClick={() => setActiveTab("timeline")}>View Timeline</Button>
+              <Button
+                variant="secondary"
+                className="w-full justify-center"
+                disabled={briefing}
+                onClick={async () => {
+                  if (!workspaceId || !token) return;
+                  setBriefing(true);
+                  setBriefText(null);
+                  try {
+                    const res = await apiClient.getMeetingBrief(workspaceId, contact.id, token);
+                    setBriefText(res.brief);
+                  } catch { /* silent */ } finally {
+                    setBriefing(false);
+                  }
+                }}
+              >
+                {briefing ? (
+                  <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating Brief…</>
+                ) : (
+                  <><Brain className="h-3.5 w-3.5" /> Pre-Meeting Brief</>
+                )}
+              </Button>
               <Button
                 variant="secondary"
                 className="w-full justify-center"
@@ -560,6 +728,63 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
             )}
           </div>
         )}
+
+        {activeTab === "timeline" && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-indigo-400" aria-hidden="true" />
+              <p className="text-xs font-semibold text-zinc-300">Activity Timeline</p>
+            </div>
+
+            {timelineLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-14 rounded-xl border border-zinc-800 bg-zinc-900 animate-pulse" />
+                ))}
+              </div>
+            ) : timeline.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 py-10 text-center">
+                <Zap className="h-8 w-8 text-zinc-700" />
+                <p className="text-xs text-zinc-500">No activity recorded yet.</p>
+              </div>
+            ) : (
+              <div className="relative space-y-0">
+                {timeline.map((evt, i) => {
+                  const dotColor =
+                    evt.type === "message" ? "bg-indigo-400" :
+                    evt.type === "call" ? "bg-emerald-400" :
+                    evt.type === "deal_stage" ? "bg-amber-400" :
+                    "bg-zinc-500";
+                  const typeLabel =
+                    evt.type === "message" ? "Email" :
+                    evt.type === "call" ? "Call" :
+                    evt.type === "deal_stage" ? "Deal" :
+                    "Activity";
+                  return (
+                    <div key={evt.id} className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <span className={cn("mt-2 h-2.5 w-2.5 rounded-full flex-shrink-0", dotColor)} />
+                        {i < timeline.length - 1 && (
+                          <span className="flex-1 w-px bg-zinc-800 mt-1" />
+                        )}
+                      </div>
+                      <div className="pb-4 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-[10px] font-mono font-medium text-zinc-500 uppercase tracking-wider">{typeLabel}</span>
+                          <span className="text-[10px] text-zinc-600 font-mono">{formatRelative(evt.ts)}</span>
+                        </div>
+                        <p className="text-xs font-medium text-zinc-200 truncate">{evt.title}</p>
+                        {evt.body && (
+                          <p className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">{evt.body}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </aside>
 
@@ -569,7 +794,48 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
         draft={emailDraft}
         contact={contact}
         onClose={() => setEmailDraft(null)}
+        hasGmailConnector={hasGmailConnector}
+        workspaceId={workspaceId}
+        token={token}
       />
+    )}
+
+    {/* Pre-meeting brief modal */}
+    {briefText && (
+      <div
+        className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
+        onClick={() => setBriefText(null)}
+      >
+        <div
+          className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+            <div className="flex items-center gap-2">
+              <Brain className="h-4 w-4 text-indigo-400" />
+              <p className="text-sm font-semibold text-zinc-100">Pre-Meeting Brief — {contact.name}</p>
+            </div>
+            <button onClick={() => setBriefText(null)} className="text-zinc-400 hover:text-zinc-100 cursor-pointer">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="p-5 max-h-[70vh] overflow-y-auto">
+            <pre className="text-sm text-zinc-200 whitespace-pre-wrap font-sans leading-relaxed">
+              {briefText}
+            </pre>
+          </div>
+          <div className="border-t border-zinc-800 px-5 py-3 flex justify-end">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                navigator.clipboard.writeText(briefText);
+              }}
+            >
+              <Copy className="h-3.5 w-3.5" /> Copy Brief
+            </Button>
+          </div>
+        </div>
+      </div>
     )}
   </>
   );
@@ -663,6 +929,9 @@ export default function ContactsPage() {
   const [semanticLoading, setSemanticLoading] = useState(false);
   const [indexing, setIndexing] = useState(false);
   const [newContactOpen, setNewContactOpen] = useState(false);
+  const [hasGmailConnector, setHasGmailConnector] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { contacts, createContact } = useContacts();
@@ -681,6 +950,48 @@ export default function ContactsPage() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (!token || !workspaceId) return;
+    apiClient.getConnectors(workspaceId, token).then((connectors: Array<{ provider: string }>) => {
+      setHasGmailConnector(connectors.some((c) => c.provider === 'gmail'));
+    }).catch(() => {});
+  }, [token, workspaceId]);
+
+  const handleSelect = useCallback((id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const handleSelectAll = useCallback((contacts: Contact[]) => {
+    setSelectedIds((prev) => {
+      if (prev.size === contacts.length) return new Set();
+      return new Set(contacts.map((c) => c.id));
+    });
+  }, []);
+
+  const handleBulkStatus = useCallback(async (status: ContactStatus) => {
+    if (!workspaceId || !token || bulkBusy) return;
+    setBulkBusy(true);
+    await Promise.allSettled(
+      [...selectedIds].map((id) => apiClient.updateContactStatus(workspaceId, id, status, token))
+    );
+    setSelectedIds(new Set());
+    setBulkBusy(false);
+  }, [workspaceId, token, selectedIds, bulkBusy]);
+
+  const handleBulkEnrich = useCallback(async () => {
+    if (!workspaceId || !token || bulkBusy) return;
+    setBulkBusy(true);
+    await Promise.allSettled(
+      [...selectedIds].map((id) => apiClient.enrichContact(workspaceId, id, token))
+    );
+    setSelectedIds(new Set());
+    setBulkBusy(false);
+  }, [workspaceId, token, selectedIds, bulkBusy]);
 
   // Debounced semantic search
   useEffect(() => {
@@ -857,6 +1168,17 @@ export default function ContactsPage() {
           <table className="w-full" role="table" aria-label="Contacts table">
             <thead>
               <tr className="border-b border-zinc-800">
+                <th scope="col" className="pl-4 py-3 w-8">
+                  <button
+                    onClick={() => handleSelectAll(filtered)}
+                    className="text-zinc-500 hover:text-indigo-400 transition-colors"
+                    aria-label="Select all"
+                  >
+                    {selectedIds.size > 0 && selectedIds.size === filtered.length
+                      ? <CheckSquare className="h-4 w-4 text-indigo-400" />
+                      : <Square className="h-4 w-4" />}
+                  </button>
+                </th>
                 <th scope="col" className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wider">
                   Contact
                 </th>
@@ -890,14 +1212,14 @@ export default function ContactsPage() {
               {semanticMode ? (
                 !search.trim() ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-sm text-zinc-500">
+                    <td colSpan={8} className="px-4 py-12 text-center text-sm text-zinc-500">
                       <Sparkles className="h-5 w-5 text-indigo-500 mx-auto mb-2" />
                       Type a natural language query to search semantically.
                     </td>
                   </tr>
                 ) : semanticLoading ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center">
+                    <td colSpan={8} className="px-4 py-10 text-center">
                       <Loader2 className="h-5 w-5 text-indigo-400 mx-auto animate-spin" />
                     </td>
                   </tr>
@@ -929,12 +1251,14 @@ export default function ContactsPage() {
                         contact={contact}
                         onClick={() => setSelected(contact)}
                         similarity={r.similarity}
+                        selected={selectedIds.has(r.id)}
+                        onSelect={handleSelect}
                       />
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-sm text-zinc-500">
+                    <td colSpan={8} className="px-4 py-12 text-center text-sm text-zinc-500">
                       No semantic matches found. Try indexing contacts first.
                     </td>
                   </tr>
@@ -945,11 +1269,13 @@ export default function ContactsPage() {
                     key={contact.id}
                     contact={contact}
                     onClick={() => setSelected(contact)}
+                    selected={selectedIds.has(contact.id)}
+                    onSelect={handleSelect}
                   />
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-sm text-zinc-500">
+                  <td colSpan={8} className="px-4 py-12 text-center text-sm text-zinc-500">
                     No contacts match your filters.
                   </td>
                 </tr>
@@ -981,6 +1307,17 @@ export default function ContactsPage() {
         </div>
       </Card>
 
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <BulkActionBar
+          count={selectedIds.size}
+          onStatusChange={handleBulkStatus}
+          onEnrich={handleBulkEnrich}
+          onClear={() => setSelectedIds(new Set())}
+          busy={bulkBusy}
+        />
+      )}
+
       {/* Contact drawer overlay */}
       {selected && (
         <>
@@ -989,7 +1326,7 @@ export default function ContactsPage() {
             onClick={() => setSelected(null)}
             aria-hidden="true"
           />
-          <ContactDrawer contact={selected} onClose={() => setSelected(null)} workspaceId={workspaceId} token={token} />
+          <ContactDrawer contact={selected} onClose={() => setSelected(null)} workspaceId={workspaceId} token={token} hasGmailConnector={hasGmailConnector} />
         </>
       )}
 

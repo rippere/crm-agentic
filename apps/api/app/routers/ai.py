@@ -1,11 +1,12 @@
-import os
 import uuid
 
+import anthropic as _anthropic
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
@@ -99,8 +100,7 @@ async def ai_query(
         context += f"- Recent activity:\n{event_lines}\n"
 
     try:
-        import anthropic as _anthropic
-        client = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=512,

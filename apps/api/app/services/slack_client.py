@@ -62,3 +62,59 @@ class SlackClient:
 
     async def get_user_info(self, user_id: str) -> dict[str, Any]:
         return await self._get("users.info", user=user_id)
+
+    async def post_message(self, channel: str, text: str, blocks: list[dict] | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"channel": channel, "text": text}
+        if blocks:
+            payload["blocks"] = blocks
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{SLACK_API_BASE}/chat.postMessage",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json=payload,
+            )
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Slack post error: {data.get('error', 'unknown')}")
+        return data
+
+    async def post_hitl_block(
+        self,
+        channel: str,
+        deal_title: str,
+        company: str,
+        subject: str,
+        body_preview: str,
+        approve_value: str,
+        dismiss_value: str,
+    ) -> dict[str, Any]:
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"Follow-up needed: {deal_title}", "emoji": True},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Company:* {company}\n*Subject:* {subject}\n\n_{body_preview}_"},
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "✓ Approve & Send", "emoji": True},
+                        "style": "primary",
+                        "action_id": "hitl_approve",
+                        "value": approve_value,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "✗ Dismiss", "emoji": True},
+                        "style": "danger",
+                        "action_id": "hitl_dismiss",
+                        "value": dismiss_value,
+                    },
+                ],
+            },
+        ]
+        return await self.post_message(channel=channel, text=f"Follow-up needed: {deal_title}", blocks=blocks)

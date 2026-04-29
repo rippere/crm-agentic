@@ -150,6 +150,32 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/pipeline/suggestions`, {}, token)
   },
 
+  sendEmail: (workspaceId: string, contactId: string, payload: { to: string; subject: string; body: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ message_id: 'demo-msg', status: 'sent', to: payload.to })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/send-email`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }, token)
+  },
+
+  getMeetingBrief: (workspaceId: string, contactId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({
+      contact_id: contactId,
+      contact_name: 'Demo Contact',
+      brief: `**Who they are**\nJames Whitfield is the Head of Procurement at TechCorp, with 12 years in enterprise software buying. He prioritizes ROI and vendor reliability over features.\n\n**Current deal status & risks**\nThe TechCorp Enterprise deal (Negotiation, $48K) has stalled for 24 days. Legal review is pending and James has been less responsive over the past week — a churn signal.\n\n**Conversation highlights**\n- Last email discussed SLA terms and uptime guarantees\n- Call on 2024-05-02 confirmed strong interest but flagged a competing vendor\n\n**Recommended talking points**\n- Lead with the 99.9% SLA and reference customer success stories\n- Address the competitor by focusing on integration depth\n- Propose a 30-day pilot to de-risk the decision\n\n**Watch-out signals**\n- Delayed responses may indicate internal prioritization shift\n- Legal review duration suggests committee buy-in needed — ask for a champion`
+    })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/brief`, { method: 'POST' }, token)
+  },
+
+  getContactTimeline: (workspaceId: string, contactId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'evt-1', type: 'message', title: 'Re: Partnership Opportunity', body: 'Thank you for reaching out...', ts: new Date(Date.now() - 86400000).toISOString(), meta: { sender: 'contact@example.com' } },
+      { id: 'evt-2', type: 'deal_stage', title: 'Deal: Enterprise Expansion', body: 'Stage: proposal · Value: $48,000', ts: new Date(Date.now() - 172800000).toISOString(), meta: { stage: 'proposal', value: 48000 } },
+      { id: 'evt-3', type: 'activity', title: 'email_sent', body: 'Email sent to contact@example.com: Re: Partnership Opportunity', ts: new Date(Date.now() - 3600000).toISOString(), meta: { agent_name: 'Gmail', severity: 'success' } },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/timeline`, {}, token)
+  },
+
   updateContactStatus: (workspaceId: string, contactId: string, contactStatus: string, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: contactId, status: contactStatus })
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/status`, {
@@ -181,6 +207,11 @@ export const apiClient = {
   triggerEmbedContacts: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve({ job_id: 'demo-embed', status: 'queued' })
     return apiFetch(`/workspaces/${workspaceId}/contacts/embed`, { method: 'POST' }, token)
+  },
+
+  inviteTeammate: (workspaceId: string, email: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ status: 'invited', email })
+    return apiFetch(`/workspaces/${workspaceId}/invite`, { method: 'POST', body: JSON.stringify({ email }) }, token)
   },
 
   // AI query

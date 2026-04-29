@@ -9,10 +9,12 @@ import { createBrowserClient } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import {
   Settings, Layers, TrendingUp, CheckSquare,
-  Plug, User, LogOut, Save, AlertTriangle,
+  Plug, User, LogOut, Save, AlertTriangle, Users, Mail,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 import { useRouter } from "next/navigation";
+import { useRole } from "@/hooks/useRole";
+import { apiClient } from "@/lib/api-client";
 
 const MODE_OPTIONS: { value: WorkspaceMode; label: string; description: string; icon: React.ElementType }[] = [
   { value: "sales", label: "Sales",              description: "CRM, pipeline, deal tracking",     icon: TrendingUp  },
@@ -24,11 +26,15 @@ interface Toast { id: number; message: string; type: "success" | "error" }
 
 export default function SettingsPage() {
   const router = useRouter();
+  const { isAdmin } = useRole();
   const [workspaceName, setWorkspaceName] = useState("");
   const [mode, setMode] = useState<WorkspaceMode>("sales");
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviting, setInviting] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const addToast = (message: string, type: Toast["type"]) => {
@@ -39,8 +45,10 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const supabase = createBrowserClient();
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (!user) return;
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) return;
+      setToken(session.access_token);
+      const user = session.user;
       setUserEmail(user.email ?? null);
       const wsId = user.user_metadata?.workspace_id as string | undefined;
       if (!wsId) return;
@@ -52,8 +60,8 @@ export default function SettingsPage() {
         .eq("id", wsId)
         .single();
       if (ws) {
-        setWorkspaceName(ws.name ?? "");
-        setMode((ws.mode as WorkspaceMode) ?? "sales");
+        setWorkspaceName((ws as { name: string; mode: string }).name ?? "");
+        setMode(((ws as { name: string; mode: string }).mode as WorkspaceMode) ?? "sales");
       }
     });
   }, []);
@@ -148,10 +156,13 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <Button variant="primary" onClick={handleSave} disabled={saving || !workspaceName.trim()}>
+          <Button variant="primary" onClick={handleSave} disabled={saving || !workspaceName.trim() || !isAdmin}>
             <Save className="h-3.5 w-3.5" />
             {saving ? "Saving…" : "Save changes"}
           </Button>
+          {!isAdmin && (
+            <p className="text-xs text-zinc-600 mt-2">Admin role required to modify workspace settings.</p>
+          )}
         </div>
       </Card>
 
@@ -169,6 +180,50 @@ export default function SettingsPage() {
           Manage Connectors
         </Button>
       </Card>
+
+      {/* Team */}
+      {isAdmin && (
+        <Card>
+          <div className="flex items-center gap-2 mb-4">
+            <Users className="h-4 w-4 text-indigo-400" />
+            <p className="text-sm font-semibold text-zinc-100">Invite Teammates</p>
+          </div>
+          <p className="text-xs text-zinc-500 mb-4">
+            Send a Supabase invite email to add a new member to this workspace.
+          </p>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!workspaceId || !token || !inviteEmail.trim()) return;
+              setInviting(true);
+              try {
+                await apiClient.inviteTeammate(workspaceId, inviteEmail.trim(), token);
+                addToast(`Invite sent to ${inviteEmail}`, "success");
+                setInviteEmail("");
+              } catch {
+                addToast("Failed to send invite — check admin permissions", "error");
+              } finally {
+                setInviting(false);
+              }
+            }}
+            className="flex gap-2"
+          >
+            <div className="flex-1 flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-3.5">
+              <Mail className="h-4 w-4 text-zinc-500 flex-shrink-0" />
+              <input
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="teammate@company.com"
+                className="flex-1 bg-transparent py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none"
+              />
+            </div>
+            <Button type="submit" variant="secondary" disabled={inviting || !inviteEmail.trim()}>
+              {inviting ? "Sending…" : "Send Invite"}
+            </Button>
+          </form>
+        </Card>
+      )}
 
       {/* Account */}
       <Card>

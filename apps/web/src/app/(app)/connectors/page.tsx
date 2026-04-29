@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase";
 import Header from "@/components/layout/Header";
@@ -50,7 +50,7 @@ function formatRelative(dateStr: string | null): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-export default function ConnectorsPage() {
+function ConnectorsInner() {
   const searchParams = useSearchParams();
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [loading, setLoading] = useState(true);
@@ -294,5 +294,21 @@ export default function ConnectorsPage() {
         </div>
       </Card>
     </div>
+  );
+}
+
+export default function ConnectorsPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex flex-col gap-6 p-6">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2].map((i) => (
+            <div key={i} className="h-48 rounded-2xl border border-zinc-800 bg-zinc-900 animate-pulse" />
+          ))}
+        </div>
+      </div>
+    }>
+      <ConnectorsInner />
+    </Suspense>
   );
 }

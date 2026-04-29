@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_admin
 from app.models.user import User
 from app.models.deal import Deal
 
@@ -49,7 +49,7 @@ async def list_deals(
 @router.post("/workspaces/{workspace_id}/deals/health", status_code=202)
 async def trigger_deal_health(
     workspace_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ) -> dict:
     """Enqueue a Celery job to recompute health scores for all active deals."""
     if current_user.workspace_id != workspace_id:
@@ -202,7 +202,7 @@ async def pipeline_suggestions(
 @router.post("/workspaces/{workspace_id}/pipeline/optimize", status_code=202)
 async def trigger_pipeline_optimize(
     workspace_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ) -> dict:
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")

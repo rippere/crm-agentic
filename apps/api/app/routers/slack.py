@@ -33,6 +33,7 @@ SLACK_TOKEN_URL = "https://slack.com/api/oauth.v2.access"
 SLACK_USER_SCOPES = [
     "channels:read",
     "channels:history",
+    "chat:write",
     "groups:read",
     "groups:history",
     "im:read",

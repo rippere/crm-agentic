@@ -8,7 +8,7 @@ import { useDeals } from "@/hooks/useDeals";
 import { cn, formatCurrency, stageConfig, dealStageOrder } from "@/lib/utils";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend,
+  Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
 } from "recharts";
 import {
   TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy,
@@ -69,7 +69,57 @@ export default function ReportsPage() {
       { label: "Critical (<40)",   count: active.filter((d) => d.healthScore < 40).length, color: "#F43F5E" },
     ];
 
-    return { won, lost, active, winRate, wonValue, pipelineValue, avgDealSize, stale, byStage, topDeals, healthBuckets };
+    // Monthly revenue from closed_won deals (last 6 months)
+    const now = new Date();
+    const abbr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const historyMonths = 6;
+    const monthKeys: string[] = [];
+    for (let i = historyMonths - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      monthKeys.push(`${d.getFullYear()}-${d.getMonth()}`);
+    }
+    const monthBuckets: Record<string, { month: string; actual: number }> = {};
+    monthKeys.forEach((key) => {
+      const [y, m] = key.split('-').map(Number);
+      monthBuckets[key] = { month: abbr[m], actual: 0 };
+    });
+    won.forEach((d) => {
+      const dt = new Date(d.createdAt);
+      const key = `${dt.getFullYear()}-${dt.getMonth()}`;
+      if (monthBuckets[key]) monthBuckets[key].actual += d.value;
+    });
+    const history = monthKeys.map((k) => monthBuckets[k]);
+
+    // Linear regression over history to project 3 forecast months
+    const n = history.length;
+    const sumX = history.reduce((s, _, i) => s + i, 0);
+    const sumY = history.reduce((s, h) => s + h.actual, 0);
+    const sumXY = history.reduce((s, h, i) => s + i * h.actual, 0);
+    const sumX2 = history.reduce((s, _, i) => s + i * i, 0);
+    const denom = n * sumX2 - sumX * sumX;
+    const slope = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0;
+    const intercept = (sumY - slope * sumX) / n;
+
+    const forecastCount = 3;
+    const revenueChart = [
+      ...history.map((h, i) => ({
+        month: h.month,
+        actual: Math.round(h.actual),
+        forecast: null as number | null,
+        trend: Math.max(0, Math.round(intercept + slope * i)),
+      })),
+      ...Array.from({ length: forecastCount }, (_, i) => {
+        const dt = new Date(now.getFullYear(), now.getMonth() + 1 + i, 1);
+        return {
+          month: abbr[dt.getMonth()],
+          actual: null as number | null,
+          forecast: Math.max(0, Math.round(intercept + slope * (n + i))),
+          trend: null as number | null,
+        };
+      }),
+    ];
+
+    return { won, lost, active, winRate, wonValue, pipelineValue, avgDealSize, stale, byStage, topDeals, healthBuckets, revenueChart };
   }, [deals]);
 
   if (loading) {
@@ -260,6 +310,37 @@ export default function ReportsPage() {
           )}
         </Card>
       </div>
+
+      {/* Revenue forecast chart */}
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="text-sm font-semibold text-zinc-100">Revenue Trend &amp; Forecast</p>
+            <p className="text-xs text-zinc-500 mt-0.5 font-mono">6-month history · 3-month projection (linear trend)</p>
+          </div>
+          <div className="flex items-center gap-4 text-[10px] text-zinc-500">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-2 w-4 rounded-sm bg-[#6366F1]" /> Actual
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-0.5 w-4 border-t-2 border-dashed border-[#00C896]" /> Forecast
+            </span>
+          </div>
+        </div>
+        <div className="h-56">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={stats.revenueChart} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis dataKey="month" tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v / 1000}K`} width={40} />
+              <Tooltip content={<CustomTooltip />} />
+              <Bar dataKey="actual" name="Actual" fill="#6366F1" radius={[4, 4, 0, 0]} maxBarSize={40} />
+              <Bar dataKey="forecast" name="Forecast" fill="#00C896" radius={[4, 4, 0, 0]} maxBarSize={40} opacity={0.35} />
+              <Line dataKey="trend" name="Trend" stroke="#00C896" strokeWidth={1.5} strokeDasharray="5 3" dot={false} connectNulls />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
 
       {/* Stale alert */}
       {stats.stale > 0 && (
