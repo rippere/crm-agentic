@@ -1,7 +1,7 @@
 import uuid
 
 import anthropic as _anthropic
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.limiter import limiter
 from app.models.user import User
 from app.models.contact import Contact
 from app.models.deal import Deal
@@ -39,7 +40,9 @@ class AIQueryResponse(BaseModel):
 
 
 @router.post("/workspaces/{workspace_id}/ai/query", response_model=AIQueryResponse)
+@limiter.limit("20/minute")
 async def ai_query(
+    request: Request,
     workspace_id: uuid.UUID,
     body: AIQueryRequest,
     db: AsyncSession = Depends(get_db),

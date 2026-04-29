@@ -209,11 +209,11 @@ function BulkActionBar({
 }) {
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-2xl border border-indigo-500/30 bg-zinc-900/95 backdrop-blur px-5 py-3 shadow-2xl animate-slide-up">
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-col sm:flex-row items-center gap-3 rounded-2xl border border-indigo-500/30 bg-zinc-900/95 backdrop-blur px-5 py-3 shadow-2xl animate-slide-up w-[calc(100vw-2rem)] sm:w-auto">
       <span className="text-sm font-medium text-indigo-300 whitespace-nowrap">
         {count} selected
       </span>
-      <div className="w-px h-4 bg-zinc-700 flex-shrink-0" />
+      <div className="hidden sm:block w-px h-4 bg-zinc-700 flex-shrink-0" />
       <div className="relative">
         <button
           onClick={() => setStatusMenuOpen((v) => !v)}
@@ -444,13 +444,13 @@ function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector
           </button>
         </div>
         {/* Tabs */}
-        <div className="flex border-t border-zinc-800">
+        <div className="flex flex-wrap border-t border-zinc-800">
           {(["overview", "timeline", "messages"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={cn(
-                "flex-1 py-2.5 text-xs font-medium transition-colors cursor-pointer",
+                "flex-1 min-w-[5rem] py-2.5 text-xs font-medium transition-colors cursor-pointer",
                 activeTab === tab
                   ? "border-b-2 border-indigo-500 text-indigo-400"
                   : "text-zinc-500 hover:text-zinc-300"

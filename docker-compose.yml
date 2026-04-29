@@ -104,6 +104,19 @@ services:
       redis:
         condition: service_healthy
 
+  flower:
+    build: ./apps/api
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app.celery_app flower --port=5555 --broker=redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    env_file: .env
+    environment:
+      <<: *api-env
+    depends_on:
+      redis:
+        condition: service_healthy
+
   web:
     build: ./apps/web
     restart: unless-stopped
