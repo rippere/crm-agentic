@@ -1,5 +1,6 @@
 import uuid
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
@@ -16,6 +17,25 @@ router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/verify", auto_error=True)
 
 
+async def _sync_workspace_metadata(supabase_uid: str, workspace_id: str) -> None:
+    """Push workspace_id into Supabase user_metadata via admin API (non-fatal)."""
+    from app.config import settings as _s
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.patch(
+                f"{_s.SUPABASE_URL.rstrip('/')}/auth/v1/admin/users/{supabase_uid}",
+                headers={
+                    "apikey": _s.SUPABASE_SERVICE_ROLE_KEY,
+                    "Authorization": f"Bearer {_s.SUPABASE_SERVICE_ROLE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"user_metadata": {"workspace_id": workspace_id}},
+            )
+    except Exception:
+        pass  # metadata sync is best-effort; never block the auth response
+
+
 class VerifyResponse(BaseModel):
     user_id: uuid.UUID
     workspace_id: uuid.UUID | None
@@ -28,6 +48,7 @@ async def verify(
 ) -> VerifyResponse:
     """
     Verify a Supabase JWT. Auto-provisions a users row on first login.
+    Reconciles workspace_id if the user completed onboarding after first provision.
     Returns user_id and workspace_id.
     """
     try:
@@ -37,6 +58,8 @@ async def verify(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
     email: str | None = payload.get("email")
+    user_meta: dict = payload.get("user_metadata", {})
+    meta_ws_id_str: str | None = user_meta.get("workspace_id")
 
     # Look up existing user
     result = await db.execute(select(User).where(User.supabase_uid == supabase_uid))
@@ -52,6 +75,20 @@ async def verify(
         db.add(user)
         await db.commit()
         await db.refresh(user)
+
+        # Push workspace_id back into Supabase user_metadata so the JWT stays in sync
+        await _sync_workspace_metadata(supabase_uid, str(ws.id))
+    else:
+        # Reconcile: if the JWT now carries a different workspace_id (e.g. after onboarding
+        # created a new workspace via direct Supabase insert + updateUser), update our DB row.
+        if meta_ws_id_str and meta_ws_id_str != str(user.workspace_id):
+            try:
+                new_ws_id = uuid.UUID(meta_ws_id_str)
+                user.workspace_id = new_ws_id  # type: ignore[assignment]
+                await db.commit()
+                await db.refresh(user)
+            except ValueError:
+                pass
 
     return VerifyResponse(user_id=user.id, workspace_id=user.workspace_id)
 

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.limiter import limiter
 from app.models.user import User
 
 router = APIRouter()
@@ -214,6 +215,7 @@ def _err(id_: Any, code: int, message: str) -> dict:
 
 
 @router.post("/mcp")
+@limiter.limit("20/minute")
 async def mcp_endpoint(
     request: Request,
     db: AsyncSession = Depends(get_db),

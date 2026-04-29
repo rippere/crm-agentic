@@ -30,8 +30,16 @@
   - 8e: init_docker.sql — seed default workspace + 6 agents for fresh Docker installs
   - 8f: next.config ignoreBuildErrors; recharts Tooltip formatter; proxy.ts types
 
+- [2026-04-29] Pre-ship pass (PM agent):
+  - Task 1: workspace_id reconciliation in `/auth/verify` — syncs DB row when JWT metadata diverges (post-onboarding), pushes workspace_id to Supabase user_metadata via admin API on first provision
+  - Task 2: `POST /workspaces/{id}/contacts` backend route added — creates contact, logs ActivityEvent, returns ContactResponse
+  - Task 3: Rate limiting via slowapi — 20/minute on `/mcp` and `/ai/query`, keyed by user_id or IP
+  - Task 4: Flower dashboard — added to requirements.txt, docker-compose.yml (port 5555), railway-flower.toml
+  - Task 5: Mobile responsive pass — BulkActionBar stacks vertically on mobile, drawer tabs wrap with min-w
+  - Task 6: DEPLOY.md created — full Railway checklist, env var table, OAuth setup steps
+
 ## Current Status
-FEATURE COMPLETE — all phases shipped. Ready for QA / first real deployment.
+**SHIP-READY** — all phases complete, pre-ship backlog cleared. Deploy to Railway via DEPLOY.md.
 
 Notes:
 - All pages use live data with mock fallbacks in demo mode

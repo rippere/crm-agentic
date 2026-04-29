@@ -34,6 +34,57 @@ class ContactResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class CreateContactRequest(BaseModel):
+    name: str
+    email: str | None = None
+    company: str | None = None
+    role: str | None = None
+    status: str = "lead"
+
+
+@router.post("/workspaces/{workspace_id}/contacts", response_model=ContactResponse, status_code=201)
+async def create_contact(
+    workspace_id: uuid.UUID,
+    body: CreateContactRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ContactResponse:
+    """Create a new contact in the workspace."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    allowed_statuses = {"lead", "prospect", "customer", "churned"}
+    if body.status not in allowed_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"status must be one of {allowed_statuses}",
+        )
+
+    contact = Contact(
+        workspace_id=workspace_id,
+        name=body.name,
+        email=body.email,
+        company=body.company,
+        role=body.role,
+        status=body.status,
+    )
+    db.add(contact)
+    await db.flush()
+
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="contact_created",
+        agent_name="System",
+        description=f"New contact added: {body.name}",
+        severity="info",
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(contact)
+
+    return ContactResponse.model_validate(contact)
+
+
 @router.get("/workspaces/{workspace_id}/contacts", response_model=list[ContactResponse])
 async def list_contacts(
     workspace_id: uuid.UUID,
