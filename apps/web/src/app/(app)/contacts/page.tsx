@@ -10,6 +10,7 @@ import LogActivityModal from "@/components/ui/LogActivityModal";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { cn, formatCurrency, leadScoreConfig } from "@/lib/utils";
 import { useContacts } from "@/hooks/useContacts";
+import { useJobPoller } from "@/hooks/useJobPoller";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import {
@@ -259,8 +260,7 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
   const [composing, setComposing] = useState(false);
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
-  const [enriching, setEnriching] = useState(false);
-  const [enrichDone, setEnrichDone] = useState(false);
+  const enrichPoller = useJobPoller();
   const [logActivityOpen, setLogActivityOpen] = useState(false);
   const [flagConfirmOpen, setFlagConfirmOpen] = useState(false);
 
@@ -428,24 +428,21 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
               <Button
                 variant="secondary"
                 className="w-full justify-center"
-                disabled={enriching || enrichDone}
+                disabled={enrichPoller.state === "pending" || enrichPoller.state === "started" || enrichPoller.state === "success"}
                 onClick={async () => {
                   if (!workspaceId || !token) return;
-                  setEnriching(true);
                   try {
-                    await apiClient.enrichContact(workspaceId, contact.id, token);
-                    setEnrichDone(true);
-                  } catch {
-                    // silent — background task, will surface via data refresh
-                  } finally {
-                    setEnriching(false);
-                  }
+                    const res = await apiClient.enrichContact(workspaceId, contact.id, token);
+                    if (res?.job_id) enrichPoller.start(res.job_id);
+                  } catch { /* silent */ }
                 }}
               >
-                {enriching ? (
+                {enrichPoller.state === "pending" || enrichPoller.state === "started" ? (
                   <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Enriching…</>
-                ) : enrichDone ? (
-                  <><Sparkles className="h-3.5 w-3.5 text-emerald-400" /> Enrichment Queued</>
+                ) : enrichPoller.state === "success" ? (
+                  <><Sparkles className="h-3.5 w-3.5 text-[#00C896]" /> Enriched!</>
+                ) : enrichPoller.state === "failure" ? (
+                  <><Sparkles className="h-3.5 w-3.5 text-rose-400" /> Enrich Failed</>
                 ) : (
                   <><Sparkles className="h-3.5 w-3.5" /> Auto-Enrich Contact</>
                 )}
@@ -498,7 +495,13 @@ function ContactDrawer({ contact, onClose, workspaceId, token }: {
             description={`This will mark ${contact.name} as at-risk and alert assigned agents.`}
             actionLabel="Flag At-Risk"
             variant="warning"
-            onConfirm={() => console.log("[Flagged at-risk]", contact.id)}
+            onConfirm={async () => {
+              setFlagConfirmOpen(false);
+              if (!workspaceId || !token) return;
+              try {
+                await apiClient.updateContactStatus(workspaceId, contact.id, "churned", token);
+              } catch { /* silent — contact list will refresh on next visit */ }
+            }}
             onClose={() => setFlagConfirmOpen(false)}
           />
         )}

@@ -74,3 +74,32 @@ async def run_agent(
     await db.commit()
 
     return RunResponse(job_id=job_id, agent_id=agent_id, status="processing")
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    state: str
+    result: dict | None = None
+    error: str | None = None
+
+
+@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+) -> JobStatusResponse:
+    """Return the state of a Celery task by job_id."""
+    from app.workers.celery_app import celery_app
+
+    task = celery_app.AsyncResult(job_id)
+    state = task.state  # PENDING | STARTED | SUCCESS | FAILURE | REVOKED
+
+    result = None
+    error = None
+    if state == "SUCCESS":
+        raw = task.result
+        result = raw if isinstance(raw, dict) else {"value": str(raw)}
+    elif state == "FAILURE":
+        error = str(task.result)
+
+    return JobStatusResponse(job_id=job_id, state=state, result=result, error=error)

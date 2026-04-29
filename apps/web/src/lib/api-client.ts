@@ -142,6 +142,36 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/stale?threshold=${threshold}`, {}, token)
   },
 
+  getPipelineSuggestions: (workspaceId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve([
+      { deal_id: 'demo-1', title: 'Acme Corp Expansion', company: 'Acme Corp', stage: 'proposal', value: 48000, action: 'follow_up', reason: 'No stage change in 24 days', priority: 'high' },
+      { deal_id: 'demo-2', title: 'TechStart Series A', company: 'TechStart', stage: 'negotiation', value: 22000, action: 'review', reason: 'Win probability only 28% — consider re-qualifying', priority: 'medium' },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/pipeline/suggestions`, {}, token)
+  },
+
+  updateContactStatus: (workspaceId: string, contactId: string, contactStatus: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: contactId, status: contactStatus })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: contactStatus }),
+    }, token)
+  },
+
+  getDealHistory: (workspaceId: string, token: string, months = 6) => {
+    if (isDemoMode) {
+      const now = new Date()
+      const abbr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+      return Promise.resolve(
+        Array.from({ length: months }, (_, i) => {
+          const d = new Date(now.getFullYear(), now.getMonth() - (months - 1 - i), 1)
+          return { month: abbr[d.getMonth()], revenue: Math.round(50000 + Math.random() * 100000) }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/history?months=${months}`, {}, token)
+  },
+
   // Semantic search
   semanticSearchContacts: (workspaceId: string, query: string, token: string) => {
     if (isDemoMode) return Promise.resolve([])

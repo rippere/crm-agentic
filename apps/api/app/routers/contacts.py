@@ -168,3 +168,46 @@ async def enrich_contact_endpoint(
     from app.workers.enrich_contact import enrich_contact
     task = enrich_contact.delay(str(contact_id))
     return {"status": "queued", "contact_id": str(contact_id), "job_id": task.id}
+
+
+class ContactStatusUpdate(BaseModel):
+    status: str
+
+
+@router.patch("/workspaces/{workspace_id}/contacts/{contact_id}/status")
+async def update_contact_status(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    body: ContactStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Update a contact's status (lead/prospect/customer/churned)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    allowed = {"lead", "prospect", "customer", "churned"}
+    if body.status not in allowed:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"status must be one of {allowed}")
+
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    contact.status = body.status  # type: ignore[assignment]
+    db.add(contact)
+
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="deal_moved",
+        agent_name="System",
+        description=f"{contact.name} flagged as {body.status}",
+        severity="warning",
+    )
+    db.add(event)
+    await db.commit()
+
+    return {"id": str(contact_id), "status": body.status}

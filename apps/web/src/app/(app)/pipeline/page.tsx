@@ -1,13 +1,26 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import { useDeals } from "@/hooks/useDeals";
+import { apiClient } from "@/lib/api-client";
+import { createBrowserClient } from "@/lib/supabase";
 import { cn, formatCurrency, stageConfig, dealStageOrder } from "@/lib/utils";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight } from "lucide-react";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
+
+interface PipelineSuggestion {
+  deal_id: string;
+  title: string;
+  company: string;
+  stage: string;
+  value: number;
+  action: string;
+  reason: string;
+  priority: "high" | "medium";
+}
 
 const SIGNAL = "#00C896";
 
@@ -315,6 +328,27 @@ export default function PipelinePage() {
   const { deals, loading, createDeal, updateDeal } = useDeals();
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [newDealStage, setNewDealStage] = useState<DealStage | null>(null);
+  const [suggestions, setSuggestions] = useState<PipelineSuggestion[]>([]);
+  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
+
+  useEffect(() => {
+    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+    if (isDemoMode) {
+      apiClient.getPipelineSuggestions("demo-workspace-1", "demo-token")
+        .then((data) => { if (Array.isArray(data)) setSuggestions(data as PipelineSuggestion[]); })
+        .catch(() => {});
+      return;
+    }
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) return;
+      const workspaceId: string | undefined = session.user.user_metadata?.workspace_id;
+      if (!workspaceId) return;
+      apiClient.getPipelineSuggestions(workspaceId, session.access_token)
+        .then((data) => { if (Array.isArray(data)) setSuggestions(data as PipelineSuggestion[]); })
+        .catch(() => {});
+    });
+  }, []);
 
   const totalPipelineValue = deals.filter((d) => d.stage !== "closed_lost").reduce((s, d) => s + d.value, 0);
   const wonValue = deals.filter((d) => d.stage === "closed_won").reduce((s, d) => s + d.value, 0);
@@ -342,6 +376,46 @@ export default function PipelinePage() {
   return (
     <div className="flex flex-col gap-6 p-6 min-h-screen">
       <Header title="Pipeline" subtitle={`${deals.length} deals · ML win prediction active`} />
+
+      {/* Pipeline Optimizer Suggestions */}
+      {suggestions.length > 0 && !suggestionsDismissed && (
+        <Card className="border-indigo-500/20 bg-indigo-500/5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 border border-indigo-500/20">
+              <Zap className="h-4 w-4 text-indigo-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold text-zinc-100">
+                  Pipeline Optimizer — {suggestions.length} suggestion{suggestions.length !== 1 ? "s" : ""}
+                </p>
+                <button
+                  onClick={() => setSuggestionsDismissed(true)}
+                  className="text-zinc-600 hover:text-zinc-400 transition-colors"
+                  aria-label="Dismiss suggestions"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-2">
+                {suggestions.slice(0, 3).map((s) => (
+                  <div key={s.deal_id} className="flex items-center gap-3 rounded-lg bg-zinc-900/60 px-3 py-2">
+                    <span className={cn(
+                      "h-1.5 w-1.5 rounded-full flex-shrink-0",
+                      s.priority === "high" ? "bg-rose-400" : "bg-amber-400"
+                    )} />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-xs font-medium text-zinc-200">{s.title}</span>
+                      <span className="text-xs text-zinc-500 ml-2">· {s.reason}</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-zinc-500 flex-shrink-0">{formatCurrency(s.value)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Summary bar */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">

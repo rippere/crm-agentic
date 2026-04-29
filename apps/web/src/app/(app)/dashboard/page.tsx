@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
-import { mockKPIs, revenueChartData, agentAccuracyData, mockAgents, mockActivity } from "@/lib/mock-data";
+import { agentAccuracyData, mockAgents, mockActivity } from "@/lib/mock-data";
 import { demoDashboard } from "@/lib/demo-data";
+import { useDeals } from "@/hooks/useDeals";
 import { formatCurrency } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
@@ -19,7 +20,7 @@ import {
   ListTodo, Mail, BarChart2, CheckSquare, Heart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { KPI, ActivityEvent } from "@/lib/types";
+import type { KPI, ActivityEvent, Deal } from "@/lib/types";
 
 interface PMKpis {
   tasksExtractedToday: number;
@@ -166,12 +167,57 @@ function PMKpiCard({
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
+function computeKPIs(deals: Deal[]): KPI[] {
+  const won = deals.filter((d) => d.stage === "closed_won");
+  const active = deals.filter((d) => d.stage !== "closed_won" && d.stage !== "closed_lost");
+  const wonValue = won.reduce((s, d) => s + d.value, 0);
+  const closed = won.length + deals.filter((d) => d.stage === "closed_lost").length;
+  const winRate = closed > 0 ? Math.round((won.length / closed) * 100) : 0;
+  const avgProb = active.length > 0
+    ? Math.round(active.reduce((s, d) => s + (d.mlWinProbability ?? 50), 0) / active.length)
+    : 0;
+
+  return [
+    {
+      id: "k1", label: "Closed Won", icon: "dollar",
+      value: wonValue >= 1000000 ? `$${(wonValue / 1000000).toFixed(1)}M` : `$${Math.round(wonValue / 1000)}K`,
+      delta: `${won.length} deal${won.length !== 1 ? "s" : ""} closed`,
+      deltaType: won.length > 0 ? "positive" : "neutral",
+      sparkData: won.slice(-7).map((d) => d.value),
+    },
+    {
+      id: "k2", label: "Active Deals", icon: "briefcase",
+      value: String(active.length),
+      delta: `${deals.length} total`,
+      deltaType: "neutral",
+      sparkData: [active.length],
+    },
+    {
+      id: "k3", label: "Avg Win Probability", icon: "brain",
+      value: `${avgProb}%`,
+      delta: winRate > 0 ? `${winRate}% win rate` : "No closed deals",
+      deltaType: winRate >= 50 ? "positive" : winRate > 0 ? "negative" : "neutral",
+      sparkData: active.map((d) => d.mlWinProbability ?? 50),
+    },
+    {
+      id: "k4", label: "Pipeline Value", icon: "bot",
+      value: (() => { const v = active.reduce((s, d) => s + d.value, 0); return v >= 1000000 ? `$${(v / 1000000).toFixed(1)}M` : `$${Math.round(v / 1000)}K`; })(),
+      delta: `${active.length} open deal${active.length !== 1 ? "s" : ""}`,
+      deltaType: "neutral",
+      sparkData: active.map((d) => d.value),
+    },
+  ];
+}
+
 export default function DashboardPage() {
+  const { deals } = useDeals();
   const [activeAgents] = useState(mockAgents.filter((a) => a.status !== "idle"));
   const [pmKpis, setPmKpis] = useState<PMKpis | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<"sales" | "pm" | "both">("sales");
   const [staleDeals, setStaleDeals] = useState<StaleDeal[]>([]);
   const [liveActivity, setLiveActivity] = useState<ActivityEvent[]>([]);
+  const [revenueHistory, setRevenueHistory] = useState<{ month: string; revenue: number }[]>([]);
+  const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -185,10 +231,13 @@ export default function DashboardPage() {
       apiClient.getStaleDeals("demo-workspace-1", "demo-token").then((data) => {
         setStaleDeals(Array.isArray(data) ? data : []);
       }).catch(() => {});
+      apiClient.getDealHistory("demo-workspace-1", "demo-token", 6).then((data) => {
+        if (Array.isArray(data)) setRevenueHistory(data);
+      }).catch(() => {});
       return;
     }
 
-    // Fetch live activity feed
+    // Seed activity feed with recent events, then switch to SSE
     fetch("/api/activity?limit=20")
       .then((r) => r.json())
       .then((data: Array<{ id: string; type: string; agent_name: string; description: string; meta?: string; severity: string; created_at: string }>) => {
@@ -225,6 +274,31 @@ export default function DashboardPage() {
       }
 
       if (!workspaceId) return;
+
+      // Fetch revenue history
+      apiClient.getDealHistory(workspaceId, session.access_token, 6)
+        .then((data) => { if (Array.isArray(data)) setRevenueHistory(data); })
+        .catch(() => {});
+
+      // Open SSE stream for live activity updates
+      if (esRef.current) esRef.current.close();
+      const es = new EventSource(`/api/events?workspaceId=${workspaceId}`);
+      esRef.current = es;
+      es.onmessage = (e) => {
+        try {
+          const ev = JSON.parse(e.data) as { id: string; type: string; agent_name: string; description: string; meta?: string; severity: string; created_at: string };
+          const mapped: ActivityEvent = {
+            id: ev.id,
+            type: ev.type as ActivityEvent["type"],
+            agentName: ev.agent_name,
+            description: ev.description,
+            meta: ev.meta,
+            severity: ev.severity as ActivityEvent["severity"],
+            timestamp: "Just now",
+          };
+          setLiveActivity((prev) => [mapped, ...prev].slice(0, 50));
+        } catch { /* ignore malformed */ }
+      };
 
       // Fetch PM aggregate KPIs + stale deals in parallel
       try {
@@ -263,6 +337,7 @@ export default function DashboardPage() {
         // Non-critical — dashboard still renders with sales KPIs
       }
     });
+    return () => { esRef.current?.close(); };
   }, []);
 
   return (
@@ -276,7 +351,7 @@ export default function DashboardPage() {
       <section aria-labelledby="kpi-heading">
         <h2 id="kpi-heading" className="sr-only">Key Performance Indicators</h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {mockKPIs.map((kpi) => (
+          {computeKPIs(deals).map((kpi) => (
             <KPICard key={kpi.id} kpi={kpi} />
           ))}
         </div>
@@ -387,7 +462,7 @@ export default function DashboardPage() {
           </div>
           <div className="h-52">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={revenueChartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+              <AreaChart data={revenueHistory.length > 0 ? revenueHistory : []} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <defs>
                   <linearGradient id="grad-revenue" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#6366F1" stopOpacity={0.3} />
