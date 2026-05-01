@@ -37,10 +37,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     .single();
 
   const mode = (workspace?.mode ?? "sales") as "sales" | "pm" | "both";
+  const userEmail = user.email ?? "";
+  const userName = (user.user_metadata?.full_name as string | undefined)
+    ?? (user.user_metadata?.name as string | undefined)
+    ?? userEmail.split("@")[0]
+    ?? "User";
 
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950">
-      <ClientShell mode={mode}>{children}</ClientShell>
+      <ClientShell mode={mode} userEmail={userEmail} userName={userName}>{children}</ClientShell>
     </div>
   );
 }

@@ -423,9 +423,9 @@ export default function AgentsPage() {
 
   const activeCount = agents.filter((a) => a.status === "active").length;
   const processingCount = agents.filter((a) => a.status === "processing").length;
-  const avgAccuracy = (
-    agents.reduce((sum, a) => sum + a.accuracy, 0) / agents.length
-  ).toFixed(1);
+  const avgAccuracy = agents.length > 0
+    ? (agents.reduce((sum, a) => sum + a.accuracy, 0) / agents.length).toFixed(1)
+    : "0.0";
 
   return (
     <div className="flex flex-col gap-6 p-6">

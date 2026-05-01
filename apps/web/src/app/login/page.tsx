@@ -28,12 +28,7 @@ export default function LoginPage() {
         password,
       });
       if (signInError) {
-        if (signInError.message.toLowerCase().includes("invalid")) {
-          setError("Invalid email or password. Don't have an account?");
-          setMode("signup");
-        } else {
-          setError(signInError.message);
-        }
+        setError("Invalid email or password. Please try again.");
         setLoading(false);
         return;
       }

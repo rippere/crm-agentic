@@ -142,7 +142,7 @@ export function useContacts(options: UseContactsOptions = {}) {
     const supabase = createBrowserClient();
     const { data, error: updateError } = await supabase
       .from("contacts")
-      .update(payload as Partial<ContactRow>)
+      .update(payload as Partial<Omit<ContactRow, "id" | "created_at" | "updated_at">>)
       .eq("id", id)
       .select()
       .single();

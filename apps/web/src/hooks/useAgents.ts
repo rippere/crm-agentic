@@ -85,7 +85,7 @@ export function useAgents() {
     const supabase = createBrowserClient();
     const { data, error: updateError } = await supabase
       .from("agents")
-      .update(payload as Partial<AgentRow>)
+      .update(payload as Partial<Omit<AgentRow, "id" | "created_at" | "updated_at">>)
       .eq("id", id)
       .select()
       .single();

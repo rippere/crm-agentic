@@ -1,22 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
+import { createBrowserClient } from "@/lib/supabase";
+import type { AgentRow } from "@/lib/supabase";
 import {
   LayoutDashboard, Users, KanbanSquare, Bot, Settings,
   Zap, Inbox, CheckSquare, FolderOpen, Plug, Search,
-  PhoneCall, ChevronsUpDown, LogOut, UserCircle, BarChart2,
+  PhoneCall, ChevronsUpDown, LogOut, BarChart2,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
-import { useState } from "react";
 
-/* ─── Framer variants (borrowed from 21st.dev SessionNavBar) ─── */
+/* ─── Framer variants ─── */
 
 const sidebarVariants = {
-  open:   { width: "15rem"   },
-  closed: { width: "3.5rem"  },
+  open:   { width: "15rem"  },
+  closed: { width: "3.5rem" },
 };
 
 const transitionProps = {
@@ -26,8 +28,8 @@ const transitionProps = {
 };
 
 const labelVariants = {
-  open:   { opacity: 1, x: 0,   display: "block", transition: { delay: 0.05 } },
-  closed: { opacity: 0, x: -8,  transitionEnd: { display: "none" } },
+  open:   { opacity: 1, x: 0,  display: "block", transition: { delay: 0.05 } },
+  closed: { opacity: 0, x: -8, transitionEnd: { display: "none" } },
 };
 
 /* ─── Nav structure ─── */
@@ -51,10 +53,10 @@ const navGroups: NavGroup[] = [
     id: "workspace",
     label: "Workspace",
     items: [
-      { href: "/dashboard",  label: "Dashboard", icon: LayoutDashboard                   },
-      { href: "/contacts",   label: "Contacts",  icon: Users                             },
-      { href: "/pipeline",   label: "Pipeline",  icon: KanbanSquare,  hideModes: ["pm"] },
-      { href: "/reports",    label: "Reports",   icon: BarChart2,     hideModes: ["pm"] },
+      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/contacts",  label: "Contacts",  icon: Users            },
+      { href: "/pipeline",  label: "Pipeline",  icon: KanbanSquare,  hideModes: ["pm"] },
+      { href: "/reports",   label: "Reports",   icon: BarChart2,     hideModes: ["pm"] },
     ],
   },
   {
@@ -78,21 +80,71 @@ const navGroups: NavGroup[] = [
   },
 ];
 
-const agentNexus = [
-  { name: "Semantic Sorter",    status: "active"     as const, metric: "12/min" },
-  { name: "Lead Scorer",        status: "active"     as const, metric: "8/min"  },
-  { name: "Email Composer",     status: "processing" as const, metric: "ready"  },
-  { name: "Sentiment Analyzer", status: "active"     as const, metric: "15/min" },
-];
+function getInitials(name: string, email: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  if (parts[0]?.length >= 2) return parts[0].slice(0, 2).toUpperCase();
+  return email.slice(0, 2).toUpperCase();
+}
 
 interface SidebarProps {
   mode?: WorkspaceMode;
+  userEmail?: string;
+  userName?: string;
   onSearchClick?: () => void;
+  isCollapsed: boolean;
+  onExpand: () => void;
+  onCollapse: () => void;
 }
 
-export default function Sidebar({ mode = "sales", onSearchClick }: SidebarProps) {
+export default function Sidebar({
+  mode = "sales",
+  userEmail = "",
+  userName = "User",
+  onSearchClick,
+  isCollapsed,
+  onExpand,
+  onCollapse,
+}: SidebarProps) {
   const pathname = usePathname();
-  const [isCollapsed, setIsCollapsed] = useState(true);
+  const router = useRouter();
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Real agent status for Nexus
+  const [nexusAgents, setNexusAgents] = useState<Pick<AgentRow, "name" | "status">[]>([]);
+
+  useEffect(() => {
+    const supabase = createBrowserClient();
+    supabase
+      .from("agents")
+      .select("name, status")
+      .limit(4)
+      .then(({ data }) => {
+        if (data && data.length > 0) setNexusAgents(data);
+      });
+  }, []);
+
+  // Close menu on outside click
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [userMenuOpen]);
+
+  const handleLogout = async () => {
+    const supabase = createBrowserClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+  };
+
+  const initials = getInitials(userName, userEmail);
+  const activeCount = nexusAgents.filter((a) => a.status === "active").length;
 
   return (
     <motion.aside
@@ -102,8 +154,8 @@ export default function Sidebar({ mode = "sales", onSearchClick }: SidebarProps)
       animate={isCollapsed ? "closed" : "open"}
       variants={sidebarVariants}
       transition={transitionProps}
-      onMouseEnter={() => setIsCollapsed(false)}
-      onMouseLeave={() => setIsCollapsed(true)}
+      onMouseEnter={onExpand}
+      onMouseLeave={onCollapse}
     >
       {/* Logo */}
       <div className="flex h-[54px] shrink-0 items-center gap-3 px-3 border-b border-zinc-800/50">
@@ -123,7 +175,7 @@ export default function Sidebar({ mode = "sales", onSearchClick }: SidebarProps)
           title="All systems operational"
         >
           <span className="h-1.5 w-1.5 rounded-full bg-[#00C896] agent-pulse" />
-          <span className="text-[9px] font-mono font-semibold text-[#00C896] tracking-widest">LIVE</span>
+          <span className="text-[10px] font-mono font-semibold text-[#00C896] tracking-widest">LIVE</span>
         </motion.div>
       </div>
 
@@ -151,17 +203,14 @@ export default function Sidebar({ mode = "sales", onSearchClick }: SidebarProps)
       <nav className="flex-1 px-2 py-2 overflow-y-auto overflow-x-hidden" aria-label="Main navigation">
         <div className="space-y-4">
           {navGroups.map(({ id, label, items }) => {
-            const visible = items.filter((item) => {
-              if (item.hideModes?.includes(mode)) return false;
-              return true;
-            });
+            const visible = items.filter((item) => !item.hideModes?.includes(mode));
             if (visible.length === 0) return null;
 
             return (
               <div key={id}>
                 <motion.p
                   variants={labelVariants}
-                  className="px-2.5 mb-1 text-[9px] font-semibold uppercase tracking-[0.14em] font-mono text-zinc-600 whitespace-nowrap overflow-hidden"
+                  className="px-2.5 mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] font-mono text-zinc-500 whitespace-nowrap overflow-hidden"
                 >
                   {label}
                 </motion.p>
@@ -181,7 +230,6 @@ export default function Sidebar({ mode = "sales", onSearchClick }: SidebarProps)
                         aria-current={active ? "page" : undefined}
                         title={itemLabel}
                       >
-                        {/* Active indicator bar */}
                         {active && (
                           <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-full bg-indigo-500" />
                         )}
@@ -213,19 +261,19 @@ export default function Sidebar({ mode = "sales", onSearchClick }: SidebarProps)
         </div>
       </nav>
 
-      {/* Nexus — agent status */}
+      {/* Nexus — live agent status */}
       <div className="px-3 py-3 border-t border-zinc-800/50 shrink-0">
         <motion.div variants={labelVariants}>
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[9px] font-mono font-semibold uppercase tracking-[0.14em] text-zinc-600">
+            <p className="text-[10px] font-mono font-semibold uppercase tracking-[0.14em] text-zinc-500">
               Nexus
             </p>
-            <span className="text-[9px] font-mono text-zinc-700">
-              {agentNexus.filter((a) => a.status === "active").length} active
+            <span className="text-[10px] font-mono text-zinc-600">
+              {nexusAgents.length > 0 ? `${activeCount} active` : "—"}
             </span>
           </div>
           <div className="space-y-1.5">
-            {agentNexus.map((agent) => (
+            {nexusAgents.map((agent) => (
               <div key={agent.name} className="flex items-center gap-2.5">
                 <span
                   className={cn(
@@ -242,21 +290,21 @@ export default function Sidebar({ mode = "sales", onSearchClick }: SidebarProps)
                   "text-[10px] font-mono shrink-0",
                   agent.status === "active" ? "text-[#00C896]/60" : "text-zinc-600"
                 )}>
-                  {agent.metric}
+                  {agent.status}
                 </span>
               </div>
             ))}
           </div>
         </motion.div>
 
-        {/* Collapsed: just dots */}
         <motion.div
           initial={false}
           animate={isCollapsed ? { opacity: 1 } : { opacity: 0 }}
           transition={{ duration: 0.1 }}
-          className={cn("space-y-1.5 absolute", isCollapsed ? "pointer-events-none" : "hidden")}
+          className="space-y-1.5 absolute pointer-events-none"
+          aria-hidden="true"
         >
-          {agentNexus.map((agent) => (
+          {nexusAgents.map((agent) => (
             <span
               key={agent.name}
               className={cn(
@@ -268,30 +316,49 @@ export default function Sidebar({ mode = "sales", onSearchClick }: SidebarProps)
         </motion.div>
       </div>
 
-      {/* Settings + User */}
-      <div className="px-2 py-2 border-t border-zinc-800/50 space-y-0.5 shrink-0">
-        <Link
-          href="/settings"
-          className="group flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/40 transition-all whitespace-nowrap"
-          title="Settings"
-        >
-          <Settings className="h-4 w-4 shrink-0 text-zinc-600 group-hover:text-zinc-400 transition-colors" aria-hidden="true" />
-          <motion.span variants={labelVariants}>Settings</motion.span>
-        </Link>
+      {/* User menu */}
+      <div ref={menuRef} className="px-2 py-2 border-t border-zinc-800/50 shrink-0 relative">
+        <AnimatePresence>
+          {userMenuOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.15 }}
+              className="absolute bottom-full left-2 right-2 mb-1 rounded-xl border border-zinc-800 bg-zinc-900 shadow-xl overflow-hidden z-50"
+            >
+              <div className="px-3 py-2.5 border-b border-zinc-800">
+                <p className="text-xs font-semibold text-zinc-200 truncate">{userName}</p>
+                <p className="text-[10px] text-zinc-500 font-mono truncate mt-0.5">{userEmail}</p>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-zinc-400 hover:text-red-400 hover:bg-red-500/5 transition-colors cursor-pointer"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                <span className="text-xs">Sign out</span>
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {/* User row — org-switcher inspired by SessionNavBar */}
-        <div className="flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-zinc-800/40 transition-all cursor-pointer whitespace-nowrap group">
+        <button
+          onClick={() => setUserMenuOpen((v) => !v)}
+          className="w-full flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-zinc-800/40 transition-all cursor-pointer whitespace-nowrap group"
+          aria-label="User menu"
+          aria-expanded={userMenuOpen}
+        >
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-500/15 border border-indigo-500/25 text-[10px] font-semibold text-indigo-300 font-mono">
-            BR
+            {initials}
           </div>
-          <motion.div variants={labelVariants} className="flex-1 min-w-0 overflow-hidden">
-            <p className="text-xs font-semibold text-zinc-300 truncate leading-none">Ben Wilson</p>
-            <p className="text-[10px] text-zinc-600 font-mono mt-0.5">Admin · Pro</p>
+          <motion.div variants={labelVariants} className="flex-1 min-w-0 overflow-hidden text-left">
+            <p className="text-xs font-semibold text-zinc-300 truncate leading-none">{userName}</p>
+            <p className="text-[10px] text-zinc-600 font-mono mt-0.5 truncate">{userEmail}</p>
           </motion.div>
-          <motion.div variants={labelVariants} className="shrink-0 flex gap-1.5">
+          <motion.div variants={labelVariants} className="shrink-0">
             <ChevronsUpDown className="h-3.5 w-3.5 text-zinc-700 group-hover:text-zinc-500 transition-colors" />
           </motion.div>
-        </div>
+        </button>
       </div>
     </motion.aside>
   );

@@ -42,8 +42,6 @@ SLACK_USER_SCOPES = [
     "mpim:history",
     "users:read",
     "users:read.email",
-    "identity.basic",
-    "identity.email",
 ]
 
 
@@ -107,16 +105,16 @@ async def slack_callback(
     if not user_token:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No user token returned by Slack")
 
-    # Resolve email via users.identity (requires identity.email scope)
+    # Resolve email via users.info (requires users:read.email scope)
     external_email: str | None = None
     async with httpx.AsyncClient() as client:
-        identity_resp = await client.get(
-            "https://slack.com/api/users.identity",
+        profile_resp = await client.get(
+            f"https://slack.com/api/users.info?user={slack_user_id}",
             headers={"Authorization": f"Bearer {user_token}"},
         )
-        identity = identity_resp.json()
-        if identity.get("ok"):
-            external_email = identity.get("user", {}).get("email")
+        profile = profile_resp.json()
+        if profile.get("ok"):
+            external_email = profile.get("user", {}).get("profile", {}).get("email")
 
     if not external_email:
         external_email = f"{team_id}:{slack_user_id}"

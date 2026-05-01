@@ -19,7 +19,7 @@ import {
   Minus, Activity, CheckCircle, AlertTriangle, Info,
   ListTodo, Mail, BarChart2, CheckSquare, Heart,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, SIGNAL } from "@/lib/utils";
 import type { KPI, ActivityEvent, Deal } from "@/lib/types";
 
 interface PMKpis {
@@ -44,9 +44,8 @@ const kpiIcons: Record<string, React.ReactNode> = {
   briefcase: <Briefcase className="h-4 w-4" />,
   brain: <Brain className="h-4 w-4" />,
   bot: <Bot className="h-4 w-4" />,
+  barChart: <BarChart2 className="h-4 w-4" />,
 };
-
-const SIGNAL = "#00C896";
 
 const severityIcon: Record<ActivityEvent["severity"], React.ReactNode> = {
   success: <CheckCircle className="h-3.5 w-3.5 flex-shrink-0" style={{ color: SIGNAL }} />,
@@ -149,18 +148,34 @@ function PMKpiCard({
   icon,
   label,
   value,
+  deltaLabel,
+  deltaType = "neutral",
 }: {
   icon: React.ReactNode;
   label: string;
   value: string | number;
+  deltaLabel?: string;
+  deltaType?: "positive" | "negative" | "warning" | "neutral";
 }) {
+  const deltaColor = {
+    positive: "text-[#00C896]",
+    negative: "text-rose-400",
+    warning:  "text-amber-400",
+    neutral:  "text-zinc-600",
+  }[deltaType];
+
   return (
-    <Card compact accent="violet" className="flex items-center gap-3">
-      <span className="flex-shrink-0 text-indigo-400" aria-hidden="true">{icon}</span>
-      <div>
-        <p className="text-xl font-bold font-mono tabular-nums text-zinc-100 leading-none">{value}</p>
-        <p className="text-[11px] text-zinc-500 mt-1 font-medium">{label}</p>
+    <Card compact accent="violet" className="flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <span className="flex-shrink-0 text-indigo-400" aria-hidden="true">{icon}</span>
+        <div>
+          <p className="text-xl font-bold font-mono tabular-nums text-zinc-100 leading-none">{value}</p>
+          <p className="text-[11px] text-zinc-500 mt-1 font-medium">{label}</p>
+        </div>
       </div>
+      {deltaLabel && (
+        <p className={cn("text-[10px] font-mono pl-7", deltaColor)}>{deltaLabel}</p>
+      )}
     </Card>
   );
 }
@@ -200,7 +215,7 @@ function computeKPIs(deals: Deal[]): KPI[] {
       sparkData: active.map((d) => d.mlWinProbability ?? 50),
     },
     {
-      id: "k4", label: "Pipeline Value", icon: "bot",
+      id: "k4", label: "Pipeline Value", icon: "barChart",
       value: (() => { const v = active.reduce((s, d) => s + d.value, 0); return v >= 1000000 ? `$${(v / 1000000).toFixed(1)}M` : `$${Math.round(v / 1000)}K`; })(),
       delta: `${active.length} open deal${active.length !== 1 ? "s" : ""}`,
       deltaType: "neutral",
@@ -282,7 +297,7 @@ export default function DashboardPage() {
 
       // Open SSE stream for live activity updates
       if (esRef.current) esRef.current.close();
-      const es = new EventSource(`/api/events?workspaceId=${workspaceId}`);
+      const es = new EventSource(`/api/events?workspaceId=${workspaceId}&token=${encodeURIComponent(session.access_token)}`);
       esRef.current = es;
       es.onmessage = (e) => {
         try {
@@ -344,7 +359,7 @@ export default function DashboardPage() {
     <div className="flex flex-col gap-6 p-6">
       <Header
         title="Dashboard"
-        subtitle="Real-time overview · 6 agents active"
+        subtitle={`Real-time overview · ${activeAgents.length} agents active`}
       />
 
       {/* KPI Grid */}
@@ -371,21 +386,39 @@ export default function DashboardPage() {
               icon={<ListTodo className="h-4 w-4" />}
               label="Tasks Extracted Today"
               value={pmKpis.tasksExtractedToday}
+              deltaLabel="Extracted today"
+              deltaType="neutral"
             />
             <PMKpiCard
               icon={<BarChart2 className="h-4 w-4" />}
               label="Avg Clarity Score"
               value={pmKpis.avgClarityScore !== null ? pmKpis.avgClarityScore : "—"}
+              deltaLabel={
+                pmKpis.avgClarityScore === null ? undefined
+                  : pmKpis.avgClarityScore >= 70 ? "High clarity"
+                  : pmKpis.avgClarityScore >= 40 ? "Needs review"
+                  : "Low clarity"
+              }
+              deltaType={
+                pmKpis.avgClarityScore === null ? "neutral"
+                  : pmKpis.avgClarityScore >= 70 ? "positive"
+                  : pmKpis.avgClarityScore >= 40 ? "warning"
+                  : "negative"
+              }
             />
             <PMKpiCard
               icon={<CheckSquare className="h-4 w-4" />}
               label="Open Tasks"
               value={pmKpis.openTasks}
+              deltaLabel={pmKpis.openTasks === 0 ? "All clear" : "Need attention"}
+              deltaType={pmKpis.openTasks === 0 ? "positive" : pmKpis.openTasks > 10 ? "warning" : "neutral"}
             />
             <PMKpiCard
               icon={<Mail className="h-4 w-4" />}
               label="Messages Ingested"
               value={pmKpis.messagesIngested}
+              deltaLabel="Total processed"
+              deltaType="neutral"
             />
           </div>
         </section>
@@ -576,7 +609,7 @@ export default function DashboardPage() {
               Live feed
             </div>
           </div>
-          <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+          <div className="space-y-2 max-h-72 overflow-y-auto pr-1" aria-live="polite" aria-label="Agent activity feed">
             {(liveActivity.length > 0 ? liveActivity : mockActivity).map((event) => (
               <div
                 key={event.id}
