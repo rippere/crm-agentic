@@ -233,6 +233,8 @@ export default function DashboardPage() {
   const [liveActivity, setLiveActivity] = useState<ActivityEvent[]>([]);
   const [revenueHistory, setRevenueHistory] = useState<{ month: string; revenue: number }[]>([]);
   const esRef = useRef<EventSource | null>(null);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -610,7 +612,13 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="space-y-2 max-h-72 overflow-y-auto pr-1" aria-live="polite" aria-label="Agent activity feed">
-            {(liveActivity.length > 0 ? liveActivity : mockActivity).map((event) => (
+            {liveActivity.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <Activity className="h-6 w-6 text-zinc-700 mb-2" aria-hidden="true" />
+                <p className="text-xs text-zinc-500">No activity yet</p>
+                <p className="text-[10px] text-zinc-600 font-mono mt-0.5">Events will appear here as agents run</p>
+              </div>
+            ) : liveActivity.map((event) => (
               <div
                 key={event.id}
                 className="flex items-start gap-2.5 rounded-lg px-2.5 py-2 hover:bg-zinc-800/50 transition-colors duration-150 cursor-default"
