@@ -14,7 +14,7 @@ export async function POST(
   // Fetch the agent
   const { data: agent, error: fetchError } = await getSupabase()
     .from("agents")
-    .select("id, name, status")
+    .select("id, name, status, workspace_id")
     .eq("id", id)
     .single();
 
@@ -34,6 +34,7 @@ export async function POST(
 
   // Log activity event
   await getSupabase().from("activity_events").insert({
+    workspace_id: agent.workspace_id,
     type: "agent_run",
     agent_name: agent.name,
     description: `${agent.name} manually triggered`,

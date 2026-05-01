@@ -14,6 +14,7 @@ from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.contact import Contact
 from app.models.activity_event import ActivityEvent
+from app.services.supabase_rest import get_row
 
 router = APIRouter()
 
@@ -146,21 +147,38 @@ async def compose_email(
     result = await db.execute(
         select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
     )
-    contact = result.scalar_one_or_none()
-    if contact is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    contact_orm = result.scalar_one_or_none()
+
+    # Fallback: read from Supabase REST if not in local Postgres
+    if contact_orm is None:
+        row = await get_row("contacts", {"id": str(contact_id), "workspace_id": str(workspace_id)})
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+        contact_name = row.get("name") or "Unknown"
+        contact_company = row.get("company") or "Unknown"
+        contact_role = row.get("role") or "Unknown"
+        contact_status = row.get("status") or "cold"
+        contact_tags = row.get("semantic_tags") or []
+        contact_revenue = row.get("revenue") or 0
+    else:
+        contact_name = contact_orm.name or "Unknown"
+        contact_company = contact_orm.company or "Unknown"
+        contact_role = contact_orm.role or "Unknown"
+        contact_status = contact_orm.status
+        contact_tags = contact_orm.semantic_tags or []
+        contact_revenue = contact_orm.revenue
 
     system_prompt = (
         "You are a sales professional. Write a personalized outreach email for the following contact. "
         'Return JSON only: {"subject": "<subject line>", "body": "<email body>"}'
     )
     user_content = (
-        f"Contact name: {contact.name or 'Unknown'}\n"
-        f"Company: {contact.company or 'Unknown'}\n"
-        f"Role: {contact.role or 'Unknown'}\n"
-        f"Status: {contact.status}\n"
-        f"Semantic tags: {json.dumps(contact.semantic_tags or [])}\n"
-        f"Revenue: {contact.revenue}\n"
+        f"Contact name: {contact_name}\n"
+        f"Company: {contact_company}\n"
+        f"Role: {contact_role}\n"
+        f"Status: {contact_status}\n"
+        f"Semantic tags: {json.dumps(contact_tags)}\n"
+        f"Revenue: {contact_revenue}\n"
     )
 
     client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -203,7 +221,10 @@ async def enrich_contact_endpoint(
         select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
     )
     if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+        # Check Supabase fallback before 404
+        row = await get_row("contacts", {"id": str(contact_id), "workspace_id": str(workspace_id)})
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
     from app.workers.enrich_contact import enrich_contact
     task = enrich_contact.delay(str(contact_id))

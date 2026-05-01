@@ -7,7 +7,7 @@ import Button from "@/components/ui/Button";
 import { useDeals } from "@/hooks/useDeals";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
-import { cn, formatCurrency, stageConfig, dealStageOrder } from "@/lib/utils";
+import { cn, formatCurrency, stageConfig, dealStageOrder, SIGNAL } from "@/lib/utils";
 import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
@@ -21,8 +21,6 @@ interface PipelineSuggestion {
   reason: string;
   priority: "high" | "medium";
 }
-
-const SIGNAL = "#00C896";
 
 function WinProbabilityBar({ value }: { value: number }) {
   const gradient =
@@ -54,13 +52,11 @@ const stageBorderColor: Record<string, string> = {
 function DealCard({ deal, onSelect }: { deal: Deal; onSelect: () => void }) {
   const borderColor = stageBorderColor[deal.stage] ?? "#52525B";
   return (
-    <div
-      className="group rounded-xl border border-zinc-800/70 bg-zinc-900/70 p-3.5 hover:border-zinc-700/80 hover:bg-zinc-900 transition-all duration-200 cursor-pointer space-y-2.5 border-l-2"
+    <button
+      type="button"
+      className="group w-full text-left rounded-xl border border-zinc-800/70 bg-zinc-900/70 p-3.5 hover:border-zinc-700/80 hover:bg-zinc-900 transition-all duration-200 cursor-pointer space-y-2.5 border-l-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950"
       style={{ borderLeftColor: borderColor }}
       onClick={onSelect}
-      tabIndex={0}
-      onKeyDown={(e) => e.key === "Enter" && onSelect()}
-      role="button"
       aria-label={`${deal.title} — ${formatCurrency(deal.value)}`}
     >
       <div className="flex items-start justify-between gap-2">
@@ -100,7 +96,7 @@ function DealCard({ deal, onSelect }: { deal: Deal; onSelect: () => void }) {
         <span className="text-[10px] text-zinc-500 font-mono truncate">Closes {deal.expectedClose}</span>
         <span className="text-[10px] text-indigo-400 font-mono truncate flex-shrink-0">{deal.assignedAgent}</span>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -330,6 +326,12 @@ export default function PipelinePage() {
   const [newDealStage, setNewDealStage] = useState<DealStage | null>(null);
   const [suggestions, setSuggestions] = useState<PipelineSuggestion[]>([]);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSelectedDeal(null); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";

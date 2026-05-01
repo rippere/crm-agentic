@@ -108,7 +108,7 @@ export function useDeals(stage?: string) {
     const supabase = createBrowserClient();
     const { data, error: updateError } = await supabase
       .from("deals")
-      .update(payload as Partial<DealRow>)
+      .update(payload as Partial<Omit<DealRow, "id" | "created_at" | "updated_at">>)
       .eq("id", id)
       .select()
       .single();

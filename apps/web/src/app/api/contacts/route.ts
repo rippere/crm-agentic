@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getSupabase } from "@/lib/supabase";
+import type { ContactRow } from "@/lib/supabase";
 
 const CreateContactSchema = z.object({
   name: z.string().min(1),
@@ -36,7 +37,7 @@ export async function GET(req: NextRequest) {
     .order("created_at", { ascending: false });
 
   if (status && status !== "all") {
-    query = query.eq("status", status);
+    query = query.eq("status", status as ContactRow["status"]);
   }
   if (search) {
     query = query.or(

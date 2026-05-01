@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getSupabase } from "@/lib/supabase";
+import type { DealRow } from "@/lib/supabase";
 
 const CreateDealSchema = z.object({
   title: z.string().min(1),
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest) {
     .select("*")
     .order("created_at", { ascending: false });
 
-  if (stage && stage !== "all") query = query.eq("stage", stage);
+  if (stage && stage !== "all") query = query.eq("stage", stage as DealRow["stage"]);
   if (contact_id) query = query.eq("contact_id", contact_id);
 
   const { data, error } = await query;

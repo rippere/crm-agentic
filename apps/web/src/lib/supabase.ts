@@ -1,27 +1,30 @@
 import { createBrowserClient as _createBrowserClient } from "@supabase/ssr";
 import { createServerClient as _createServerClient } from "@supabase/ssr";
 import type { CookieOptions } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ReadonlyRequestCookies } from "next/dist/server/web/spec-extension/adapters/request-cookies";
 
 // ─── DB row types (snake_case, matches Supabase columns) ─────────────────────
-export interface WorkspaceRow {
+// Must be `type` (not `interface`) — interfaces don't satisfy Record<string,unknown>
+// in conditional type checks, which breaks SupabaseClient<Database> Schema inference.
+export type WorkspaceRow = {
   id: string;
   name: string;
   slug: string;
   mode: "sales" | "pm" | "both";
   created_at: string;
-}
+};
 
-export interface UserRow {
+export type UserRow = {
   id: string;
   supabase_uid: string;
   workspace_id: string;
   email: string;
   role: "admin" | "member";
   created_at: string;
-}
+};
 
-export interface ContactRow {
+export type ContactRow = {
   id: string;
   workspace_id: string;
   name: string;
@@ -46,9 +49,9 @@ export interface ContactRow {
   deal_count: number;
   created_at: string;
   updated_at: string;
-}
+};
 
-export interface DealRow {
+export type DealRow = {
   id: string;
   workspace_id: string;
   title: string;
@@ -65,9 +68,9 @@ export interface DealRow {
   stage_changed_at: string | null;
   created_at: string;
   updated_at: string;
-}
+};
 
-export interface AgentRow {
+export type AgentRow = {
   id: string;
   workspace_id: string;
   name: string;
@@ -88,9 +91,9 @@ export interface AgentRow {
   metrics: Array<{ label: string; value: string; delta?: string }>;
   created_at: string;
   updated_at: string;
-}
+};
 
-export interface ActivityEventRow {
+export type ActivityEventRow = {
   id: string;
   workspace_id: string;
   type: string;
@@ -99,9 +102,9 @@ export interface ActivityEventRow {
   meta: string;
   severity: "info" | "success" | "warning";
   created_at: string;
-}
+};
 
-export interface ConnectorRow {
+export type ConnectorRow = {
   id: string;
   workspace_id: string;
   service: "gmail" | "slack" | "teams";
@@ -113,9 +116,9 @@ export interface ConnectorRow {
   task_count: number;
   last_sync: string | null;
   created_at: string;
-}
+};
 
-export interface MessageRow {
+export type MessageRow = {
   id: string;
   workspace_id: string;
   connector_id: string | null;
@@ -127,9 +130,9 @@ export interface MessageRow {
   contact_id: string | null;
   processed: boolean;
   created_at: string;
-}
+};
 
-export interface TaskRow {
+export type TaskRow = {
   id: string;
   workspace_id: string;
   message_id: string | null;
@@ -141,18 +144,18 @@ export interface TaskRow {
   assignee_id: string | null;
   created_at: string;
   updated_at: string;
-}
+};
 
-export interface MetricTemplateRow {
+export type MetricTemplateRow = {
   id: string;
   workspace_id: string;
   name: string | null;
   description: string | null;
   data_type: "text" | "number" | "boolean" | "date" | null;
   created_at: string;
-}
+};
 
-export interface ClarityScoreRow {
+export type ClarityScoreRow = {
   id: string;
   workspace_id: string;
   message_id: string | null;
@@ -160,14 +163,12 @@ export interface ClarityScoreRow {
   rationale: string | null;
   model_used: string;
   created_at: string;
-}
+};
 
 // ─── Supabase Database type (tells the client about our tables) ───────────────
-// Relationships array required by supabase-js >=2.90 type inference
 type R = [];
 
 export interface Database {
-  __InternalSupabase: { PostgrestVersion: "12" };
   public: {
     Tables: {
       workspaces: {
@@ -237,16 +238,17 @@ export interface Database {
         Relationships: R;
       };
     };
-    Views: Record<string, never>;
-    Functions: Record<string, never>;
-    Enums: Record<string, never>;
+    Views: { [_ in never]: never };
+    Functions: { [_ in never]: never };
+    Enums: { [_ in never]: never };
+    CompositeTypes: { [_ in never]: never };
   };
 }
 
 // ─── Browser client (singleton) ──────────────────────────────────────────────
-let _browserClient: ReturnType<typeof _createBrowserClient<Database>> | null = null;
+let _browserClient: SupabaseClient<Database> | null = null;
 
-export function createBrowserClient() {
+export function createBrowserClient(): SupabaseClient<Database> {
   if (_browserClient) return _browserClient;
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -261,7 +263,7 @@ export function createBrowserClient() {
       _browserClient = _createBrowserClient<Database>(
         "http://localhost:54321",
         "demo-key"
-      );
+      ) as unknown as SupabaseClient<Database>;
       return _browserClient;
     }
     throw new Error(
@@ -270,12 +272,12 @@ export function createBrowserClient() {
     );
   }
 
-  _browserClient = _createBrowserClient<Database>(url, key);
+  _browserClient = _createBrowserClient<Database>(url, key) as unknown as SupabaseClient<Database>;
   return _browserClient;
 }
 
 // ─── Server client (per-request, uses cookies) ───────────────────────────────
-export function createServerClient(cookieStore: ReadonlyRequestCookies) {
+export function createServerClient(cookieStore: ReadonlyRequestCookies): SupabaseClient<Database> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
@@ -291,7 +293,7 @@ export function createServerClient(cookieStore: ReadonlyRequestCookies) {
         // Server components can't remove cookies directly; handled by middleware
       },
     },
-  });
+  }) as unknown as SupabaseClient<Database>;
 }
 
 // ─── Legacy export (kept for backward compat during migration) ───────────────
