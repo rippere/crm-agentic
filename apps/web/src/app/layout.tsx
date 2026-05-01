@@ -1,10 +1,16 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "NovaCRM — Agentic Intelligence",
   description:
     "AI-native CRM powered by semantic sorting, ML lead scoring, and autonomous agents.",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#09090B",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Zap, Brain, Sparkles, TrendingUp, Bot, Shield,
   ArrowRight, Check, ChevronDown, Mail, Mic, Heart,
@@ -61,23 +62,31 @@ function Nav() {
         {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
       </button>
 
-      {open && (
-        <div className="absolute top-full left-0 right-0 mt-2 rounded-2xl border border-zinc-800 bg-zinc-950 p-4 space-y-3 md:hidden">
-          {["Features", "Agents", "Pricing", "Docs"].map((item) => (
-            <a
-              key={item}
-              href={`#${item.toLowerCase()}`}
-              className="block text-sm text-zinc-400 hover:text-zinc-100 py-2 transition-colors"
-              onClick={() => setOpen(false)}
-            >
-              {item}
-            </a>
-          ))}
-          <Link href="/dashboard" className="block w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-center text-sm font-medium text-white">
-            Start Free
-          </Link>
-        </div>
-      )}
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -8, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -8, scale: 0.98 }}
+            transition={{ duration: 0.15, ease: "easeOut" }}
+            className="absolute top-full left-0 right-0 mt-2 rounded-2xl border border-zinc-800 bg-zinc-950 p-4 space-y-3 md:hidden"
+          >
+            {["Features", "Agents", "Pricing", "Docs"].map((item) => (
+              <a
+                key={item}
+                href={`#${item.toLowerCase()}`}
+                className="block text-sm text-zinc-400 hover:text-zinc-100 py-2 transition-colors"
+                onClick={() => setOpen(false)}
+              >
+                {item}
+              </a>
+            ))}
+            <Link href="/dashboard" className="block w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-center text-sm font-medium text-white">
+              Start Free
+            </Link>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </nav>
   );
 }
