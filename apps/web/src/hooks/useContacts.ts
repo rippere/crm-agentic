@@ -142,23 +142,31 @@ export function useContacts(options: UseContactsOptions = {}) {
   const updateContact = async (id: string, payload: Partial<Contact>) => {
     if (isDemoMode) return {};
     const supabase = createBrowserClient();
-    const { data, error: updateError } = await supabase
-      .from("contacts")
-      .update(payload as Partial<Omit<ContactRow, "id" | "created_at" | "updated_at">>)
-      .eq("id", id)
-      .select()
-      .single();
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    if (!workspaceId || !token) throw new Error("Not authenticated");
 
-    if (updateError) throw new Error(updateError.message);
+    const result = await apiClient.updateContact(workspaceId, id, {
+      name: payload.name,
+      email: payload.email ?? undefined,
+      company: payload.company ?? undefined,
+      role: payload.role ?? undefined,
+      status: payload.status,
+    }, token);
     await fetchContacts();
-    return data;
+    return result;
   };
 
   const deleteContact = async (id: string) => {
     if (isDemoMode) return;
     const supabase = createBrowserClient();
-    const { error: deleteError } = await supabase.from("contacts").delete().eq("id", id);
-    if (deleteError) throw new Error(deleteError.message);
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    if (!workspaceId || !token) throw new Error("Not authenticated");
+
+    await apiClient.deleteContact(workspaceId, id, token);
     await fetchContacts();
   };
 

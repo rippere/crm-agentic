@@ -94,6 +94,18 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ id: `demo-contact-${Date.now()}`, workspace_id: workspaceId, status: 'lead', ...data })
     return apiFetch(`/workspaces/${workspaceId}/contacts`, { method: 'POST', body: JSON.stringify(data) }, token)
   },
+  getContact: (workspaceId: string, contactId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve(null)
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}`, {}, token)
+  },
+  updateContact: (workspaceId: string, contactId: string, data: { name?: string; email?: string; company?: string; role?: string; status?: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: contactId, ...data })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
+  },
+  deleteContact: (workspaceId: string, contactId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve()
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}`, { method: 'DELETE' }, token)
+  },
 
   // Calls
   uploadCall: (workspaceId: string, formData: FormData, token: string) => {

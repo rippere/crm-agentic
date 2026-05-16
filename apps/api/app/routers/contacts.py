@@ -231,6 +231,112 @@ async def enrich_contact_endpoint(
     return {"status": "queued", "contact_id": str(contact_id), "job_id": task.id}
 
 
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}", response_model=ContactResponse)
+async def get_contact(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ContactResponse:
+    """Return a single contact by ID."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    return ContactResponse.model_validate(contact)
+
+
+class UpdateContactRequest(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    company: str | None = None
+    role: str | None = None
+    status: str | None = None
+
+
+@router.patch("/workspaces/{workspace_id}/contacts/{contact_id}", response_model=ContactResponse)
+async def update_contact(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    body: UpdateContactRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ContactResponse:
+    """Update editable fields on a contact."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    allowed_statuses = {"lead", "prospect", "customer", "churned"}
+    if body.status is not None and body.status not in allowed_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"status must be one of {allowed_statuses}",
+        )
+
+    for field in ("name", "email", "company", "role", "status"):
+        value = getattr(body, field)
+        if value is not None:
+            setattr(contact, field, value)
+
+    db.add(contact)
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="contact_updated",
+        agent_name="System",
+        description=f"Contact updated: {contact.name}",
+        severity="info",
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(contact)
+
+    return ContactResponse.model_validate(contact)
+
+
+@router.delete("/workspaces/{workspace_id}/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_contact(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """Delete a contact and all cascade-linked records."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    contact_name = contact.name or str(contact_id)
+    await db.delete(contact)
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="contact_deleted",
+        agent_name="System",
+        description=f"Contact removed: {contact_name}",
+        severity="warning",
+    )
+    db.add(event)
+    await db.commit()
+
+
 class ContactStatusUpdate(BaseModel):
     status: str
 
