@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createBrowserClient } from "@/lib/supabase";
+import { apiClient } from "@/lib/api-client";
 import type { Contact } from "@/lib/types";
 import type { ContactRow } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/demo-mode";
@@ -122,19 +123,20 @@ export function useContacts(options: UseContactsOptions = {}) {
   const createContact = async (payload: Partial<Contact>) => {
     if (isDemoMode) return {};
     const supabase = createBrowserClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    const workspaceId = user?.user_metadata?.workspace_id as string;
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    if (!workspaceId || !token) throw new Error("Not authenticated");
 
-    const { data, error: insertError } = await supabase
-      .from("contacts")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .insert({ ...payload, workspace_id: workspaceId } as any)
-      .select()
-      .single();
-
-    if (insertError) throw new Error(insertError.message);
+    await apiClient.createContact(workspaceId, {
+      name: payload.name ?? "",
+      email: payload.email ?? undefined,
+      company: payload.company ?? undefined,
+      role: payload.role ?? undefined,
+      status: payload.status ?? "lead",
+    }, token);
     await fetchContacts();
-    return data;
+    return {};
   };
 
   const updateContact = async (id: string, payload: Partial<Contact>) => {

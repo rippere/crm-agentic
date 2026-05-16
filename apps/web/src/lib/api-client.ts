@@ -90,6 +90,10 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ status: 'queued', fields_updated: ['company', 'role', 'semantic_tags'] })
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/enrich`, { method: 'POST' }, token)
   },
+  createContact: (workspaceId: string, data: { name: string; email?: string; company?: string; role?: string; status?: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: `demo-contact-${Date.now()}`, workspace_id: workspaceId, status: 'lead', ...data })
+    return apiFetch(`/workspaces/${workspaceId}/contacts`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
 
   // Calls
   uploadCall: (workspaceId: string, formData: FormData, token: string) => {
