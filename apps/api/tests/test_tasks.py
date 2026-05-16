@@ -160,6 +160,26 @@ async def test_update_task_wrong_workspace_returns_403(app_client):
     assert resp.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_update_task_all_fields(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    task = _fake_task(workspace_id, title="Old title", description="Old desc", status="open")
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(task))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{workspace_id}/tasks/{task.id}",
+            json={"title": "New title", "description": "New desc", "status": "done", "due_date": "2026-06-01"},
+        )
+
+    assert resp.status_code == 200
+    assert task.title == "New title"
+    assert task.description == "New desc"
+    assert task.status == "done"
+    assert task.due_date == date(2026, 6, 1)
+    mock_db.commit.assert_awaited()
+
+
 # ---------------------------------------------------------------------------
 # DELETE /workspaces/{wid}/tasks/{tid}
 # ---------------------------------------------------------------------------
