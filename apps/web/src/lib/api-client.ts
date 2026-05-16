@@ -1,4 +1,4 @@
-import { demoMessages, demoTasks, demoConnectors } from './demo-data'
+import { demoMessages, demoTasks, demoConnectors, demoDeals } from './demo-data'
 
 const FASTAPI_URL = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
@@ -142,6 +142,11 @@ export const apiClient = {
   },
 
   // Deals
+  listDeals: (workspaceId: string, token: string, stage?: string) => {
+    if (isDemoMode) return Promise.resolve(demoDeals)
+    const params = stage && stage !== 'all' ? `?stage=${stage}` : ''
+    return apiFetch(`/workspaces/${workspaceId}/deals${params}`, {}, token)
+  },
   createDeal: (workspaceId: string, data: { title?: string; company?: string; contact_id?: string; value?: number; stage?: string; ml_win_probability?: number; expected_close?: string; notes?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: `demo-deal-${Date.now()}`, workspace_id: workspaceId, stage: 'lead', ...data })
     return apiFetch(`/workspaces/${workspaceId}/deals`, { method: 'POST', body: JSON.stringify(data) }, token)

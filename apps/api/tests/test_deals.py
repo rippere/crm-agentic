@@ -25,6 +25,8 @@ def _fake_deal(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
     deal.expected_close = kwargs.get("expected_close", None)
     deal.assigned_agent = kwargs.get("assigned_agent", None)
     deal.health_score = kwargs.get("health_score", 100)
+    deal.notes = kwargs.get("notes", None)
+    deal.created_at = kwargs.get("created_at", None)
     return deal
 
 

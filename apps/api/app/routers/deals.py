@@ -28,7 +28,9 @@ class DealResponse(BaseModel):
     ml_win_probability: int
     expected_close: str | None
     assigned_agent: str | None
+    notes: str | None
     health_score: int = 100
+    created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -36,13 +38,17 @@ class DealResponse(BaseModel):
 @router.get("/workspaces/{workspace_id}/deals", response_model=list[DealResponse])
 async def list_deals(
     workspace_id: uuid.UUID,
+    stage: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[DealResponse]:
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    result = await db.execute(select(Deal).where(Deal.workspace_id == workspace_id))
+    q = select(Deal).where(Deal.workspace_id == workspace_id)
+    if stage and stage != "all":
+        q = q.where(Deal.stage == stage)
+    result = await db.execute(q)
     deals = result.scalars().all()
     return [DealResponse.model_validate(d) for d in deals]
 

@@ -50,27 +50,16 @@ export function useDeals(stage?: string) {
 
     try {
       const supabase = createBrowserClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      const workspaceId = user?.user_metadata?.workspace_id as string | undefined;
-      if (!workspaceId) {
+      const { data: { session } } = await supabase.auth.getSession();
+      const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+      const token = session?.access_token;
+      if (!workspaceId || !token) {
         setError("No workspace found");
         return;
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let query: any = supabase
-        .from("deals")
-        .select("*")
-        .eq("workspace_id", workspaceId);
-
-      if (stage && stage !== "all") {
-        query = query.eq("stage", stage);
-      }
-
-      const { data, error: fetchError } = await query;
-      if (fetchError) throw new Error(fetchError.message);
-
-      setDeals((data ?? []).map((r: DealRow) => rowToDeal(r)));
+      const data = await apiClient.listDeals(workspaceId, token, stage);
+      setDeals(Array.isArray(data) ? (data as DealRow[]).map(rowToDeal) : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load deals");
     } finally {
