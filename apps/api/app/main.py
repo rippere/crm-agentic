@@ -45,8 +45,11 @@ app.add_middleware(
 )
 
 # Routers
+# search.router must precede contacts.router: GET /contacts/search would otherwise
+# be shadowed by contacts.router's GET /contacts/{contact_id} parameterized route.
 app.include_router(auth.router, tags=["auth"])
 app.include_router(workspaces.router, tags=["workspaces"])
+app.include_router(search.router, tags=["search"])
 app.include_router(contacts.router, tags=["contacts"])
 app.include_router(deals.router, tags=["deals"])
 app.include_router(agents.router, tags=["agents"])
@@ -54,7 +57,6 @@ app.include_router(messages.router, tags=["messages"])
 app.include_router(tasks.router, tags=["tasks"])
 app.include_router(gmail.router, tags=["gmail"])
 app.include_router(slack.router, tags=["slack"])
-app.include_router(search.router, tags=["search"])
 app.include_router(calls.router, tags=["calls"])
 app.include_router(ai.router, tags=["ai"])
 app.include_router(events.router, tags=["events"])
