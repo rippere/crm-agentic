@@ -22,6 +22,10 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ job_id: `demo-job-${agentId}` })
     return apiFetch(`/agents/${agentId}/run`, { method: 'POST' }, token)
   },
+  updateAgent: (agentId: string, data: { status?: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: agentId, ...data })
+    return apiFetch(`/agents/${agentId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
+  },
 
   // Connectors
   getConnectors: (workspaceId: string, token: string) => {

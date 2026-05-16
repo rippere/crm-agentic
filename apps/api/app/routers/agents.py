@@ -83,6 +83,33 @@ class JobStatusResponse(BaseModel):
     error: str | None = None
 
 
+class UpdateAgentRequest(BaseModel):
+    status: str | None = None
+
+
+@router.patch("/agents/{agent_id}", response_model=AgentResponse)
+async def update_agent(
+    agent_id: uuid.UUID,
+    body: UpdateAgentRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AgentResponse:
+    result = await db.execute(
+        select(Agent).where(Agent.id == agent_id, Agent.workspace_id == current_user.workspace_id)
+    )
+    agent = result.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    if body.status is not None:
+        agent.status = body.status  # type: ignore[assignment]
+
+    db.add(agent)
+    await db.commit()
+    await db.refresh(agent)
+    return AgentResponse.model_validate(agent)
+
+
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(
     job_id: str,

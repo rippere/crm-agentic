@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createBrowserClient } from "@/lib/supabase";
+import { apiClient } from "@/lib/api-client";
 import type { Agent } from "@/lib/types";
 import type { AgentRow } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/demo-mode";
@@ -66,33 +67,24 @@ export function useAgents() {
 
   const runAgent = async (id: string) => {
     if (isDemoMode) return { id, status: "processing" };
-    // Triggers the FastAPI agent runner; falls back to status update if API unavailable
     const supabase = createBrowserClient();
-    const { data, error: updateError } = await supabase
-      .from("agents")
-      .update({ status: "processing" })
-      .eq("id", id)
-      .select()
-      .single();
-
-    if (updateError) throw new Error(updateError.message);
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error("Not authenticated");
+    const result = await apiClient.triggerAgent(id, token);
     await fetchAgents();
-    return data;
+    return result;
   };
 
   const updateAgent = async (id: string, payload: { status?: Agent["status"] }) => {
     if (isDemoMode) return { id, ...payload };
     const supabase = createBrowserClient();
-    const { data, error: updateError } = await supabase
-      .from("agents")
-      .update(payload as Partial<Omit<AgentRow, "id" | "created_at" | "updated_at">>)
-      .eq("id", id)
-      .select()
-      .single();
-
-    if (updateError) throw new Error(updateError.message);
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error("Not authenticated");
+    const result = await apiClient.updateAgent(id, payload, token);
     await fetchAgents();
-    return data;
+    return result;
   };
 
   return { agents, loading, error, refetch: fetchAgents, runAgent, updateAgent };
