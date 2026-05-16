@@ -269,6 +269,10 @@ export const apiClient = {
   },
 
   // Workspace
+  createWorkspace: (data: { name: string; slug: string; mode: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: crypto.randomUUID(), ...data })
+    return apiFetch('/workspaces', { method: 'POST', body: JSON.stringify(data) }, token)
+  },
   getWorkspace: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: workspaceId, name: 'Demo Workspace', slug: 'demo', mode: 'both' })
     return apiFetch(`/workspaces/${workspaceId}`, {}, token)

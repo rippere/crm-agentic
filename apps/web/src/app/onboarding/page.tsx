@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase";
+import { apiClient } from "@/lib/api-client";
 import { Zap, TrendingUp, CheckSquare, Layers, Mail, MessageSquare, Users, ArrowRight, Check, Loader2 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -66,24 +67,27 @@ export default function OnboardingPage() {
     setLoading(true);
     setError(null);
     const supabase = createBrowserClient();
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !session) {
       setError("Not authenticated. Please sign in first.");
       setLoading(false);
       return false;
     }
-    const { data: workspace, error: wsError } = await supabase
-      .from("workspaces").insert({ name: workspaceName.trim(), slug, mode }).select().single();
-    if (wsError || !workspace) {
-      setError(wsError?.message ?? "Failed to create workspace.");
+    try {
+      const workspace = await apiClient.createWorkspace(
+        { name: workspaceName.trim(), slug, mode },
+        session.access_token,
+      ) as { id: string };
+      // Write workspace_id into JWT user_metadata so get_current_user picks it up on next call
+      await supabase.auth.updateUser({ data: { workspace_id: workspace.id } });
+      const { data: { session: refreshed } } = await supabase.auth.getSession();
+      setWorkspaceId(workspace.id);
+      setToken(refreshed?.access_token ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create workspace.");
       setLoading(false);
       return false;
     }
-    await supabase.from("users").insert({ supabase_uid: user.id, workspace_id: workspace.id, email: user.email ?? "", role: "admin" });
-    await supabase.auth.updateUser({ data: { workspace_id: workspace.id } });
-    const { data: { session } } = await supabase.auth.getSession();
-    setWorkspaceId(workspace.id);
-    setToken(session?.access_token ?? null);
     setLoading(false);
     return true;
   };

@@ -1,4 +1,4 @@
-"""Tests for the workspaces router — GET, PATCH, auth checks."""
+"""Tests for the workspaces router — GET, PATCH, POST, auth checks."""
 
 from __future__ import annotations
 
@@ -141,3 +141,35 @@ async def test_patch_workspace_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_workspace_creates_and_binds_user(app_client):
+    fastapi_app, mock_db, _ = app_client
+    new_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    def fake_refresh(obj):
+        obj.id = new_id
+        obj.name = "Test Corp"
+        obj.slug = "test-corp"
+        obj.mode = "pm"
+
+    mock_db.refresh.side_effect = fake_refresh
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/workspaces",
+            json={"name": "Test Corp", "slug": "test-corp", "mode": "pm"},
+        )
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["name"] == "Test Corp"
+    assert body["slug"] == "test-corp"
+    assert body["mode"] == "pm"
+    mock_db.commit.assert_awaited()

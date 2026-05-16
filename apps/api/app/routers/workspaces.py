@@ -80,8 +80,14 @@ async def create_workspace(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> WorkspaceResponse:
-    ws = Workspace(name=body.name, slug=body.slug, mode=body.mode)
+    ws_id = uuid.uuid4()
+    ws = Workspace(id=ws_id, name=body.name, slug=body.slug, mode=body.mode)
     db.add(ws)
+
+    # Bind user to the new workspace before commit so both land in one transaction
+    current_user.workspace_id = ws_id  # type: ignore[assignment]
+    current_user.role = "admin"  # type: ignore[assignment]
+
     await db.commit()
     await db.refresh(ws)
     return WorkspaceResponse.model_validate(ws)
