@@ -82,6 +82,27 @@ async def create_task(
     return TaskResponse.model_validate(task)
 
 
+@router.delete("/workspaces/{workspace_id}/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task(
+    workspace_id: uuid.UUID,
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Task).where(Task.id == task_id, Task.workspace_id == workspace_id)
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    await db.delete(task)
+    await db.commit()
+
+
 @router.put("/workspaces/{workspace_id}/tasks/{task_id}", response_model=TaskResponse)
 async def update_task(
     workspace_id: uuid.UUID,

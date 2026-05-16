@@ -75,6 +75,10 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ id: taskId, ...data })
     return apiFetch(`/workspaces/${workspaceId}/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(data) }, token)
   },
+  deleteTask: (workspaceId: string, taskId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve()
+    return apiFetch(`/workspaces/${workspaceId}/tasks/${taskId}`, { method: 'DELETE' }, token)
+  },
 
   // Contacts
   composeEmail: (workspaceId: string, contactId: string, token: string) => {
