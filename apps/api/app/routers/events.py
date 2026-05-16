@@ -7,8 +7,9 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +19,70 @@ from app.models.user import User
 from app.models.activity_event import ActivityEvent
 
 router = APIRouter()
+
+
+class ActivityEventResponse(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    type: str | None
+    agent_name: str | None
+    description: str | None
+    meta: str | None
+    severity: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ActivityEventCreate(BaseModel):
+    type: str
+    agent_name: str
+    description: str
+    meta: str = ""
+    severity: str = "info"
+
+
+@router.get("/workspaces/{workspace_id}/activity", response_model=list[ActivityEventResponse])
+async def list_activity(
+    workspace_id: uuid.UUID,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ActivityEventResponse]:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(ActivityEvent)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .order_by(desc(ActivityEvent.created_at))
+        .limit(limit)
+    )
+    return [ActivityEventResponse.model_validate(e) for e in result.scalars().all()]
+
+
+@router.post("/workspaces/{workspace_id}/activity", response_model=ActivityEventResponse, status_code=status.HTTP_201_CREATED)
+async def create_activity(
+    workspace_id: uuid.UUID,
+    body: ActivityEventCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ActivityEventResponse:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type=body.type,
+        agent_name=body.agent_name,
+        description=body.description,
+        meta=body.meta,
+        severity=body.severity,
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return ActivityEventResponse.model_validate(event)
 
 
 def _serialize(event: ActivityEvent) -> str:

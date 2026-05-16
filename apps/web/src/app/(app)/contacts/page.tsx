@@ -641,17 +641,14 @@ function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector
             contactName={contact.name}
             onClose={() => setLogActivityOpen(false)}
             onSubmit={({ type, note }) => {
-              fetch("/api/activity", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  type,
-                  agent_name: "User",
-                  description: note,
-                  meta: `contact:${contact.id}`,
-                  severity: "info",
-                }),
-              }).catch(() => {});
+              if (!workspaceId || !token) return;
+              apiClient.createActivity(workspaceId, {
+                type,
+                agent_name: "User",
+                description: note,
+                meta: `contact:${contact.id}`,
+                severity: "info",
+              }, token).catch(() => {});
             }}
           />
         )}

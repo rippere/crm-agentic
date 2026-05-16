@@ -256,6 +256,16 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/invite`, { method: 'POST', body: JSON.stringify({ email }) }, token)
   },
 
+  // Activity events
+  listActivity: (workspaceId: string, token: string, limit = 50) => {
+    if (isDemoMode) return Promise.resolve([])
+    return apiFetch(`/workspaces/${workspaceId}/activity?limit=${limit}`, {}, token)
+  },
+  createActivity: (workspaceId: string, data: { type: string; agent_name: string; description: string; meta?: string; severity?: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: `demo-activity-${Date.now()}`, ...data })
+    return apiFetch(`/workspaces/${workspaceId}/activity`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+
   // AI query
   aiQuery: (workspaceId: string, query: string, token: string) => {
     if (isDemoMode) return Promise.resolve({

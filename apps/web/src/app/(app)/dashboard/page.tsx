@@ -254,35 +254,36 @@ export default function DashboardPage() {
       return;
     }
 
-    // Seed activity feed with recent events, then switch to SSE
-    fetch("/api/activity?limit=20")
-      .then((r) => r.json())
-      .then((data: Array<{ id: string; type: string; agent_name: string; description: string; meta?: string; severity: string; created_at: string }>) => {
-        if (!Array.isArray(data)) return;
-        setLiveActivity(data.map((e) => ({
-          id: e.id,
-          type: e.type as ActivityEvent["type"],
-          agentName: e.agent_name,
-          description: e.description,
-          meta: e.meta,
-          severity: e.severity as ActivityEvent["severity"],
-          timestamp: (() => {
-            const diff = Date.now() - new Date(e.created_at).getTime();
-            const mins = Math.floor(diff / 60000);
-            if (mins < 1) return "Just now";
-            if (mins < 60) return `${mins}m ago`;
-            const hrs = Math.floor(mins / 60);
-            if (hrs < 24) return `${hrs}h ago`;
-            return `${Math.floor(hrs / 24)}d ago`;
-          })(),
-        })));
-      })
-      .catch(() => {});
-
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) return;
       const workspaceId: string | undefined = session.user.user_metadata?.workspace_id;
+
+      // Seed activity feed with recent events, then switch to SSE
+      if (workspaceId) {
+        apiClient.listActivity(workspaceId, session.access_token, 20)
+          .then((data: Array<{ id: string; type: string; agent_name: string; description: string; meta?: string; severity: string; created_at: string }>) => {
+            if (!Array.isArray(data)) return;
+            setLiveActivity(data.map((e) => ({
+              id: e.id,
+              type: e.type as ActivityEvent["type"],
+              agentName: e.agent_name,
+              description: e.description,
+              meta: e.meta,
+              severity: e.severity as ActivityEvent["severity"],
+              timestamp: (() => {
+                const diff = Date.now() - new Date(e.created_at).getTime();
+                const mins = Math.floor(diff / 60000);
+                if (mins < 1) return "Just now";
+                if (mins < 60) return `${mins}m ago`;
+                const hrs = Math.floor(mins / 60);
+                if (hrs < 24) return `${hrs}h ago`;
+                return `${Math.floor(hrs / 24)}d ago`;
+              })(),
+            })));
+          })
+          .catch(() => {});
+      }
 
       // Fetch workspace mode
       if (workspaceId) {
