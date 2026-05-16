@@ -71,33 +71,18 @@ export function useContacts(options: UseContactsOptions = {}) {
 
     try {
       const supabase = createBrowserClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      const workspaceId = user?.user_metadata?.workspace_id as string | undefined;
-      if (!workspaceId) {
-        setError("No workspace found");
+      const { data: { session } } = await supabase.auth.getSession();
+      const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+      const token = session?.access_token;
+      if (!workspaceId || !token) {
+        setError("Not authenticated");
         return;
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let query: any = supabase
-        .from("contacts")
-        .select("*")
-        .eq("workspace_id", workspaceId)
-        .order("created_at", { ascending: false });
-
-      if (options.status && options.status !== "all") {
-        query = query.eq("status", options.status);
-      }
-      if (options.search) {
-        query = query.or(
-          `name.ilike.%${options.search}%,email.ilike.%${options.search}%,company.ilike.%${options.search}%`
-        );
-      }
-
-      const { data, error: fetchError } = await query;
-      if (fetchError) throw new Error(fetchError.message);
-
-      let rows = (data ?? []) as ContactRow[];
+      let rows = (await apiClient.listContacts(workspaceId, token, {
+        status: options.status,
+        q: options.search,
+      })) as ContactRow[];
 
       // Client-side score filter (ml_score is JSONB)
       if (options.score && options.score !== "all") {

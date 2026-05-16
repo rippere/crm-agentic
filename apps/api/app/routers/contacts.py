@@ -3,9 +3,9 @@ import uuid
 from datetime import datetime
 
 import anthropic as _anthropic
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select, insert
+from sqlalchemy import or_, select, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -26,11 +26,14 @@ class ContactResponse(BaseModel):
     email: str | None
     company: str | None
     role: str | None
+    avatar: str | None = None
     status: str
     ml_score: dict
+    semantic_tags: list = []
     revenue: float
     deal_count: int
     last_activity: str
+    created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -89,13 +92,25 @@ async def create_contact(
 @router.get("/workspaces/{workspace_id}/contacts", response_model=list[ContactResponse])
 async def list_contacts(
     workspace_id: uuid.UUID,
+    contact_status: str | None = Query(default=None, alias="status"),
+    q: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ContactResponse]:
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    result = await db.execute(select(Contact).where(Contact.workspace_id == workspace_id))
+    stmt = select(Contact).where(Contact.workspace_id == workspace_id)
+    if contact_status and contact_status != "all":
+        stmt = stmt.where(Contact.status == contact_status)
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where(or_(
+            Contact.name.ilike(pattern),
+            Contact.email.ilike(pattern),
+            Contact.company.ilike(pattern),
+        ))
+    result = await db.execute(stmt)
     contacts = result.scalars().all()
     return [ContactResponse.model_validate(c) for c in contacts]
 

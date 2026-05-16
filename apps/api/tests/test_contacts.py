@@ -20,10 +20,13 @@ def _fake_contact(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
     contact.company = kwargs.get("company", "Acme")
     contact.role = kwargs.get("role", "VP Sales")
     contact.status = kwargs.get("status", "lead")
+    contact.avatar = kwargs.get("avatar", None)
     contact.ml_score = {"value": 70, "label": "warm", "trend": "stable", "signals": []}
+    contact.semantic_tags = []
     contact.revenue = 0.0
     contact.deal_count = 0
     contact.last_activity = "Never"
+    contact.created_at = None
     return contact
 
 

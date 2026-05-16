@@ -85,6 +85,14 @@ export const apiClient = {
   },
 
   // Contacts
+  listContacts: (workspaceId: string, token: string, opts?: { status?: string; q?: string }) => {
+    if (isDemoMode) return Promise.resolve([])
+    const params = new URLSearchParams()
+    if (opts?.status && opts.status !== 'all') params.set('status', opts.status)
+    if (opts?.q) params.set('q', opts.q)
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/contacts${qs ? `?${qs}` : ''}`, {}, token)
+  },
   composeEmail: (workspaceId: string, contactId: string, token: string) => {
     if (isDemoMode) {
       return Promise.resolve({
