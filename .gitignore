@@ -45,3 +45,10 @@ next-env.d.ts
 CLAUDE.md
 HANDOFF.md
 PROGRESS.md
+
+# Python
+apps/api/.venv/
+apps/api/__pycache__/
+apps/api/**/__pycache__/
+apps/api/.pytest_cache/
+*.pyc
