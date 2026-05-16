@@ -25,6 +25,8 @@ class AgentResponse(BaseModel):
     accuracy: float
     tasks_today: int
     last_run: str
+    workflow: list = []
+    metrics: list = []
 
     model_config = {"from_attributes": True}
 

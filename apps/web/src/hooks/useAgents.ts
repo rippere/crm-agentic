@@ -39,20 +39,15 @@ export function useAgents() {
     setError(null);
     try {
       const supabase = createBrowserClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      const workspaceId = user?.user_metadata?.workspace_id as string | undefined;
-      if (!workspaceId) {
-        setError("No workspace found");
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        setError("Not authenticated");
         return;
       }
 
-      const { data, error: fetchError } = await supabase
-        .from("agents")
-        .select("*")
-        .eq("workspace_id", workspaceId);
-
-      if (fetchError) throw new Error(fetchError.message);
-      setAgents((data ?? []).map((r: AgentRow) => rowToAgent(r)));
+      const data = await apiClient.listAgents(token);
+      setAgents(Array.isArray(data) ? (data as AgentRow[]).map(rowToAgent) : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load agents");
     } finally {

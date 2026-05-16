@@ -18,6 +18,10 @@ async function apiFetch(path: string, options: RequestInit = {}, token?: string)
 
 export const apiClient = {
   // Agents
+  listAgents: (token: string) => {
+    if (isDemoMode) return Promise.resolve([])
+    return apiFetch('/agents', {}, token)
+  },
   triggerAgent: (agentId: string, token: string) => {
     if (isDemoMode) return Promise.resolve({ job_id: `demo-job-${agentId}` })
     return apiFetch(`/agents/${agentId}/run`, { method: 'POST' }, token)
