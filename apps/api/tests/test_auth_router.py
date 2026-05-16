@@ -264,3 +264,39 @@ async def test_invite_supabase_error_returns_502(app_client):
 
     assert resp.status_code == 502
     assert "invited" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# _sync_workspace_metadata — direct unit tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_workspace_metadata_happy_path():
+    from app.routers.auth import _sync_workspace_metadata
+
+    mock_client = AsyncMock()
+    mock_client.patch = AsyncMock(return_value=MagicMock(status_code=200))
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.routers.auth.httpx.AsyncClient", return_value=mock_cm):
+        await _sync_workspace_metadata("uid-123", "ws-456")
+
+    mock_client.patch.assert_awaited_once()
+    call_kwargs = mock_client.patch.call_args
+    assert "uid-123" in call_kwargs[0][0]  # URL contains supabase_uid
+
+
+@pytest.mark.asyncio
+async def test_sync_workspace_metadata_exception_is_swallowed():
+    from app.routers.auth import _sync_workspace_metadata
+
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__ = AsyncMock(side_effect=Exception("network error"))
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.routers.auth.httpx.AsyncClient", return_value=mock_cm):
+        # Should not raise — exceptions are caught and suppressed
+        await _sync_workspace_metadata("uid-xyz", "ws-xyz")
