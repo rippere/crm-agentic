@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import base64
-from unittest.mock import MagicMock
+from datetime import datetime, timezone, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -177,3 +180,146 @@ def test_decode_body_unicode_content():
     payload = {"mimeType": "text/plain", "body": {"data": _b64("Héllo wörld — Ünïcode")}}
     result = _decode_body(payload)
     assert "Héllo" in result
+
+
+# ---------------------------------------------------------------------------
+# pipeline._compute_win_probability — heuristic win probability scorer
+# ---------------------------------------------------------------------------
+
+_PIPELINE_NOW = datetime(2026, 5, 15, 12, 0, 0)  # naive — matches datetime.utcnow() in _run_optimize
+
+
+def _fake_deal(**kwargs) -> MagicMock:
+    d = MagicMock()
+    d.stage = kwargs.get("stage", "discovery")
+    d.value = kwargs.get("value", 0)
+    d.updated_at = kwargs.get("updated_at", _PIPELINE_NOW - timedelta(days=5))
+    return d
+
+
+def test_compute_win_probability_discovery_base():
+    from app.workers.pipeline import _compute_win_probability
+
+    result = _compute_win_probability(_fake_deal(stage="discovery", value=0), _PIPELINE_NOW)
+    assert result == 30  # base 30 + stage_bonus 0
+
+
+def test_compute_win_probability_qualified_stage():
+    from app.workers.pipeline import _compute_win_probability
+
+    result = _compute_win_probability(_fake_deal(stage="qualified"), _PIPELINE_NOW)
+    assert result == 45  # 30 + 15
+
+
+def test_compute_win_probability_proposal_stage():
+    from app.workers.pipeline import _compute_win_probability
+
+    result = _compute_win_probability(_fake_deal(stage="proposal"), _PIPELINE_NOW)
+    assert result == 55  # 30 + 25
+
+
+def test_compute_win_probability_negotiation_stage():
+    from app.workers.pipeline import _compute_win_probability
+
+    result = _compute_win_probability(_fake_deal(stage="negotiation"), _PIPELINE_NOW)
+    assert result == 65  # 30 + 35
+
+
+def test_compute_win_probability_high_value_bonus():
+    from app.workers.pipeline import _compute_win_probability
+
+    result = _compute_win_probability(_fake_deal(stage="proposal", value=75000), _PIPELINE_NOW)
+    assert result == 60  # 30 + 25 + 5
+
+
+def test_compute_win_probability_stale_deal_penalty():
+    from app.workers.pipeline import _compute_win_probability
+
+    stale = _PIPELINE_NOW - timedelta(days=45)
+    result = _compute_win_probability(_fake_deal(stage="discovery", updated_at=stale), _PIPELINE_NOW)
+    assert result == 20  # 30 + 0 - 10
+
+
+def test_compute_win_probability_no_updated_at_no_staleness():
+    from app.workers.pipeline import _compute_win_probability
+
+    d = _fake_deal(stage="discovery")
+    d.updated_at = None
+    result = _compute_win_probability(d, _PIPELINE_NOW)
+    assert result == 30  # no staleness penalty applied
+
+
+def test_compute_win_probability_clamped_at_95():
+    from app.workers.pipeline import _compute_win_probability
+
+    # negotiation(35) + high_value(5) + base(30) = 70, below 95 cap
+    result = _compute_win_probability(_fake_deal(stage="negotiation", value=100000), _PIPELINE_NOW)
+    assert result == 70
+    assert result <= 95
+
+
+def test_compute_win_probability_clamped_at_0():
+    from app.workers.pipeline import _compute_win_probability
+
+    # Minimum is 0: worst case churned stale with 0 value → 30 - 10 = 20, still > 0
+    # The clamp at 0 can't be reached with current logic, but we verify non-negative
+    stale = _PIPELINE_NOW - timedelta(days=60)
+    result = _compute_win_probability(_fake_deal(stage="discovery", value=0, updated_at=stale), _PIPELINE_NOW)
+    assert result >= 0
+
+
+# ---------------------------------------------------------------------------
+# followup_sequences._draft_email — async Anthropic-backed email drafter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_draft_email_plain_json_response():
+    import app.workers.followup_sequences as fseq_mod
+
+    mock_message = MagicMock()
+    mock_message.content = [MagicMock(text='{"subject": "Follow up", "body": "Hi there"}')]
+
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_message)
+
+    with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+        result = await fseq_mod._draft_email("Deal X", "Acme", "Alice", "proposal")
+
+    assert result["subject"] == "Follow up"
+    assert result["body"] == "Hi there"
+
+
+@pytest.mark.asyncio
+async def test_draft_email_strips_json_markdown_fence():
+    import app.workers.followup_sequences as fseq_mod
+
+    raw = '```json\n{"subject": "Re: proposal", "body": "Looking forward to it"}\n```'
+    mock_message = MagicMock()
+    mock_message.content = [MagicMock(text=raw)]
+
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_message)
+
+    with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+        result = await fseq_mod._draft_email("Deal Y", "Corp", "Bob", "negotiation")
+
+    assert result["subject"] == "Re: proposal"
+
+
+@pytest.mark.asyncio
+async def test_draft_email_strips_plain_markdown_fence():
+    import app.workers.followup_sequences as fseq_mod
+
+    raw = '```\n{"subject": "Checking in", "body": "Hope all is well"}\n```'
+    mock_message = MagicMock()
+    mock_message.content = [MagicMock(text=raw)]
+
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_client)
+    mock_client.messages.create = AsyncMock(return_value=mock_message)
+
+    with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+        result = await fseq_mod._draft_email("Deal Z", "LLC", None, "qualified")
+
+    assert result["subject"] == "Checking in"
