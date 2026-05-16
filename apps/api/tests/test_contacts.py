@@ -536,3 +536,260 @@ async def test_contact_timeline_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/{uuid.uuid4()}/timeline")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/contacts/{cid}/compose
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compose_email_happy_path(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(contact))
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text='{"subject": "Hello Alice", "body": "Hi there"}')]
+    mock_client_instance = MagicMock()
+    mock_client_instance.messages.create.return_value = mock_response
+
+    with patch("anthropic.Anthropic", return_value=mock_client_instance):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{contact.id}/compose")
+
+    assert resp.status_code == 200
+    assert resp.json()["subject"] == "Hello Alice"
+    assert resp.json()["body"] == "Hi there"
+
+
+@pytest.mark.asyncio
+async def test_compose_email_contact_not_found_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    with patch("app.routers.contacts.get_row", new=AsyncMock(return_value=None)):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/compose")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_compose_email_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/contacts/{uuid.uuid4()}/compose")
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_compose_email_json_parse_error_returns_500(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(contact))
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text="not valid json at all")]
+    mock_client_instance = MagicMock()
+    mock_client_instance.messages.create.return_value = mock_response
+
+    with patch("anthropic.Anthropic", return_value=mock_client_instance):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{contact.id}/compose")
+
+    assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/contacts/{cid}/send-email
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_email_no_connector_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/send-email",
+            json={"to": "alice@example.com", "subject": "Hello", "body": "Hi"},
+        )
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_send_email_gmail_error_returns_502(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    connector = MagicMock()
+    connector.workspace_id = workspace_id
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(connector))
+
+    with patch("app.services.gmail_client.GmailClient") as MockGmailClient:
+        mock_gmail = AsyncMock()
+        mock_gmail.send_message = AsyncMock(side_effect=Exception("SMTP failure"))
+        MockGmailClient.return_value = mock_gmail
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/send-email",
+                json={"to": "alice@example.com", "subject": "Hello", "body": "Hi"},
+            )
+
+    assert resp.status_code == 502
+    assert "Gmail error" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_send_email_happy_path(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    connector = MagicMock()
+    connector.workspace_id = workspace_id
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(connector))
+
+    with patch("app.services.gmail_client.GmailClient") as MockGmailClient:
+        mock_gmail = AsyncMock()
+        mock_gmail.send_message = AsyncMock(return_value={"id": "msg_abc123"})
+        MockGmailClient.return_value = mock_gmail
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/send-email",
+                json={"to": "alice@example.com", "subject": "Hello", "body": "Hi there"},
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "sent"
+    assert resp.json()["to"] == "alice@example.com"
+    mock_db.commit.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/contacts/{cid}/brief
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_meeting_brief_contact_not_found_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/brief")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_pre_meeting_brief_happy_path(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),  # contact lookup
+        _make_scalars_result([]),       # messages
+        _make_scalars_result([]),       # calls
+        _make_scalars_result([]),       # deals
+    ])
+
+    mock_message = MagicMock()
+    mock_message.content = [MagicMock(text="This is a brief about Alice Smith.")]
+    mock_anthropic_client = AsyncMock()
+    mock_anthropic_client.messages.create = AsyncMock(return_value=mock_message)
+
+    with patch("anthropic.AsyncAnthropic", return_value=mock_anthropic_client):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{contact.id}/brief")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["contact_id"] == str(contact.id)
+    assert data["contact_name"] == contact.name
+    assert "brief" in data
+    assert "Alice" in data["brief"]
+
+
+@pytest.mark.asyncio
+async def test_pre_meeting_brief_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/contacts/{uuid.uuid4()}/brief")
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_pre_meeting_brief_with_context_data(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    msg = MagicMock()
+    msg.subject = "Re: Proposal"
+
+    call = MagicMock()
+    call.title = "Discovery Call"
+    call.summary = "We discussed pricing."
+
+    deal = MagicMock()
+    deal.title = "Big Deal"
+    deal.stage = "proposal"
+    deal.value = 50000.0
+    deal.ml_win_probability = 65
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_scalars_result([msg]),
+        _make_scalars_result([call]),
+        _make_scalars_result([deal]),
+    ])
+
+    mock_message = MagicMock()
+    mock_message.content = [MagicMock(text="Brief including deal and call context.")]
+    mock_anthropic_client = AsyncMock()
+    mock_anthropic_client.messages.create = AsyncMock(return_value=mock_message)
+
+    with patch("anthropic.AsyncAnthropic", return_value=mock_anthropic_client):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{contact.id}/brief")
+
+    assert resp.status_code == 200
+    assert "brief" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_compose_email_strips_markdown_fence(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(contact))
+
+    fenced = '```json\n{"subject": "Fenced subject", "body": "Fenced body"}\n```'
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=fenced)]
+    mock_client_instance = MagicMock()
+    mock_client_instance.messages.create.return_value = mock_response
+
+    with patch("anthropic.Anthropic", return_value=mock_client_instance):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{contact.id}/compose")
+
+    assert resp.status_code == 200
+    assert resp.json()["subject"] == "Fenced subject"
+
+
+@pytest.mark.asyncio
+async def test_send_email_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/contacts/{uuid.uuid4()}/send-email",
+            json={"to": "alice@example.com", "subject": "Hello", "body": "Hi"},
+        )
+
+    assert resp.status_code == 403
