@@ -793,3 +793,38 @@ async def test_send_email_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_compose_email_supabase_fallback_path(app_client):
+    """When contact not in Postgres, falls back to Supabase REST row to build email."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact_id = uuid.uuid4()
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    supabase_row = {
+        "name": "Supabase Alice",
+        "company": "Remote Corp",
+        "role": "CTO",
+        "status": "prospect",
+        "semantic_tags": ["ai", "enterprise"],
+        "revenue": 500000,
+    }
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text='{"subject": "Hello Supabase Alice", "body": "Via fallback"}')]
+    mock_client_instance = MagicMock()
+    mock_client_instance.messages.create.return_value = mock_response
+
+    with patch("app.routers.contacts.get_row", new=AsyncMock(return_value=supabase_row)):
+        with patch("anthropic.Anthropic", return_value=mock_client_instance):
+            async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+                resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{contact_id}/compose")
+
+    assert resp.status_code == 200
+    assert resp.json()["subject"] == "Hello Supabase Alice"
+    # Verify the Supabase row fields were used in the prompt
+    call_args = mock_client_instance.messages.create.call_args
+    user_msg = call_args[1]["messages"][0]["content"]
+    assert "Supabase Alice" in user_msg
+    assert "Remote Corp" in user_msg
