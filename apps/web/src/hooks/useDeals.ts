@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createBrowserClient } from "@/lib/supabase";
+import { apiClient } from "@/lib/api-client";
 import type { Deal } from "@/lib/types";
 import type { DealRow } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/demo-mode";
@@ -88,41 +89,54 @@ export function useDeals(stage?: string) {
   const createDeal = async (payload: Partial<Deal>) => {
     if (isDemoMode) return {};
     const supabase = createBrowserClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    const workspaceId = user?.user_metadata?.workspace_id as string;
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    if (!workspaceId || !token) throw new Error("Not authenticated");
 
-    const { data, error: insertError } = await supabase
-      .from("deals")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .insert({ ...payload, workspace_id: workspaceId } as any)
-      .select()
-      .single();
-
-    if (insertError) throw new Error(insertError.message);
+    const result = await apiClient.createDeal(workspaceId, {
+      title: payload.title ?? undefined,
+      company: payload.company ?? undefined,
+      value: payload.value,
+      stage: payload.stage ?? "lead",
+      ml_win_probability: payload.mlWinProbability ?? undefined,
+      expected_close: payload.expectedClose ?? undefined,
+      notes: payload.notes ?? undefined,
+    }, token);
     await fetchDeals();
-    return data;
+    return result;
   };
 
   const updateDeal = async (id: string, payload: Partial<Deal> & { stage?: Deal["stage"] }) => {
     if (isDemoMode) return {};
     const supabase = createBrowserClient();
-    const { data, error: updateError } = await supabase
-      .from("deals")
-      .update(payload as Partial<Omit<DealRow, "id" | "created_at" | "updated_at">>)
-      .eq("id", id)
-      .select()
-      .single();
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    if (!workspaceId || !token) throw new Error("Not authenticated");
 
-    if (updateError) throw new Error(updateError.message);
+    const result = await apiClient.updateDeal(workspaceId, id, {
+      title: payload.title ?? undefined,
+      company: payload.company ?? undefined,
+      value: payload.value,
+      stage: payload.stage ?? undefined,
+      ml_win_probability: payload.mlWinProbability ?? undefined,
+      expected_close: payload.expectedClose ?? undefined,
+      notes: payload.notes ?? undefined,
+    }, token);
     await fetchDeals();
-    return data;
+    return result;
   };
 
   const deleteDeal = async (id: string) => {
     if (isDemoMode) return;
     const supabase = createBrowserClient();
-    const { error: deleteError } = await supabase.from("deals").delete().eq("id", id);
-    if (deleteError) throw new Error(deleteError.message);
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    if (!workspaceId || !token) throw new Error("Not authenticated");
+
+    await apiClient.deleteDeal(workspaceId, id, token);
     await fetchDeals();
   };
 

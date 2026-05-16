@@ -133,6 +133,24 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/calls/${callId}`, { method: 'DELETE' }, token)
   },
 
+  // Deals
+  createDeal: (workspaceId: string, data: { title?: string; company?: string; contact_id?: string; value?: number; stage?: string; ml_win_probability?: number; expected_close?: string; notes?: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: `demo-deal-${Date.now()}`, workspace_id: workspaceId, stage: 'lead', ...data })
+    return apiFetch(`/workspaces/${workspaceId}/deals`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+  getDeal: (workspaceId: string, dealId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve(null)
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}`, {}, token)
+  },
+  updateDeal: (workspaceId: string, dealId: string, data: { title?: string; company?: string; value?: number; stage?: string; ml_win_probability?: number; expected_close?: string; notes?: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: dealId, ...data })
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
+  },
+  deleteDeal: (workspaceId: string, dealId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve()
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}`, { method: 'DELETE' }, token)
+  },
+
   // Deal health
   triggerDealHealth: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve({ job_id: 'demo-health', status: 'queued' })

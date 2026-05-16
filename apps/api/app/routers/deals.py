@@ -11,6 +11,7 @@ from app.database import get_db
 from app.dependencies import get_current_user, require_admin
 from app.models.user import User
 from app.models.deal import Deal
+from app.models.activity_event import ActivityEvent
 
 router = APIRouter()
 
@@ -212,11 +213,91 @@ async def trigger_pipeline_optimize(
     return {"job_id": task.id, "status": "queued"}
 
 
+class UpdateDealRequest(BaseModel):
+    title: str | None = None
+    company: str | None = None
+    value: float | None = None
+    stage: str | None = None
+    ml_win_probability: int | None = None
+    expected_close: str | None = None
+    notes: str | None = None
+
+
+class CreateDealRequest(BaseModel):
+    title: str | None = None
+    company: str | None = None
+    contact_id: uuid.UUID | None = None
+    contact_name: str | None = None
+    value: float = 0.0
+    stage: str = "lead"
+    ml_win_probability: int = 50
+    expected_close: str | None = None
+    assigned_agent: str | None = None
+    notes: str | None = None
+
+
+@router.post("/workspaces/{workspace_id}/deals", response_model=DealResponse, status_code=201)
+async def create_deal(
+    workspace_id: uuid.UUID,
+    body: CreateDealRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DealResponse:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal = Deal(
+        workspace_id=workspace_id,
+        title=body.title,
+        company=body.company,
+        contact_id=body.contact_id,
+        contact_name=body.contact_name,
+        value=body.value,
+        stage=body.stage,
+        ml_win_probability=body.ml_win_probability,
+        expected_close=body.expected_close,
+        assigned_agent=body.assigned_agent,
+        notes=body.notes,
+        stage_changed_at=datetime.now(timezone.utc),
+    )
+    db.add(deal)
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="deal_created",
+        agent_name="System",
+        description=f"New deal: {body.title or 'Untitled'}" + (f" ({body.company})" if body.company else ""),
+        severity="info",
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(deal)
+    return DealResponse.model_validate(deal)
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
+async def get_deal(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DealResponse:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    return DealResponse.model_validate(deal)
+
+
 @router.patch("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def update_deal(
     workspace_id: uuid.UUID,
     deal_id: uuid.UUID,
-    payload: dict,
+    body: UpdateDealRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> DealResponse:
@@ -230,12 +311,54 @@ async def update_deal(
     if deal is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
-    allowed = {"title", "company", "value", "stage", "ml_win_probability", "expected_close", "notes", "stage_changed_at"}
-    for k, v in payload.items():
-        if k in allowed:
-            setattr(deal, k, v)
+    old_stage = deal.stage
+    for field in ("title", "company", "value", "stage", "ml_win_probability", "expected_close", "notes"):
+        value = getattr(body, field)
+        if value is not None:
+            setattr(deal, field, value)
+
+    if body.stage is not None and body.stage != old_stage:
+        deal.stage_changed_at = datetime.now(timezone.utc)
 
     db.add(deal)
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="deal_moved",
+        agent_name="System",
+        description=f"Deal '{deal.title}' updated" + (f" → {deal.stage}" if body.stage else ""),
+        severity="info",
+    )
+    db.add(event)
     await db.commit()
     await db.refresh(deal)
     return DealResponse.model_validate(deal)
+
+
+@router.delete("/workspaces/{workspace_id}/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_deal(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    deal_title = deal.title or str(deal_id)
+    await db.delete(deal)
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="deal_deleted",
+        agent_name="System",
+        description=f"Deal removed: {deal_title}",
+        severity="warning",
+    )
+    db.add(event)
+    await db.commit()
