@@ -84,7 +84,7 @@ export default function ReportsPage() {
       monthBuckets[key] = { month: abbr[m], actual: 0 };
     });
     won.forEach((d) => {
-      const dt = new Date(d.createdAt);
+      const dt = new Date(d.createdAt ?? "");
       const key = `${dt.getFullYear()}-${dt.getMonth()}`;
       if (monthBuckets[key]) monthBuckets[key].actual += d.value;
     });

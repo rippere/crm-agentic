@@ -77,3 +77,5 @@ export const dealStageOrder: DealStage[] = [
   "closed_won",
   "closed_lost",
 ];
+
+export const SIGNAL = "#10B981";
