@@ -87,7 +87,7 @@ export function useDeals(stage?: string) {
       title: payload.title ?? undefined,
       company: payload.company ?? undefined,
       value: payload.value,
-      stage: payload.stage ?? "lead",
+      stage: payload.stage ?? "discovery",
       ml_win_probability: payload.mlWinProbability ?? undefined,
       expected_close: payload.expectedClose ?? undefined,
       notes: payload.notes ?? undefined,

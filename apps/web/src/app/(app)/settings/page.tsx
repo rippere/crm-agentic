@@ -26,7 +26,7 @@ interface Toast { id: number; message: string; type: "success" | "error" }
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { isAdmin } = useRole();
+  const { isAdmin, role } = useRole();
   const [workspaceName, setWorkspaceName] = useState("");
   const [mode, setMode] = useState<WorkspaceMode>("sales");
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -227,7 +227,7 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm text-zinc-200">{userEmail ?? "—"}</p>
-            <Badge variant="indigo" size="sm" className="mt-1.5">Admin</Badge>
+            {role && <Badge variant="indigo" size="sm" className="mt-1.5">{role.charAt(0).toUpperCase() + role.slice(1)}</Badge>}
           </div>
           <Button variant="secondary" size="sm" onClick={handleSignOut}>
             <LogOut className="h-3.5 w-3.5" />
