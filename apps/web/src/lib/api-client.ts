@@ -268,6 +268,16 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/contacts/embed`, { method: 'POST' }, token)
   },
 
+  // Workspace
+  getWorkspace: (workspaceId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: workspaceId, name: 'Demo Workspace', slug: 'demo', mode: 'both' })
+    return apiFetch(`/workspaces/${workspaceId}`, {}, token)
+  },
+  updateWorkspace: (workspaceId: string, data: { name?: string; mode?: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: workspaceId, ...data })
+    return apiFetch(`/workspaces/${workspaceId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
+  },
+
   inviteTeammate: (workspaceId: string, email: string, token: string) => {
     if (isDemoMode) return Promise.resolve({ status: 'invited', email })
     return apiFetch(`/workspaces/${workspaceId}/invite`, { method: 'POST', body: JSON.stringify({ email }) }, token)

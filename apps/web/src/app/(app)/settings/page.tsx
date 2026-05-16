@@ -6,6 +6,7 @@ import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { createBrowserClient } from "@/lib/supabase";
+import { apiClient } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import {
   Settings, Layers, TrendingUp, CheckSquare,
@@ -54,11 +55,7 @@ export default function SettingsPage() {
       if (!wsId) return;
       setWorkspaceId(wsId);
 
-      const { data: ws } = await supabase
-        .from("workspaces")
-        .select("name, mode")
-        .eq("id", wsId)
-        .single();
+      const ws = await apiClient.getWorkspace(wsId, session.access_token).catch(() => null);
       if (ws) {
         setWorkspaceName((ws as { name: string; mode: string }).name ?? "");
         setMode(((ws as { name: string; mode: string }).mode as WorkspaceMode) ?? "sales");
@@ -67,18 +64,15 @@ export default function SettingsPage() {
   }, []);
 
   const handleSave = async () => {
-    if (!workspaceId || !workspaceName.trim()) return;
+    if (!workspaceId || !workspaceName.trim() || !token) return;
     setSaving(true);
-    const supabase = createBrowserClient();
-    const { error } = await supabase
-      .from("workspaces")
-      .update({ name: workspaceName.trim(), mode })
-      .eq("id", workspaceId);
-    setSaving(false);
-    if (error) {
-      addToast("Failed to save: " + error.message, "error");
-    } else {
+    try {
+      await apiClient.updateWorkspace(workspaceId, { name: workspaceName.trim(), mode }, token);
       addToast("Workspace settings saved.", "success");
+    } catch (err) {
+      addToast("Failed to save: " + (err instanceof Error ? err.message : "unknown error"), "error");
+    } finally {
+      setSaving(false);
     }
   };
 
