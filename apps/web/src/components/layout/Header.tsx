@@ -4,14 +4,16 @@ import { Search, Bell, Command, X } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { createBrowserClient } from "@/lib/supabase";
-import type { ActivityEventRow } from "@/lib/supabase";
+import { apiClient } from "@/lib/api-client";
 
 interface HeaderProps {
   title: string;
   subtitle?: string;
 }
 
-const severityDot: Record<ActivityEventRow["severity"], string> = {
+type NotifEvent = { id: string; description: string; agent_name: string; severity: string; created_at: string };
+
+const severityDot: Record<string, string> = {
   info:    "bg-zinc-500",
   success: "bg-[#00C896]",
   warning: "bg-amber-400",
@@ -30,7 +32,7 @@ function timeAgo(iso: string): string {
 export default function Header({ title, subtitle }: HeaderProps) {
   const [searchFocused, setSearchFocused] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [events, setEvents] = useState<ActivityEventRow[]>([]);
+  const [events, setEvents] = useState<NotifEvent[]>([]);
   const [seen, setSeen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
 
@@ -38,14 +40,14 @@ export default function Header({ title, subtitle }: HeaderProps) {
   useEffect(() => {
     if (!notifOpen || events.length > 0) return;
     const supabase = createBrowserClient();
-    supabase
-      .from("activity_events")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(8)
-      .then(({ data }) => {
-        if (data) setEvents(data);
-      });
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) return;
+      const workspaceId = session.user.user_metadata?.workspace_id as string | undefined;
+      if (!workspaceId) return;
+      apiClient.listActivity(workspaceId, session.access_token, 8)
+        .then((data: NotifEvent[]) => { if (Array.isArray(data)) setEvents(data); })
+        .catch(() => {});
+    });
   }, [notifOpen, events.length]);
 
   // Mark seen when opened
