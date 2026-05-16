@@ -287,8 +287,9 @@ export default function DashboardPage() {
 
       // Fetch workspace mode
       if (workspaceId) {
-        const { data: ws } = await supabase.from("workspaces").select("mode").eq("id", workspaceId).single();
-        if (ws?.mode) setWorkspaceMode(ws.mode as "sales" | "pm" | "both");
+        apiClient.getWorkspace(workspaceId, session.access_token)
+          .then((ws: { mode?: string }) => { if (ws?.mode) setWorkspaceMode(ws.mode as "sales" | "pm" | "both"); })
+          .catch(() => {});
       }
 
       if (!workspaceId) return;
