@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient, ASGITransport
@@ -130,3 +130,67 @@ async def test_patch_agent_none_status_is_noop(app_client):
 
     assert resp.status_code == 200
     assert agent.status == "idle"
+
+
+# ---------------------------------------------------------------------------
+# GET /jobs/{job_id} — Celery job status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_success(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_result = MagicMock()
+    mock_result.state = "SUCCESS"
+    mock_result.result = {"output": "done"}
+
+    with patch("app.workers.celery_app.celery_app") as mock_celery:
+        mock_celery.AsyncResult.return_value = mock_result
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get("/jobs/test-job-id-123")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["state"] == "SUCCESS"
+    assert data["result"] == {"output": "done"}
+    assert data["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_failure(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_result = MagicMock()
+    mock_result.state = "FAILURE"
+    mock_result.result = Exception("something went wrong")
+
+    with patch("app.workers.celery_app.celery_app") as mock_celery:
+        mock_celery.AsyncResult.return_value = mock_result
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get("/jobs/failing-job-id")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["state"] == "FAILURE"
+    assert data["error"] is not None
+    assert data["result"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_pending(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_result = MagicMock()
+    mock_result.state = "PENDING"
+    mock_result.result = None
+
+    with patch("app.workers.celery_app.celery_app") as mock_celery:
+        mock_celery.AsyncResult.return_value = mock_result
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get("/jobs/pending-job-id")
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "PENDING"
+    assert resp.json()["result"] is None
+    assert resp.json()["error"] is None

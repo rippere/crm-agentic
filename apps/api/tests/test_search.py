@@ -115,3 +115,41 @@ async def test_trigger_embed_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/contacts/embed")
 
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_semantic_search_pgvector_path(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # First execute: COUNT → 3 (pgvector embeddings exist)
+    count_result = MagicMock()
+    count_result.scalar.return_value = 3
+
+    # Second execute: pgvector query result rows
+    row = MagicMock()
+    row.__getitem__ = lambda self, key: {
+        "id": uuid.uuid4(),
+        "name": "Alice Smith",
+        "email": "alice@example.com",
+        "company": "Acme",
+        "role": "CEO",
+        "status": "active",
+        "ml_score": 80,
+        "revenue": 50000.0,
+        "deal_count": 3,
+        "score": 0.92,
+    }[key]
+
+    pgvector_result = MagicMock()
+    pgvector_result.mappings.return_value.all.return_value = [row]
+    mock_db.execute = AsyncMock(side_effect=[count_result, pgvector_result])
+
+    with patch("app.services.embedding.embed_text", return_value=[0.1] * 384):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/contacts/search?q=alice")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "Alice Smith"
+    assert data[0]["similarity"] == 0.92
