@@ -15,7 +15,6 @@ import {
 import type { WorkspaceMode } from "@/lib/types";
 import { useRouter } from "next/navigation";
 import { useRole } from "@/hooks/useRole";
-import { apiClient } from "@/lib/api-client";
 
 const MODE_OPTIONS: { value: WorkspaceMode; label: string; description: string; icon: React.ElementType }[] = [
   { value: "sales", label: "Sales",              description: "CRM, pipeline, deal tracking",     icon: TrendingUp  },
