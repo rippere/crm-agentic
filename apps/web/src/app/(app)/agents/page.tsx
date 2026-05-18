@@ -334,7 +334,7 @@ function AgentDetailPanel({
 
 export default function AgentsPage() {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
-  const [agents, setAgents] = useState(mockAgents);
+  const [agents, setAgents] = useState<typeof mockAgents>([]);
   const [token, setToken] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);

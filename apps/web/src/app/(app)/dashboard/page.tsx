@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
-import { agentAccuracyData, mockAgents, mockActivity } from "@/lib/mock-data";
+import { mockAgents, mockActivity } from "@/lib/mock-data";
 import { demoDashboard } from "@/lib/demo-data";
 import { useDeals } from "@/hooks/useDeals";
 import { formatCurrency } from "@/lib/utils";
@@ -226,7 +226,7 @@ function computeKPIs(deals: Deal[]): KPI[] {
 
 export default function DashboardPage() {
   const { deals } = useDeals();
-  const [activeAgents] = useState(mockAgents.filter((a) => a.status !== "idle"));
+  const [activeAgents, setActiveAgents] = useState<typeof mockAgents>([]);
   const [pmKpis, setPmKpis] = useState<PMKpis | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<"sales" | "pm" | "both">("sales");
   const [staleDeals, setStaleDeals] = useState<StaleDeal[]>([]);
@@ -540,7 +540,7 @@ export default function DashboardPage() {
           </div>
           <div className="h-52">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={agentAccuracyData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+              <LineChart data={[]} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
                 <XAxis dataKey="day" tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} />
                 <YAxis
