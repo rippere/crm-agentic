@@ -20,6 +20,17 @@ import {
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
+function renderMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
+    .replace(/(<li[^>]*>.*<\/li>\n?)+/g, (match) => `<ul class="space-y-0.5 my-1">${match}</ul>`)
+    .replace(/\n\n/g, '</p><p class="mt-3">')
+    .replace(/^/, '<p>')
+    .replace(/$/, '</p>')
+    .replace(/\n/g, '<br/>')
+}
+
 interface EmailDraft {
   subject: string;
   body: string;
@@ -325,9 +336,10 @@ function EmailComposerModal({
           <div>
             <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest mb-1">Body</p>
             <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-3 max-h-64 overflow-y-auto">
-              <pre className="text-sm text-zinc-200 whitespace-pre-wrap font-sans leading-relaxed">
-                {draft.body}
-              </pre>
+              <div
+                className="text-sm text-zinc-200 font-sans leading-relaxed [&_strong]:text-zinc-100 [&_strong]:font-semibold [&_ul]:my-1 [&_li]:ml-4 [&_li]:list-disc [&_p]:mt-2 first:[&_p]:mt-0"
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(draft.body) }}
+              />
             </div>
           </div>
 
@@ -817,9 +829,10 @@ function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector
             </button>
           </div>
           <div className="p-5 max-h-[70vh] overflow-y-auto">
-            <pre className="text-sm text-zinc-200 whitespace-pre-wrap font-sans leading-relaxed">
-              {briefText}
-            </pre>
+            <div
+              className="text-sm text-zinc-200 font-sans leading-relaxed [&_strong]:text-zinc-100 [&_strong]:font-semibold [&_ul]:my-1 [&_li]:ml-4 [&_li]:list-disc [&_p]:mt-2 first:[&_p]:mt-0"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(briefText) }}
+            />
           </div>
           <div className="border-t border-zinc-800 px-5 py-3 flex justify-end">
             <Button

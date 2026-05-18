@@ -1,12 +1,16 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+const IS_DEMO = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+
 export async function proxy(request: NextRequest) {
-  let response = NextResponse.next({
-    request: {
-      headers: request.headers,
-    },
-  });
+  const response = NextResponse.next({ request: { headers: request.headers } });
+
+  // Skip Supabase token refresh in demo mode — avoids ~25s network timeout
+  // when the Supabase project is unreachable or has no active session.
+  if (IS_DEMO) return response;
+
+  let mutableResponse = response;
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -20,24 +24,17 @@ export async function proxy(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
-          response = NextResponse.next({
-            request: {
-              headers: request.headers,
-            },
-          });
+          mutableResponse = NextResponse.next({ request: { headers: request.headers } });
           cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options as Parameters<typeof response.cookies.set>[2])
+            mutableResponse.cookies.set(name, value, options as Parameters<typeof mutableResponse.cookies.set>[2])
           );
         },
       },
     }
   );
 
-  // Refresh session if expired — updates cookies on response automatically.
-  // getUser() contacts Supabase Auth to verify and rotate tokens.
   await supabase.auth.getUser();
-
-  return response;
+  return mutableResponse;
 }
 
 export const config = {
