@@ -57,10 +57,12 @@ def _decode_body(payload: dict[str, Any]) -> str:
 
 
 async def _run_sync(connector_id: str) -> dict[str, Any]:
+    from app.models.clarity_score import ClarityScore
     from app.models.connector import Connector
     from app.models.contact import Contact
     from app.models.message import Message
     from app.models.task import Task
+    from app.services.clarity import score_clarity
     from app.services.gmail_client import GmailClient
     from app.services.extraction import extract_tasks
     from app.services.sentiment import analyze_sentiment
@@ -181,6 +183,20 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                             db.add(contact)
                 except Exception:
                     pass  # sentiment failure must not block ingestion
+
+                # Clarity scoring — score communication clarity using Claude Sonnet
+                try:
+                    clarity = await score_clarity(body_plain)
+                    cs = ClarityScore(
+                        workspace_id=workspace_id,
+                        message_id=message.id,
+                        score=clarity["score"],
+                        rationale=clarity["rationale"],
+                        model_used="claude-sonnet-4-6",
+                    )
+                    db.add(cs)
+                except Exception:
+                    pass  # clarity failure must not block ingestion
 
             message.processed = True  # type: ignore[assignment]
             db.add(message)

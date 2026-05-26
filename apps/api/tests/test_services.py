@@ -282,3 +282,89 @@ async def test_extract_tasks_multiple_items():
 
     assert len(result) == 2
     assert result[1]["title"] == "Schedule call"
+
+
+# ---------------------------------------------------------------------------
+# services/clarity.py — score_clarity (Claude Sonnet, mocked)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_score_clarity_happy_path():
+    import app.services.clarity as clarity_mod
+
+    response_json = json.dumps({"score": 88, "rationale": "Clear and well structured"})
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text=response_json)]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_msg
+
+    with patch.object(clarity_mod, "_get_client", return_value=mock_client):
+        result = await clarity_mod.score_clarity("Please review the attached proposal by Friday.")
+
+    assert result["score"] == 88
+    assert result["rationale"] == "Clear and well structured"
+
+
+@pytest.mark.asyncio
+async def test_score_clarity_clamps_score_to_0_100():
+    import app.services.clarity as clarity_mod
+
+    response_json = json.dumps({"score": 150, "rationale": "Over the top"})
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text=response_json)]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_msg
+
+    with patch.object(clarity_mod, "_get_client", return_value=mock_client):
+        result = await clarity_mod.score_clarity("Some message")
+
+    assert result["score"] == 100
+
+
+@pytest.mark.asyncio
+async def test_score_clarity_invalid_json_returns_default():
+    import app.services.clarity as clarity_mod
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text="not valid json {{")]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_msg
+
+    with patch.object(clarity_mod, "_get_client", return_value=mock_client):
+        result = await clarity_mod.score_clarity("Vague message")
+
+    assert result["score"] == 50
+    assert result["rationale"] == "Scoring failed"
+
+
+@pytest.mark.asyncio
+async def test_score_clarity_empty_content_returns_default():
+    import app.services.clarity as clarity_mod
+
+    mock_msg = MagicMock()
+    mock_msg.content = []
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_msg
+
+    with patch.object(clarity_mod, "_get_client", return_value=mock_client):
+        result = await clarity_mod.score_clarity("Some message body")
+
+    assert result["score"] == 50
+
+
+@pytest.mark.asyncio
+async def test_score_clarity_truncates_long_rationale():
+    import app.services.clarity as clarity_mod
+
+    long_rationale = "x" * 300
+    response_json = json.dumps({"score": 60, "rationale": long_rationale})
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text=response_json)]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_msg
+
+    with patch.object(clarity_mod, "_get_client", return_value=mock_client):
+        result = await clarity_mod.score_clarity("Some message")
+
+    assert len(result["rationale"]) == 200
