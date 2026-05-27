@@ -9,6 +9,7 @@ from app.models.message import Message
 from app.models.task import Task
 from app.models.metric_template import MetricTemplate
 from app.models.clarity_score import ClarityScore
+from app.models.project import Project
 
 __all__ = [
     "Workspace",
@@ -22,4 +23,5 @@ __all__ = [
     "Task",
     "MetricTemplate",
     "ClarityScore",
+    "Project",
 ]
