@@ -393,6 +393,20 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/activity`, { method: 'POST', body: JSON.stringify(data) }, token)
   },
 
+  // Projects
+  listProjects: (workspaceId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve([])
+    return apiFetch(`/workspaces/${workspaceId}/projects`, {}, token)
+  },
+  createProject: (workspaceId: string, data: { name: string; description?: string; status?: string; contact_id?: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: `demo-project-${Date.now()}`, workspace_id: workspaceId, status: 'active', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...data })
+    return apiFetch(`/workspaces/${workspaceId}/projects`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+  deleteProject: (workspaceId: string, projectId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve()
+    return apiFetch(`/workspaces/${workspaceId}/projects/${projectId}`, { method: 'DELETE' }, token)
+  },
+
   // AI query
   aiQuery: (workspaceId: string, query: string, token: string) => {
     if (isDemoMode) return Promise.resolve({

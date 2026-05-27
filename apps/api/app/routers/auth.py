@@ -8,10 +8,21 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.agent import Agent
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.services.auth import verify_supabase_jwt, extract_supabase_uid
 from app.dependencies import get_current_user
+
+_DEFAULT_AGENTS = [
+    {"name": "Semantic Sorter",    "type": "semantic_sorter",    "description": "Categorises inbound messages by topic and urgency using embeddings.",    "model": "all-MiniLM-L6-v2",  "status": "active", "accuracy": 94.2},
+    {"name": "Lead Scorer",        "type": "lead_scorer",        "description": "Scores contacts 0-100 based on engagement, revenue signals, and stage.",  "model": "heuristic",          "status": "active", "accuracy": 87.1},
+    {"name": "Email Composer",     "type": "email_composer",     "description": "Drafts personalised outreach emails using Claude Sonnet.",               "model": "claude-sonnet-4-6",  "status": "idle",   "accuracy": 91.8},
+    {"name": "Call Summarizer",    "type": "call_summarizer",    "description": "Transcribes calls with Whisper then extracts action items via Claude.",   "model": "whisper-base",       "status": "active", "accuracy": 89.5},
+    {"name": "Pipeline Optimizer", "type": "pipeline_optimizer", "description": "Detects stale deals and recommends next actions each night.",             "model": "heuristic",          "status": "active", "accuracy": 85.3},
+    {"name": "Sentiment Analyzer", "type": "sentiment_analyzer", "description": "Runs Claude Haiku over every ingested message for tone signals.",         "model": "claude-haiku-4-5",   "status": "active", "accuracy": 92.0},
+    {"name": "PM Agent",           "type": "pm_agent",           "description": "Monitors task health, connector sync status, and catches silent failures.", "model": "heuristic",          "status": "active", "accuracy": 100.0},
+]
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/verify", auto_error=True)
@@ -73,6 +84,10 @@ async def verify(
 
         user = User(supabase_uid=supabase_uid, email=email, workspace_id=ws.id, role="admin")
         db.add(user)
+
+        for spec in _DEFAULT_AGENTS:
+            db.add(Agent(workspace_id=ws.id, **spec))
+
         await db.commit()
         await db.refresh(user)
 

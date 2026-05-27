@@ -14,7 +14,7 @@ celery_app = Celery(
     "crm_agentic",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["app.workers.ingest", "app.workers.score_contact", "app.workers.pipeline", "app.workers.slack_ingest", "app.workers.embed_contacts", "app.workers.deal_health_worker", "app.workers.transcribe", "app.workers.enrich_contact", "app.workers.followup_sequences"],
+    include=["app.workers.ingest", "app.workers.score_contact", "app.workers.pipeline", "app.workers.slack_ingest", "app.workers.embed_contacts", "app.workers.deal_health_worker", "app.workers.transcribe", "app.workers.enrich_contact", "app.workers.followup_sequences", "app.workers.pm_agent"],
 )
 
 celery_app.conf.update(
@@ -38,6 +38,11 @@ celery_app.conf.update(
         "daily-hitl-followup": {
             "task": "app.workers.followup_sequences.check_stale_deals_hitl",
             "schedule": crontab(hour=9, minute=0),
+            "args": [],
+        },
+        "pm-health-check": {
+            "task": "app.workers.pm_agent.run_health_check",
+            "schedule": crontab(minute="*/30"),
             "args": [],
         },
     },
