@@ -153,6 +153,8 @@ async def test_slack_interactions_hitl_dismiss(app_client):
 
 @pytest.mark.asyncio
 async def test_slack_interactions_hitl_approve_no_connector(app_client):
+    """When no Gmail connector exists the endpoint still acks Slack immediately
+    ({"ok": True}) and the background task marks the event as hitl_error."""
     fastapi_app, mock_db, workspace_id = app_client
 
     hitl_id = str(uuid.uuid4())
@@ -166,16 +168,19 @@ async def test_slack_interactions_hitl_approve_no_connector(app_client):
         "contact_id": str(uuid.uuid4()),
     })
     mock_db.execute = AsyncMock(side_effect=[
-        _make_scalar_result(event),    # HITL event lookup
-        _make_scalar_result(None),     # connector lookup → none
+        _make_scalar_result(event),    # HITL event lookup (endpoint)
+        _make_scalar_result(None),     # connector lookup → none (background task)
     ])
 
     payload = {"actions": [{"action_id": "hitl_approve", "value": hitl_id}]}
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.post("/slack/interactions", data={"payload": json.dumps(payload)})
 
+    # Slack ack is always 200 ok — errors are handled in the background task
     assert resp.status_code == 200
-    assert resp.json()["error"] == "no_gmail_connector"
+    assert resp.json()["ok"] is True
+    # Background task commits once (marking hitl_error)
+    mock_db.commit.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -200,7 +205,7 @@ async def test_slack_interactions_hitl_approve_happy_path(app_client):
 
     payload = {"actions": [{"action_id": "hitl_approve", "value": hitl_id}]}
 
-    with patch("app.services.gmail_client.GmailClient") as MockGmail:
+    with patch("app.routers.slack_interactions.GmailClient") as MockGmail:
         mock_gmail = AsyncMock()
         mock_gmail.send_message = AsyncMock(return_value={"id": "msg-sent"})
         MockGmail.return_value = mock_gmail
@@ -215,6 +220,8 @@ async def test_slack_interactions_hitl_approve_happy_path(app_client):
 
 @pytest.mark.asyncio
 async def test_slack_interactions_hitl_approve_gmail_error(app_client):
+    """When Gmail send fails the endpoint still acks Slack immediately and the
+    background task marks the event as hitl_error (not hitl_approved)."""
     fastapi_app, mock_db, workspace_id = app_client
 
     hitl_id = str(uuid.uuid4())
@@ -229,19 +236,209 @@ async def test_slack_interactions_hitl_approve_gmail_error(app_client):
     })
     connector = MagicMock()
     mock_db.execute = AsyncMock(side_effect=[
-        _make_scalar_result(event),
-        _make_scalar_result(connector),
+        _make_scalar_result(event),    # HITL event lookup (endpoint)
+        _make_scalar_result(connector),  # connector lookup (background task)
     ])
 
     payload = {"actions": [{"action_id": "hitl_approve", "value": hitl_id}]}
 
-    with patch("app.services.gmail_client.GmailClient") as MockGmail:
+    with patch("app.routers.slack_interactions.GmailClient") as MockGmail:
         mock_gmail = AsyncMock()
         mock_gmail.send_message = AsyncMock(side_effect=Exception("SMTP error"))
         MockGmail.return_value = mock_gmail
         async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
             resp = await ac.post("/slack/interactions", data={"payload": json.dumps(payload)})
 
+    # Slack ack is always 200 ok — the error surfaces in the background task
     assert resp.status_code == 200
-    assert resp.json()["ok"] is False
-    assert "SMTP error" in resp.json()["error"]
+    assert resp.json()["ok"] is True
+    # Background task marks the event as an error, not approved
+    assert event.type == "hitl_error"
+    mock_db.commit.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# New behavior: response_url ack / Slack message replacement
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_slack_interactions_dismiss_posts_to_response_url(app_client):
+    """Dismiss should call SlackClient.ack_response_url with the payload's response_url."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    hitl_id = str(uuid.uuid4())
+    event = MagicMock()
+    event.meta = json.dumps({"hitl_id": hitl_id, "workspace_id": str(workspace_id)})
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(event))
+
+    payload = {
+        "actions": [{"action_id": "hitl_dismiss", "value": hitl_id}],
+        "response_url": "https://hooks.slack.com/actions/fake/url",
+    }
+
+    with patch("app.routers.slack_interactions.SlackClient.ack_response_url", new_callable=AsyncMock) as mock_ack:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post("/slack/interactions", data={"payload": json.dumps(payload)})
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    mock_ack.assert_awaited_once()
+    call_kwargs = mock_ack.await_args
+    assert "https://hooks.slack.com/actions/fake/url" in call_kwargs.args
+    assert "dismissed" in call_kwargs.kwargs.get("text", "") or "dismissed" in (call_kwargs.args[1] if len(call_kwargs.args) > 1 else "")
+
+
+@pytest.mark.asyncio
+async def test_slack_interactions_approve_posts_success_to_response_url(app_client):
+    """Successful approve should replace the Slack message via response_url."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    hitl_id = str(uuid.uuid4())
+    event = MagicMock()
+    contact_id = str(uuid.uuid4())
+    event.meta = json.dumps({
+        "hitl_id": hitl_id,
+        "workspace_id": str(workspace_id),
+        "to": "lead@example.com",
+        "subject": "Checking in",
+        "body": "Hey there!",
+        "contact_id": contact_id,
+    })
+    connector = MagicMock()
+    contact = MagicMock()
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(event),      # HITL lookup (endpoint)
+        _make_scalar_result(connector),  # Gmail connector lookup (bg task)
+        _make_scalar_result(contact),    # Contact lookup (bg task)
+    ])
+
+    payload = {
+        "actions": [{"action_id": "hitl_approve", "value": hitl_id}],
+        "response_url": "https://hooks.slack.com/actions/fake/url",
+    }
+
+    with patch("app.routers.slack_interactions.GmailClient") as MockGmail, \
+         patch("app.routers.slack_interactions.SlackClient.ack_response_url", new_callable=AsyncMock) as mock_ack:
+        mock_gmail = AsyncMock()
+        mock_gmail.send_message = AsyncMock(return_value={"id": "sent-123"})
+        MockGmail.return_value = mock_gmail
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post("/slack/interactions", data={"payload": json.dumps(payload)})
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert event.type == "hitl_approved"
+    # Contact last_activity should be stamped
+    assert contact.last_activity is not None
+    # Slack message should be replaced with a success notice
+    mock_ack.assert_awaited_once()
+    ack_text = mock_ack.await_args.args[1] if len(mock_ack.await_args.args) > 1 else mock_ack.await_args.kwargs.get("text", "")
+    assert "lead@example.com" in ack_text
+
+
+@pytest.mark.asyncio
+async def test_slack_interactions_approve_updates_contact_last_activity(app_client):
+    """Approving a HITL should stamp contact.last_activity with the send date."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    hitl_id = str(uuid.uuid4())
+    contact_id = str(uuid.uuid4())
+    event = MagicMock()
+    event.meta = json.dumps({
+        "hitl_id": hitl_id,
+        "workspace_id": str(workspace_id),
+        "to": "cto@acme.com",
+        "subject": "Q3 Follow-up",
+        "body": "Just checking in.",
+        "contact_id": contact_id,
+    })
+    connector = MagicMock()
+    contact = MagicMock()
+    contact.last_activity = "Never"
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(event),
+        _make_scalar_result(connector),
+        _make_scalar_result(contact),
+    ])
+
+    payload = {"actions": [{"action_id": "hitl_approve", "value": hitl_id}]}
+
+    with patch("app.routers.slack_interactions.GmailClient") as MockGmail, \
+         patch("app.routers.slack_interactions.SlackClient.ack_response_url", new_callable=AsyncMock):
+        mock_gmail = AsyncMock()
+        mock_gmail.send_message = AsyncMock(return_value={"id": "ok"})
+        MockGmail.return_value = mock_gmail
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post("/slack/interactions", data={"payload": json.dumps(payload)})
+
+    assert resp.status_code == 200
+    # last_activity should have been updated away from "Never"
+    assert contact.last_activity != "Never"
+    assert "Email sent" in contact.last_activity
+
+
+# ---------------------------------------------------------------------------
+# SlackClient — new update_message and ack_response_url methods
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_slack_client_update_message_calls_chat_update():
+    """SlackClient.update_message should POST to chat.update with channel+ts."""
+    from app.services.slack_client import SlackClient
+
+    connector = MagicMock()
+    connector.encrypted_token = "enc_token"
+
+    with patch("app.services.slack_client.decrypt_token", return_value="xoxp-test-token"), \
+         patch("httpx.AsyncClient") as MockHTTP:
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"ok": True, "ts": "12345.678"}
+        mock_http_instance = AsyncMock()
+        mock_http_instance.post = AsyncMock(return_value=mock_response)
+        mock_http_instance.__aenter__ = AsyncMock(return_value=mock_http_instance)
+        mock_http_instance.__aexit__ = AsyncMock(return_value=False)
+        MockHTTP.return_value = mock_http_instance
+
+        client = SlackClient(connector)
+        result = await client.update_message(
+            channel="C123",
+            ts="12345.678",
+            text="Updated text",
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "done"}}],
+        )
+
+    assert result["ok"] is True
+    call_args = mock_http_instance.post.call_args
+    assert "chat.update" in call_args.args[0]
+    sent_json = call_args.kwargs["json"]
+    assert sent_json["channel"] == "C123"
+    assert sent_json["ts"] == "12345.678"
+
+
+@pytest.mark.asyncio
+async def test_slack_client_ack_response_url_posts_json():
+    """SlackClient.ack_response_url should POST the text to the response_url."""
+    from app.services.slack_client import SlackClient
+
+    response_url = "https://hooks.slack.com/actions/TOKEN/12345"
+
+    with patch("httpx.AsyncClient") as MockHTTP:
+        mock_response = MagicMock()
+        mock_http_instance = AsyncMock()
+        mock_http_instance.post = AsyncMock(return_value=mock_response)
+        mock_http_instance.__aenter__ = AsyncMock(return_value=mock_http_instance)
+        mock_http_instance.__aexit__ = AsyncMock(return_value=False)
+        MockHTTP.return_value = mock_http_instance
+
+        await SlackClient.ack_response_url(response_url, text="Done!", replace_original=True)
+
+    call_args = mock_http_instance.post.call_args
+    assert call_args.args[0] == response_url
+    body = call_args.kwargs["json"]
+    assert body["text"] == "Done!"
+    assert body["replace_original"] is True

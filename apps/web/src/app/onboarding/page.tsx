@@ -80,7 +80,8 @@ export default function OnboardingPage() {
       ) as { id: string };
       // Write workspace_id into JWT user_metadata so get_current_user picks it up on next call
       await supabase.auth.updateUser({ data: { workspace_id: workspace.id } });
-      const { data: { session: refreshed } } = await supabase.auth.getSession();
+      // Force a session refresh so the new JWT carries the updated metadata
+      const { data: { session: refreshed } } = await supabase.auth.refreshSession();
       setWorkspaceId(workspace.id);
       setToken(refreshed?.access_token ?? null);
     } catch (err) {
