@@ -209,6 +209,38 @@ async def list_connectors(
     ]
 
 
+@router.get("/workspaces/{workspace_id}/connectors/{connector_id}/status")
+async def connector_status(
+    workspace_id: uuid_mod.UUID,
+    connector_id: uuid_mod.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Connector).where(
+            Connector.id == connector_id,
+            Connector.workspace_id == workspace_id,
+        )
+    )
+    connector = result.scalar_one_or_none()
+    if connector is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+
+    return {
+        "id": str(connector.id),
+        "service": connector.service,
+        "status": "active",
+        "external_email": connector.external_email,
+        "message_count": connector.message_count,
+        "task_count": connector.task_count,
+        "last_sync": connector.last_sync.isoformat() if connector.last_sync else None,
+        "created_at": connector.created_at.isoformat(),
+    }
+
+
 @router.delete("/workspaces/{workspace_id}/connectors/{connector_id}")
 async def delete_connector(
     workspace_id: uuid_mod.UUID,

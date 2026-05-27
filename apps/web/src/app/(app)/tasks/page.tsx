@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   DndContext,
   DragEndEvent,
@@ -187,7 +188,10 @@ function TaskDetailModal({ task, onClose }: { task: Task; onClose: () => void })
   );
 }
 
-export default function TasksPage() {
+function TasksPageInner() {
+  const searchParams = useSearchParams();
+  const contactFilter = searchParams.get("contact");
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
@@ -235,13 +239,16 @@ export default function TasksPage() {
   }, [workspaceId, token, isDemoMode]);
 
   const tasksByColumn = useMemo(() => {
-    const visible = filter === "all" ? tasks : tasks.filter((t) => t.status === filter);
+    let visible = contactFilter
+      ? tasks.filter((t) => t.contact_id === contactFilter)
+      : tasks;
+    if (filter !== "all") visible = visible.filter((t) => t.status === filter);
     return {
       open: visible.filter((t) => t.status === "open"),
       in_progress: visible.filter((t) => t.status === "in_progress"),
       done: visible.filter((t) => t.status === "done"),
     };
-  }, [tasks, filter]);
+  }, [tasks, filter, contactFilter]);
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
@@ -296,9 +303,14 @@ export default function TasksPage() {
     }
   };
 
+  const totalVisible = Object.values(tasksByColumn).flat().length;
+
   return (
     <div className="flex flex-col gap-6 p-6">
-      <Header title="Tasks" subtitle={`${tasks.length} total tasks`} />
+      <Header
+        title="Tasks"
+        subtitle={contactFilter ? `Filtered by contact · ${totalVisible} tasks` : `${tasks.length} total tasks`}
+      />
 
       {/* Filter + New Task */}
       <div className="flex items-center gap-3 flex-wrap">
@@ -420,5 +432,13 @@ export default function TasksPage() {
         <TaskDetailModal task={detailTask} onClose={() => setDetailTask(null)} />
       )}
     </div>
+  );
+}
+
+export default function TasksPage() {
+  return (
+    <Suspense fallback={null}>
+      <TasksPageInner />
+    </Suspense>
   );
 }
