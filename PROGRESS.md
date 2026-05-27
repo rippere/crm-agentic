@@ -15,20 +15,22 @@
 - [2026-05-26] Test suite: 288 tests, full coverage across all routers and services
 - [2026-05-26] Demo mode: complete demo data layer (demo-data.ts, demo-mode.ts) with realistic stubs for all 5 sales pages; live at Railway
 - [2026-05-26] Session: Created apps/api/app/services/clarity.py (Claude Sonnet clarity scoring); wired into ingest.py (scores each new message on ingestion); updated messages router to return enriched response with clarity_score + tasks via selectinload; added 5 clarity service tests + 2 message router tests; 288 tests pass
+- [2026-05-27] Task 4a: POST /messages/{id}/score-clarity endpoint (on-demand Claude Sonnet scoring with upsert); GET /connectors/{id}/status endpoint (live sync stats); "Score Clarity" button in inbox MessageDrawer (updates list badge + drawer in real time); /tasks?contact=<id> filter (kanban filtered by contact, header shows context, Suspense wrapper for useSearchParams); scoreClarity() and getConnectorStatus() added to api-client with demo stubs
 
 ## Current Phase
 Phase 4 — Sales Agent Intelligence + PM Feature Polish
 
 ## Next Task
-Task 4a: Wire the remaining agent intelligence gaps:
-- Implement POST /workspaces/{id}/messages/{msg_id}/score-clarity endpoint so users can trigger on-demand clarity scoring from the inbox (currently only runs during ingest)
-- Add "Score Clarity" button to the inbox page MessageDrawer that calls the new endpoint
-- Implement GET /workspaces/{id}/connectors/{id}/status endpoint with live sync stats
-- Add tasks page filter by contact_id (the /tasks?contact=<id> link from /projects already works via URL param, but the tasks page doesn't yet filter on it)
-
 Task 4b: FastAPI vector search integration
 - The /contacts/search endpoint exists but pgvector embeddings need to be verified end-to-end
 - Add POST /workspaces/{id}/contacts/embed-all Celery task to batch-embed all contacts on demand
+- Add "Embed All" button to /contacts page that triggers batch embedding and shows progress
+- Verify semantic search returns results ranked by cosine similarity
+
+Task 4c: Dashboard real-time deal health widget
+- Add a live "Deal Health Alerts" card to /dashboard that polls /deals/stale every 30s
+- Show top 3 stale deals with health score bars and "View" links to /pipeline
+- Already have getStaleDeals() in api-client — just need the UI widget
 
 ## Blockers
 - Supabase credentials not set in this environment (# TODO: add real credentials in .env.local) — code reads from env vars correctly but no live DB available for integration testing
