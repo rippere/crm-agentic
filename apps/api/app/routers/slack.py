@@ -46,7 +46,7 @@ SLACK_USER_SCOPES = [
 
 
 def _build_redirect_uri() -> str:
-    return f"{settings.FRONTEND_URL.rstrip('/')}/auth/slack/callback"
+    return f"{settings.API_URL.rstrip('/')}/auth/slack/callback"
 
 
 # ── 1. Initiate OAuth ────────────────────────────────────────────
