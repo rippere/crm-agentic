@@ -11,6 +11,7 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.message import Message
+from app.models.clarity_score import ClarityScore
 
 router = APIRouter()
 
@@ -44,6 +45,67 @@ class MessageResponse(BaseModel):
     tasks: list[TaskNested] = []
 
     model_config = {"from_attributes": True}
+
+
+class ScoreClarityResponse(BaseModel):
+    message_id: uuid.UUID
+    score: int
+    rationale: str
+    model_used: str
+
+    model_config = {"from_attributes": True}
+
+
+@router.post(
+    "/workspaces/{workspace_id}/messages/{message_id}/score-clarity",
+    response_model=ScoreClarityResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def score_message_clarity(
+    workspace_id: uuid.UUID,
+    message_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ScoreClarityResponse:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Message)
+        .where(Message.id == message_id, Message.workspace_id == workspace_id)
+        .options(selectinload(Message.clarity_score))
+    )
+    message = result.scalar_one_or_none()
+    if message is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+
+    from app.services.clarity import score_clarity
+    scored = await score_clarity(message.body_plain)
+
+    existing = message.clarity_score
+    if existing is not None:
+        existing.score = scored["score"]
+        existing.rationale = scored["rationale"]
+        cs = existing
+    else:
+        cs = ClarityScore(
+            workspace_id=workspace_id,
+            message_id=message_id,
+            score=scored["score"],
+            rationale=scored["rationale"],
+            model_used="claude-sonnet-4-6",
+        )
+        db.add(cs)
+
+    await db.commit()
+    await db.refresh(cs)
+
+    return ScoreClarityResponse(
+        message_id=message_id,
+        score=cs.score,
+        rationale=cs.rationale or "",
+        model_used=cs.model_used,
+    )
 
 
 @router.get("/workspaces/{workspace_id}/messages", response_model=list[MessageResponse])

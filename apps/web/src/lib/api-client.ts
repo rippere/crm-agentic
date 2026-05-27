@@ -102,6 +102,13 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve(demoConnectors)
     return apiFetch(`/workspaces/${workspaceId}/connectors`, {}, token)
   },
+  getConnectorStatus: (workspaceId: string, connectorId: string, token: string) => {
+    if (isDemoMode) {
+      const c = demoConnectors.find(x => x.id === connectorId)
+      return Promise.resolve({ id: connectorId, service: c?.service ?? 'gmail', status: 'active', external_email: 'demo@example.com', message_count: c?.message_count ?? 0, task_count: 0, last_sync: c?.last_sync ?? null, created_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/connectors/${connectorId}/status`, {}, token)
+  },
   getGmailAuthUrl: (_workspaceId: string, _token: string) => {
     if (isDemoMode) return Promise.resolve({ auth_url: '#' })
     return apiFetch(`/workspaces/${_workspaceId}/connectors/gmail/auth`, {}, _token)
@@ -127,6 +134,10 @@ export const apiClient = {
   getMessages: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve(demoMessages)
     return apiFetch(`/workspaces/${workspaceId}/messages`, {}, token)
+  },
+  scoreClarity: (workspaceId: string, messageId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ message_id: messageId, score: 72, rationale: 'Message is clear and well-structured with specific action items.', model_used: 'claude-sonnet-4-6' })
+    return apiFetch(`/workspaces/${workspaceId}/messages/${messageId}/score-clarity`, { method: 'POST' }, token)
   },
 
   // Tasks

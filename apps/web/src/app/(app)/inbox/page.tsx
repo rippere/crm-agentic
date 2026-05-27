@@ -7,7 +7,8 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Avatar from "@/components/ui/Avatar";
 import { apiClient } from "@/lib/api-client";
-import { Search, Mail, X, CheckCircle, Clock, Brain, ListTodo } from "lucide-react";
+import { Search, Mail, X, CheckCircle, Brain, ListTodo, Sparkles } from "lucide-react";
+import Button from "@/components/ui/Button";
 
 interface Message {
   id: string;
@@ -65,7 +66,34 @@ function MessageSkeleton() {
   );
 }
 
-function MessageDrawer({ message, onClose }: { message: Message; onClose: () => void }) {
+function MessageDrawer({
+  message,
+  onClose,
+  workspaceId,
+  token,
+  onClarityScored,
+}: {
+  message: Message;
+  onClose: () => void;
+  workspaceId: string | null;
+  token: string | null;
+  onClarityScored: (messageId: string, score: { score: number; rationale: string }) => void;
+}) {
+  const [scoring, setScoring] = useState(false);
+
+  async function handleScoreClarity() {
+    if (!workspaceId || !token) return;
+    setScoring(true);
+    try {
+      const result = await apiClient.scoreClarity(workspaceId, message.id, token);
+      onClarityScored(message.id, { score: result.score, rationale: result.rationale });
+    } catch {
+      // silently fail — API may not be running
+    } finally {
+      setScoring(false);
+    }
+  }
+
   return (
     <aside
       className="fixed right-0 top-0 h-full w-[520px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto"
@@ -99,17 +127,38 @@ function MessageDrawer({ message, onClose }: { message: Message; onClose: () => 
         </div>
 
         {/* Clarity score */}
-        {message.clarity_score && (
+        {message.clarity_score ? (
           <Card className="space-y-2">
             <div className="flex items-center gap-2">
               <Brain className="h-4 w-4 text-indigo-400" />
               <p className="text-xs font-semibold text-zinc-300">Clarity Score</p>
               <ClarityBadge score={message.clarity_score.score} />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto text-[10px] h-6 px-2"
+                onClick={handleScoreClarity}
+                disabled={scoring}
+              >
+                <Sparkles className="h-2.5 w-2.5 mr-1" />
+                {scoring ? "Scoring…" : "Re-score"}
+              </Button>
             </div>
             {message.clarity_score.rationale && (
               <p className="text-xs text-zinc-400 leading-relaxed">{message.clarity_score.rationale}</p>
             )}
           </Card>
+        ) : (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleScoreClarity}
+            disabled={scoring}
+            className="w-full"
+          >
+            <Sparkles className="h-3.5 w-3.5 mr-2" />
+            {scoring ? "Scoring clarity…" : "Score Clarity"}
+          </Button>
         )}
 
         {/* Linked contact */}
@@ -269,7 +318,18 @@ export default function InboxPage() {
             onClick={() => setSelected(null)}
             aria-hidden="true"
           />
-          <MessageDrawer message={selected} onClose={() => setSelected(null)} />
+          <MessageDrawer
+            message={selected}
+            onClose={() => setSelected(null)}
+            workspaceId={workspaceId}
+            token={token}
+            onClarityScored={(msgId, score) => {
+              setMessages((prev) =>
+                prev.map((m) => m.id === msgId ? { ...m, clarity_score: score } : m)
+              );
+              setSelected((prev) => prev && prev.id === msgId ? { ...prev, clarity_score: score } : prev);
+            }}
+          />
         </>
       )}
     </div>
