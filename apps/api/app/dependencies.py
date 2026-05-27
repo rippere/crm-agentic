@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from fastapi import Depends, HTTPException, status
@@ -8,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
 from app.services.auth import verify_supabase_jwt, extract_supabase_uid
+
+logger = logging.getLogger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/verify", auto_error=True)
 
@@ -31,8 +34,7 @@ async def get_current_user(
         payload = verify_supabase_jwt(token)
         supabase_uid = extract_supabase_uid(payload)
     except (ValueError, Exception) as e:
-        import sys
-        print(f"[auth] JWT verify failed: {e}", file=sys.stderr)
+        logger.warning("event=jwt_verify_failed error=%s", e)
         raise credentials_exc
 
     result = await db.execute(select(User).where(User.supabase_uid == supabase_uid))

@@ -7,7 +7,7 @@ for 300 s. SUPABASE_JWT_SECRET is not used here (it only covers the static
 anon/service-role tokens).
 """
 
-import sys
+import logging
 import uuid
 from typing import Any
 
@@ -15,6 +15,8 @@ import jwt as pyjwt
 from jwt import PyJWKClient, PyJWKClientConnectionError, PyJWKClientError
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 _JWKS_URL = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
 _jwks_client = PyJWKClient(_JWKS_URL, cache_jwk_set=True, lifespan=300)
@@ -27,9 +29,9 @@ def verify_supabase_jwt(token: str) -> dict[str, Any]:
     """
     try:
         unverified_header = pyjwt.get_unverified_header(token)
-        print(f"[auth] token header: {unverified_header}", file=sys.stderr)
+        logger.debug("event=jwt_header_decoded alg=%s", unverified_header.get("alg"))
     except Exception as header_err:
-        print(f"[auth] could not decode token header: {header_err}", file=sys.stderr)
+        logger.warning("event=jwt_header_decode_failed error=%s", header_err)
 
     try:
         signing_key = _jwks_client.get_signing_key_from_jwt(token)

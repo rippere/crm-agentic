@@ -80,6 +80,8 @@ async def create_workspace(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> WorkspaceResponse:
+    from app.routers.auth import _sync_workspace_metadata
+
     ws_id = uuid.uuid4()
     ws = Workspace(id=ws_id, name=body.name, slug=body.slug, mode=body.mode)
     db.add(ws)
@@ -90,4 +92,8 @@ async def create_workspace(
 
     await db.commit()
     await db.refresh(ws)
+
+    # Push workspace_id into Supabase user_metadata so JWT stays in sync on next refresh
+    await _sync_workspace_metadata(str(current_user.supabase_uid), str(ws_id))
+
     return WorkspaceResponse.model_validate(ws)

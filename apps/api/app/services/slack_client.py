@@ -78,6 +78,43 @@ class SlackClient:
             raise RuntimeError(f"Slack post error: {data.get('error', 'unknown')}")
         return data
 
+    async def update_message(
+        self,
+        channel: str,
+        ts: str,
+        text: str,
+        blocks: list[dict] | None = None,
+    ) -> dict[str, Any]:
+        """Replace an existing Slack message in-place via chat.update."""
+        payload: dict[str, Any] = {"channel": channel, "ts": ts, "text": text}
+        if blocks:
+            payload["blocks"] = blocks
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{SLACK_API_BASE}/chat.update",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json=payload,
+            )
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Slack update error: {data.get('error', 'unknown')}")
+        return data
+
+    @staticmethod
+    async def ack_response_url(response_url: str, text: str, replace_original: bool = True) -> None:
+        """Post an ephemeral ack back to Slack via the interaction response_url.
+
+        This is a static method because it uses the URL Slack provided in the
+        payload, not the connector token.
+        """
+        payload: dict[str, Any] = {
+            "text": text,
+            "replace_original": replace_original,
+            "response_type": "in_channel",
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            await client.post(response_url, json=payload)
+
     async def post_hitl_block(
         self,
         channel: str,

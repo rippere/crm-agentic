@@ -31,10 +31,11 @@ STAGE_BONUS: dict[str, int] = {
 
 
 def _get_async_session() -> async_sessionmaker[AsyncSession]:
-    url = os.getenv("SUPABASE_URL", "")
+    # Prefer DATABASE_URL (already asyncpg-formatted) over SUPABASE_URL
+    url = os.getenv("DATABASE_URL", "") or os.getenv("SUPABASE_URL", "")
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-    elif url.startswith("postgresql://"):
+    elif url.startswith("postgresql://") and "+asyncpg" not in url:
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
     engine = create_async_engine(url, echo=False)
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
