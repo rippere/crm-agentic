@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str
     REDIS_URL: str = "redis://localhost:6379/0"
     FRONTEND_URL: str = "http://localhost:3000"
+    API_URL: str = "http://localhost:8000"
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     SLACK_CLIENT_ID: str = ""
