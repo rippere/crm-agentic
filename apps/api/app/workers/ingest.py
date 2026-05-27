@@ -3,17 +3,19 @@ Celery ingest worker.
 
 Task: process_gmail_sync(connector_id: str)
   1. Load connector from DB
-  2. Fetch messages from Gmail API via GmailClient
+  2. Fetch Primary-inbox messages via GmailClient (category:primary + no-reply filter)
   3. Deduplicate against messages table (UNIQUE workspace_id + external_id)
-  4. Insert new messages
-  5. Call Claude extraction on each new message body
-  6. Insert extracted tasks
-  7. Update connector.last_sync and message_count
+  4. Pre-filter each message with Claude Haiku (deal relevance check)
+  5. Insert new relevant messages
+  6. Call Claude extraction on each new message body
+  7. Insert extracted tasks
+  8. Update connector.last_sync and message_count
 """
 from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -21,19 +23,21 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
+
+# Automated sender patterns — skip without even pre-filtering
+_SKIP_SENDER_PATTERNS = [
+    "noreply", "no-reply", "no_reply", "donotreply", "do-not-reply",
+    "notifications@", "newsletter", "mailer-daemon", "bounce@",
+    "automated@", "unsubscribe",
+]
 
 
 def _get_async_session() -> async_sessionmaker[AsyncSession]:
     url = os.getenv("DATABASE_URL", "")
-    if not url:
-        url = os.getenv("SUPABASE_URL", "")
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-        elif url.startswith("postgresql://"):
-            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
     engine = create_async_engine(url, echo=False)
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -56,6 +60,32 @@ def _decode_body(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _is_automated_sender(sender: str) -> bool:
+    lower = sender.lower()
+    return any(pattern in lower for pattern in _SKIP_SENDER_PATTERNS)
+
+
+def _is_deal_relevant(subject: str, sender: str, snippet: str) -> bool:
+    """Claude Haiku pre-filter: is this email deal/business relevant?"""
+    import anthropic
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    prompt = (
+        f"Subject: {subject}\nFrom: {sender}\nPreview: {snippet[:300]}\n\n"
+        "Is this a business or deal-relevant email a sales professional should track "
+        "(e.g. client communication, proposal, follow-up, meeting, contract, introduction)? "
+        "Answer only 'yes' or 'no'."
+    )
+    try:
+        message = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=5,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text.strip().lower().startswith("y")
+    except Exception:
+        return True  # on error, include the email rather than silently drop it
+
+
 async def _run_sync(connector_id: str) -> dict[str, Any]:
     from app.models.clarity_score import ClarityScore
     from app.models.connector import Connector
@@ -73,6 +103,8 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
     SessionFactory = _get_async_session()
     new_count = 0
     task_count = 0
+    skipped_automated = 0
+    skipped_irrelevant = 0
 
     async with SessionFactory() as db:
         result = await db.execute(select(Connector).where(Connector.id == uuid.UUID(connector_id)))
@@ -83,7 +115,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
         workspace_id = connector.workspace_id
         gmail = GmailClient(connector, db, google_client_id, google_client_secret)
 
-        # Fetch up to 200 messages
+        # Fetch up to 200 messages — category:primary filter applied inside GmailClient
         page_token: str | None = None
         messages_to_process: list[str] = []
 
@@ -96,7 +128,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 break
 
         for gmail_id in messages_to_process:
-            # Check for duplicate
+            # Deduplicate
             dup = await db.execute(
                 select(Message).where(
                     Message.workspace_id == workspace_id,
@@ -104,9 +136,8 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 )
             )
             if dup.scalar_one_or_none() is not None:
-                continue  # already stored
+                continue
 
-            # Fetch full message
             try:
                 msg_data = await gmail.get_message(gmail_id)
             except Exception:
@@ -116,8 +147,8 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 h["name"].lower(): h["value"]
                 for h in msg_data.get("payload", {}).get("headers", [])
             }
-            subject = headers.get("subject")
-            sender_email = headers.get("from")
+            subject = headers.get("subject", "")
+            sender_email = headers.get("from", "")
             date_str = headers.get("date")
             received_at: datetime | None = None
             if date_str:
@@ -127,7 +158,19 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 except Exception:
                     pass
 
+            # Skip automated senders outright
+            if _is_automated_sender(sender_email):
+                skipped_automated += 1
+                continue
+
             body_plain = _decode_body(msg_data.get("payload", {}))
+            snippet = msg_data.get("snippet", "")
+
+            # Claude Haiku pre-filter
+            if not _is_deal_relevant(subject, sender_email, snippet or body_plain[:300]):
+                skipped_irrelevant += 1
+                logger.debug("ingest skipped_irrelevant gmail_id=%s subject=%s", gmail_id, subject[:60])
+                continue
 
             message = Message(
                 workspace_id=workspace_id,
@@ -140,11 +183,10 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 processed=False,
             )
             db.add(message)
-            await db.flush()  # get message.id
+            await db.flush()
 
             new_count += 1
 
-            # Claude extraction
             if body_plain.strip():
                 try:
                     extracted = await extract_tasks(body_plain, str(workspace_id))
@@ -155,14 +197,13 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                             title=t.get("title", "Untitled task"),
                             description=t.get("description", ""),
                             status="open",
-                            due_date=t.get("due_date"),  # may be None or ISO string
+                            due_date=t.get("due_date"),
                         )
                         db.add(task)
                         task_count += 1
                 except Exception:
-                    pass  # extraction failure must not block ingestion
+                    pass
 
-                # Sentiment analysis — store result in contact's ml_score.signals if linked
                 try:
                     sentiment_result = analyze_sentiment(body_plain)
                     if message.contact_id and sentiment_result.get("signals"):
@@ -173,18 +214,16 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                         if contact is not None:
                             existing_score: dict = dict(contact.ml_score or {})
                             existing_signals: list = list(existing_score.get("signals", []))
-                            # Prepend latest sentiment signals (avoid duplicates)
                             for sig in sentiment_result["signals"]:
                                 sentiment_signal = f"[{sentiment_result['sentiment']}] {sig}"
                                 if sentiment_signal not in existing_signals:
                                     existing_signals.insert(0, sentiment_signal)
-                            existing_score["signals"] = existing_signals[:10]  # cap at 10
+                            existing_score["signals"] = existing_signals[:10]
                             contact.ml_score = existing_score  # type: ignore[assignment]
                             db.add(contact)
                 except Exception:
-                    pass  # sentiment failure must not block ingestion
+                    pass
 
-                # Clarity scoring — score communication clarity using Claude Sonnet
                 try:
                     clarity = await score_clarity(body_plain)
                     cs = ClarityScore(
@@ -196,18 +235,27 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                     )
                     db.add(cs)
                 except Exception:
-                    pass  # clarity failure must not block ingestion
+                    pass
 
             message.processed = True  # type: ignore[assignment]
             db.add(message)
 
-        # Update connector stats
         connector.last_sync = datetime.now(tz=timezone.utc)  # type: ignore[assignment]
         connector.message_count = (connector.message_count or 0) + new_count  # type: ignore[assignment]
         db.add(connector)
         await db.commit()
 
-    return {"new_messages": new_count, "new_tasks": task_count, "connector_id": connector_id}
+    logger.info(
+        "ingest complete connector=%s new=%d tasks=%d skipped_automated=%d skipped_irrelevant=%d",
+        connector_id, new_count, task_count, skipped_automated, skipped_irrelevant,
+    )
+    return {
+        "new_messages": new_count,
+        "new_tasks": task_count,
+        "skipped_automated": skipped_automated,
+        "skipped_irrelevant": skipped_irrelevant,
+        "connector_id": connector_id,
+    }
 
 
 @celery_app.task(name="app.workers.ingest.process_gmail_sync", bind=True)

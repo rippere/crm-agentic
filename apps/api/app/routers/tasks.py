@@ -1,7 +1,7 @@
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,10 +19,12 @@ class TaskResponse(BaseModel):
     workspace_id: uuid.UUID
     message_id: uuid.UUID | None
     contact_id: uuid.UUID | None
+    project_id: uuid.UUID | None
     title: str
     description: str
     status: str
     due_date: date | None
+    updated_at: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -34,6 +36,7 @@ class TaskCreate(BaseModel):
     due_date: date | None = None
     message_id: uuid.UUID | None = None
     contact_id: uuid.UUID | None = None
+    project_id: uuid.UUID | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -41,20 +44,39 @@ class TaskUpdate(BaseModel):
     description: str | None = None
     status: str | None = None
     due_date: date | None = None
+    project_id: uuid.UUID | None = None
+
+
+def _to_response(t: Task) -> TaskResponse:
+    return TaskResponse(
+        id=t.id,
+        workspace_id=t.workspace_id,
+        message_id=t.message_id,
+        contact_id=t.contact_id,
+        project_id=t.project_id,
+        title=t.title,
+        description=t.description,
+        status=t.status,
+        due_date=t.due_date,
+        updated_at=t.updated_at.isoformat() if t.updated_at else None,
+    )
 
 
 @router.get("/workspaces/{workspace_id}/tasks", response_model=list[TaskResponse])
 async def list_tasks(
     workspace_id: uuid.UUID,
+    project_id: uuid.UUID | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[TaskResponse]:
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    result = await db.execute(select(Task).where(Task.workspace_id == workspace_id))
-    tasks = result.scalars().all()
-    return [TaskResponse.model_validate(t) for t in tasks]
+    q = select(Task).where(Task.workspace_id == workspace_id)
+    if project_id is not None:
+        q = q.where(Task.project_id == project_id)
+    result = await db.execute(q.order_by(Task.created_at.desc()))
+    return [_to_response(t) for t in result.scalars().all()]
 
 
 @router.post("/workspaces/{workspace_id}/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
@@ -75,11 +97,12 @@ async def create_task(
         due_date=body.due_date,
         message_id=body.message_id,
         contact_id=body.contact_id,
+        project_id=body.project_id,
     )
     db.add(task)
     await db.commit()
     await db.refresh(task)
-    return TaskResponse.model_validate(task)
+    return _to_response(task)
 
 
 @router.delete("/workspaces/{workspace_id}/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -129,7 +152,9 @@ async def update_task(
         task.status = body.status  # type: ignore[assignment]
     if body.due_date is not None:
         task.due_date = body.due_date  # type: ignore[assignment]
+    if body.project_id is not None:
+        task.project_id = body.project_id  # type: ignore[assignment]
 
     await db.commit()
     await db.refresh(task)
-    return TaskResponse.model_validate(task)
+    return _to_response(task)
