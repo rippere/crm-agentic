@@ -113,9 +113,9 @@ function AutoProjectCard({ group, onClick }: { group: ProjectGroup; onClick: () 
   );
 }
 
-function ManualProjectCard({ project, onDelete }: { project: ManualProject; onDelete: (id: string) => void }) {
+function ManualProjectCard({ project, onDelete, onClick }: { project: ManualProject; onDelete: (id: string) => void; onClick: () => void }) {
   return (
-    <Card className="flex flex-col gap-4">
+    <Card hover className="flex flex-col gap-4 cursor-pointer" onClick={onClick}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-violet-500/20 bg-violet-500/10 flex-shrink-0">
@@ -129,7 +129,7 @@ function ManualProjectCard({ project, onDelete }: { project: ManualProject; onDe
           </div>
         </div>
         <button
-          onClick={() => onDelete(project.id)}
+          onClick={(e) => { e.stopPropagation(); onDelete(project.id); }}
           className="text-zinc-600 hover:text-rose-400 transition-colors flex-shrink-0 mt-0.5"
         >
           <X className="h-4 w-4" />
@@ -352,7 +352,7 @@ export default function ProjectsPage() {
               <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">Manual</p>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {manualProjects.map((p) => (
-                  <ManualProjectCard key={p.id} project={p} onDelete={handleDelete} />
+                  <ManualProjectCard key={p.id} project={p} onDelete={handleDelete} onClick={() => router.push(`/projects/${p.id}`)} />
                 ))}
               </div>
             </section>

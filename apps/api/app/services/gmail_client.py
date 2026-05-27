@@ -4,12 +4,9 @@ Handles decryption of stored tokens, 401-triggered refresh, and re-encryption.
 """
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.connector import Connector
@@ -17,6 +14,13 @@ from app.services.crypto import decrypt_token, encrypt_token
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+# Default query: Primary inbox only, skip automated senders
+GMAIL_DEFAULT_QUERY = (
+    "category:primary "
+    "-from:noreply -from:no-reply -from:no_reply -from:donotreply "
+    "-from:notifications -from:newsletter -from:mailer-daemon -from:bounce"
+)
 
 
 class GmailClient:
@@ -27,15 +31,10 @@ class GmailClient:
         self._client_secret = google_client_secret
         self._access_token: str | None = None
 
-    # ──────────────────────────────────────────────────────────────
-    # Internal helpers
-    # ──────────────────────────────────────────────────────────────
-
     def _decrypt_access_token(self) -> str:
         return decrypt_token(self._connector.encrypted_token)
 
     async def _refresh_access_token(self) -> str:
-        """Exchange the stored refresh token for a new access token and persist."""
         if not self._connector.refresh_token:
             raise ValueError("No refresh token available for connector")
 
@@ -67,7 +66,6 @@ class GmailClient:
         return self._decrypt_access_token()
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Make an authenticated request; on 401 refresh and retry once."""
         token = await self._get_valid_access_token()
         headers = {"Authorization": f"Bearer {token}"}
         async with httpx.AsyncClient() as client:
@@ -82,30 +80,28 @@ class GmailClient:
         resp.raise_for_status()
         return resp
 
-    # ──────────────────────────────────────────────────────────────
-    # Public API
-    # ──────────────────────────────────────────────────────────────
-
-    async def list_messages(self, max_results: int = 100, page_token: str | None = None) -> dict[str, Any]:
-        """List message stubs from the inbox."""
-        params: dict[str, Any] = {"maxResults": max_results}
+    async def list_messages(
+        self,
+        max_results: int = 100,
+        page_token: str | None = None,
+        q: str = GMAIL_DEFAULT_QUERY,
+    ) -> dict[str, Any]:
+        """List message stubs filtered to Primary inbox by default."""
+        params: dict[str, Any] = {"maxResults": max_results, "q": q}
         if page_token:
             params["pageToken"] = page_token
         resp = await self._request("GET", "/users/me/messages", params=params)
         return resp.json()
 
     async def get_message(self, message_id: str, format: str = "full") -> dict[str, Any]:
-        """Fetch a full message by its Gmail ID."""
         resp = await self._request("GET", f"/users/me/messages/{message_id}", params={"format": format})
         return resp.json()
 
     async def get_profile(self) -> dict[str, Any]:
-        """Return the authenticated Gmail user profile."""
         resp = await self._request("GET", "/users/me/profile")
         return resp.json()
 
     async def send_message(self, to: str, subject: str, body: str) -> dict[str, Any]:
-        """Send an email via Gmail API using stored OAuth token."""
         import base64
         import email.mime.text
 
