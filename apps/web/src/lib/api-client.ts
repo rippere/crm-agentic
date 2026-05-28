@@ -96,6 +96,18 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ id: agentId, ...data })
     return apiFetch(`/agents/${agentId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
   },
+  /**
+   * Fetch the last `limit` activity events for a specific agent.
+   * Falls back to filtering workspace activity by agent_id meta tag.
+   */
+  getAgentActivity: (workspaceId: string, agentId: string, token: string, limit = 7) => {
+    if (isDemoMode) return Promise.resolve([])
+    return apiFetch(
+      `/workspaces/${workspaceId}/activity?agent_id=${agentId}&limit=${limit}`,
+      {},
+      token
+    )
+  },
 
   // Connectors
   getConnectors: (workspaceId: string, token: string) => {
