@@ -355,13 +355,36 @@ export const apiClient = {
 
   // Semantic search
   semanticSearchContacts: (workspaceId: string, query: string, token: string) => {
-    if (isDemoMode) return Promise.resolve([])
+    if (isDemoMode) {
+      const q = query.toLowerCase()
+      const results = demoContacts
+        .filter((c) =>
+          c.name.toLowerCase().includes(q) ||
+          c.company.toLowerCase().includes(q) ||
+          (c.role ?? '').toLowerCase().includes(q) ||
+          c.email.toLowerCase().includes(q)
+        )
+        .slice(0, 8)
+        .map((c, i) => ({
+          id: c.id,
+          name: c.name,
+          email: c.email,
+          company: c.company,
+          role: c.role,
+          status: c.status,
+          ml_score: { value: c.mlScore.value, label: c.mlScore.label, trend: c.mlScore.trend },
+          revenue: c.revenue,
+          deal_count: c.deals,
+          similarity: Math.round((Math.max(0.5, 0.97 - i * 0.07)) * 10000) / 10000,
+        }))
+      return Promise.resolve(results)
+    }
     const params = new URLSearchParams({ q: query, limit: '15' })
     return apiFetch(`/workspaces/${workspaceId}/contacts/search?${params}`, {}, token)
   },
   triggerEmbedContacts: (workspaceId: string, token: string) => {
-    if (isDemoMode) return Promise.resolve({ job_id: 'demo-embed', status: 'queued' })
-    return apiFetch(`/workspaces/${workspaceId}/contacts/embed`, { method: 'POST' }, token)
+    if (isDemoMode) return Promise.resolve({ job_id: 'demo-embed', status: 'queued', contacts_total: demoContacts.length })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/embed-all`, { method: 'POST' }, token)
   },
 
   // Workspace

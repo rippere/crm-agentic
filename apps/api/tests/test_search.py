@@ -153,3 +153,43 @@ async def test_semantic_search_pgvector_path(app_client):
     assert len(data) == 1
     assert data[0]["name"] == "Alice Smith"
     assert data[0]["similarity"] == 0.92
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/contacts/embed-all
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_trigger_embed_all_enqueues_job_with_count(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    count_result = MagicMock()
+    count_result.scalar.return_value = 12
+
+    mock_db.execute = AsyncMock(return_value=count_result)
+
+    mock_task = MagicMock()
+    mock_task.id = "embed-all-job-42"
+
+    with patch("app.workers.embed_contacts.embed_workspace_contacts") as mock_celery:
+        mock_celery.delay.return_value = mock_task
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/contacts/embed-all")
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["job_id"] == "embed-all-job-42"
+    assert body["status"] == "queued"
+    assert body["contacts_total"] == 12
+
+
+@pytest.mark.asyncio
+async def test_trigger_embed_all_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/contacts/embed-all")
+
+    assert resp.status_code == 403

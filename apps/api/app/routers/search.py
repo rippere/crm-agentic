@@ -124,3 +124,25 @@ async def trigger_embed(
 
     task = embed_workspace_contacts.delay(str(workspace_id))
     return {"job_id": task.id, "status": "queued"}
+
+
+@router.post("/workspaces/{workspace_id}/contacts/embed-all", status_code=202)
+async def trigger_embed_all(
+    workspace_id: uuid_mod.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Enqueue a Celery job to embed all contacts, returning the total count for progress tracking."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    count_result = await db.execute(
+        text("SELECT COUNT(*) FROM contacts WHERE workspace_id = :wid"),
+        {"wid": str(workspace_id)},
+    )
+    contacts_total: int = count_result.scalar() or 0
+
+    from app.workers.embed_contacts import embed_workspace_contacts
+
+    task = embed_workspace_contacts.delay(str(workspace_id))
+    return {"job_id": task.id, "status": "queued", "contacts_total": contacts_total}
