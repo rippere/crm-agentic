@@ -937,7 +937,7 @@ export default function ContactsPage() {
   const [semanticMode, setSemanticMode] = useState(false);
   const [semanticResults, setSemanticResults] = useState<SemanticResult[]>([]);
   const [semanticLoading, setSemanticLoading] = useState(false);
-  const [indexing, setIndexing] = useState(false);
+  const embedPoller = useJobPoller();
   const [newContactOpen, setNewContactOpen] = useState(false);
   const [hasGmailConnector, setHasGmailConnector] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -1027,14 +1027,16 @@ export default function ContactsPage() {
   }, [semanticMode, search, workspaceId, token]);
 
   const handleIndex = useCallback(async () => {
-    if (!workspaceId || !token || indexing) return;
-    setIndexing(true);
+    if (!workspaceId || !token) return;
+    if (embedPoller.state === "pending" || embedPoller.state === "started") return;
+    embedPoller.reset();
     try {
-      await apiClient.triggerEmbedContacts(workspaceId, token);
-    } finally {
-      setTimeout(() => setIndexing(false), 3000);
-    }
-  }, [workspaceId, token, indexing]);
+      const res = await apiClient.triggerEmbedContacts(workspaceId, token);
+      if (res?.job_id && res.job_id !== "demo-embed") {
+        embedPoller.start(res.job_id);
+      }
+    } catch { /* silent */ }
+  }, [workspaceId, token, embedPoller]);
 
   const filtered = useMemo(() => {
     return contacts.filter((c) => {
@@ -1148,21 +1150,32 @@ export default function ContactsPage() {
           </div>
         )}
 
-        {/* Index contacts button — only when semantic mode and authed */}
+        {/* Embed-all button — only when semantic mode and authed */}
         {semanticMode && workspaceId && token && (
           <button
             onClick={handleIndex}
-            disabled={indexing}
+            disabled={embedPoller.state === "pending" || embedPoller.state === "started"}
             className={cn(
               "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-200 cursor-pointer",
-              indexing
+              embedPoller.state === "pending" || embedPoller.state === "started"
                 ? "border-zinc-700 text-zinc-600 cursor-not-allowed"
+                : embedPoller.state === "success"
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                : embedPoller.state === "failure"
+                ? "border-rose-500/40 bg-rose-500/10 text-rose-400"
                 : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-indigo-500/40 hover:text-indigo-400"
             )}
             title="Build semantic embeddings for all contacts"
           >
-            {indexing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
-            {indexing ? "Indexing…" : "Index Contacts"}
+            {embedPoller.state === "pending" || embedPoller.state === "started" ? (
+              <><Loader2 className="h-3 w-3 animate-spin" /> Indexing…</>
+            ) : embedPoller.state === "success" ? (
+              <><Zap className="h-3 w-3" /> Indexed!</>
+            ) : embedPoller.state === "failure" ? (
+              <><Zap className="h-3 w-3" /> Embed Failed</>
+            ) : (
+              <><Zap className="h-3 w-3" /> Embed All</>
+            )}
           </button>
         )}
 

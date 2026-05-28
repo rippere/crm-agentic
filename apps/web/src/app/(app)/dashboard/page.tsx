@@ -14,10 +14,11 @@ import {
   AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
+import Link from "next/link";
 import {
   DollarSign, Briefcase, Brain, Bot, TrendingUp, TrendingDown,
   Minus, Activity, CheckCircle, AlertTriangle, Info,
-  ListTodo, Mail, BarChart2, CheckSquare, Heart,
+  ListTodo, Mail, BarChart2, CheckSquare, ExternalLink,
 } from "lucide-react";
 import { cn, SIGNAL } from "@/lib/utils";
 import type { KPI, ActivityEvent, Deal } from "@/lib/types";
@@ -232,6 +233,8 @@ export default function DashboardPage() {
   const [staleDeals, setStaleDeals] = useState<StaleDeal[]>([]);
   const [liveActivity, setLiveActivity] = useState<ActivityEvent[]>([]);
   const [revenueHistory, setRevenueHistory] = useState<{ month: string; revenue: number }[]>([]);
+  const [pollToken, setPollToken] = useState<string | null>(null);
+  const [pollWorkspaceId, setPollWorkspaceId] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -258,6 +261,8 @@ export default function DashboardPage() {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) return;
       const workspaceId: string | undefined = session.user.user_metadata?.workspace_id;
+      setPollToken(session.access_token);
+      if (workspaceId) setPollWorkspaceId(workspaceId);
 
       // Seed activity feed with recent events, then switch to SSE
       if (workspaceId) {
@@ -359,6 +364,17 @@ export default function DashboardPage() {
     return () => { esRef.current?.close(); };
   }, []);
 
+  // 30s polling for stale deal health (live mode only)
+  useEffect(() => {
+    if (DEMO_MODE || !pollWorkspaceId || !pollToken) return;
+    const id = setInterval(() => {
+      apiClient.getStaleDeals(pollWorkspaceId, pollToken).then((data) => {
+        setStaleDeals(Array.isArray(data) ? data : []);
+      }).catch(() => {});
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [pollWorkspaceId, pollToken]);
+
   return (
     <div className="flex flex-col gap-6 p-6">
       <Header
@@ -439,7 +455,7 @@ export default function DashboardPage() {
           </div>
           <Card className="border-rose-500/10 overflow-hidden p-0">
             <div className="divide-y divide-zinc-800">
-              {staleDeals.map((deal) => (
+              {staleDeals.slice(0, 3).map((deal) => (
                 <div key={deal.id} className="flex items-center gap-4 px-4 py-3 hover:bg-zinc-800/40 transition-colors">
                   {/* Health bar */}
                   <div className="flex items-center gap-2 w-28 flex-shrink-0">
@@ -477,9 +493,26 @@ export default function DashboardPage() {
                     <AlertTriangle className="h-3 w-3 text-rose-400 flex-shrink-0" />
                     <span className="text-[11px] text-zinc-500 truncate">{deal.signals[0]}</span>
                   </div>
+
+                  {/* View link */}
+                  <Link
+                    href="/pipeline"
+                    className="flex-shrink-0 flex items-center gap-1 text-[11px] text-zinc-500 hover:text-indigo-400 transition-colors font-mono"
+                    title="View in pipeline"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    View
+                  </Link>
                 </div>
               ))}
             </div>
+            {staleDeals.length > 3 && (
+              <div className="border-t border-zinc-800 px-4 py-2.5 text-center">
+                <Link href="/pipeline" className="text-xs text-zinc-500 hover:text-indigo-400 transition-colors font-mono">
+                  +{staleDeals.length - 3} more at-risk deals · View all in Pipeline →
+                </Link>
+              </div>
+            )}
           </Card>
         </section>
       )}
