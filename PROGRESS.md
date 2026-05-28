@@ -19,21 +19,13 @@
 - [2026-05-28] Task 4b: POST /contacts/embed-all endpoint with contacts_total count; contacts page embed button wired to useJobPoller (real pending/started/success/failure states); demo semantic search returns filtered demoContacts with ranked similarity; 2 new tests for embed-all
 - [2026-05-28] Task 4c: Dashboard deal health widget — top 3 stale deals (with "View all" footer); per-deal "View" links to /pipeline; 30s polling useEffect for live stale deal data via extracted pollToken/pollWorkspaceId state
 - [2026-05-28] Task 4d: /settings page — workspace editor (name + mode via updateWorkspace()), invite form (inviteTeammate()), danger zone with ConfirmDialog type-to-confirm delete modal, profile section with email and sign-out
+- [2026-05-28] Task 4e: Agents page polish — per-card Run button wired to triggerAgent() + per-card useJobPoller (pending/started/success/failure); last-run timestamp from live getAgentActivity() API call; success/failure badges (CheckCircle/XCircle) update after each job; 7-point recharts LineChart accuracy sparkline per card seeded from last 7 activity events; AgentDetailPanel Run button also uses useJobPoller; apiClient.getAgentActivity() added
 
 ## Current Phase
 Phase 4 — Sales Agent Intelligence + PM Feature Polish
 
 ## Next Task
-Task 4d: Settings page + workspace management
-- Build /settings page: workspace name/mode editor (calls PATCH /workspaces/{id}), team member invite form (calls POST /workspaces/{id}/invite), "Danger zone" section with workspace delete confirmation
-- Add profile section: display email from Supabase session, sign-out button
-- Already have updateWorkspace() and inviteTeammate() in api-client
-
-Task 4e: Agents page polish
-- The /agents page has a trigger button but agent cards need real status polling
-- Wire each agent card's "Run" button to triggerAgent() + useJobPoller for live state
-- Show last run timestamp from activity events, success/failure badge
-- Add agent accuracy sparklines using 7 activity events
+Phase 4 complete. All agent intelligence + PM feature polish tasks done.
 
 ## Blockers
 - Supabase credentials not set in this environment (# TODO: add real credentials in .env.local) — code reads from env vars correctly but no live DB available for integration testing
