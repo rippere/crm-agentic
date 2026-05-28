@@ -5,23 +5,43 @@ import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
-import Avatar from "@/components/ui/Avatar";
 import { mockAgents } from "@/lib/mock-data";
 import { cn, agentStatusConfig } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
+import { useJobPoller } from "@/hooks/useJobPoller";
 import { createBrowserClient } from "@/lib/supabase";
 import {
   Brain, Sparkles, Mail, Mic, TrendingUp, Heart,
   Play, Pause, Settings, ChevronRight, Cpu, Target,
-  ArrowRight, GitBranch, Zap,
+  ArrowRight, GitBranch, Zap, Loader2, CheckCircle, XCircle,
 } from "lucide-react";
+import {
+  LineChart, Line, ResponsiveContainer, Tooltip,
+} from "recharts";
 import type { Agent, AgentType, WorkflowNode } from "@/lib/types";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Toast {
   id: number;
   message: string;
   type: "success" | "error" | "info";
 }
+
+interface ActivityEvent {
+  id: string;
+  type: string;
+  agent_name: string;
+  description: string;
+  severity: "success" | "error" | "warning" | "info";
+  created_at: string;
+}
+
+interface SparkPoint {
+  v: number; // accuracy proxy 0–100
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const agentTypeIcon: Record<AgentType, React.ReactNode> = {
   semantic_sorter: <Sparkles className="h-4 w-4" />,
@@ -55,13 +75,49 @@ const nodeTypeIcon: Record<WorkflowNode["type"], React.ReactNode> = {
   output: <Target className="h-3 w-3" />,
 };
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatRelative(dateStr: string | null | undefined): string {
+  if (!dateStr) return "Never";
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/**
+ * Build 7 sparkline points from activity events for this agent.
+ * Each point is a mock accuracy reading derived from severity: success=high, error=low.
+ * Falls back to a flat line seeded from agent.accuracy when no events exist.
+ */
+function buildSparkData(events: ActivityEvent[], baseAccuracy: number): SparkPoint[] {
+  if (events.length === 0) {
+    // Generate a subtly varied flat line so the sparkline always renders
+    return Array.from({ length: 7 }, (_, i) => ({
+      v: Math.max(50, Math.min(100, baseAccuracy + (Math.sin(i) * 3))),
+    }));
+  }
+  const last7 = events.slice(0, 7).reverse();
+  return last7.map((e) => ({
+    v: e.severity === "success"
+      ? Math.min(100, baseAccuracy + 3)
+      : e.severity === "error"
+      ? Math.max(50, baseAccuracy - 8)
+      : baseAccuracy,
+  }));
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
 function WorkflowDiagram({ nodes }: { nodes: WorkflowNode[] }) {
   return (
     <div className="overflow-x-auto" role="img" aria-label="Agent workflow diagram">
       <div className="flex items-center gap-2 py-4 px-2 min-w-max">
         {nodes.map((node, idx) => (
           <div key={node.id} className="flex items-center gap-2">
-            {/* Node */}
             <div
               className={cn(
                 "flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-medium whitespace-nowrap",
@@ -73,14 +129,12 @@ function WorkflowDiagram({ nodes }: { nodes: WorkflowNode[] }) {
               <span className="flex-shrink-0">{nodeTypeIcon[node.type]}</span>
               {node.label}
             </div>
-            {/* Arrow (not after last node) */}
             {idx < nodes.length - 1 && (
               <ArrowRight className="h-3.5 w-3.5 text-zinc-600 flex-shrink-0" aria-hidden="true" />
             )}
           </div>
         ))}
       </div>
-      {/* Legend */}
       <div className="flex flex-wrap gap-3 px-2 pb-2">
         {(["trigger", "action", "condition", "output"] as const).map((type) => (
           <div key={type} className="flex items-center gap-1.5">
@@ -97,9 +151,95 @@ function WorkflowDiagram({ nodes }: { nodes: WorkflowNode[] }) {
   );
 }
 
-function AgentCard({ agent, onSelect }: { agent: Agent; onSelect: () => void }) {
+interface AgentCardProps {
+  agent: Agent;
+  onSelect: () => void;
+  token: string | null;
+  workspaceId: string | null;
+  onRun: (agentId: string) => Promise<string | null>;
+}
+
+function AgentCard({ agent, onSelect, token, workspaceId, onRun }: AgentCardProps) {
+  const poller = useJobPoller();
+  const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const [lastRunTs, setLastRunTs] = useState<string | null>(null);
+
+  // Fetch last 7 activity events for this agent on mount
+  useEffect(() => {
+    if (!token || !workspaceId) return;
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === "true") {
+      // Generate synthetic activity demo data keyed to agent id
+      const now = Date.now();
+      const agentNames: Record<string, string> = {
+        "a-001": "Semantic Sorter",
+        "a-002": "Lead Scorer",
+        "a-003": "Email Composer",
+        "a-004": "Call Summarizer",
+        "a-005": "Pipeline Optimizer",
+        "a-006": "Sentiment Analyzer",
+      };
+      const name = agentNames[agent.id] ?? agent.name;
+      const severities: Array<ActivityEvent["severity"]> = ["success", "success", "info", "success", "warning", "success", "error"];
+      const synth: ActivityEvent[] = severities.map((sev, i) => ({
+        id: `demo-${agent.id}-${i}`,
+        type: "agent_run",
+        agent_name: name,
+        description: `${name} completed run ${i + 1}`,
+        severity: sev,
+        created_at: new Date(now - i * 3600000).toISOString(),
+      }));
+      setActivity(synth);
+      setLastRunTs(synth[0]?.created_at ?? null);
+      return;
+    }
+    apiClient
+      .getAgentActivity(workspaceId, agent.id, token)
+      .then((data: ActivityEvent[]) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setActivity(data.slice(0, 7));
+          setLastRunTs(data[0]?.created_at ?? null);
+        }
+      })
+      .catch(() => {});
+  }, [token, workspaceId, agent.id, agent.name]);
+
+  // Update lastRunTs when poller succeeds or fails
+  useEffect(() => {
+    if (poller.state === "success" || poller.state === "failure") {
+      setLastRunTs(new Date().toISOString());
+    }
+  }, [poller.state]);
+
+  const sparkData = buildSparkData(activity, agent.accuracy);
+
+  const isRunning = poller.state === "pending" || poller.state === "started" || agent.status === "processing";
+  const runFailed = poller.state === "failure";
+  const runSucceeded = poller.state === "success";
+
   const statusCfg = agentStatusConfig[agent.status];
   const typeCfg = agentTypeColor[agent.type];
+
+  // Derive the live badge for last run outcome
+  const runBadge = runFailed ? (
+    <span className="flex items-center gap-1 text-[10px] text-rose-400 font-mono">
+      <XCircle className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
+      Run failed
+    </span>
+  ) : runSucceeded ? (
+    <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono">
+      <CheckCircle className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
+      Succeeded
+    </span>
+  ) : null;
+
+  const handleRun = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      const jobId = await onRun(agent.id);
+      if (jobId) poller.start(jobId);
+    },
+    [onRun, agent.id, poller]
+  );
 
   return (
     <Card hover glow className="flex flex-col gap-4 cursor-pointer" onClick={onSelect}>
@@ -118,41 +258,72 @@ function AgentCard({ agent, onSelect }: { agent: Agent; onSelect: () => void }) 
           variant={
             agent.status === "active"
               ? "emerald"
-              : agent.status === "processing"
+              : agent.status === "processing" || isRunning
               ? "indigo"
               : agent.status === "error"
               ? "rose"
               : "zinc"
           }
           dot
-          pulse={agent.status === "active" || agent.status === "processing"}
+          pulse={agent.status === "active" || agent.status === "processing" || isRunning}
           size="sm"
         >
-          {statusCfg.label}
+          {isRunning ? "Running" : statusCfg.label}
         </Badge>
       </div>
 
       {/* Description */}
       <p className="text-xs text-zinc-400 leading-relaxed line-clamp-2">{agent.description}</p>
 
-      {/* Accuracy bar */}
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[10px] text-zinc-500 font-mono">Model Accuracy</span>
-          <span className="text-xs font-mono text-emerald-400 font-semibold">{agent.accuracy}%</span>
-        </div>
-        <div
-          className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden"
-          role="progressbar"
-          aria-valuenow={agent.accuracy}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label={`${agent.name} accuracy: ${agent.accuracy}%`}
-        >
+      {/* Accuracy bar + sparkline */}
+      <div className="flex items-end gap-3">
+        <div className="flex-1">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] text-zinc-500 font-mono">Model Accuracy</span>
+            <span className="text-xs font-mono text-emerald-400 font-semibold">{agent.accuracy}%</span>
+          </div>
           <div
-            className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-400"
-            style={{ width: `${agent.accuracy}%` }}
-          />
+            className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden"
+            role="progressbar"
+            aria-valuenow={agent.accuracy}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`${agent.name} accuracy: ${agent.accuracy}%`}
+          >
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-400"
+              style={{ width: `${agent.accuracy}%` }}
+            />
+          </div>
+        </div>
+        {/* Sparkline — 7-point accuracy trend */}
+        <div
+          className="flex-shrink-0 w-20 h-8"
+          title="Accuracy trend (last 7 runs)"
+          aria-label={`${agent.name} accuracy sparkline`}
+        >
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={sparkData} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+              <Line
+                type="monotone"
+                dataKey="v"
+                stroke={runFailed ? "#f87171" : "#34d399"}
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={false}
+              />
+              <Tooltip
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] text-zinc-300 font-mono shadow-xl">
+                      {(payload[0].value as number).toFixed(1)}%
+                    </div>
+                  );
+                }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       </div>
 
@@ -169,12 +340,28 @@ function AgentCard({ agent, onSelect }: { agent: Agent; onSelect: () => void }) 
         ))}
       </div>
 
-      {/* Footer */}
-      <div className="flex items-center justify-between pt-1 border-t border-zinc-800">
-        <span className="text-[10px] text-zinc-500 font-mono">
-          Last run: {agent.lastRun}
-        </span>
-        <div className="flex items-center gap-1.5">
+      {/* Footer — last run + run button */}
+      <div className="flex items-center justify-between pt-1 border-t border-zinc-800" onClick={(e) => e.stopPropagation()}>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] text-zinc-500 font-mono">
+            Last run: {lastRunTs ? formatRelative(lastRunTs) : agent.lastRun}
+          </span>
+          {runBadge}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant={isRunning ? "secondary" : "cta"}
+            size="sm"
+            disabled={isRunning}
+            onClick={handleRun}
+            aria-label={`Run ${agent.name}`}
+          >
+            {isRunning ? (
+              <><Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> Running</>
+            ) : (
+              <><Play className="h-3 w-3" aria-hidden="true" /> Run</>
+            )}
+          </Button>
           <ChevronRight className="h-3.5 w-3.5 text-zinc-600" aria-hidden="true" />
         </div>
       </div>
@@ -186,15 +373,21 @@ function AgentDetailPanel({
   agent,
   onClose,
   token,
+  workspaceId,
   onRun,
 }: {
   agent: Agent;
   onClose: () => void;
   token: string | null;
-  onRun: (agentId: string) => Promise<void>;
+  workspaceId: string | null;
+  onRun: (agentId: string) => Promise<string | null>;
 }) {
+  const poller = useJobPoller();
   const [running, setRunning] = useState(agent.status === "active" || agent.status === "processing");
-  const statusCfg = agentStatusConfig[running ? "active" : "idle"];
+
+  const isJobRunning = poller.state === "pending" || poller.state === "started";
+  const isRunning = running || isJobRunning;
+  const statusCfg = agentStatusConfig[isRunning ? "active" : "idle"];
 
   return (
     <aside
@@ -224,26 +417,47 @@ function AgentDetailPanel({
       <div className="p-5 space-y-6">
         {/* Status + Controls */}
         <div className="flex items-center justify-between">
-          <Badge
-            variant={running ? "emerald" : "zinc"}
-            dot
-            pulse={running}
-            size="md"
-          >
-            {running ? "Active" : "Paused"}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge
+              variant={isRunning ? "emerald" : "zinc"}
+              dot
+              pulse={isRunning}
+              size="md"
+            >
+              {isJobRunning ? "Running…" : isRunning ? "Active" : "Paused"}
+            </Badge>
+            {poller.state === "success" && (
+              <span className="flex items-center gap-1 text-xs text-emerald-400 font-mono">
+                <CheckCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                Completed
+              </span>
+            )}
+            {poller.state === "failure" && (
+              <span className="flex items-center gap-1 text-xs text-rose-400 font-mono">
+                <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                {poller.error ?? "Failed"}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <Button
-              variant={running ? "secondary" : "cta"}
+              variant={isRunning ? "secondary" : "cta"}
               size="sm"
+              disabled={isJobRunning}
               onClick={async () => {
-                if (!running) {
-                  await onRun(agent.id);
+                if (!isRunning) {
+                  const jobId = await onRun(agent.id);
+                  if (jobId) poller.start(jobId);
+                  setRunning(true);
+                } else {
+                  setRunning(false);
+                  poller.reset();
                 }
-                setRunning(!running);
               }}
             >
-              {running ? (
+              {isJobRunning ? (
+                <><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Running</>
+              ) : isRunning ? (
                 <><Pause className="h-3.5 w-3.5" aria-hidden="true" /> Pause</>
               ) : (
                 <><Play className="h-3.5 w-3.5" aria-hidden="true" /> Start</>
@@ -332,10 +546,13 @@ function AgentDetailPanel({
   );
 }
 
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
 export default function AgentsPage() {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [agents, setAgents] = useState<typeof mockAgents>([]);
   const [token, setToken] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -345,14 +562,19 @@ export default function AgentsPage() {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000);
   }, []);
 
+  // Auth + workspace
   useEffect(() => {
-    if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') {
-      setToken('demo-token');
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === "true") {
+      setToken("demo-token");
+      setWorkspaceId("demo-workspace-1");
       return;
     }
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) setToken(session.access_token);
+      if (session) {
+        setToken(session.access_token);
+        setWorkspaceId(session.user.user_metadata?.workspace_id ?? null);
+      }
     });
   }, []);
 
@@ -364,10 +586,13 @@ export default function AgentsPage() {
     workflow: (a.workflow ?? []) as Agent["workflow"],
   });
 
-  // Initial fetch from API
+  // Initial fetch from API — use mock data in demo mode
   useEffect(() => {
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === "true") {
+      setAgents(mockAgents);
+      return;
+    }
     if (!token) return;
-    if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') return;
     fetch(
       `${process.env.NEXT_PUBLIC_FASTAPI_URL || "http://localhost:8000"}/agents`,
       { headers: { Authorization: `Bearer ${token}` } }
@@ -379,7 +604,7 @@ export default function AgentsPage() {
       .catch(() => {});
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll /agents every 5s if any agent is processing
+  // Poll /agents every 5s while any agent is processing
   const pollAgents = useCallback(async () => {
     if (!token) return;
     try {
@@ -394,7 +619,7 @@ export default function AgentsPage() {
     } catch {
       // silently ignore polling failures
     }
-  }, [token]);
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const hasProcessing = agents.some((a) => a.status === "processing");
@@ -408,16 +633,23 @@ export default function AgentsPage() {
     };
   }, [agents, pollAgents]);
 
-  const handleRun = useCallback(async (agentId: string) => {
-    if (!token) return;
+  /**
+   * Trigger an agent run and return the job_id for the card's poller.
+   * Also marks the agent locally as processing.
+   */
+  const handleRun = useCallback(async (agentId: string): Promise<string | null> => {
+    if (!token) return null;
     try {
       const result = await apiClient.triggerAgent(agentId, token);
-      const jobId = result?.job_id ?? result?.id ?? "unknown";
+      const jobId: string = result?.job_id ?? result?.id ?? "unknown";
       addToast(`Agent started — job ${jobId}`, "success");
-      // Mark as processing
-      setAgents((prev) => prev.map((a) => a.id === agentId ? { ...a, status: "processing" as const } : a));
+      setAgents((prev) =>
+        prev.map((a) => a.id === agentId ? { ...a, status: "processing" as const } : a)
+      );
+      return jobId;
     } catch {
       addToast("Failed to start agent — check API connection", "error");
+      return null;
     }
   }, [token, addToast]);
 
@@ -489,7 +721,13 @@ export default function AgentsPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3" role="list" aria-label="AI Agents">
         {agents.map((agent) => (
           <div key={agent.id} role="listitem">
-            <AgentCard agent={agent} onSelect={() => setSelectedAgent(agent)} />
+            <AgentCard
+              agent={agent}
+              onSelect={() => setSelectedAgent(agent)}
+              token={token}
+              workspaceId={workspaceId}
+              onRun={handleRun}
+            />
           </div>
         ))}
       </div>
@@ -506,6 +744,7 @@ export default function AgentsPage() {
             agent={selectedAgent}
             onClose={() => setSelectedAgent(null)}
             token={token}
+            workspaceId={workspaceId}
             onRun={handleRun}
           />
         </>
