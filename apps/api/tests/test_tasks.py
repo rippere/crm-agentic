@@ -22,6 +22,8 @@ def _fake_task(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
     task.due_date = kwargs.get("due_date", None)
     task.message_id = kwargs.get("message_id", None)
     task.contact_id = kwargs.get("contact_id", None)
+    task.project_id = kwargs.get("project_id", None)
+    task.updated_at = kwargs.get("updated_at", None)
     return task
 
 

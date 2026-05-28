@@ -28,5 +28,13 @@ Phase 4 — Sales Agent Intelligence + PM Feature Polish
 Phase 4 complete. All agent intelligence + PM feature polish tasks done.
 
 ## Blockers
-- Supabase credentials not set in this environment (# TODO: add real credentials in .env.local) — code reads from env vars correctly but no live DB available for integration testing
-- Anthropic API key not set — Claude-based services (extraction, clarity, sentiment, email composer) require real key for integration testing; unit tests are fully mocked
+- No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
+- Local DATABASE_URL points to localhost:5433 (Docker Postgres) — /health returns `degraded` locally unless docker-compose is running. Supabase production credentials ARE present in apps/api/.env and apps/web/.env.local.
+- SLACK_SIGNING_SECRET and HUNTER_API_KEY not set — Slack HITL signature verification is skipped in dev (documented behavior); Hunter enrichment is optional.
+
+## Resolved (previously listed as blockers)
+- [2026-05-28] Supabase credentials confirmed present in apps/api/.env and apps/web/.env.local (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET, NEXT_PUBLIC_SUPABASE_ANON_KEY all set)
+- [2026-05-28] Anthropic API key confirmed present in both .env files
+- [2026-05-28] Google OAuth credentials (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) confirmed present
+- [2026-05-28] Slack OAuth credentials (SLACK_CLIENT_ID, SLACK_CLIENT_SECRET) confirmed present
+- [2026-05-28] Smoke test: 295/295 tests pass; TypeScript clean; FastAPI starts and serves 52 routes; /health responds (degraded only due to local Docker DB not running)
