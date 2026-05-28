@@ -15,6 +15,7 @@ import {
 import type { WorkspaceMode } from "@/lib/types";
 import { useRouter } from "next/navigation";
 import { useRole } from "@/hooks/useRole";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
 
 const MODE_OPTIONS: { value: WorkspaceMode; label: string; description: string; icon: React.ElementType }[] = [
   { value: "sales", label: "Sales",              description: "CRM, pipeline, deal tracking",     icon: TrendingUp  },
@@ -36,6 +37,7 @@ export default function SettingsPage() {
   const [inviting, setInviting] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const addToast = (message: string, type: Toast["type"]) => {
     const id = Date.now();
@@ -246,11 +248,34 @@ export default function SettingsPage() {
           Deleting your workspace permanently removes all contacts, deals, messages, and agents.
           This action cannot be undone.
         </p>
-        <Button variant="danger" size="sm" disabled>
+        <Button
+          variant="danger"
+          size="sm"
+          disabled={!isAdmin}
+          onClick={() => setDeleteConfirmOpen(true)}
+        >
           Delete Workspace
         </Button>
-        <p className="text-[10px] text-zinc-600 mt-2 font-mono">Contact support to delete your workspace.</p>
+        {!isAdmin && (
+          <p className="text-[10px] text-zinc-600 mt-2 font-mono">Admin role required to delete workspace.</p>
+        )}
       </Card>
+
+      {/* Delete workspace confirmation modal */}
+      {deleteConfirmOpen && (
+        <ConfirmDialog
+          title="Delete this workspace?"
+          description="This will permanently delete all contacts, deals, messages, tasks, and agents. This action cannot be undone."
+          confirmText={workspaceName || "delete"}
+          actionLabel="Delete Workspace"
+          variant="danger"
+          onConfirm={async () => {
+            setDeleteConfirmOpen(false);
+            addToast("Workspace deletion requested — contact support to complete.", "error");
+          }}
+          onClose={() => setDeleteConfirmOpen(false)}
+        />
+      )}
     </div>
   );
 }
