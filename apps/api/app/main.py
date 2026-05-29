@@ -50,6 +50,15 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("event=startup version=0.1.0")
+    # Slack HITL signature verification fails closed when SLACK_SIGNING_SECRET is
+    # unset, which means POST /slack/interactions will 403 every request. Warn
+    # loudly at startup so a missing secret is visible rather than silently
+    # breaking all Slack approvals.
+    if not settings.SLACK_SIGNING_SECRET:
+        logger.warning(
+            "event=startup_check check=slack_signing_secret status=missing "
+            "detail=POST_/slack/interactions_will_reject_all_requests_until_set"
+        )
     yield
     logger.info("event=shutdown")
 
