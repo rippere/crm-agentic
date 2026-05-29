@@ -38,9 +38,17 @@ router = APIRouter()
 
 
 def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool:
+    # Fail closed: without a configured signing secret we cannot authenticate the
+    # request, so we must reject it. (A forged POST could otherwise send email via
+    # the victim's Gmail connector.) Prod sets SLACK_SIGNING_SECRET.
     if not settings.SLACK_SIGNING_SECRET:
-        return True  # Skip verification if not configured
-    if abs(time.time() - float(timestamp)) > 300:
+        return False
+    if not signature or not timestamp:
+        return False
+    try:
+        if abs(time.time() - float(timestamp)) > 300:
+            return False
+    except (TypeError, ValueError):
         return False
     base = f"v0:{timestamp}:{body.decode()}"
     expected = "v0=" + hmac.new(
@@ -214,6 +222,15 @@ async def slack_interactions(
     hitl_id: str = action.get("value", "")
 
     if action_id not in ("hitl_approve", "hitl_dismiss"):
+        return {"ok": True}
+
+    # hitl_id is server-minted as str(uuid.uuid4()) (canonical dashed form) and
+    # stored verbatim in the event meta JSON. Re-parse it to the same canonical
+    # form so a forged value can never smuggle LIKE wildcards ('%' / '_') into the
+    # lookup below. Canonical UUID output contains only hex digits and dashes.
+    try:
+        hitl_id = str(uuid.UUID(hitl_id))
+    except (ValueError, AttributeError, TypeError):
         return {"ok": True}
 
     # response_url lets us update the original Slack message after we ack

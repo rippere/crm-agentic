@@ -20,14 +20,16 @@ from tests.conftest import _make_scalar_result
 # ---------------------------------------------------------------------------
 
 
-def test_verify_signature_no_signing_secret_returns_true():
+def test_verify_signature_no_signing_secret_returns_false():
+    """Fail-closed: with no signing secret configured, verification must reject
+    (not allow) requests, so the endpoint 403s instead of accepting forged POSTs."""
     from app.routers.slack_interactions import _verify_slack_signature
 
     with patch("app.routers.slack_interactions.settings") as mock_settings:
         mock_settings.SLACK_SIGNING_SECRET = ""
         result = _verify_slack_signature(b"body", "12345", "v0=whatever")
 
-    assert result is True
+    assert result is False
 
 
 def test_verify_signature_stale_timestamp_returns_false():
