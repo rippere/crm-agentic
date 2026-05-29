@@ -136,7 +136,7 @@ export default function CommandPalette({ onClose }: CommandPaletteProps) {
               placeholder="Ask anything about your deals, contacts, or pipeline…"
               className={cn(
                 "w-full px-5 py-4 resize-none bg-transparent border-none outline-none",
-                "text-zinc-100 text-sm leading-relaxed",
+                "text-zinc-100 text-base sm:text-sm leading-relaxed",
                 "placeholder:text-zinc-600 min-h-[60px]"
               )}
               style={{ overflow: "hidden" }}

@@ -245,16 +245,17 @@ function AgentCard({ agent, onSelect, token, workspaceId, onRun }: AgentCardProp
     <Card hover glow className="flex flex-col gap-4 cursor-pointer" onClick={onSelect}>
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl border flex-shrink-0", typeCfg)}>
             {agentTypeIcon[agent.type]}
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-zinc-100">{agent.name}</p>
+            <p className="text-sm font-semibold text-zinc-100 truncate">{agent.name}</p>
             <p className="text-[10px] text-zinc-500 font-mono truncate">{agent.model}</p>
           </div>
         </div>
         <Badge
+          className="flex-shrink-0"
           variant={
             agent.status === "active"
               ? "emerald"
@@ -391,7 +392,7 @@ function AgentDetailPanel({
 
   return (
     <aside
-      className="fixed right-0 top-0 h-full w-[520px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto"
+      className="fixed right-0 top-0 h-full w-full max-w-[520px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto"
       aria-label={`${agent.name} configuration`}
     >
       {/* Header */}
@@ -597,11 +598,14 @@ export default function AgentsPage() {
       `${process.env.NEXT_PUBLIC_FASTAPI_URL || "http://localhost:8000"}/agents`,
       { headers: { Authorization: `Bearer ${token}` } }
     )
-      .then((r) => r.ok ? r.json() : null)
+      .then((r) => {
+        if (!r.ok) { console.error(`[agents] GET /agents → ${r.status}`); return null; }
+        return r.json();
+      })
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) setAgents(data.map(normalizeAgent));
       })
-      .catch(() => {});
+      .catch((err) => console.error("[agents] failed to load agents (network/CORS):", err));
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll /agents every 5s while any agent is processing
@@ -660,7 +664,7 @@ export default function AgentsPage() {
     : "0.0";
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       {/* Toast stack */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
         {toasts.map((t) => (
@@ -685,7 +689,7 @@ export default function AgentsPage() {
       />
 
       {/* Summary */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Card className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex-shrink-0">
             <Zap className="h-4 w-4 text-emerald-400" aria-hidden="true" />

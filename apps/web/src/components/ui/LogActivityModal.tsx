@@ -106,7 +106,7 @@ export default function LogActivityModal({
             }}
             placeholder={placeholders[type]}
             rows={4}
-            className="w-full resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-indigo-500/50 transition-colors leading-relaxed"
+            className="w-full resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-base sm:text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-indigo-500/50 transition-colors leading-relaxed"
           />
 
           {/* Date hint */}

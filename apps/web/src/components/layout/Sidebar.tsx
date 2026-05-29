@@ -10,15 +10,19 @@ import type { AgentRow } from "@/lib/supabase";
 import {
   LayoutDashboard, Users, KanbanSquare, Bot, Settings,
   Zap, Inbox, CheckSquare, FolderOpen, Plug, Search,
-  PhoneCall, ChevronsUpDown, LogOut, BarChart2,
+  PhoneCall, ChevronsUpDown, LogOut, BarChart2, X,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 
 /* ─── Framer variants ─── */
+/* Desktop: open/closed toggle the hover-rail width. Mobile: the drawer is
+   always full-width with labels shown; only its x-offset slides it in/out. */
 
 const sidebarVariants = {
-  open:   { width: "15rem"  },
-  closed: { width: "3.5rem" },
+  open:         { width: "15rem",  x: 0 },
+  closed:       { width: "3.5rem", x: 0 },
+  mobileOpen:   { width: "16rem",  x: 0 },
+  mobileClosed: { width: "16rem",  x: "-100%" },
 };
 
 const transitionProps = {
@@ -28,8 +32,10 @@ const transitionProps = {
 };
 
 const labelVariants = {
-  open:   { opacity: 1, x: 0,  display: "block", transition: { delay: 0.05 } },
-  closed: { opacity: 0, x: -8, transitionEnd: { display: "none" } },
+  open:         { opacity: 1, x: 0,  display: "block", transition: { delay: 0.05 } },
+  closed:       { opacity: 0, x: -8, transitionEnd: { display: "none" } },
+  mobileOpen:   { opacity: 1, x: 0,  display: "block" },
+  mobileClosed: { opacity: 1, x: 0,  display: "block" },
 };
 
 /* ─── Nav structure ─── */
@@ -95,6 +101,9 @@ interface SidebarProps {
   isCollapsed: boolean;
   onExpand: () => void;
   onCollapse: () => void;
+  isMobile?: boolean;
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 export default function Sidebar({
@@ -105,6 +114,9 @@ export default function Sidebar({
   isCollapsed,
   onExpand,
   onCollapse,
+  isMobile = false,
+  mobileOpen = false,
+  onMobileClose,
 }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -146,16 +158,25 @@ export default function Sidebar({
   const initials = getInitials(userName, userEmail);
   const activeCount = nexusAgents.filter((a) => a.status === "active").length;
 
+  // Single source of truth for the animation state across aside + child labels
+  const animateState = isMobile
+    ? mobileOpen ? "mobileOpen" : "mobileClosed"
+    : isCollapsed ? "closed" : "open";
+
   return (
     <motion.aside
-      className="fixed left-0 top-0 h-full z-30 flex flex-col border-r border-zinc-800/50 overflow-hidden"
+      className={cn(
+        "fixed left-0 top-0 h-full flex flex-col border-r border-zinc-800/50 overflow-hidden",
+        isMobile ? "z-50 shadow-2xl shadow-black/50" : "z-30"
+      )}
       style={{ backgroundColor: "#08080C" }}
-      initial="closed"
-      animate={isCollapsed ? "closed" : "open"}
+      initial={false}
+      animate={animateState}
       variants={sidebarVariants}
       transition={transitionProps}
-      onMouseEnter={onExpand}
-      onMouseLeave={onCollapse}
+      onMouseEnter={isMobile ? undefined : onExpand}
+      onMouseLeave={isMobile ? undefined : onCollapse}
+      aria-hidden={isMobile && !mobileOpen}
     >
       {/* Logo */}
       <div className="flex h-[54px] shrink-0 items-center gap-3 px-3 border-b border-zinc-800/50">
@@ -169,20 +190,30 @@ export default function Sidebar({
           <p className="text-sm font-semibold text-zinc-100 leading-none tracking-tight">NovaCRM</p>
           <p className="text-[10px] text-zinc-500 mt-0.5 font-mono">Agentic Intelligence</p>
         </motion.div>
-        <motion.div
-          variants={labelVariants}
-          className="flex items-center gap-1 flex-shrink-0"
-          title="All systems operational"
-        >
-          <span className="h-1.5 w-1.5 rounded-full bg-[#00C896] agent-pulse" />
-          <span className="text-[10px] font-mono font-semibold text-[#00C896] tracking-widest">LIVE</span>
-        </motion.div>
+        {isMobile ? (
+          <button
+            onClick={onMobileClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 transition-colors cursor-pointer"
+            aria-label="Close navigation menu"
+          >
+            <X className="h-5 w-5" aria-hidden="true" />
+          </button>
+        ) : (
+          <motion.div
+            variants={labelVariants}
+            className="flex items-center gap-1 flex-shrink-0"
+            title="All systems operational"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-[#00C896] agent-pulse" />
+            <span className="text-[10px] font-mono font-semibold text-[#00C896] tracking-widest">LIVE</span>
+          </motion.div>
+        )}
       </div>
 
       {/* Search / ⌘K */}
       <div className="px-2 pt-3 pb-1">
         <button
-          onClick={onSearchClick}
+          onClick={() => { onSearchClick?.(); onMobileClose?.(); }}
           className="group w-full flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-2 text-sm text-zinc-600 hover:text-zinc-400 hover:border-zinc-700 transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500"
           aria-label="Open command palette (⌘K)"
         >
@@ -221,6 +252,7 @@ export default function Sidebar({
                       <Link
                         key={href}
                         href={href}
+                        onClick={onMobileClose}
                         className={cn(
                           "group relative flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium transition-all duration-150 whitespace-nowrap",
                           active
@@ -299,7 +331,7 @@ export default function Sidebar({
 
         <motion.div
           initial={false}
-          animate={isCollapsed ? { opacity: 1 } : { opacity: 0 }}
+          animate={!isMobile && isCollapsed ? { opacity: 1 } : { opacity: 0 }}
           transition={{ duration: 0.1 }}
           className="space-y-1.5 absolute pointer-events-none"
           aria-hidden="true"

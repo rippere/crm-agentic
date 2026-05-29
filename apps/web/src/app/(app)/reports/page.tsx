@@ -124,7 +124,7 @@ export default function ReportsPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-col gap-6 p-6">
+      <div className="flex flex-col gap-6 p-4 md:p-6">
         <Header title="Reports" subtitle="Pipeline analytics and win rate" />
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           {[1, 2, 3, 4].map((i) => <div key={i} className="h-24 rounded-xl bg-zinc-800/50 animate-pulse" />)}
@@ -134,7 +134,7 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header title="Reports" subtitle={`${deals.length} total deals · win rate ${stats.winRate}%`} />
 
       {/* KPI row */}

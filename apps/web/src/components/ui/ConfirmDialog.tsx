@@ -88,7 +88,7 @@ export default function ConfirmDialog({
                 onKeyDown={(e) => e.key === "Enter" && handleConfirm()}
                 placeholder={confirmText}
                 autoFocus
-                className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-zinc-600 transition-colors"
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-base sm:text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-zinc-600 transition-colors"
               />
             </div>
           )}

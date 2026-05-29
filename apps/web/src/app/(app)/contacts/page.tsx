@@ -441,7 +441,7 @@ function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector
   return (
     <>
     <aside
-      className="fixed right-0 top-0 h-full w-96 border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto animate-slide-up"
+      className="fixed right-0 top-0 h-full w-full max-w-96 border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto animate-slide-up"
       aria-label={`Contact details for ${contact.name}`}
     >
       <div className="sticky top-0 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur z-10">
@@ -899,7 +899,7 @@ function NewContactModal({ onClose, onCreate }: { onClose: () => void; onCreate:
                 value={form[key]}
                 onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
                 placeholder={placeholder}
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-base sm:text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
               />
             </div>
           ))}
@@ -908,7 +908,7 @@ function NewContactModal({ onClose, onCreate }: { onClose: () => void; onCreate:
             <select
               value={form.status}
               onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as ContactStatus }))}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-sm text-zinc-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-base sm:text-sm text-zinc-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
             >
               {(["lead", "prospect", "customer", "churned"] as ContactStatus[]).map((s) => (
                 <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
@@ -1052,7 +1052,7 @@ export default function ContactsPage() {
   }, [contacts, search, filterStatus, filterScore]);
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header
         title="Contacts"
         subtitle={`${contacts.length} total · AI-classified`}
@@ -1099,7 +1099,7 @@ export default function ContactsPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className={cn(
-              "w-full rounded-xl border bg-zinc-900 py-2 pl-9 pr-4 text-sm text-zinc-300 placeholder-zinc-600 outline-none transition-all duration-200",
+              "w-full rounded-xl border bg-zinc-900 py-2 pl-9 pr-4 text-base sm:text-sm text-zinc-300 placeholder-zinc-600 outline-none transition-all duration-200",
               semanticMode
                 ? "border-indigo-500/50 focus:border-indigo-400/70"
                 : "border-zinc-800 focus:border-indigo-500/50 focus:shadow-glow-sm"

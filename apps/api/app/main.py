@@ -64,16 +64,24 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# CORS — allow Next.js dev + configured frontend origin
+# CORS — allow Next.js dev + the configured frontend origin(s).
+# Explicit allowlist = FRONTEND_URL + comma-separated CORS_ORIGINS (apex domain,
+# old deploy URL, etc.) + localhost. An optional CORS_ORIGIN_REGEX covers whole
+# domain families (e.g. www + apex) so a domain cutover doesn't need a code change.
+_extra_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 origins = [
     settings.FRONTEND_URL,
+    *_extra_origins,
     "http://localhost:3000",
     "http://localhost:3001",
 ]
+# De-duplicate while preserving order, drop empties.
+origins = list(dict.fromkeys(o for o in origins if o))
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

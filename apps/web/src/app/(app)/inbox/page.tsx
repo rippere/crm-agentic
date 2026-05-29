@@ -96,7 +96,7 @@ function MessageDrawer({
 
   return (
     <aside
-      className="fixed right-0 top-0 h-full w-[520px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto"
+      className="fixed right-0 top-0 h-full w-full max-w-[520px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto"
       aria-label="Message details"
     >
       <div className="sticky top-0 flex items-center justify-between border-b border-zinc-800 bg-zinc-950/90 backdrop-blur px-5 py-4">
@@ -248,7 +248,7 @@ export default function InboxPage() {
   }, [messages, search]);
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header
         title="Inbox"
         subtitle={`${messages.length} messages ingested`}
@@ -262,7 +262,7 @@ export default function InboxPage() {
           placeholder="Search by sender or subject…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full rounded-xl border border-zinc-800 bg-zinc-900 py-2 pl-9 pr-4 text-sm text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50 transition-all"
+          className="w-full rounded-xl border border-zinc-800 bg-zinc-900 py-2 pl-9 pr-4 text-base sm:text-sm text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50 transition-all"
         />
       </div>
 

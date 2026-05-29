@@ -175,7 +175,7 @@ export default function OnboardingPage() {
                   placeholder="Acme Corp"
                   required
                   autoFocus
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-base sm:text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
                 />
                 {slug && (
                   <p className="mt-1.5 text-[11px] text-zinc-600 font-mono">slug: <span className="text-zinc-500">{slug}</span></p>

@@ -185,7 +185,7 @@ function NewProjectModal({ onClose, onCreate }: { onClose: () => void; onCreate:
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Q3 Enterprise Expansion"
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+              className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-base sm:text-sm text-zinc-100 placeholder-zinc-600 focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
             />
           </div>
 
@@ -196,7 +196,7 @@ function NewProjectModal({ onClose, onCreate }: { onClose: () => void; onCreate:
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional — what is this project about?"
               rows={3}
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30 resize-none"
+              className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-base sm:text-sm text-zinc-100 placeholder-zinc-600 focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30 resize-none"
             />
           </div>
 
@@ -205,7 +205,7 @@ function NewProjectModal({ onClose, onCreate }: { onClose: () => void; onCreate:
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value)}
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+              className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-base sm:text-sm text-zinc-100 focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
             >
               <option value="active">Active</option>
               <option value="completed">Completed</option>
@@ -308,7 +308,7 @@ export default function ProjectsPage() {
   const totalCount = manualProjects.length + autoProjects.length;
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       <div className="flex items-center justify-between">
         <Header title="Projects" subtitle={`${totalCount} project${totalCount !== 1 ? "s" : ""}`} />
         <button
