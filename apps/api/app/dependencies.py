@@ -41,10 +41,14 @@ async def get_current_user(
     user = result.scalar_one_or_none()
 
     if user is None:
-        # Auto-provision: pull workspace_id + email from JWT user_metadata
+        # Auto-provision: pull workspace_id + email from the JWT. workspace_id is read from
+        # server-only app_metadata (not user-writable), falling back to user_metadata for
+        # legacy users not yet migrated by the one-time app_metadata backfill.
+        from app.routers.auth import _read_bound_workspace_id
+
         user_meta: dict = payload.get("user_metadata", {})
         email: str | None = payload.get("email") or user_meta.get("email")
-        workspace_id_str: str | None = user_meta.get("workspace_id")
+        workspace_id_str: str | None = _read_bound_workspace_id(payload)
 
         workspace_id: uuid.UUID | None = None
         if workspace_id_str:
