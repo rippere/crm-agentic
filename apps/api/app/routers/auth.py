@@ -31,16 +31,16 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/verify", auto_error=True)
 def _read_bound_workspace_id(payload: dict) -> str | None:
     """Read the server-bound workspace_id from a Supabase JWT.
 
-    Prefers server-only app_metadata (not writable by the user via auth.updateUser),
-    falling back to user_metadata for legacy users not yet migrated by the one-time
-    app_metadata backfill. Once all users are migrated the fallback is dead code.
+    ONLY reads server-only app_metadata, which is NOT writable by the user via
+    supabase.auth.updateUser. We deliberately do NOT fall back to user_metadata:
+    a forgeable user_metadata.workspace_id let an attacker bind a brand-new account
+    to an existing foreign workspace (cross-tenant takeover). Existing users are
+    migrated into app_metadata by the one-time backfill run at the WS-B deploy
+    cutover; a user whose JWT lacks app_metadata is provisioned a fresh workspace
+    rather than bound to any user-supplied id.
     """
     app_meta = payload.get("app_metadata") or {}
-    ws_id = app_meta.get("workspace_id")
-    if ws_id:
-        return ws_id
-    user_meta = payload.get("user_metadata") or {}
-    return user_meta.get("workspace_id")
+    return app_meta.get("workspace_id") or None
 
 
 async def _sync_workspace_metadata(supabase_uid: str, workspace_id: str) -> None:
