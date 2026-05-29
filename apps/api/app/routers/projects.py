@@ -33,6 +33,7 @@ class ProjectUpdate(BaseModel):
 class ProjectResponse(BaseModel):
     id: uuid_mod.UUID
     workspace_id: uuid_mod.UUID
+    external_id: str | None = None
     name: str
     description: str | None
     status: str
@@ -43,10 +44,17 @@ class ProjectResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ProjectUpsert(BaseModel):
+    name: str
+    description: str | None = None
+    status: str = "active"
+
+
 def _to_response(p: Project) -> ProjectResponse:
     return ProjectResponse(
         id=p.id,
         workspace_id=p.workspace_id,
+        external_id=p.external_id,
         name=p.name,
         description=p.description,
         status=p.status,
@@ -135,6 +143,45 @@ async def update_project(
     if body.contact_id is not None:
         project.contact_id = body.contact_id  # type: ignore[assignment]
     db.add(project)
+    await db.commit()
+    await db.refresh(project)
+    return _to_response(project)
+
+
+@router.put("/workspaces/{workspace_id}/projects/by-external/{external_id}", response_model=ProjectResponse)
+async def upsert_project_by_external(
+    workspace_id: uuid_mod.UUID,
+    external_id: str,
+    body: ProjectUpsert,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ProjectResponse:
+    """Idempotent create-or-update keyed on (workspace_id, external_id).
+
+    Lets the sync bridge mirror each vault project into NovaCRM once, so tasks
+    from all active projects can be grouped by project_id within the single workspace.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Project).where(Project.workspace_id == workspace_id, Project.external_id == external_id)
+    )
+    project = result.scalar_one_or_none()
+    if project is None:
+        project = Project(
+            workspace_id=workspace_id,
+            external_id=external_id,
+            name=body.name,
+            description=body.description,
+            status=body.status,
+        )
+        db.add(project)
+    else:
+        project.name = body.name  # type: ignore[assignment]
+        project.description = body.description  # type: ignore[assignment]
+        project.status = body.status  # type: ignore[assignment]
+
     await db.commit()
     await db.refresh(project)
     return _to_response(project)
