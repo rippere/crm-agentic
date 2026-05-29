@@ -17,6 +17,7 @@ router = APIRouter()
 class TaskResponse(BaseModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
+    external_id: str | None = None
     message_id: uuid.UUID | None
     contact_id: uuid.UUID | None
     project_id: uuid.UUID | None
@@ -51,6 +52,7 @@ def _to_response(t: Task) -> TaskResponse:
     return TaskResponse(
         id=t.id,
         workspace_id=t.workspace_id,
+        external_id=t.external_id,
         message_id=t.message_id,
         contact_id=t.contact_id,
         project_id=t.project_id,
@@ -100,6 +102,57 @@ async def create_task(
         project_id=body.project_id,
     )
     db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return _to_response(task)
+
+
+class TaskUpsert(BaseModel):
+    title: str
+    description: str = ""
+    status: str = "open"
+    due_date: date | None = None
+    project_id: uuid.UUID | None = None
+
+
+@router.put("/workspaces/{workspace_id}/tasks/by-external/{external_id}", response_model=TaskResponse)
+async def upsert_task_by_external(
+    workspace_id: uuid.UUID,
+    external_id: str,
+    body: TaskUpsert,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TaskResponse:
+    """Idempotent create-or-update keyed on (workspace_id, external_id).
+
+    Entry point for the vault->NovaCRM task sync bridge: re-running the sync with
+    the same vault uid updates the existing task instead of creating a duplicate.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Task).where(Task.workspace_id == workspace_id, Task.external_id == external_id)
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        task = Task(
+            workspace_id=workspace_id,
+            external_id=external_id,
+            title=body.title,
+            description=body.description,
+            status=body.status,
+            due_date=body.due_date,
+            project_id=body.project_id,
+        )
+        db.add(task)
+    else:
+        task.title = body.title  # type: ignore[assignment]
+        task.description = body.description  # type: ignore[assignment]
+        task.status = body.status  # type: ignore[assignment]
+        task.due_date = body.due_date  # type: ignore[assignment]
+        task.project_id = body.project_id  # type: ignore[assignment]
+
     await db.commit()
     await db.refresh(task)
     return _to_response(task)
