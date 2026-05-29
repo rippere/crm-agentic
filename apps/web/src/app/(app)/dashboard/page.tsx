@@ -376,7 +376,7 @@ export default function DashboardPage() {
   }, [pollWorkspaceId, pollToken]);
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header
         title="Dashboard"
         subtitle={`Real-time overview · ${activeAgents.length} agents active`}

@@ -84,7 +84,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-2xl">
+    <div className="flex flex-col gap-6 p-4 md:p-6 max-w-2xl">
       {/* Toast */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
         {toasts.map((t) => (
@@ -120,7 +120,7 @@ export default function SettingsPage() {
               value={workspaceName}
               onChange={(e) => setWorkspaceName(e.target.value)}
               placeholder="Acme Corp"
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-base sm:text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
             />
           </div>
 

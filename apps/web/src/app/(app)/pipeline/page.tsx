@@ -153,7 +153,7 @@ function DealDetailPanel({ deal, onClose, onStageChange }: { deal: Deal; onClose
   };
 
   return (
-    <aside className="fixed right-0 top-0 h-full w-[400px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto">
+    <aside className="fixed right-0 top-0 h-full w-full max-w-[400px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto">
       <div className="sticky top-0 flex items-center justify-between border-b border-zinc-800 bg-zinc-950/90 backdrop-blur px-5 py-4">
         <div>
           <p className="text-sm font-semibold text-zinc-100 truncate">{deal.title}</p>
@@ -292,7 +292,7 @@ function NewDealModal({ defaultStage, onClose, onCreate }: { defaultStage: DealS
                 value={form[key as keyof NewDealForm]}
                 onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
                 placeholder={placeholder}
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-base sm:text-sm text-zinc-100 placeholder-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
               />
             </div>
           ))}
@@ -301,7 +301,7 @@ function NewDealModal({ defaultStage, onClose, onCreate }: { defaultStage: DealS
             <select
               value={form.stage}
               onChange={(e) => setForm((f) => ({ ...f, stage: e.target.value as DealStage }))}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-sm text-zinc-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-2.5 text-base sm:text-sm text-zinc-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
             >
               {dealStageOrder.filter((s) => s !== "closed_won" && s !== "closed_lost").map((s) => (
                 <option key={s} value={s}>{stageConfig[s].label}</option>
@@ -376,7 +376,7 @@ export default function PipelinePage() {
   }, [createDeal]);
 
   return (
-    <div className="flex flex-col gap-6 p-6 min-h-screen">
+    <div className="flex flex-col gap-6 p-4 md:p-6 min-h-screen">
       <Header title="Pipeline" subtitle={`${deals.length} deals · ML win prediction active`} />
 
       {/* Pipeline Optimizer Suggestions */}

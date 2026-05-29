@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str
     REDIS_URL: str = "redis://localhost:6379/0"
     FRONTEND_URL: str = "http://localhost:3000"
+    # Comma-separated additional allowed CORS origins (e.g. apex domain, old deploy URL).
+    CORS_ORIGINS: str = ""
+    # Optional regex for allowed origins (e.g. r"https://(.*\.)?riphere\.com").
+    CORS_ORIGIN_REGEX: str = ""
     API_URL: str = "http://localhost:8000"
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

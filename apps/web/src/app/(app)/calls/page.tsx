@@ -142,7 +142,7 @@ function UploadModal({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Q2 Review with TechCorp"
-              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50"
+              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-base sm:text-sm text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50"
             />
           </div>
 
@@ -154,7 +154,7 @@ function UploadModal({
               value={participants}
               onChange={(e) => setParticipants(e.target.value)}
               placeholder="e.g. Sarah Chen, Marcus Rivera"
-              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50"
+              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-base sm:text-sm text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50"
             />
           </div>
 
@@ -178,7 +178,7 @@ function CallDrawer({ call, onClose }: { call: CallRecord; onClose: () => void }
   const [tab, setTab] = useState<"summary" | "transcript">("summary");
 
   return (
-    <aside className="fixed right-0 top-0 h-full w-[440px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto">
+    <aside className="fixed right-0 top-0 h-full w-full max-w-[440px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto">
       {/* Header */}
       <div className="sticky top-0 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur z-10">
         <div className="flex items-center justify-between px-5 py-4">
@@ -341,7 +341,7 @@ export default function CallsPage() {
   const processingCount = calls.filter((c) => c.processing).length;
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header
         title="Calls"
         subtitle={`${calls.length} recording${calls.length !== 1 ? "s" : ""} · Whisper + Claude extraction`}
@@ -431,7 +431,7 @@ export default function CallsPage() {
                 {/* Delete */}
                 <button
                   onClick={(e) => { e.stopPropagation(); handleDelete(call.id); }}
-                  className="flex-shrink-0 p-1 text-zinc-700 hover:text-rose-400 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
+                  className="flex-shrink-0 p-1 text-zinc-700 hover:text-rose-400 transition-colors cursor-pointer opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                   aria-label="Delete call"
                 >
                   <Trash2 className="h-3.5 w-3.5" />

@@ -306,7 +306,7 @@ function TasksPageInner() {
   const totalVisible = Object.values(tasksByColumn).flat().length;
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header
         title="Tasks"
         subtitle={contactFilter ? `Filtered by contact · ${totalVisible} tasks` : `${tasks.length} total tasks`}
@@ -347,14 +347,14 @@ function TasksPageInner() {
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
             autoFocus
-            className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-indigo-500/50"
+            className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-base sm:text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-indigo-500/50"
           />
           <textarea
             placeholder="Description (optional)…"
             value={newDesc}
             onChange={(e) => setNewDesc(e.target.value)}
             rows={2}
-            className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-indigo-500/50 resize-none"
+            className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-base sm:text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-indigo-500/50 resize-none"
           />
           <div className="flex gap-2">
             <Button variant="primary" size="sm" onClick={handleCreate} disabled={creating || !newTitle.trim()}>

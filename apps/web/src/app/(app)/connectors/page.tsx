@@ -170,7 +170,7 @@ function ConnectorsInner() {
   const connectedServices = new Set(connectors.map((c) => c.service));
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       {/* Toast stack */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
         {toasts.map((t) => (
@@ -300,7 +300,7 @@ function ConnectorsInner() {
 export default function ConnectorsPage() {
   return (
     <Suspense fallback={
-      <div className="flex flex-col gap-6 p-6">
+      <div className="flex flex-col gap-6 p-4 md:p-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[1, 2].map((i) => (
             <div key={i} className="h-48 rounded-2xl border border-zinc-800 bg-zinc-900 animate-pulse" />

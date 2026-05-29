@@ -80,7 +80,8 @@ async def create_workspace(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> WorkspaceResponse:
-    from app.routers.auth import _sync_workspace_metadata
+    from app.routers.auth import _DEFAULT_AGENTS, _sync_workspace_metadata
+    from app.models.agent import Agent
 
     ws_id = uuid.uuid4()
     ws = Workspace(id=ws_id, name=body.name, slug=body.slug, mode=body.mode)
@@ -89,6 +90,12 @@ async def create_workspace(
     # Bind user to the new workspace before commit so both land in one transaction
     current_user.workspace_id = ws_id  # type: ignore[assignment]
     current_user.role = "admin"  # type: ignore[assignment]
+
+    # Seed the default agent roster for the new workspace. Without this, workspaces
+    # created via the onboarding wizard (this path, not /auth/verify) had zero agents
+    # and the dashboard/agents page rendered empty for the user.
+    for spec in _DEFAULT_AGENTS:
+        db.add(Agent(workspace_id=ws_id, **spec))
 
     await db.commit()
     await db.refresh(ws)

@@ -70,19 +70,19 @@ export default function Header({ title, subtitle }: HeaderProps) {
   const badgeCount = seen ? 0 : events.length || (notifOpen ? 0 : 3);
 
   return (
-    <header className="sticky top-0 z-20 flex items-center gap-4 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-xl px-6 py-4">
+    <header className="sticky top-14 md:top-0 z-20 flex items-center gap-2 sm:gap-4 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-xl px-4 md:px-6 py-3 md:py-4">
       {/* Page title */}
       <div className="flex-1 min-w-0">
-        <h1 className="text-lg font-semibold text-zinc-100 truncate">{title}</h1>
+        <h1 className="text-base sm:text-lg font-semibold text-zinc-100 truncate">{title}</h1>
         {subtitle && (
           <p className="text-xs text-zinc-500 mt-0.5 truncate font-mono">{subtitle}</p>
         )}
       </div>
 
-      {/* Search bar */}
+      {/* Search bar — hidden on the smallest screens to avoid crowding the title */}
       <div
         className={cn(
-          "relative flex items-center gap-2 rounded-xl border bg-zinc-900 px-3 py-2 transition-all duration-200 w-64",
+          "relative hidden sm:flex items-center gap-2 rounded-xl border bg-zinc-900 px-3 py-2 transition-all duration-200 w-44 lg:w-64",
           searchFocused ? "border-indigo-500/50 shadow-glow-sm" : "border-zinc-800"
         )}
       >

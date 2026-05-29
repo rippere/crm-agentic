@@ -70,15 +70,27 @@ const FASTAPI_URL = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:800
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
 
 async function apiFetch(path: string, options: RequestInit = {}, token?: string) {
-  const res = await fetch(`${FASTAPI_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
-  })
-  if (!res.ok) throw new Error(`API error ${res.status}`)
+  let res: Response
+  try {
+    res = await fetch(`${FASTAPI_URL}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    })
+  } catch (err) {
+    // Network/CORS failure — fetch rejects with a TypeError and no status. Log it so
+    // silent breakage (e.g. the API's CORS allowlist missing the current origin after
+    // a domain change) is observable instead of vanishing into a caller's .catch().
+    console.error(`[api] ${options.method ?? 'GET'} ${FASTAPI_URL}${path} failed (network/CORS):`, err)
+    throw err
+  }
+  if (!res.ok) {
+    console.error(`[api] ${options.method ?? 'GET'} ${path} → ${res.status}`)
+    throw new Error(`API error ${res.status}`)
+  }
   return res.json()
 }
 

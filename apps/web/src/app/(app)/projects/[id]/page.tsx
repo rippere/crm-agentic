@@ -112,7 +112,7 @@ export default function ProjectDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-col gap-6 p-6">
+      <div className="flex flex-col gap-6 p-4 md:p-6">
         <div className="h-8 w-48 rounded-lg bg-zinc-800 animate-pulse" />
         <div className="h-32 rounded-2xl bg-zinc-900 animate-pulse" />
       </div>
@@ -131,7 +131,7 @@ export default function ProjectDetailPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       {/* Back + Header */}
       <div className="flex items-start gap-4">
         <button
@@ -205,7 +205,7 @@ export default function ProjectDetailPage() {
               value={newTaskTitle}
               onChange={(e) => setNewTaskTitle(e.target.value)}
               placeholder="Task title…"
-              className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+              className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-base sm:text-sm text-zinc-100 placeholder-zinc-600 focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
             />
             <button
               type="submit"
