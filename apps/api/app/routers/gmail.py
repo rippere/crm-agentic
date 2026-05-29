@@ -9,8 +9,6 @@ Endpoints:
 """
 from __future__ import annotations
 
-import base64
-import json
 import uuid as uuid_mod
 from urllib.parse import urlencode
 
@@ -27,6 +25,7 @@ from app.dependencies import get_current_user
 from app.models.connector import Connector
 from app.models.user import User
 from app.services.crypto import encrypt_token
+from app.services.oauth_state import build_state, verify_state
 
 router = APIRouter()
 
@@ -55,8 +54,7 @@ async def gmail_auth_url(
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    state_payload = json.dumps({"wid": str(workspace_id), "csrf": str(uuid_mod.uuid4())})
-    state = base64.urlsafe_b64encode(state_payload.encode()).decode()
+    state = build_state(workspace_id)
 
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID,
@@ -80,11 +78,10 @@ async def gmail_callback(
     state: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ) -> RedirectResponse:
-    # Decode state
+    # Verify the signed state and derive workspace_id from the verified payload.
     try:
-        state_data = json.loads(base64.urlsafe_b64decode(state).decode())
-        workspace_id = uuid_mod.UUID(state_data["wid"])
-    except Exception:
+        workspace_id = verify_state(state)
+    except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid state parameter")
 
     # Exchange code for tokens
