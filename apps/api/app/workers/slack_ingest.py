@@ -43,6 +43,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
     from app.models.task import Task
     from app.services.slack_client import SlackClient
     from app.services.extraction import extract_tasks
+    from app.workers.ingest import _link_contact
 
     SessionFactory = _get_async_session()
     new_count = 0
@@ -120,6 +121,8 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 received_at = datetime.fromtimestamp(float(ts), tz=timezone.utc)
                 subject = f"Slack {'DM' if is_dm else f'#{channel_name}'}"
 
+                contact_id = await _link_contact(db, workspace_id, sender_email)
+
                 message = Message(
                     workspace_id=workspace_id,
                     connector_id=connector.id,
@@ -128,6 +131,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                     body_plain=text,
                     sender_email=sender_email,
                     received_at=received_at,
+                    contact_id=contact_id,
                     processed=False,
                 )
                 db.add(message)

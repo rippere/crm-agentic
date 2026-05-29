@@ -36,11 +36,12 @@ class MessageResponse(BaseModel):
     workspace_id: uuid.UUID
     external_id: str
     subject: str | None
-    body_plain: str
+    body_plain: str | None = None
     sender_email: str | None
     received_at: datetime | None
     contact_id: uuid.UUID | None
     processed: bool
+    relevant: bool | None = None
     clarity_score: ClarityScoreNested | None = None
     tasks: list[TaskNested] = []
 
@@ -128,3 +129,28 @@ async def list_messages(
     )
     messages = result.scalars().all()
     return [MessageResponse.model_validate(m) for m in messages]
+
+
+class ReprocessResponse(BaseModel):
+    job_id: str
+
+
+@router.post(
+    "/workspaces/{workspace_id}/messages/reprocess",
+    response_model=ReprocessResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def reprocess_messages(
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+) -> ReprocessResponse:
+    """Enqueue a non-destructive re-enrichment + relevance-flagging pass over all
+    existing messages in the workspace. Returns the Celery task id as job_id so the
+    frontend can poll /jobs/{id}."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from app.workers.ingest import reprocess_workspace_messages
+
+    task = reprocess_workspace_messages.delay(str(workspace_id))
+    return ReprocessResponse(job_id=task.id)

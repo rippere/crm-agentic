@@ -65,6 +65,33 @@ def _is_automated_sender(sender: str) -> bool:
     return any(pattern in lower for pattern in _SKIP_SENDER_PATTERNS)
 
 
+async def _link_contact(db: AsyncSession, workspace_id: uuid.UUID, sender_email: str | None) -> uuid.UUID | None:
+    """Parse the bare address out of a (possibly RFC2822) sender header, then
+    SELECT a workspace-scoped Contact by case-insensitive email. Link-only — never
+    auto-creates a Contact. Returns the contact id, or None if no match.
+    """
+    from email.utils import parseaddr
+    from sqlalchemy import func as sa_func
+
+    from app.models.contact import Contact
+
+    if not sender_email:
+        return None
+    _, addr = parseaddr(sender_email)
+    addr = addr.strip().lower()
+    if not addr:
+        return None
+
+    result = await db.execute(
+        select(Contact).where(
+            Contact.workspace_id == workspace_id,
+            sa_func.lower(Contact.email) == addr,
+        )
+    )
+    contact = result.scalar_one_or_none()
+    return contact.id if contact is not None else None
+
+
 def _is_deal_relevant(subject: str, sender: str, snippet: str) -> bool:
     """Claude Haiku pre-filter: is this email deal/business relevant?"""
     import anthropic
@@ -172,6 +199,8 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 logger.debug("ingest skipped_irrelevant gmail_id=%s subject=%s", gmail_id, subject[:60])
                 continue
 
+            contact_id = await _link_contact(db, workspace_id, sender_email)
+
             message = Message(
                 workspace_id=workspace_id,
                 connector_id=connector.id,
@@ -180,7 +209,9 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 body_plain=body_plain,
                 sender_email=sender_email,
                 received_at=received_at,
+                contact_id=contact_id,
                 processed=False,
+                relevant=True,  # passed _is_automated_sender + _is_deal_relevant gates above
             )
             db.add(message)
             await db.flush()
@@ -262,3 +293,132 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
 def process_gmail_sync(self: Any, connector_id: str) -> dict[str, Any]:
     """Celery task: fetch and store new Gmail messages, extract tasks via Claude."""
     return asyncio.get_event_loop().run_until_complete(_run_sync(connector_id))
+
+
+async def _run_reprocess(workspace_id: str) -> dict[str, Any]:
+    """Non-destructive re-enrichment of existing messages for a workspace.
+
+    For every message already stored in the workspace this re-runs contact
+    linking, task extraction, clarity scoring and sentiment analysis, and flags
+    messages.relevant using the same _is_automated_sender + _is_deal_relevant
+    heuristics the live ingest path uses. Nothing is ever deleted.
+    """
+    from app.models.clarity_score import ClarityScore
+    from app.models.contact import Contact
+    from app.models.message import Message
+    from app.models.task import Task
+    from app.services.clarity import score_clarity
+    from app.services.extraction import extract_tasks
+    from app.services.sentiment import analyze_sentiment
+
+    ws_uuid = uuid.UUID(workspace_id)
+    SessionFactory = _get_async_session()
+    processed = 0
+    relevant_count = 0
+    linked = 0
+
+    async with SessionFactory() as db:
+        result = await db.execute(
+            select(Message).where(Message.workspace_id == ws_uuid)
+        )
+        messages = list(result.scalars().all())
+
+        for message in messages:
+            sender_email = message.sender_email or ""
+            body_plain = message.body_plain or ""
+            subject = message.subject or ""
+
+            # Contact linking (link-only, never auto-create)
+            if message.contact_id is None:
+                contact_id = await _link_contact(db, ws_uuid, sender_email)
+                if contact_id is not None:
+                    message.contact_id = contact_id  # type: ignore[assignment]
+                    linked += 1
+
+            # Relevance flag — same heuristics as the live ingest path
+            if _is_automated_sender(sender_email):
+                is_relevant = False
+            else:
+                is_relevant = _is_deal_relevant(subject, sender_email, body_plain[:300])
+            message.relevant = is_relevant  # type: ignore[assignment]
+            if is_relevant:
+                relevant_count += 1
+
+            if body_plain.strip():
+                try:
+                    extracted = await extract_tasks(body_plain, workspace_id)
+                    for t in extracted:
+                        task = Task(
+                            workspace_id=ws_uuid,
+                            message_id=message.id,
+                            title=t.get("title", "Untitled task"),
+                            description=t.get("description", ""),
+                            status="open",
+                            due_date=t.get("due_date"),
+                        )
+                        db.add(task)
+                except Exception:
+                    logger.exception("reprocess extract_tasks failed message_id=%s", message.id)
+
+                try:
+                    sentiment_result = analyze_sentiment(body_plain)
+                    if message.contact_id and sentiment_result.get("signals"):
+                        contact_result = await db.execute(
+                            select(Contact).where(Contact.id == message.contact_id)
+                        )
+                        contact = contact_result.scalar_one_or_none()
+                        if contact is not None:
+                            existing_score: dict = dict(contact.ml_score or {})
+                            existing_signals: list = list(existing_score.get("signals", []))
+                            for sig in sentiment_result["signals"]:
+                                sentiment_signal = f"[{sentiment_result['sentiment']}] {sig}"
+                                if sentiment_signal not in existing_signals:
+                                    existing_signals.insert(0, sentiment_signal)
+                            existing_score["signals"] = existing_signals[:10]
+                            contact.ml_score = existing_score  # type: ignore[assignment]
+                            db.add(contact)
+                except Exception:
+                    logger.exception("reprocess analyze_sentiment failed message_id=%s", message.id)
+
+                try:
+                    clarity = await score_clarity(body_plain)
+                    existing_cs = await db.execute(
+                        select(ClarityScore).where(ClarityScore.message_id == message.id)
+                    )
+                    cs = existing_cs.scalar_one_or_none()
+                    if cs is not None:
+                        cs.score = clarity["score"]
+                        cs.rationale = clarity["rationale"]
+                    else:
+                        db.add(ClarityScore(
+                            workspace_id=ws_uuid,
+                            message_id=message.id,
+                            score=clarity["score"],
+                            rationale=clarity["rationale"],
+                            model_used="claude-sonnet-4-6",
+                        ))
+                except Exception:
+                    logger.exception("reprocess score_clarity failed message_id=%s", message.id)
+
+            message.processed = True  # type: ignore[assignment]
+            db.add(message)
+            processed += 1
+
+        await db.commit()
+
+    logger.info(
+        "reprocess complete workspace=%s processed=%d relevant=%d linked=%d",
+        workspace_id, processed, relevant_count, linked,
+    )
+    return {
+        "workspace_id": workspace_id,
+        "processed": processed,
+        "relevant": relevant_count,
+        "linked": linked,
+    }
+
+
+@celery_app.task(name="app.workers.ingest.reprocess_workspace_messages", bind=True)
+def reprocess_workspace_messages(self: Any, workspace_id: str) -> dict[str, Any]:
+    """Celery task: non-destructively re-enrich + relevance-flag existing messages."""
+    return asyncio.get_event_loop().run_until_complete(_run_reprocess(workspace_id))

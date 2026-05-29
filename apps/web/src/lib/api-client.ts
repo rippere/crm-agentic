@@ -163,6 +163,10 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ message_id: messageId, score: 72, rationale: 'Message is clear and well-structured with specific action items.', model_used: 'claude-sonnet-4-6' })
     return apiFetch(`/workspaces/${workspaceId}/messages/${messageId}/score-clarity`, { method: 'POST' }, token)
   },
+  reprocessMessages: (workspaceId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ job_id: 'demo-reprocess' })
+    return apiFetch(`/workspaces/${workspaceId}/messages/reprocess`, { method: 'POST' }, token)
+  },
 
   // Tasks
   getTasks: (workspaceId: string, token: string) => {
