@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from app.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 
 def _make_session() -> async_sessionmaker[AsyncSession]:
@@ -131,7 +134,11 @@ async def _run_hitl() -> dict[str, Any]:
                         contact_name=contact_name,
                         stage=deal.stage,
                     )
-                except Exception:
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "followup draft_failed workspace=%s deal_id=%s exc=%s",
+                        ws_id, deal.id, exc,
+                    )
                     continue
 
                 # Persist HITL pending event
@@ -172,8 +179,11 @@ async def _run_hitl() -> dict[str, Any]:
                         dismiss_value=hitl_id,
                     )
                     processed += 1
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "followup slack_post_failed workspace=%s deal_id=%s hitl_id=%s exc=%s",
+                        ws_id, deal.id, hitl_id, exc,
+                    )
 
         await db.commit()
 

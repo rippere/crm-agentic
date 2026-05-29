@@ -126,7 +126,7 @@ app.include_router(projects.router, tags=["projects"])
 
 @app.get("/health")
 async def health() -> dict:
-    """Liveness + readiness probe: checks DB connectivity."""
+    """Liveness + readiness probe: checks DB + Redis (Celery broker) connectivity."""
     db_ok = False
     db_error: str | None = None
     try:
@@ -137,11 +137,33 @@ async def health() -> dict:
         db_error = str(exc)
         logger.error("event=health_check_failed component=database error=%s", db_error)
 
-    status_str = "ok" if db_ok else "degraded"
-    payload: dict = {"status": status_str, "database": "ok" if db_ok else "error"}
+    # Redis PING — Celery broker/result backend. A down Redis means ingest/agent
+    # tasks silently never dispatch, so surface it (without killing the container).
+    redis_ok = False
+    redis_error: str | None = None
+    try:
+        import redis as _redis
+
+        client = _redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        try:
+            redis_ok = bool(client.ping())
+        finally:
+            client.close()
+    except Exception as exc:  # noqa: BLE001
+        redis_error = str(exc)
+        logger.error("event=health_check_failed component=redis error=%s", redis_error)
+
+    status_str = "ok" if (db_ok and redis_ok) else "degraded"
+    payload: dict = {
+        "status": status_str,
+        "database": "ok" if db_ok else "error",
+        "redis": "ok" if redis_ok else "error",
+    }
     if db_error:
         payload["database_error"] = db_error
+    if redis_error:
+        payload["redis_error"] = redis_error
     # Railway healthcheck: return 200 even when degraded so the container is not
-    # killed on a transient DB blip.  A dedicated alerting layer should monitor
-    # `status != "ok"` in the response body.
+    # killed on a transient DB/Redis blip. A dedicated alerting layer should
+    # monitor `status != "ok"` in the response body.
     return payload

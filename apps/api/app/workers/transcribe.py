@@ -10,6 +10,7 @@ Celery task: transcribe_call(call_summary_id: str, audio_path: str)
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import uuid
 from functools import lru_cache
@@ -19,6 +20,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from app.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
 
@@ -122,5 +125,5 @@ def transcribe_call(self: Any, call_summary_id: str, audio_path: str) -> dict[st
     finally:
         try:
             Path(audio_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("transcribe temp_cleanup_failed path=%s exc=%s", audio_path, exc)
