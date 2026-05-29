@@ -24,6 +24,7 @@ from app.dependencies import get_current_user
 from app.models.connector import Connector
 from app.models.user import User
 from app.services.crypto import encrypt_token
+from app.services.oauth_state import build_state, verify_state
 
 router = APIRouter()
 
@@ -64,7 +65,7 @@ async def slack_auth_url(
         "client_id": settings.SLACK_CLIENT_ID,
         "user_scope": ",".join(SLACK_USER_SCOPES),
         "redirect_uri": _build_redirect_uri(),
-        "state": str(workspace_id),
+        "state": build_state(workspace_id),
     }
     return {"auth_url": f"{SLACK_AUTH_URL}?{urlencode(params)}"}
 
@@ -78,9 +79,10 @@ async def slack_callback(
     state: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ) -> RedirectResponse:
+    # Verify the signed state and derive workspace_id from the verified payload.
     try:
-        workspace_id = uuid_mod.UUID(state)
-    except Exception:
+        workspace_id = verify_state(state)
+    except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid state parameter")
 
     async with httpx.AsyncClient() as client:
