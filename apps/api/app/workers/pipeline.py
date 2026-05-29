@@ -10,6 +10,7 @@ optimize_pipeline(workspace_id: str)
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -19,6 +20,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from app.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 CLOSED_STAGES = {"closed_won", "closed_lost"}
 

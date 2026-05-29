@@ -13,6 +13,31 @@ from app.services.crypto import decrypt_token
 
 SLACK_API_BASE = "https://slack.com/api"
 
+# Slack error codes that mean the connector's token can no longer be used and
+# the user must re-authorize. These are non-transient — retrying with the same
+# token will keep failing — so callers should surface them, not silently swallow.
+_AUTH_ERROR_CODES = {
+    "invalid_auth",
+    "token_revoked",
+    "account_inactive",
+    "token_expired",
+    "not_authed",
+    "no_permission",
+}
+
+
+class SlackAuthError(RuntimeError):
+    """Raised when Slack rejects the connector token (revoked/invalid auth).
+
+    Distinct from a generic RuntimeError so the ingest worker can avoid bumping
+    last_sync and can persist the auth failure instead of swallowing it.
+    """
+
+    def __init__(self, method: str, code: str):
+        self.method = method
+        self.code = code
+        super().__init__(f"Slack auth error [{method}]: {code}")
+
 
 class SlackClient:
     def __init__(self, connector: Connector):
@@ -30,7 +55,10 @@ class SlackClient:
             )
         data = resp.json()
         if not data.get("ok"):
-            raise RuntimeError(f"Slack API error [{method}]: {data.get('error', 'unknown')}")
+            error = data.get("error", "unknown")
+            if error in _AUTH_ERROR_CODES:
+                raise SlackAuthError(method, error)
+            raise RuntimeError(f"Slack API error [{method}]: {error}")
         return data
 
     async def list_conversations(
@@ -75,7 +103,10 @@ class SlackClient:
             )
         data = resp.json()
         if not data.get("ok"):
-            raise RuntimeError(f"Slack post error: {data.get('error', 'unknown')}")
+            error = data.get("error", "unknown")
+            if error in _AUTH_ERROR_CODES:
+                raise SlackAuthError("chat.postMessage", error)
+            raise RuntimeError(f"Slack post error: {error}")
         return data
 
     async def update_message(
@@ -97,7 +128,10 @@ class SlackClient:
             )
         data = resp.json()
         if not data.get("ok"):
-            raise RuntimeError(f"Slack update error: {data.get('error', 'unknown')}")
+            error = data.get("error", "unknown")
+            if error in _AUTH_ERROR_CODES:
+                raise SlackAuthError("chat.update", error)
+            raise RuntimeError(f"Slack update error: {error}")
         return data
 
     @staticmethod
