@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from typing import Any
@@ -20,6 +21,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from app.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 _ENRICH_PROMPT = """\
 You are a CRM data enrichment assistant. Given a contact's name, email, and their recent messages, \
@@ -88,8 +91,8 @@ async def _hunter_lookup(email: str | None, name: str | None, company: str | Non
                 data = resp.json()
                 found = data.get("data", {})
                 result["role"] = found.get("position") or None
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("enrich_contact hunter_lookup_failed email=%s exc=%s", email, exc)
 
     return result
 
@@ -125,8 +128,8 @@ async def _claude_enrich(
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
             return json.loads(m.group(0))
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("enrich_contact claude_enrich_failed email=%s exc=%s", email, exc)
     return {}
 
 
