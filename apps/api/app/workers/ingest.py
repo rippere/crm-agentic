@@ -491,6 +491,11 @@ async def _run_reprocess(workspace_id: str) -> dict[str, Any]:
 
             if body_plain.strip():
                 try:
+                    # Idempotent re-run: clear tasks from a prior reprocess of this message
+                    # before re-extracting, so the user-facing "Re-run enrichment" button
+                    # cannot duplicate tasks on repeated runs (mirrors the clarity upsert).
+                    from sqlalchemy import delete as _sa_delete
+                    await db.execute(_sa_delete(Task).where(Task.message_id == message.id))
                     extracted = await extract_tasks(body_plain, workspace_id)
                     for t in extracted:
                         task = Task(
