@@ -13,6 +13,8 @@ class Project(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    # Stable external key for idempotent vault->NovaCRM sync (e.g. the vault project key).
+    external_id: Mapped[str | None] = mapped_column(String, nullable=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
