@@ -7,6 +7,7 @@ Safe to run multiple times — existing embeddings are overwritten.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import uuid
 from typing import Any
@@ -15,6 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from app.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 
 def _make_session() -> async_sessionmaker[AsyncSession]:

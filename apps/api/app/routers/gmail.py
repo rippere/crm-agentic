@@ -29,6 +29,55 @@ from app.services.oauth_state import build_state, verify_state
 
 router = APIRouter()
 
+
+async def _derive_connector_status(db: AsyncSession, connector: Connector) -> str:
+    """Derive a connector's status from real state instead of hardcoding 'active'.
+
+    - "error"  if a recent connector_auth_error ActivityEvent exists for the
+               workspace+connector (e.g. Slack token revoked — persisted by the
+               ingest worker), or the connector has no token.
+    - "pending" if it has never synced.
+    - "stale"  if the last sync is older than 24h.
+    - "active" otherwise.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.activity_event import ActivityEvent
+
+    if not getattr(connector, "encrypted_token", None):
+        return "error"
+
+    try:
+        recent = await db.execute(
+            select(ActivityEvent)
+            .where(
+                ActivityEvent.workspace_id == connector.workspace_id,
+                ActivityEvent.type == "connector_auth_error",
+                ActivityEvent.meta.like(f"%connector_id={connector.id}%"),
+            )
+            .order_by(ActivityEvent.created_at.desc())
+            .limit(1)
+        )
+        evt = recent.scalar_one_or_none()
+    except Exception:  # noqa: BLE001 — status derivation must never 500 the endpoint
+        evt = None
+
+    if evt is not None:
+        # An auth error supersedes a later successful sync only if it post-dates it.
+        if connector.last_sync is None or (
+            evt.created_at is not None and evt.created_at >= connector.last_sync
+        ):
+            return "error"
+
+    if connector.last_sync is None:
+        return "pending"
+
+    if connector.last_sync < datetime.now(tz=timezone.utc) - timedelta(hours=24):
+        return "stale"
+
+    return "active"
+
+
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GMAIL_SCOPES = [
@@ -198,7 +247,7 @@ async def list_connectors(
         {
             "id": str(c.id),
             "service": c.service,
-            "status": "active",
+            "status": await _derive_connector_status(db, c),
             "last_sync": c.last_sync.isoformat() if c.last_sync else None,
             "message_count": c.message_count,
         }
@@ -229,7 +278,7 @@ async def connector_status(
     return {
         "id": str(connector.id),
         "service": connector.service,
-        "status": "active",
+        "status": await _derive_connector_status(db, connector),
         "external_email": connector.external_email,
         "message_count": connector.message_count,
         "task_count": connector.task_count,
