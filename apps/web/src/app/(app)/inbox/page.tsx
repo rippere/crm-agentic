@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { createBrowserClient } from "@/lib/supabase";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Avatar from "@/components/ui/Avatar";
 import { apiClient } from "@/lib/api-client";
-import { Search, Mail, X, CheckCircle, Brain, ListTodo, Sparkles } from "lucide-react";
+import { Search, Mail, X, CheckCircle, Brain, ListTodo, Sparkles, AlertTriangle, RefreshCw } from "lucide-react";
 import Button from "@/components/ui/Button";
+import { useJobPoller } from "@/hooks/useJobPoller";
 
 interface Message {
   id: string;
@@ -17,6 +18,7 @@ interface Message {
   received_at: string | null;
   body_plain: string | null;
   processed: boolean;
+  relevant?: boolean | null;
   contact_id: string | null;
   clarity_score?: { score: number; rationale: string } | null;
   tasks?: Array<{ id: string; title: string; status: string }>;
@@ -203,19 +205,29 @@ function MessageDrawer({
 export default function InboxPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [search, setSearch] = useState("");
+  const [filterMode, setFilterMode] = useState<"all" | "relevant">("all"); // DEFAULT All — nothing hidden
   const [selected, setSelected] = useState<Message | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
 
   const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+  const reprocessJob = useJobPoller();
+
+  const loadMessages = useCallback((wsId: string, tok: string) => {
+    setLoading(true);
+    setError(false);
+    apiClient
+      .getMessages(wsId, tok)
+      .then((data) => setMessages(Array.isArray(data) ? data : []))
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => {
     if (isDemoMode) {
-      apiClient.getMessages('demo-workspace-1', 'demo-token')
-        .then((data) => setMessages(Array.isArray(data) ? data : []))
-        .catch(() => setMessages([]))
-        .finally(() => setLoading(false));
+      loadMessages('demo-workspace-1', 'demo-token');
       return;
     }
     const supabase = createBrowserClient();
@@ -225,27 +237,64 @@ export default function InboxPage() {
         setWorkspaceId(session.user.user_metadata?.workspace_id ?? null);
       }
     });
-  }, [isDemoMode]);
+  }, [isDemoMode, loadMessages]);
 
   useEffect(() => {
     if (isDemoMode) return; // already loaded above
     if (!workspaceId || !token) return;
-    apiClient
-      .getMessages(workspaceId, token)
-      .then((data) => setMessages(Array.isArray(data) ? data : []))
-      .catch(() => setMessages([]))
-      .finally(() => setLoading(false));
-  }, [workspaceId, token, isDemoMode]);
+    loadMessages(workspaceId, token);
+  }, [workspaceId, token, isDemoMode, loadMessages]);
+
+  // When a re-run enrichment job finishes, reload the message list to pick up
+  // newly-set relevance flags / contact links / clarity scores.
+  useEffect(() => {
+    if (reprocessJob.state !== "success") return;
+    if (isDemoMode) {
+      loadMessages('demo-workspace-1', 'demo-token');
+    } else if (workspaceId && token) {
+      loadMessages(workspaceId, token);
+    }
+  }, [reprocessJob.state, workspaceId, token, isDemoMode, loadMessages]);
+
+  function handleRetry() {
+    if (isDemoMode) {
+      loadMessages('demo-workspace-1', 'demo-token');
+    } else if (workspaceId && token) {
+      loadMessages(workspaceId, token);
+    }
+  }
+
+  async function handleReprocess() {
+    const wsId = isDemoMode ? 'demo-workspace-1' : workspaceId;
+    const tok = isDemoMode ? 'demo-token' : token;
+    if (!wsId || !tok) return;
+    try {
+      const { job_id } = await apiClient.reprocessMessages(wsId, tok);
+      reprocessJob.start(job_id);
+    } catch {
+      // surfaced via the job poller / error banner on next load; no silent data wipe
+    }
+  }
+
+  const reprocessing = reprocessJob.state === "pending" || reprocessJob.state === "started";
 
   const filtered = useMemo(() => {
-    if (!search) return messages;
-    const q = search.toLowerCase();
-    return messages.filter(
-      (m) =>
-        m.sender_email?.toLowerCase().includes(q) ||
-        m.subject?.toLowerCase().includes(q)
-    );
-  }, [messages, search]);
+    let list = messages;
+    if (filterMode === "relevant") {
+      // Only hide messages explicitly flagged irrelevant; NULL (not yet evaluated)
+      // stays visible so "Relevant" never hides un-enriched mail.
+      list = list.filter((m) => m.relevant !== false);
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (m) =>
+          m.sender_email?.toLowerCase().includes(q) ||
+          m.subject?.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [messages, search, filterMode]);
 
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
@@ -254,19 +303,82 @@ export default function InboxPage() {
         subtitle={`${messages.length} messages ingested`}
       />
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
-        <input
-          type="search"
-          placeholder="Search by sender or subject…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full rounded-xl border border-zinc-800 bg-zinc-900 py-2 pl-9 pr-4 text-base sm:text-sm text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50 transition-all"
-        />
+      {/* Toolbar: search + relevance toggle + re-run enrichment */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        {/* Search */}
+        <div className="relative max-w-sm flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+          <input
+            type="search"
+            placeholder="Search by sender or subject…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded-xl border border-zinc-800 bg-zinc-900 py-2 pl-9 pr-4 text-base sm:text-sm text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50 transition-all"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* All / Relevant toggle (default All) */}
+          <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-900 p-0.5">
+            {(["all", "relevant"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setFilterMode(mode)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition-colors cursor-pointer ${
+                  filterMode === mode
+                    ? "bg-indigo-500/20 text-indigo-300"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+                aria-pressed={filterMode === mode}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+
+          {/* Re-run enrichment */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleReprocess}
+            disabled={reprocessing}
+            className="text-xs"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${reprocessing ? "animate-spin" : ""}`} />
+            {reprocessing ? "Re-running…" : "Re-run enrichment"}
+          </Button>
+        </div>
       </div>
 
+      {reprocessJob.state === "success" && (
+        <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs text-emerald-300">
+          <CheckCircle className="h-3.5 w-3.5 flex-shrink-0" />
+          Enrichment complete — inbox refreshed.
+        </div>
+      )}
+      {reprocessJob.state === "failure" && (
+        <div className="flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-xs text-rose-300">
+          <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+          {reprocessJob.error ?? "Re-run enrichment failed."}
+        </div>
+      )}
+
+      {/* Error / retry banner — replaces the old silent .catch(()=>setMessages([])) */}
+      {error && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3">
+          <div className="flex items-center gap-2 text-xs text-rose-300">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            Couldn&apos;t load your inbox. Check your connection and try again.
+          </div>
+          <Button variant="ghost" size="sm" onClick={handleRetry} className="text-xs flex-shrink-0">
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+            Retry
+          </Button>
+        </div>
+      )}
+
       {/* Message list */}
+      {!error && (
       <Card className="overflow-hidden p-0">
         {loading ? (
           <>
@@ -309,6 +421,7 @@ export default function InboxPage() {
           </div>
         )}
       </Card>
+      )}
 
       {/* Drawer */}
       {selected && (
