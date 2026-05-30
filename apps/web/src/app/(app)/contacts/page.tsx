@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
@@ -17,6 +18,7 @@ import {
   Search, SlidersHorizontal, Brain, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
   Copy, X, Loader2, Zap, ClipboardList, CheckSquare, Square, Tag,
+  ExternalLink,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -447,13 +449,23 @@ function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector
       <div className="sticky top-0 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur z-10">
         <div className="flex items-center justify-between px-5 py-4">
           <p className="text-sm font-semibold text-zinc-100">Contact Details</p>
-          <button
-            onClick={onClose}
-            className="text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors"
-            aria-label="Close contact details"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/contacts/${contact.id}`}
+              className="text-zinc-500 hover:text-indigo-400 transition-colors"
+              title="Open full page"
+              aria-label="Open full contact page"
+            >
+              <ExternalLink className="h-4 w-4" />
+            </Link>
+            <button
+              onClick={onClose}
+              className="text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors"
+              aria-label="Close contact details"
+            >
+              ✕
+            </button>
+          </div>
         </div>
         {/* Tabs */}
         <div className="flex flex-wrap border-t border-zinc-800">
