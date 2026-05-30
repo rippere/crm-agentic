@@ -2,17 +2,24 @@
 Gmail OAuth router.
 
 Endpoints:
-  GET  /workspaces/{id}/connectors/gmail/auth    — build OAuth URL
-  GET  /auth/gmail/callback                       — exchange code, store tokens
-  POST /workspaces/{id}/connectors/gmail/sync    — trigger Celery ingest
-  DELETE /workspaces/{id}/connectors/{connector_id} — remove connector
+  GET  /workspaces/{id}/connectors/gmail/auth       — build OAuth URL
+  GET  /auth/gmail/callback                          — exchange code, store tokens
+  POST /workspaces/{id}/connectors/gmail/sync        — trigger Celery ingest
+  POST /workspaces/{id}/connectors/gmail/subscribe   — set up Gmail push notifications
+  POST /webhooks/gmail/push                          — receive Pub/Sub push notifications
+  DELETE /workspaces/{id}/connectors/{connector_id}  — remove connector
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import logging
 import uuid as uuid_mod
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,8 +31,10 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.connector import Connector
 from app.models.user import User
-from app.services.crypto import encrypt_token
+from app.services.crypto import decrypt_token, encrypt_token
 from app.services.oauth_state import build_state, verify_state
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -285,6 +294,160 @@ async def connector_status(
         "last_sync": connector.last_sync.isoformat() if connector.last_sync else None,
         "created_at": connector.created_at.isoformat(),
     }
+
+
+_GMAIL_WATCH_URL = "https://gmail.googleapis.com/gmail/v1/users/me/watch"
+_GMAIL_STOP_URL = "https://gmail.googleapis.com/gmail/v1/users/me/stop"
+
+
+@router.post("/workspaces/{workspace_id}/connectors/gmail/subscribe")
+async def gmail_subscribe(
+    workspace_id: uuid_mod.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Register a Gmail push subscription via users.watch().
+
+    Calls the Gmail API to set up Pub/Sub push notifications for the workspace's
+    Gmail connector. Requires GMAIL_PUBSUB_TOPIC to be configured.
+
+    Returns the watch response (historyId, expiration).
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if not settings.GMAIL_PUBSUB_TOPIC:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GMAIL_PUBSUB_TOPIC not configured",
+        )
+
+    result = await db.execute(
+        select(Connector).where(
+            Connector.workspace_id == workspace_id,
+            Connector.service == "gmail",
+        )
+    )
+    connector = result.scalar_one_or_none()
+    if connector is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gmail connector not found")
+
+    try:
+        access_token = decrypt_token(connector.encrypted_token)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not decrypt connector token",
+        )
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            _GMAIL_WATCH_URL,
+            json={
+                "topicName": settings.GMAIL_PUBSUB_TOPIC,
+                "labelIds": ["INBOX"],
+            },
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Gmail watch failed: {resp.text}",
+        )
+
+    watch_data = resp.json()
+    logger.info(
+        "gmail_watch_registered connector=%s expiration=%s",
+        connector.id,
+        watch_data.get("expiration"),
+    )
+    return {
+        "connector_id": str(connector.id),
+        "history_id": watch_data.get("historyId"),
+        "expiration": watch_data.get("expiration"),
+    }
+
+
+def _verify_pubsub_secret(request_secret: str | None) -> bool:
+    """Verify the shared secret in the push URL matches our configured value.
+
+    Returns True if GMAIL_WEBHOOK_SECRET is empty (dev mode) or if the
+    provided secret matches.
+    """
+    if not settings.GMAIL_WEBHOOK_SECRET:
+        return True  # no secret configured — accept all (dev/test only)
+    if not request_secret:
+        return False
+    return hmac.compare_digest(settings.GMAIL_WEBHOOK_SECRET, request_secret)
+
+
+async def _trigger_ingest_for_email(email: str, db: AsyncSession) -> str | None:
+    """Find the Gmail connector matching the push email and enqueue a sync."""
+    result = await db.execute(
+        select(Connector).where(
+            Connector.service == "gmail",
+            Connector.external_email == email,
+        )
+    )
+    connector = result.scalar_one_or_none()
+    if connector is None:
+        logger.warning("gmail_push_no_connector email=%s", email)
+        return None
+
+    from app.workers.ingest import process_gmail_sync
+
+    task = process_gmail_sync.delay(str(connector.id))
+    logger.info("gmail_push_ingest_queued connector=%s job=%s", connector.id, task.id)
+    return task.id
+
+
+@router.post("/webhooks/gmail/push", status_code=204)
+async def gmail_push_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    secret: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Receive Google Pub/Sub push notifications from Gmail.
+
+    Google delivers a POST request with a JSON body:
+      {
+        "message": {
+          "data": "<base64-encoded JSON>",   # {"emailAddress": "...", "historyId": "..."}
+          "messageId": "...",
+          "publishTime": "..."
+        },
+        "subscription": "projects/.../subscriptions/..."
+      }
+
+    We verify the shared secret, decode the payload, and enqueue a Celery
+    ingest task for the matching connector.  Always returns 204 so Pub/Sub
+    does not retry — errors are logged rather than returned as HTTP errors.
+    """
+    if not _verify_pubsub_secret(secret):
+        logger.warning("gmail_push_invalid_secret remote=%s", request.client)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret")
+
+    try:
+        body = await request.json()
+        message = body.get("message", {})
+        raw_data = message.get("data", "")
+        # Pub/Sub base64-encodes the payload; add padding if needed
+        padding = "=" * (-len(raw_data) % 4)
+        payload_bytes = base64.urlsafe_b64decode(raw_data + padding)
+        payload = json.loads(payload_bytes.decode())
+        email_address: str = payload.get("emailAddress", "")
+    except Exception as exc:
+        logger.warning("gmail_push_decode_error err=%s", exc)
+        # Return 204 so Pub/Sub doesn't retry — the message is malformed
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    if not email_address:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    background_tasks.add_task(_trigger_ingest_for_email, email_address, db)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("/workspaces/{workspace_id}/connectors/{connector_id}")

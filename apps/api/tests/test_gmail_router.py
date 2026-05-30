@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -272,3 +274,186 @@ async def test_delete_connector_wrong_workspace_returns_403(app_client):
         resp = await ac.delete(f"/workspaces/{wrong_id}/connectors/{uuid.uuid4()}")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/connectors/gmail/subscribe
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gmail_subscribe_no_topic_returns_503(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    with patch("app.routers.gmail.settings") as mock_settings:
+        mock_settings.GMAIL_PUBSUB_TOPIC = ""
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/connectors/gmail/subscribe")
+
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_gmail_subscribe_no_connector_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    with patch("app.routers.gmail.settings") as mock_settings:
+        mock_settings.GMAIL_PUBSUB_TOPIC = "projects/test/topics/gmail"
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/connectors/gmail/subscribe")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_gmail_subscribe_happy_path(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    connector = MagicMock()
+    connector.id = uuid.uuid4()
+    connector.encrypted_token = "encrypted"
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(connector))
+
+    watch_resp = MagicMock()
+    watch_resp.status_code = 200
+    watch_resp.json = lambda: {"historyId": "12345", "expiration": "9999999999000"}
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=watch_resp)
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.routers.gmail.settings") as mock_settings:
+        mock_settings.GMAIL_PUBSUB_TOPIC = "projects/test/topics/gmail"
+        with patch("app.routers.gmail.decrypt_token", return_value="access_token"):
+            with patch("app.routers.gmail.httpx.AsyncClient", return_value=mock_cm):
+                async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+                    resp = await ac.post(f"/workspaces/{workspace_id}/connectors/gmail/subscribe")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["history_id"] == "12345"
+    assert "expiration" in data
+
+
+@pytest.mark.asyncio
+async def test_gmail_subscribe_watch_fails_returns_502(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    connector = MagicMock()
+    connector.id = uuid.uuid4()
+    connector.encrypted_token = "encrypted"
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(connector))
+
+    watch_resp = MagicMock()
+    watch_resp.status_code = 403
+    watch_resp.text = "Forbidden"
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=watch_resp)
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.routers.gmail.settings") as mock_settings:
+        mock_settings.GMAIL_PUBSUB_TOPIC = "projects/test/topics/gmail"
+        with patch("app.routers.gmail.decrypt_token", return_value="access_token"):
+            with patch("app.routers.gmail.httpx.AsyncClient", return_value=mock_cm):
+                async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+                    resp = await ac.post(f"/workspaces/{workspace_id}/connectors/gmail/subscribe")
+
+    assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# POST /webhooks/gmail/push
+# ---------------------------------------------------------------------------
+
+
+def _make_pubsub_body(email: str = "user@gmail.com", history_id: str = "12345") -> dict:
+    payload = json.dumps({"emailAddress": email, "historyId": history_id})
+    encoded = base64.urlsafe_b64encode(payload.encode()).decode()
+    return {
+        "message": {"data": encoded, "messageId": "abc", "publishTime": "2026-01-01T00:00:00Z"},
+        "subscription": "projects/test/subscriptions/gmail-sub",
+    }
+
+
+@pytest.mark.asyncio
+async def test_gmail_push_invalid_secret_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+
+    with patch("app.routers.gmail.settings") as mock_settings:
+        mock_settings.GMAIL_WEBHOOK_SECRET = "real-secret"
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/webhooks/gmail/push?secret=wrong-secret",
+                json=_make_pubsub_body(),
+            )
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_gmail_push_no_secret_configured_accepts(app_client):
+    """When GMAIL_WEBHOOK_SECRET is empty, all requests are accepted (dev mode)."""
+    fastapi_app, mock_db, _ = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    with patch("app.routers.gmail.settings") as mock_settings:
+        mock_settings.GMAIL_WEBHOOK_SECRET = ""
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post("/webhooks/gmail/push", json=_make_pubsub_body())
+
+    assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_gmail_push_malformed_body_returns_204(app_client):
+    """Malformed Pub/Sub body should return 204 (not retry)."""
+    fastapi_app, mock_db, _ = app_client
+
+    with patch("app.routers.gmail.settings") as mock_settings:
+        mock_settings.GMAIL_WEBHOOK_SECRET = ""
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post("/webhooks/gmail/push", json={"not": "a-pubsub-message"})
+
+    assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_gmail_push_no_connector_still_returns_204(app_client):
+    """If no connector matches the email, we still return 204 (not retry)."""
+    fastapi_app, mock_db, _ = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    with patch("app.routers.gmail.settings") as mock_settings:
+        mock_settings.GMAIL_WEBHOOK_SECRET = ""
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post("/webhooks/gmail/push", json=_make_pubsub_body("unknown@example.com"))
+
+    assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_gmail_push_triggers_ingest(app_client):
+    """Happy path: matching connector found → ingest task enqueued."""
+    fastapi_app, mock_db, _ = app_client
+    connector = MagicMock()
+    connector.id = uuid.uuid4()
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(connector))
+
+    mock_task = MagicMock()
+    mock_task.id = "push-job-id"
+
+    with patch("app.routers.gmail.settings") as mock_settings:
+        mock_settings.GMAIL_WEBHOOK_SECRET = ""
+        with patch("app.workers.ingest.process_gmail_sync") as mock_celery:
+            mock_celery.delay.return_value = mock_task
+            async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+                resp = await ac.post(
+                    "/webhooks/gmail/push",
+                    json=_make_pubsub_body("user@gmail.com"),
+                )
+
+    assert resp.status_code == 204
