@@ -20,17 +20,20 @@
 - [2026-05-28] Task 4c: Dashboard deal health widget — top 3 stale deals (with "View all" footer); per-deal "View" links to /pipeline; 30s polling useEffect for live stale deal data via extracted pollToken/pollWorkspaceId state
 - [2026-05-28] Task 4d: /settings page — workspace editor (name + mode via updateWorkspace()), invite form (inviteTeammate()), danger zone with ConfirmDialog type-to-confirm delete modal, profile section with email and sign-out
 - [2026-05-28] Task 4e: Agents page polish — per-card Run button wired to triggerAgent() + per-card useJobPoller (pending/started/success/failure); last-run timestamp from live getAgentActivity() API call; success/failure badges (CheckCircle/XCircle) update after each job; 7-point recharts LineChart accuracy sparkline per card seeded from last 7 activity events; AgentDetailPanel Run button also uses useJobPoller; apiClient.getAgentActivity() added
+- [2026-05-30] Phase 5a: GitHub Actions CI (.github/workflows/ci.yml — web tsc+build, api pytest); root-level conftest.py injects mock env vars so 295 tests pass without real credentials; fixed 22 broken tests: Gmail/Slack router state signing (build_state), Slack interactions autouse signature bypass fixture, tasks test missing external_id attribute
+- [2026-05-30] Phase 5b: Contact detail page at /contacts/[id] — identity card, ML score, semantic tags, revenue, associated deals (with health bar), tasks (open/done split), timeline, meeting brief modal, email compose modal; ExternalLink icon in drawer header; contact_id filter added to GET /deals and GET /tasks routers; api-client updated (listDeals opts, getTasks opts.contactId)
+- [2026-05-30] Phase 5c: Gmail push webhooks — POST /workspaces/{id}/connectors/gmail/subscribe (calls Gmail users.watch() to register Pub/Sub); POST /webhooks/gmail/push (receives Pub/Sub notifications, verifies GMAIL_WEBHOOK_SECRET, triggers Celery ingest); GMAIL_WEBHOOK_SECRET + GMAIL_PUBSUB_TOPIC added to config + .env.example; 9 new tests; total 304 tests pass
 
 ## Current Phase
-Phase 4 — Sales Agent Intelligence + PM Feature Polish
+Phase 5 — CI Hardening, Contact Detail, Gmail Push Webhooks
 
 ## Next Task
-Phase 4 complete. All agent intelligence + PM feature polish tasks done.
+Phase 5 complete. Suggested Phase 6: (a) Deal detail page /pipeline/[id], (b) Slack push webhook (similar to Gmail), (c) Playwright E2E smoke tests, (d) Rate-limit headers in API responses, (e) CSV export for contacts/deals.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
 - Local DATABASE_URL points to localhost:5433 (Docker Postgres) — /health returns `degraded` locally unless docker-compose is running. Supabase production credentials ARE present in apps/api/.env and apps/web/.env.local.
-- SLACK_SIGNING_SECRET and HUNTER_API_KEY not set — Slack HITL signature verification is skipped in dev (documented behavior); Hunter enrichment is optional.
+- GMAIL_PUBSUB_TOPIC and GMAIL_WEBHOOK_SECRET not set — Gmail push notifications won't work until these are configured via Railway/Render dashboard + Google Cloud Console.
 
 ## Resolved (previously listed as blockers)
 - [2026-05-28] Supabase credentials confirmed present in apps/api/.env and apps/web/.env.local (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET, NEXT_PUBLIC_SUPABASE_ANON_KEY all set)
