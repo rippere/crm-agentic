@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     SLACK_SIGNING_SECRET: str = ""
     SLACK_HITL_CHANNEL: str = "general"
     HUNTER_API_KEY: str = ""
+    # Gmail push notifications (Google Pub/Sub)
+    GMAIL_WEBHOOK_SECRET: str = ""  # shared secret appended to webhook URL
+    GMAIL_PUBSUB_TOPIC: str = ""    # e.g. projects/myproject/topics/gmail-push
 
 
 settings = Settings()
