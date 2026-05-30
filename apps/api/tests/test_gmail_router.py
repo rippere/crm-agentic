@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-import base64
-import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient, ASGITransport
 
+from app.services.oauth_state import build_state
 from tests.conftest import _make_scalar_result, _make_scalars_result
 
 
 def _make_state(workspace_id: uuid.UUID) -> str:
-    payload = json.dumps({"wid": str(workspace_id), "csrf": str(uuid.uuid4())})
-    return base64.urlsafe_b64encode(payload.encode()).decode()
+    return build_state(workspace_id)
 
 
 # ---------------------------------------------------------------------------

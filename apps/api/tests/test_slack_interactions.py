@@ -16,6 +16,24 @@ from tests.conftest import _make_scalar_result
 
 
 # ---------------------------------------------------------------------------
+# Module-level auto-fixture: bypass Slack signature verification for all
+# endpoint tests except the one that specifically tests the 403 rejection path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _auto_bypass_slack_sig(request):
+    # Skip patching for unit tests that directly test _verify_slack_signature
+    # and for the endpoint test that specifically validates the 403 path.
+    no_patch = ("verify_signature", "invalid_signature")
+    if any(s in request.node.name for s in no_patch):
+        yield
+    else:
+        with patch("app.routers.slack_interactions._verify_slack_signature", return_value=True):
+            yield
+
+
+# ---------------------------------------------------------------------------
 # _verify_slack_signature (pure function)
 # ---------------------------------------------------------------------------
 
@@ -127,7 +145,7 @@ async def test_slack_interactions_event_not_found_returns_ok(app_client):
     fastapi_app, mock_db, _ = app_client
     mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
 
-    payload = {"actions": [{"action_id": "hitl_approve", "value": "no-such-id"}]}
+    payload = {"actions": [{"action_id": "hitl_approve", "value": str(uuid.uuid4())}]}
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.post("/slack/interactions", data={"payload": json.dumps(payload)})
 
@@ -139,11 +157,12 @@ async def test_slack_interactions_event_not_found_returns_ok(app_client):
 async def test_slack_interactions_hitl_dismiss(app_client):
     fastapi_app, mock_db, workspace_id = app_client
 
+    hitl_id = str(uuid.uuid4())
     event = MagicMock()
-    event.meta = json.dumps({"hitl_id": "hitl-abc", "workspace_id": str(workspace_id)})
+    event.meta = json.dumps({"hitl_id": hitl_id, "workspace_id": str(workspace_id)})
     mock_db.execute = AsyncMock(return_value=_make_scalar_result(event))
 
-    payload = {"actions": [{"action_id": "hitl_dismiss", "value": "hitl-abc"}]}
+    payload = {"actions": [{"action_id": "hitl_dismiss", "value": hitl_id}]}
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.post("/slack/interactions", data={"payload": json.dumps(payload)})
 

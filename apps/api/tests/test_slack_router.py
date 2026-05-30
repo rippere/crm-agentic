@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import AsyncClient, ASGITransport
 
+from app.services.oauth_state import build_state
 from tests.conftest import _make_scalar_result
 
 
@@ -85,7 +86,7 @@ async def test_slack_callback_token_exchange_fails_returns_400(app_client):
 
     with patch("app.routers.slack.httpx.AsyncClient", return_value=mock_cm):
         async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
-            resp = await ac.get(f"/auth/slack/callback?code=bad_code&state={workspace_id}")
+            resp = await ac.get(f"/auth/slack/callback?code=bad_code&state={build_state(workspace_id)}")
 
     assert resp.status_code == 400
     assert "token exchange" in resp.json()["detail"].lower()
@@ -99,7 +100,7 @@ async def test_slack_callback_no_user_token_returns_400(app_client):
 
     with patch("app.routers.slack.httpx.AsyncClient", return_value=mock_cm):
         async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
-            resp = await ac.get(f"/auth/slack/callback?code=code123&state={workspace_id}")
+            resp = await ac.get(f"/auth/slack/callback?code=code123&state={build_state(workspace_id)}")
 
     assert resp.status_code == 400
     assert "token" in resp.json()["detail"].lower()
@@ -119,7 +120,7 @@ async def test_slack_callback_happy_path_new_connector(app_client):
                 base_url="http://test",
                 follow_redirects=False,
             ) as ac:
-                resp = await ac.get(f"/auth/slack/callback?code=code123&state={workspace_id}")
+                resp = await ac.get(f"/auth/slack/callback?code=code123&state={build_state(workspace_id)}")
 
     assert resp.status_code in (301, 302, 307, 308)
     mock_db.commit.assert_awaited()
@@ -140,7 +141,7 @@ async def test_slack_callback_updates_existing_connector(app_client):
                 base_url="http://test",
                 follow_redirects=False,
             ) as ac:
-                resp = await ac.get(f"/auth/slack/callback?code=code123&state={workspace_id}")
+                resp = await ac.get(f"/auth/slack/callback?code=code123&state={build_state(workspace_id)}")
 
     assert resp.status_code in (301, 302, 307, 308)
     assert existing_connector.encrypted_token == "new_encrypted"
@@ -173,7 +174,7 @@ async def test_slack_callback_no_profile_email_uses_fallback(app_client):
                 base_url="http://test",
                 follow_redirects=False,
             ) as ac:
-                resp = await ac.get(f"/auth/slack/callback?code=code&state={workspace_id}")
+                resp = await ac.get(f"/auth/slack/callback?code=code&state={build_state(workspace_id)}")
 
     assert resp.status_code in (301, 302, 307, 308)
     mock_db.commit.assert_awaited()
