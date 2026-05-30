@@ -58,7 +58,7 @@ export function useDeals(stage?: string) {
         return;
       }
 
-      const data = await apiClient.listDeals(workspaceId, token, stage);
+      const data = await apiClient.listDeals(workspaceId, token, stage ? { stage } : undefined);
       setDeals(Array.isArray(data) ? (data as DealRow[]).map(rowToDeal) : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load deals");

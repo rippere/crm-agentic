@@ -169,9 +169,17 @@ export const apiClient = {
   },
 
   // Tasks
-  getTasks: (workspaceId: string, token: string) => {
-    if (isDemoMode) return Promise.resolve(demoTasks)
-    return apiFetch(`/workspaces/${workspaceId}/tasks`, {}, token)
+  getTasks: (workspaceId: string, token: string, opts?: { contactId?: string; projectId?: string }) => {
+    if (isDemoMode) {
+      let tasks = demoTasks as unknown as Array<Record<string, unknown>>
+      if (opts?.contactId) tasks = tasks.filter(t => t.contact_id === opts.contactId)
+      return Promise.resolve(tasks)
+    }
+    const params = new URLSearchParams()
+    if (opts?.contactId) params.set('contact_id', opts.contactId)
+    if (opts?.projectId) params.set('project_id', opts.projectId)
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/tasks${qs ? `?${qs}` : ''}`, {}, token)
   },
   createTask: (workspaceId: string, data: Record<string, unknown>, token: string) => {
     if (isDemoMode) {
@@ -264,10 +272,18 @@ export const apiClient = {
   },
 
   // Deals
-  listDeals: (workspaceId: string, token: string, stage?: string) => {
-    if (isDemoMode) return Promise.resolve(demoDeals)
-    const params = stage && stage !== 'all' ? `?stage=${stage}` : ''
-    return apiFetch(`/workspaces/${workspaceId}/deals${params}`, {}, token)
+  listDeals: (workspaceId: string, token: string, opts?: { stage?: string; contactId?: string }) => {
+    if (isDemoMode) {
+      let deals = demoDeals as unknown as Array<Record<string, unknown>>
+      if (opts?.stage && opts.stage !== 'all') deals = deals.filter(d => d.stage === opts.stage)
+      if (opts?.contactId) deals = deals.filter(d => d.contact_id === opts.contactId)
+      return Promise.resolve(deals)
+    }
+    const params = new URLSearchParams()
+    if (opts?.stage && opts.stage !== 'all') params.set('stage', opts.stage)
+    if (opts?.contactId) params.set('contact_id', opts.contactId)
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/deals${qs ? `?${qs}` : ''}`, {}, token)
   },
   createDeal: (workspaceId: string, data: { title?: string; company?: string; contact_id?: string; value?: number; stage?: string; ml_win_probability?: number; expected_close?: string; notes?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: `demo-deal-${Date.now()}`, workspace_id: workspaceId, stage: 'lead', ...data })
