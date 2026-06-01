@@ -1,9 +1,12 @@
+import csv
+import io
 import json
 import uuid
 from datetime import datetime
 
 import anthropic as _anthropic
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_, select, insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -113,6 +116,38 @@ async def list_contacts(
     result = await db.execute(stmt)
     contacts = result.scalars().all()
     return [ContactResponse.model_validate(c) for c in contacts]
+
+
+@router.get("/workspaces/{workspace_id}/contacts/export")
+async def export_contacts_csv(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Export all workspace contacts as a CSV file."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(select(Contact).where(Contact.workspace_id == workspace_id))
+    contacts = result.scalars().all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "name", "email", "company", "role", "status", "ml_score", "revenue", "created_at"])
+    for c in contacts:
+        writer.writerow([
+            str(c.id), c.name or "", c.email or "", c.company or "",
+            c.role or "", c.status or "", c.ml_score or 0,
+            c.revenue or 0,
+            c.created_at.isoformat() if c.created_at else "",
+        ])
+
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=contacts.csv"},
+    )
 
 
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/score", status_code=status.HTTP_200_OK)

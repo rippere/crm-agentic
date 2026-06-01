@@ -828,3 +828,47 @@ async def test_compose_email_supabase_fallback_path(app_client):
     user_msg = call_args[1]["messages"][0]["content"]
     assert "Supabase Alice" in user_msg
     assert "Remote Corp" in user_msg
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/export — CSV download
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_contacts_csv_returns_csv(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    contact = MagicMock()
+    contact.id = uuid.uuid4()
+    contact.workspace_id = workspace_id
+    contact.name = "Alice"
+    contact.email = "alice@example.com"
+    contact.company = "Acme"
+    contact.role = "CEO"
+    contact.status = "customer"
+    contact.ml_score = 80
+    contact.revenue = 50000
+    contact.created_at = None
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([contact]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/export")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    lines = resp.text.strip().splitlines()
+    assert lines[0].startswith("id,name,email")
+    assert "Alice" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_export_contacts_csv_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/contacts/export")
+
+    assert resp.status_code == 403

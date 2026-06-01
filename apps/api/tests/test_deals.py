@@ -601,3 +601,36 @@ async def test_deal_timeline_returns_404_for_missing_deal(app_client):
         resp = await ac.get(f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/timeline")
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/export — CSV download
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_deals_csv_returns_csv(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Big Deal Export", value=99000.0, stage="negotiation")
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([deal]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/export")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    lines = resp.text.strip().splitlines()
+    assert lines[0].startswith("id,title,company")
+    assert "Big Deal Export" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_export_deals_csv_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/export")
+
+    assert resp.status_code == 403

@@ -18,7 +18,7 @@ import {
   Search, SlidersHorizontal, Brain, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
   Copy, X, Loader2, Zap, ClipboardList, CheckSquare, Square, Tag,
-  ExternalLink,
+  ExternalLink, Download,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -954,6 +954,7 @@ export default function ContactsPage() {
   const [hasGmailConnector, setHasGmailConnector] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { contacts, createContact } = useContacts();
@@ -1049,6 +1050,21 @@ export default function ContactsPage() {
       }
     } catch { /* silent */ }
   }, [workspaceId, token, embedPoller]);
+
+  const handleExportCsv = useCallback(async () => {
+    if (!workspaceId || !token || exportLoading) return;
+    setExportLoading(true);
+    try {
+      const blob = await apiClient.exportContactsCsv(workspaceId, token);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "contacts.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { /* silent */ }
+    finally { setExportLoading(false); }
+  }, [workspaceId, token, exportLoading]);
 
   const filtered = useMemo(() => {
     return contacts.filter((c) => {
@@ -1191,7 +1207,17 @@ export default function ContactsPage() {
           </button>
         )}
 
-        <Button variant="cta" size="sm" className="ml-auto" onClick={() => setNewContactOpen(true)}>
+        <button
+          onClick={handleExportCsv}
+          disabled={exportLoading}
+          className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-400 transition-all hover:border-zinc-700 hover:text-zinc-300 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+          title="Export contacts as CSV"
+        >
+          {exportLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+          Export CSV
+        </button>
+
+        <Button variant="cta" size="sm" onClick={() => setNewContactOpen(true)}>
           <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
           Add Contact
         </Button>
