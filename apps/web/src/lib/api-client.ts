@@ -66,6 +66,39 @@ const DEMO_CONTACT_TIMELINES: Record<string, Array<{ id: string; type: string; t
   ],
 }
 
+const DEMO_DEAL_CONTACT_MAP: Record<string, string> = {
+  'd-001': 'c-001', // Sarah Chen
+  'd-002': 'c-002', // Marcus Rivera
+  'd-003': 'c-004', // James Whitfield
+  'd-004': 'c-005', // Amara Osei
+  'd-005': 'c-006', // Lena Kowalski
+  'd-008': 'c-007', // Devon Park
+}
+
+const DEMO_DEAL_TIMELINES: Record<string, Array<{ id: string; type: string; title: string; body: string; ts: string; meta: Record<string, unknown> }>> = {
+  'd-001': [
+    { id: 'dt-001-1', type: 'activity', title: 'Pipeline Optimizer', body: 'Legal review complete. SLA uptime clause accepted with minor modification. Deal on track for May 15 close.', ts: new Date(Date.now() - 86400000).toISOString(), meta: { severity: 'success' } },
+    { id: 'dt-001-2', type: 'deal_moved', title: 'System', body: "Deal 'TechCorp Platform Expansion' updated → negotiation", ts: new Date(Date.now() - 259200000).toISOString(), meta: { severity: 'info' } },
+    { id: 'dt-001-3', type: 'message', title: 'Gmail', body: 'Inbound: Re: SLA Terms and Uptime Guarantees — legal just needs clarity on the indemnification clause.', ts: new Date(Date.now() - 432000000).toISOString(), meta: { severity: 'info' } },
+    { id: 'dt-001-4', type: 'activity', title: 'Lead Scorer', body: 'Contact score updated to 91 (hot). Signals: 3 meetings in 30 days, opened 8/10 emails.', ts: new Date(Date.now() - 604800000).toISOString(), meta: { severity: 'success' } },
+  ],
+  'd-002': [
+    { id: 'dt-002-1', type: 'activity', title: 'Pipeline Optimizer', body: 'Deal health flagged: 21 days without stage change. Follow-up email sent.', ts: new Date(Date.now() - 172800000).toISOString(), meta: { severity: 'warning' } },
+    { id: 'dt-002-2', type: 'message', title: 'Gmail', body: 'Inbound: Re: Enterprise Suite Pricing — "I need to bring it to the board next cycle."', ts: new Date(Date.now() - 1814400000).toISOString(), meta: { severity: 'info' } },
+    { id: 'dt-002-3', type: 'deal_moved', title: 'System', body: "Deal 'Global Finance Enterprise Suite' updated → proposal", ts: new Date(Date.now() - 2073600000).toISOString(), meta: { severity: 'info' } },
+    { id: 'dt-002-4', type: 'activity', title: 'Lead Scorer', body: 'Demo completed. Marcus attended with 2 team members. Score raised to 78 (hot).', ts: new Date(Date.now() - 2678400000).toISOString(), meta: { severity: 'success' } },
+  ],
+  'd-003': [
+    { id: 'dt-003-1', type: 'deal_moved', title: 'System', body: "Deal 'Accelarate Renewal + Upsell' updated → closed_won", ts: new Date(Date.now() - 3888000000).toISOString(), meta: { severity: 'success' } },
+    { id: 'dt-003-2', type: 'activity', title: 'Pipeline Optimizer', body: 'Renewed 2-year contract signed. Seat count expanded from 12 → 20. Analytics module added.', ts: new Date(Date.now() - 3888000000).toISOString(), meta: { severity: 'success' } },
+  ],
+  'd-006': [
+    { id: 'dt-006-1', type: 'activity', title: 'Pipeline Optimizer', body: 'Deal health critical: score 22. No stage change in 45 days. Re-qualification recommended.', ts: new Date(Date.now() - 86400000).toISOString(), meta: { severity: 'warning' } },
+    { id: 'dt-006-2', type: 'activity', title: 'Lead Scorer', body: 'Contact last visited website 30 days ago. Low engagement signal.', ts: new Date(Date.now() - 604800000).toISOString(), meta: { severity: 'warning' } },
+    { id: 'dt-006-3', type: 'deal_moved', title: 'System', body: "Deal 'ScalePath Japan Starter' created in discovery", ts: new Date(Date.now() - 1728000000).toISOString(), meta: { severity: 'info' } },
+  ],
+}
+
 const FASTAPI_URL = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
 
@@ -290,8 +323,33 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals`, { method: 'POST', body: JSON.stringify(data) }, token)
   },
   getDeal: (workspaceId: string, dealId: string, token: string) => {
-    if (isDemoMode) return Promise.resolve(null)
+    if (isDemoMode) {
+      const deal = demoDeals.find((d) => d.id === dealId)
+      if (!deal) return Promise.resolve(null)
+      return Promise.resolve({
+        id: deal.id,
+        workspace_id: workspaceId,
+        title: deal.title,
+        company: deal.company,
+        contact_name: deal.contactName,
+        contact_id: DEMO_DEAL_CONTACT_MAP[deal.id] ?? null,
+        value: deal.value,
+        stage: deal.stage,
+        ml_win_probability: deal.mlWinProbability,
+        health_score: deal.healthScore,
+        expected_close: deal.expectedClose,
+        assigned_agent: deal.assignedAgent,
+        notes: deal.notes,
+        created_at: deal.createdAt,
+      })
+    }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}`, {}, token)
+  },
+  getDealTimeline: (workspaceId: string, dealId: string, token: string) => {
+    if (isDemoMode) {
+      return Promise.resolve(DEMO_DEAL_TIMELINES[dealId] ?? [])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/timeline`, {}, token)
   },
   updateDeal: (workspaceId: string, dealId: string, data: { title?: string; company?: string; value?: number; stage?: string; ml_win_probability?: number; expected_close?: string; notes?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: dealId, ...data })
