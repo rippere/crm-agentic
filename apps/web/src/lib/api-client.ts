@@ -201,6 +201,40 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/messages/reprocess`, { method: 'POST' }, token)
   },
 
+  // CSV export (returns a Blob for browser download)
+  exportContactsCsv: async (workspaceId: string, token: string): Promise<Blob> => {
+    if (isDemoMode) {
+      const { demoContacts } = require('./demo-data')
+      const rows = [
+        ['id', 'name', 'email', 'company', 'role', 'status', 'ml_score', 'revenue', 'created_at'],
+        ...demoContacts.map((c: Record<string, unknown>) => [c.id, c.name, c.email, c.company, c.role, c.status, (c.mlScore as Record<string, unknown>)?.value ?? 0, c.revenue, c.createdAt]),
+      ]
+      const csv = rows.map((r) => r.join(',')).join('\n')
+      return new Blob([csv], { type: 'text/csv' })
+    }
+    const res = await fetch(`${FASTAPI_URL}/workspaces/${workspaceId}/contacts/export`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error(`Export failed: ${res.status}`)
+    return res.blob()
+  },
+  exportDealsCsv: async (workspaceId: string, token: string): Promise<Blob> => {
+    if (isDemoMode) {
+      const { demoDeals } = require('./demo-data')
+      const rows = [
+        ['id', 'title', 'company', 'contact_name', 'value', 'stage', 'ml_win_probability', 'health_score', 'expected_close', 'created_at'],
+        ...demoDeals.map((d: Record<string, unknown>) => [d.id, d.title, d.company, d.contactName, d.value, d.stage, d.mlWinProbability, d.healthScore, d.expectedClose, d.createdAt]),
+      ]
+      const csv = rows.map((r) => (r as unknown[]).join(',')).join('\n')
+      return new Blob([csv], { type: 'text/csv' })
+    }
+    const res = await fetch(`${FASTAPI_URL}/workspaces/${workspaceId}/deals/export`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error(`Export failed: ${res.status}`)
+    return res.blob()
+  },
+
   // Tasks
   getTasks: (workspaceId: string, token: string, opts?: { contactId?: string; projectId?: string }) => {
     if (isDemoMode) {

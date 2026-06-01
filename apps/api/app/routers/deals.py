@@ -1,8 +1,11 @@
+import csv
+import io
 import uuid
 from datetime import datetime, timedelta, timezone
 from calendar import month_abbr
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,6 +57,41 @@ async def list_deals(
     result = await db.execute(q)
     deals = result.scalars().all()
     return [DealResponse.model_validate(d) for d in deals]
+
+
+@router.get("/workspaces/{workspace_id}/deals/export")
+async def export_deals_csv(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Export all workspace deals as a CSV file."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(select(Deal).where(Deal.workspace_id == workspace_id))
+    deals = result.scalars().all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "id", "title", "company", "contact_name", "value",
+        "stage", "ml_win_probability", "health_score", "expected_close", "created_at",
+    ])
+    for d in deals:
+        writer.writerow([
+            str(d.id), d.title or "", d.company or "", d.contact_name or "",
+            d.value, d.stage or "", d.ml_win_probability, d.health_score,
+            d.expected_close or "",
+            d.created_at.isoformat() if d.created_at else "",
+        ])
+
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=deals.csv"},
+    )
 
 
 @router.post("/workspaces/{workspace_id}/deals/health", status_code=202)

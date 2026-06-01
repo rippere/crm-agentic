@@ -9,7 +9,7 @@ import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import { cn, formatCurrency, stageConfig, dealStageOrder, SIGNAL } from "@/lib/utils";
 import Link from "next/link";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink } from "lucide-react";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2 } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
 interface PipelineSuggestion {
@@ -339,6 +339,7 @@ export default function PipelinePage() {
   const [newDealStage, setNewDealStage] = useState<DealStage | null>(null);
   const [suggestions, setSuggestions] = useState<PipelineSuggestion[]>([]);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSelectedDeal(null); };
@@ -387,6 +388,31 @@ export default function PipelinePage() {
       ...({ expected_close: form.expectedClose || null } as unknown as Partial<Deal>),
     });
   }, [createDeal]);
+
+  const handleExportCsv = useCallback(async () => {
+    if (exportLoading) return;
+    setExportLoading(true);
+    try {
+      const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      let workspaceId = "demo-workspace-1";
+      let token = "demo-token";
+      if (!isDemoMode) {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        workspaceId = session?.user?.user_metadata?.workspace_id ?? "";
+        token = session?.access_token ?? "";
+      }
+      if (!workspaceId || !token) return;
+      const blob = await apiClient.exportDealsCsv(workspaceId, token);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "deals.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { /* silent */ }
+    finally { setExportLoading(false); }
+  }, [exportLoading]);
 
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6 min-h-screen">
@@ -490,9 +516,20 @@ export default function PipelinePage() {
             <Brain className="h-4 w-4 text-indigo-400" />
             <span className="text-xs text-zinc-400 font-mono">ML win probability · Deal health (stage staleness + engagement)</span>
           </div>
-          <Button variant="cta" size="sm" onClick={() => setNewDealStage("discovery")}>
-            <Plus className="h-3.5 w-3.5" /> New Deal
-          </Button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleExportCsv}
+              disabled={exportLoading}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-400 transition-all hover:border-zinc-700 hover:text-zinc-300 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+              title="Export deals as CSV"
+            >
+              {exportLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+              Export CSV
+            </button>
+            <Button variant="cta" size="sm" onClick={() => setNewDealStage("discovery")}>
+              <Plus className="h-3.5 w-3.5" /> New Deal
+            </Button>
+          </div>
         </div>
 
         {loading ? (
