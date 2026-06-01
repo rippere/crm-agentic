@@ -224,3 +224,74 @@ async def test_slack_sync_happy_path(app_client):
 
     assert resp.status_code == 200
     assert resp.json()["job_id"] == "slack-sync-job"
+
+
+# ---------------------------------------------------------------------------
+# POST /webhooks/slack/events — Events API webhook
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_slack_events_url_verification_challenge(app_client):
+    """Slack url_verification challenge must be echoed back."""
+    fastapi_app, mock_db, _ = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    payload = {"type": "url_verification", "challenge": "3eZbrw1aBm2rZgRNFdxV2595E9CY3gmdALWMmHkvFXO7tYXAYM8P"}
+
+    with patch("app.routers.slack._verify_slack_signature", return_value=True):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/webhooks/slack/events",
+                json=payload,
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["challenge"] == payload["challenge"]
+
+
+@pytest.mark.asyncio
+async def test_slack_events_event_callback_triggers_ingest(app_client):
+    """event_callback with a known team_id enqueues a Celery sync job."""
+    fastapi_app, mock_db, _ = app_client
+
+    connector = MagicMock()
+    connector.id = uuid.uuid4()
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(connector))
+
+    mock_task = MagicMock()
+    mock_task.id = "slack-event-job"
+
+    with patch("app.routers.slack._verify_slack_signature", return_value=True):
+        with patch("app.workers.slack_ingest.process_slack_sync") as mock_celery:
+            mock_celery.delay.return_value = mock_task
+            async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+                resp = await ac.post(
+                    "/webhooks/slack/events",
+                    json={
+                        "type": "event_callback",
+                        "team_id": "T0TESTTEAM",
+                        "event": {"type": "message", "text": "hello"},
+                    },
+                )
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_slack_events_bad_signature_returns_401(app_client):
+    """Invalid signature must be rejected with 401."""
+    fastapi_app, mock_db, _ = app_client
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/webhooks/slack/events",
+            json={"type": "url_verification", "challenge": "abc"},
+            headers={
+                "x-slack-request-timestamp": "1000000000",
+                "x-slack-signature": "v0=invalid",
+            },
+        )
+
+    assert resp.status_code == 401

@@ -5,14 +5,20 @@ Endpoints:
   GET  /workspaces/{id}/connectors/slack/auth    — build OAuth URL
   GET  /auth/slack/callback                       — exchange code, store tokens
   POST /workspaces/{id}/connectors/slack/sync    — trigger Celery ingest
+  POST /workspaces/{id}/connectors/slack/subscribe — verify Events API URL
+  POST /webhooks/slack/events                     — receive Slack Events API events
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import logging
+import time
 import uuid as uuid_mod
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +31,8 @@ from app.models.connector import Connector
 from app.models.user import User
 from app.services.crypto import encrypt_token
 from app.services.oauth_state import build_state, verify_state
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -175,3 +183,105 @@ async def slack_sync(
 
     task = process_slack_sync.delay(str(connector.id))
     return {"job_id": task.id}
+
+
+# ---------------------------------------------------------------------------
+# Slack Events API — push webhook
+# ---------------------------------------------------------------------------
+
+
+def _verify_slack_signature(
+    body: bytes,
+    timestamp: str | None,
+    signature: str | None,
+    signing_secret: str,
+) -> bool:
+    """Verify Slack request signature using HMAC-SHA256.
+
+    Slack signs each request with HMAC-SHA256(signing_secret, "v0:{ts}:{body}").
+    We also check that the timestamp is within 5 minutes to prevent replay attacks.
+
+    Returns True when SLACK_SIGNING_SECRET is empty (dev/test mode).
+    """
+    if not signing_secret:
+        return True  # dev mode — accept all
+    if not timestamp or not signature:
+        return False
+    try:
+        ts = int(timestamp)
+    except ValueError:
+        return False
+    if abs(time.time() - ts) > 300:
+        return False  # replay attack window
+    base = f"v0:{timestamp}:{body.decode('utf-8', errors='replace')}"
+    expected = "v0=" + hmac.new(  # type: ignore[attr-defined]
+        signing_secret.encode(), base.encode(), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+async def _trigger_slack_ingest_for_team(team_id: str, db: AsyncSession) -> str | None:
+    """Find the Slack connector matching the team and enqueue a sync."""
+    result = await db.execute(
+        select(Connector).where(
+            Connector.service == "slack",
+            Connector.external_email == team_id,
+        )
+    )
+    connector = result.scalar_one_or_none()
+    if connector is None:
+        logger.warning("slack_push_no_connector team_id=%s", team_id)
+        return None
+
+    from app.workers.slack_ingest import process_slack_sync
+
+    task = process_slack_sync.delay(str(connector.id))
+    logger.info("slack_push_ingest_queued connector=%s job=%s", connector.id, task.id)
+    return task.id
+
+
+@router.post("/webhooks/slack/events", status_code=200)
+async def slack_events_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_slack_request_timestamp: str | None = Header(default=None),
+    x_slack_signature: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Receive Slack Events API payloads.
+
+    Handles:
+    - url_verification challenge (Slack sends during app setup)
+    - event_callback for message events (triggers Celery ingest)
+
+    Slack signs each request; we verify with HMAC-SHA256 before processing.
+    Configure SLACK_SIGNING_SECRET to enable signature verification.
+    """
+    raw_body = await request.body()
+
+    if not _verify_slack_signature(
+        raw_body,
+        x_slack_request_timestamp,
+        x_slack_signature,
+        settings.SLACK_SIGNING_SECRET,
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Slack signature")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
+
+    event_type = payload.get("type")
+
+    # Slack sends a url_verification challenge when the endpoint is first registered
+    if event_type == "url_verification":
+        return {"challenge": payload.get("challenge")}
+
+    if event_type == "event_callback":
+        team_id: str | None = payload.get("team_id")
+        if team_id:
+            background_tasks.add_task(_trigger_slack_ingest_for_team, team_id, db)
+        logger.info("slack_event_received team=%s type=%s", team_id, payload.get("event", {}).get("type"))
+
+    return {"ok": True}
