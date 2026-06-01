@@ -8,7 +8,8 @@ import { useDeals } from "@/hooks/useDeals";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import { cn, formatCurrency, stageConfig, dealStageOrder, SIGNAL } from "@/lib/utils";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap } from "lucide-react";
+import Link from "next/link";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
 interface PipelineSuggestion {
@@ -52,16 +53,28 @@ const stageBorderColor: Record<string, string> = {
 function DealCard({ deal, onSelect }: { deal: Deal; onSelect: () => void }) {
   const borderColor = stageBorderColor[deal.stage] ?? "#52525B";
   return (
-    <button
-      type="button"
-      className="group w-full text-left rounded-xl border border-zinc-800/70 bg-zinc-900/70 p-3.5 hover:border-zinc-700/80 hover:bg-zinc-900 transition-all duration-200 cursor-pointer space-y-2.5 border-l-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950"
+    <div
+      className="group w-full text-left rounded-xl border border-zinc-800/70 bg-zinc-900/70 p-3.5 hover:border-zinc-700/80 hover:bg-zinc-900 transition-all duration-200 cursor-pointer space-y-2.5 border-l-2"
       style={{ borderLeftColor: borderColor }}
       onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onSelect(); }}
       aria-label={`${deal.title} — ${formatCurrency(deal.value)}`}
     >
       <div className="flex items-start justify-between gap-2">
         <p className="text-sm font-semibold text-zinc-100 leading-snug group-hover:text-white transition-colors">{deal.title}</p>
-        <span className="text-xs font-mono font-bold text-zinc-100 flex-shrink-0">{formatCurrency(deal.value)}</span>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <Link
+            href={`/pipeline/${deal.id}`}
+            onClick={(e) => e.stopPropagation()}
+            className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-600 hover:text-zinc-400 p-0.5"
+            aria-label="Open deal detail"
+          >
+            <ExternalLink className="h-3 w-3" />
+          </Link>
+          <span className="text-xs font-mono font-bold text-zinc-100">{formatCurrency(deal.value)}</span>
+        </div>
       </div>
       <div>
         <p className="text-xs text-zinc-400 truncate">{deal.company}</p>
@@ -96,7 +109,7 @@ function DealCard({ deal, onSelect }: { deal: Deal; onSelect: () => void }) {
         <span className="text-[10px] text-zinc-500 font-mono truncate">Closes {deal.expectedClose}</span>
         <span className="text-[10px] text-indigo-400 font-mono truncate flex-shrink-0">{deal.assignedAgent}</span>
       </div>
-    </button>
+    </div>
   );
 }
 

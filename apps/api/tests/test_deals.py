@@ -544,3 +544,60 @@ async def test_trigger_pipeline_optimize_wrong_workspace_returns_403(app_client)
         resp = await ac.post(f"/workspaces/{wrong_id}/pipeline/optimize")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{deal_id}/timeline
+# ---------------------------------------------------------------------------
+
+
+def _fake_activity(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
+    from app.models.activity_event import ActivityEvent
+    evt = MagicMock(spec=ActivityEvent)
+    evt.id = uuid.uuid4()
+    evt.workspace_id = workspace_id
+    evt.type = kwargs.get("type", "activity")
+    evt.agent_name = kwargs.get("agent_name", "System")
+    evt.description = kwargs.get("description", "Some event")
+    evt.severity = kwargs.get("severity", "info")
+    evt.created_at = kwargs.get("created_at", _NOW)
+    return evt
+
+
+@pytest.mark.asyncio
+async def test_deal_timeline_returns_events(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Test Deal Alpha")
+    evt = _fake_activity(workspace_id, description="Deal 'Test Deal Alpha' updated → proposal", type="deal_moved")
+
+    call_count = 0
+
+    async def _execute_side_effect(q):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_scalar_result(deal)
+        return _make_scalars_result([evt])
+
+    mock_db.execute = AsyncMock(side_effect=_execute_side_effect)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/timeline")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 1
+    assert data[0]["type"] == "deal_moved"
+    assert data[0]["body"] == "Deal 'Test Deal Alpha' updated → proposal"
+
+
+@pytest.mark.asyncio
+async def test_deal_timeline_returns_404_for_missing_deal(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/timeline")
+
+    assert resp.status_code == 404

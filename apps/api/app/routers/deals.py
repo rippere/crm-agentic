@@ -343,6 +343,50 @@ async def update_deal(
     return DealResponse.model_validate(deal)
 
 
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/timeline")
+async def get_deal_timeline(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return activity events related to this deal, ordered newest-first."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    q = select(ActivityEvent).where(ActivityEvent.workspace_id == workspace_id)
+    if deal.title:
+        from sqlalchemy import or_
+        q = q.where(
+            or_(
+                ActivityEvent.description.ilike(f"%{deal.title}%"),
+                ActivityEvent.type == "deal_moved",
+            )
+        )
+    q = q.order_by(ActivityEvent.created_at.desc()).limit(20)
+
+    result = await db.execute(q)
+    events = result.scalars().all()
+    return [
+        {
+            "id": str(e.id),
+            "type": e.type or "activity",
+            "title": e.agent_name or e.type or "activity",
+            "body": e.description or "",
+            "ts": e.created_at.isoformat() if e.created_at else None,
+            "meta": {"severity": e.severity},
+        }
+        for e in events
+    ]
+
+
 @router.delete("/workspaces/{workspace_id}/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_deal(
     workspace_id: uuid.UUID,
