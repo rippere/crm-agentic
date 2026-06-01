@@ -24,16 +24,21 @@
 - [2026-05-30] Phase 5b: Contact detail page at /contacts/[id] — identity card, ML score, semantic tags, revenue, associated deals (with health bar), tasks (open/done split), timeline, meeting brief modal, email compose modal; ExternalLink icon in drawer header; contact_id filter added to GET /deals and GET /tasks routers; api-client updated (listDeals opts, getTasks opts.contactId)
 - [2026-05-30] Phase 5c: Gmail push webhooks — POST /workspaces/{id}/connectors/gmail/subscribe (calls Gmail users.watch() to register Pub/Sub); POST /webhooks/gmail/push (receives Pub/Sub notifications, verifies GMAIL_WEBHOOK_SECRET, triggers Celery ingest); GMAIL_WEBHOOK_SECRET + GMAIL_PUBSUB_TOPIC added to config + .env.example; 9 new tests; total 304 tests pass
 
+- [2026-06-01] Phase 6a: Deal detail page /pipeline/[id] — identity card (value, health, ML win prob, stage badge), metadata, associated contact card (ExternalLink to /contacts/[id]), notes, stage mover grid (all other stages), tasks (contact-scoped), activity timeline; pipeline board DealCard refactored to div with hover-visible ExternalLink icon; getDeal demo stub fixed; getDealTimeline added; FastAPI GET /deals/{id}/timeline endpoint; 2 new tests; 305 tests pass
+- [2026-06-01] Phase 6b: Slack Events API push webhook — POST /webhooks/slack/events with HMAC-SHA256 signature verification (5-min replay-attack window), url_verification challenge, event_callback triggers Celery sync; 3 new tests; SLACK_SIGNING_SECRET added to .env.example; 308 tests pass
+- [2026-06-01] Phase 6c: CSV export — GET /contacts/export + GET /deals/export (StreamingResponse text/csv); exportContactsCsv()/exportDealsCsv() in api-client (fetch Blob + browser download trigger); Export CSV buttons on contacts page and pipeline page; demo mode generates CSV from in-memory data; 4 new tests; 312 tests pass
+
 ## Current Phase
-Phase 5 — CI Hardening, Contact Detail, Gmail Push Webhooks
+Phase 6 — Deal Detail, Slack Webhook, CSV Export
 
 ## Next Task
-Phase 5 complete. Suggested Phase 6: (a) Deal detail page /pipeline/[id], (b) Slack push webhook (similar to Gmail), (c) Playwright E2E smoke tests, (d) Rate-limit headers in API responses, (e) CSV export for contacts/deals.
+Phase 6 complete. Suggested Phase 7: (a) Rate-limit headers in API responses (slowapi with X-RateLimit-* headers), (b) Playwright E2E smoke tests (login→dashboard→contacts→pipeline→deal detail flow), (c) Activity feed realtime (Supabase Realtime on activity_events table instead of polling), (d) Bulk deal operations (bulk stage-move, bulk delete from pipeline board).
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
 - Local DATABASE_URL points to localhost:5433 (Docker Postgres) — /health returns `degraded` locally unless docker-compose is running. Supabase production credentials ARE present in apps/api/.env and apps/web/.env.local.
 - GMAIL_PUBSUB_TOPIC and GMAIL_WEBHOOK_SECRET not set — Gmail push notifications won't work until these are configured via Railway/Render dashboard + Google Cloud Console.
+- SLACK_SIGNING_SECRET not set — Slack Events API webhook will reject all requests in production until configured via Slack app settings.
 
 ## Resolved (previously listed as blockers)
 - [2026-05-28] Supabase credentials confirmed present in apps/api/.env and apps/web/.env.local (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET, NEXT_PUBLIC_SUPABASE_ANON_KEY all set)
