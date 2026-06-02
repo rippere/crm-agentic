@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 
 import anthropic as _anthropic
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_, select, insert
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.limiter import limiter
 from app.models.user import User
 from app.models.contact import Contact
 from app.models.activity_event import ActivityEvent
@@ -181,7 +182,9 @@ class EmailDraftResponse(BaseModel):
 
 
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/compose", response_model=EmailDraftResponse)
+@limiter.limit("10/minute")
 async def compose_email(
+    request: Request,
     workspace_id: uuid.UUID,
     contact_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -257,7 +260,9 @@ async def compose_email(
 
 
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/enrich", status_code=202)
+@limiter.limit("5/minute")
 async def enrich_contact_endpoint(
+    request: Request,
     workspace_id: uuid.UUID,
     contact_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -581,7 +586,9 @@ async def contact_timeline(
 
 
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/brief")
+@limiter.limit("10/minute")
 async def pre_meeting_brief(
+    request: Request,
     workspace_id: uuid.UUID,
     contact_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),

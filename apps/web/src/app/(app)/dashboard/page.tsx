@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
@@ -235,7 +235,6 @@ export default function DashboardPage() {
   const [revenueHistory, setRevenueHistory] = useState<{ month: string; revenue: number }[]>([]);
   const [pollToken, setPollToken] = useState<string | null>(null);
   const [pollWorkspaceId, setPollWorkspaceId] = useState<string | null>(null);
-  const esRef = useRef<EventSource | null>(null);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -258,13 +257,14 @@ export default function DashboardPage() {
     }
 
     const supabase = createBrowserClient();
+    let realtimeChannelRef: ReturnType<typeof supabase.channel> | null = null;
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) return;
       const workspaceId: string | undefined = session.user.user_metadata?.workspace_id;
       setPollToken(session.access_token);
       if (workspaceId) setPollWorkspaceId(workspaceId);
 
-      // Seed activity feed with recent events, then switch to SSE
+      // Seed activity feed with recent events, then subscribe to Realtime
       if (workspaceId) {
         apiClient.listActivity(workspaceId, session.access_token, 20)
           .then((data: Array<{ id: string; type: string; agent_name: string; description: string; meta?: string; severity: string; created_at: string }>) => {
@@ -304,25 +304,33 @@ export default function DashboardPage() {
         .then((data) => { if (Array.isArray(data)) setRevenueHistory(data); })
         .catch(() => {});
 
-      // Open SSE stream for live activity updates
-      if (esRef.current) esRef.current.close();
-      const es = new EventSource(`/api/events?workspaceId=${workspaceId}&token=${encodeURIComponent(session.access_token)}`);
-      esRef.current = es;
-      es.onmessage = (e) => {
-        try {
-          const ev = JSON.parse(e.data) as { id: string; type: string; agent_name: string; description: string; meta?: string; severity: string; created_at: string };
-          const mapped: ActivityEvent = {
-            id: ev.id,
-            type: ev.type as ActivityEvent["type"],
-            agentName: ev.agent_name,
-            description: ev.description,
-            meta: ev.meta,
-            severity: ev.severity as ActivityEvent["severity"],
-            timestamp: "Just now",
-          };
-          setLiveActivity((prev) => [mapped, ...prev].slice(0, 50));
-        } catch { /* ignore malformed */ }
-      };
+      // Subscribe to Supabase Realtime for live activity feed
+      const channel = supabase
+        .channel(`activity-feed:${workspaceId}`)
+        .on(
+          "postgres_changes" as Parameters<ReturnType<typeof supabase.channel>["on"]>[0],
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "activity_events",
+            filter: `workspace_id=eq.${workspaceId}`,
+          },
+          (payload: { new: Record<string, unknown> }) => {
+            const ev = payload.new as { id: string; type: string; agent_name: string; description: string; meta?: string; severity: string };
+            const mapped: ActivityEvent = {
+              id: ev.id,
+              type: ev.type as ActivityEvent["type"],
+              agentName: ev.agent_name,
+              description: ev.description,
+              meta: ev.meta,
+              severity: ev.severity as ActivityEvent["severity"],
+              timestamp: "Just now",
+            };
+            setLiveActivity((prev) => [mapped, ...prev].slice(0, 50));
+          }
+        )
+        .subscribe();
+      realtimeChannelRef = channel;
 
       // Fetch PM aggregate KPIs + stale deals in parallel
       try {
@@ -361,7 +369,9 @@ export default function DashboardPage() {
         // Non-critical — dashboard still renders with sales KPIs
       }
     });
-    return () => { esRef.current?.close(); };
+    return () => {
+      if (realtimeChannelRef) supabase.removeChannel(realtimeChannelRef);
+    };
   }, []);
 
   // 30s polling for stale deal health (live mode only)

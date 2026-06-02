@@ -393,6 +393,10 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve()
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}`, { method: 'DELETE' }, token)
   },
+  bulkDealAction: (workspaceId: string, data: { action: 'move_stage' | 'delete'; deal_ids: string[]; stage?: string }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ action: data.action, updated: data.deal_ids.length, deal_ids: data.deal_ids })
+    return apiFetch(`/workspaces/${workspaceId}/deals/bulk`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
 
   // Deal health
   triggerDealHealth: (workspaceId: string, token: string) => {

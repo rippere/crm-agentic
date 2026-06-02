@@ -21,13 +21,14 @@ import tempfile
 import uuid as uuid_mod
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.limiter import limiter
 from app.models.call_summary import CallSummary
 from app.models.user import User
 
@@ -38,7 +39,9 @@ MAX_UPLOAD_MB = int(os.getenv("MAX_CALL_UPLOAD_MB", "50"))
 
 
 @router.post("/workspaces/{workspace_id}/calls/upload", status_code=202)
+@limiter.limit("10/minute")
 async def upload_call(
+    request: Request,
     workspace_id: uuid_mod.UUID,
     file: UploadFile = File(...),
     title: str = Form(default="Untitled Call"),

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.limiter import limiter
 from app.models.user import User
 from app.models.message import Message
 from app.models.clarity_score import ClarityScore
@@ -62,7 +63,9 @@ class ScoreClarityResponse(BaseModel):
     response_model=ScoreClarityResponse,
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit("10/minute")
 async def score_message_clarity(
+    request: Request,
     workspace_id: uuid.UUID,
     message_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
