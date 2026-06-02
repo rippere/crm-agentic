@@ -402,7 +402,7 @@ async def test_pipeline_suggestions_low_probability_review(app_client):
         stage="negotiation",
         title="Long Shot",
         value=5000.0,
-        stage_changed_at=_NOW - timedelta(days=5),
+        stage_changed_at=datetime.now(timezone.utc) - timedelta(days=5),
         ml_win_probability=20,
     )
     mock_db.execute = AsyncMock(return_value=_make_scalars_result([deal]))
@@ -634,3 +634,92 @@ async def test_export_deals_csv_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/export")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Bulk deal operations
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_move_stage(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal1 = _fake_deal(workspace_id, stage="discovery")
+    deal2 = _fake_deal(workspace_id, stage="qualified")
+
+    execute_results = [
+        _make_scalars_result([deal1, deal2]),  # SELECT deals
+        MagicMock(),  # INSERT activity event
+    ]
+    mock_db.execute = AsyncMock(side_effect=execute_results)
+
+    payload = {
+        "action": "move_stage",
+        "deal_ids": [str(deal1.id), str(deal2.id)],
+        "stage": "proposal",
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{workspace_id}/deals/bulk", json=payload)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action"] == "move_stage"
+    assert data["updated"] == 2
+    assert len(data["deal_ids"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, stage="discovery", title="Kill Me")
+
+    execute_results = [
+        _make_scalars_result([deal]),  # SELECT deals
+        MagicMock(),  # INSERT activity event
+    ]
+    mock_db.execute = AsyncMock(side_effect=execute_results)
+
+    payload = {"action": "delete", "deal_ids": [str(deal.id)]}
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{workspace_id}/deals/bulk", json=payload)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action"] == "delete"
+    assert data["updated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_invalid_action_returns_422(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    payload = {"action": "nuke_all", "deal_ids": [str(uuid.uuid4())]}
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{workspace_id}/deals/bulk", json=payload)
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_bulk_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    payload = {"action": "delete", "deal_ids": [str(uuid.uuid4())]}
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/deals/bulk", json=payload)
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_bulk_empty_ids_returns_422(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    payload = {"action": "delete", "deal_ids": []}
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{workspace_id}/deals/bulk", json=payload)
+
+    assert resp.status_code == 422

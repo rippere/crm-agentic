@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import uuid as uuid_mod
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.limiter import limiter
 from app.models.contact import Contact
 from app.models.user import User
 
@@ -127,7 +128,9 @@ async def trigger_embed(
 
 
 @router.post("/workspaces/{workspace_id}/contacts/embed-all", status_code=202)
+@limiter.limit("2/minute")
 async def trigger_embed_all(
+    request: Request,
     workspace_id: uuid_mod.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),

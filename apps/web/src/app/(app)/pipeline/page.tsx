@@ -9,7 +9,7 @@ import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import { cn, formatCurrency, stageConfig, dealStageOrder, SIGNAL } from "@/lib/utils";
 import Link from "next/link";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2 } from "lucide-react";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
 interface PipelineSuggestion {
@@ -50,20 +50,46 @@ const stageBorderColor: Record<string, string> = {
   closed_lost: "#F43F5E",
 };
 
-function DealCard({ deal, onSelect }: { deal: Deal; onSelect: () => void }) {
+function DealCard({ deal, onSelect, selected, onToggleSelect, selectionActive }: {
+  deal: Deal;
+  onSelect: () => void;
+  selected: boolean;
+  onToggleSelect: (e: React.MouseEvent) => void;
+  selectionActive: boolean;
+}) {
   const borderColor = stageBorderColor[deal.stage] ?? "#52525B";
   return (
     <div
-      className="group w-full text-left rounded-xl border border-zinc-800/70 bg-zinc-900/70 p-3.5 hover:border-zinc-700/80 hover:bg-zinc-900 transition-all duration-200 cursor-pointer space-y-2.5 border-l-2"
-      style={{ borderLeftColor: borderColor }}
-      onClick={onSelect}
+      className={cn(
+        "group w-full text-left rounded-xl border bg-zinc-900/70 p-3.5 transition-all duration-200 cursor-pointer space-y-2.5 border-l-2",
+        selected
+          ? "border-indigo-500/60 bg-indigo-500/5"
+          : "border-zinc-800/70 hover:border-zinc-700/80 hover:bg-zinc-900",
+      )}
+      style={{ borderLeftColor: selected ? "#6366F1" : borderColor }}
+      onClick={selectionActive ? onToggleSelect : onSelect}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onSelect(); }}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") selectionActive ? onToggleSelect(e as unknown as React.MouseEvent) : onSelect(); }}
       aria-label={`${deal.title} — ${formatCurrency(deal.value)}`}
+      aria-pressed={selectionActive ? selected : undefined}
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-semibold text-zinc-100 leading-snug group-hover:text-white transition-colors">{deal.title}</p>
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleSelect(e); }}
+            className={cn(
+              "flex-shrink-0 transition-opacity",
+              selectionActive ? "opacity-100" : "opacity-0 group-hover:opacity-60",
+            )}
+            aria-label={selected ? "Deselect deal" : "Select deal"}
+          >
+            {selected
+              ? <CheckSquare className="h-3.5 w-3.5 text-indigo-400" />
+              : <Square className="h-3.5 w-3.5 text-zinc-500" />}
+          </button>
+          <p className="text-sm font-semibold text-zinc-100 leading-snug group-hover:text-white transition-colors truncate">{deal.title}</p>
+        </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <Link
             href={`/pipeline/${deal.id}`}
@@ -118,14 +144,19 @@ function StageColumn({
   deals,
   onSelect,
   onAddDeal,
+  selectedIds,
+  onToggleSelect,
 }: {
   stage: DealStage;
   deals: Deal[];
   onSelect: (d: Deal) => void;
   onAddDeal: (stage: DealStage) => void;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
 }) {
   const cfg = stageConfig[stage];
   const totalValue = deals.reduce((sum, d) => sum + d.value, 0);
+  const selectionActive = selectedIds.size > 0;
   return (
     <div className="flex flex-col min-w-[240px] w-[240px] flex-shrink-0">
       <div className={cn("flex items-center justify-between rounded-xl border px-3 py-2.5 mb-3", cfg.bg, "border-zinc-800")}>
@@ -137,7 +168,14 @@ function StageColumn({
       </div>
       <div className="flex flex-col gap-2.5 min-h-[120px]">
         {deals.map((deal) => (
-          <DealCard key={deal.id} deal={deal} onSelect={() => onSelect(deal)} />
+          <DealCard
+            key={deal.id}
+            deal={deal}
+            onSelect={() => onSelect(deal)}
+            selected={selectedIds.has(deal.id)}
+            onToggleSelect={(e) => { e.stopPropagation(); onToggleSelect(deal.id); }}
+            selectionActive={selectionActive}
+          />
         ))}
         {deals.length === 0 && (
           <div className="flex h-20 items-center justify-center rounded-xl border border-dashed border-zinc-800 text-xs text-zinc-600">No deals</div>
@@ -334,12 +372,15 @@ function NewDealModal({ defaultStage, onClose, onCreate }: { defaultStage: DealS
 }
 
 export default function PipelinePage() {
-  const { deals, loading, createDeal, updateDeal } = useDeals();
+  const { deals, loading, createDeal, updateDeal, refetch } = useDeals();
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [newDealStage, setNewDealStage] = useState<DealStage | null>(null);
   const [suggestions, setSuggestions] = useState<PipelineSuggestion[]>([]);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkStageTarget, setBulkStageTarget] = useState<DealStage | null>(null);
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSelectedDeal(null); };
@@ -388,6 +429,57 @@ export default function PipelinePage() {
       ...({ expected_close: form.expectedClose || null } as unknown as Partial<Deal>),
     });
   }, [createDeal]);
+
+  const handleToggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleClearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  const handleBulkDelete = useCallback(async () => {
+    if (!selectedIds.size || bulkLoading) return;
+    setBulkLoading(true);
+    try {
+      const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      if (!isDemoMode) {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        const workspaceId = session?.user?.user_metadata?.workspace_id ?? "";
+        const token = session?.access_token ?? "";
+        if (workspaceId && token) {
+          await apiClient.bulkDealAction(workspaceId, { action: "delete", deal_ids: Array.from(selectedIds) }, token);
+        }
+      }
+      setSelectedIds(new Set());
+      await refetch();
+    } catch { /* silent */ }
+    finally { setBulkLoading(false); }
+  }, [selectedIds, bulkLoading, refetch]);
+
+  const handleBulkMoveStage = useCallback(async (stage: DealStage) => {
+    if (!selectedIds.size || bulkLoading) return;
+    setBulkLoading(true);
+    try {
+      const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      if (!isDemoMode) {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        const workspaceId = session?.user?.user_metadata?.workspace_id ?? "";
+        const token = session?.access_token ?? "";
+        if (workspaceId && token) {
+          await apiClient.bulkDealAction(workspaceId, { action: "move_stage", deal_ids: Array.from(selectedIds), stage }, token);
+        }
+      }
+      setSelectedIds(new Set());
+      setBulkStageTarget(null);
+      await (refetch as () => Promise<void>)();
+    } catch { /* silent */ }
+    finally { setBulkLoading(false); }
+  }, [selectedIds, bulkLoading, refetch]);
 
   const handleExportCsv = useCallback(async () => {
     if (exportLoading) return;
@@ -548,16 +640,70 @@ export default function PipelinePage() {
                 key={stage}
                 stage={stage}
                 deals={deals.filter((d) => d.stage === stage)}
-                onSelect={setSelectedDeal}
+                onSelect={(d) => { if (!selectedIds.size) setSelectedDeal(d); }}
                 onAddDeal={setNewDealStage}
+                selectedIds={selectedIds}
+                onToggleSelect={handleToggleSelect}
               />
             ))}
           </div>
         )}
       </div>
 
+      {/* Bulk action toolbar */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-2xl border border-indigo-500/30 bg-zinc-950/95 backdrop-blur px-5 py-3 shadow-2xl shadow-black/60">
+          <span className="text-sm font-medium text-zinc-300">
+            {selectedIds.size} deal{selectedIds.size !== 1 ? "s" : ""} selected
+          </span>
+          <div className="h-4 w-px bg-zinc-700" />
+          <div className="relative">
+            <button
+              onClick={() => setBulkStageTarget(bulkStageTarget ? null : "qualified")}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:border-indigo-500/50 hover:bg-zinc-700 transition-all"
+              disabled={bulkLoading}
+            >
+              <ArrowRight className="h-3 w-3" />
+              Move stage
+            </button>
+            {bulkStageTarget !== null && (
+              <div className="absolute bottom-full mb-2 left-0 w-44 rounded-xl border border-zinc-700 bg-zinc-900 py-1 shadow-xl">
+                {dealStageOrder.map((s) => {
+                  const cfg = stageConfig[s];
+                  return (
+                    <button
+                      key={s}
+                      onClick={() => handleBulkMoveStage(s)}
+                      disabled={bulkLoading}
+                      className={cn("w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors", cfg.color)}
+                    >
+                      {cfg.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={handleBulkDelete}
+            disabled={bulkLoading}
+            className="flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-400 hover:bg-rose-500/20 transition-all disabled:opacity-50"
+          >
+            {bulkLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+            Delete
+          </button>
+          <button
+            onClick={handleClearSelection}
+            className="text-zinc-500 hover:text-zinc-300 transition-colors"
+            aria-label="Clear selection"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Deal detail panel */}
-      {selectedDeal && (
+      {selectedDeal && !selectedIds.size && (
         <>
           <div className="fixed inset-0 bg-black/40 z-30" onClick={() => setSelectedDeal(null)} />
           <DealDetailPanel deal={selectedDeal} onClose={() => setSelectedDeal(null)} onStageChange={handleStageChange} />

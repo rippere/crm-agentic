@@ -3,6 +3,7 @@ import io
 import uuid
 from datetime import datetime, timedelta, timezone
 from calendar import month_abbr
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -453,3 +454,87 @@ async def delete_deal(
     )
     db.add(event)
     await db.commit()
+
+
+_VALID_STAGES = {"discovery", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"}
+
+
+class BulkDealRequest(BaseModel):
+    action: Literal["move_stage", "delete"]
+    deal_ids: list[uuid.UUID]
+    stage: str | None = None
+
+
+class BulkDealResponse(BaseModel):
+    action: str
+    updated: int
+    deal_ids: list[str]
+
+
+@router.post("/workspaces/{workspace_id}/deals/bulk", response_model=BulkDealResponse)
+async def bulk_deal_action(
+    workspace_id: uuid.UUID,
+    body: BulkDealRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BulkDealResponse:
+    """Bulk move deals to a new stage or bulk delete deals."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if not body.deal_ids:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="deal_ids must not be empty")
+
+    if len(body.deal_ids) > 100:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Maximum 100 deals per bulk operation")
+
+    if body.action == "move_stage":
+        if not body.stage or body.stage not in _VALID_STAGES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"stage must be one of {sorted(_VALID_STAGES)}",
+            )
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.id.in_(body.deal_ids),
+        )
+    )
+    deals = result.scalars().all()
+
+    if not deals:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No matching deals found")
+
+    updated_ids = [str(d.id) for d in deals]
+
+    if body.action == "move_stage":
+        now = datetime.now(timezone.utc)
+        for deal in deals:
+            if deal.stage != body.stage:
+                deal.stage = body.stage  # type: ignore[assignment]
+                deal.stage_changed_at = now
+                db.add(deal)
+        event = ActivityEvent(
+            workspace_id=workspace_id,
+            type="deal_moved",
+            agent_name="System",
+            description=f"Bulk moved {len(deals)} deal(s) → {body.stage}",
+            severity="info",
+        )
+        db.add(event)
+    else:
+        titles = [d.title or str(d.id) for d in deals]
+        for deal in deals:
+            await db.delete(deal)
+        event = ActivityEvent(
+            workspace_id=workspace_id,
+            type="deal_deleted",
+            agent_name="System",
+            description=f"Bulk deleted {len(deals)} deal(s): {', '.join(titles[:3])}" + ("…" if len(titles) > 3 else ""),
+            severity="warning",
+        )
+        db.add(event)
+
+    await db.commit()
+    return BulkDealResponse(action=body.action, updated=len(deals), deal_ids=updated_ids)

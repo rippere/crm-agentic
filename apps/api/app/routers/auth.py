@@ -1,13 +1,14 @@
 import uuid
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.limiter import limiter
 from app.models.agent import Agent
 from app.models.user import User
 from app.models.workspace import Workspace
@@ -53,7 +54,9 @@ class VerifyResponse(BaseModel):
 
 
 @router.post("/auth/verify", response_model=VerifyResponse)
+@limiter.limit("30/minute")
 async def verify(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> VerifyResponse:
