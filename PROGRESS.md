@@ -28,11 +28,16 @@
 - [2026-06-01] Phase 6b: Slack Events API push webhook — POST /webhooks/slack/events with HMAC-SHA256 signature verification (5-min replay-attack window), url_verification challenge, event_callback triggers Celery sync; 3 new tests; SLACK_SIGNING_SECRET added to .env.example; 308 tests pass
 - [2026-06-01] Phase 6c: CSV export — GET /contacts/export + GET /deals/export (StreamingResponse text/csv); exportContactsCsv()/exportDealsCsv() in api-client (fetch Blob + browser download trigger); Export CSV buttons on contacts page and pipeline page; demo mode generates CSV from in-memory data; 4 new tests; 312 tests pass
 
+- [2026-06-02] Phase 7a: Rate-limit headers — applied @limiter.limit() to all expensive/AI endpoints: auth/verify (30/min), compose (10/min), brief (10/min), enrich (5/min), score-clarity (10/min), embed-all (2/min), call upload (10/min)
+- [2026-06-02] Phase 7b: Playwright E2E smoke tests — playwright.config.ts; e2e/smoke.spec.ts (8 tests: dashboard, contacts, pipeline, deal detail, agents, inbox, tasks, settings); CI e2e job builds demo-mode app + runs chromium, uploads failure artifacts
+- [2026-06-02] Phase 7c: Supabase Realtime activity feed — replaced EventSource/SSE in dashboard with supabase.channel().on('postgres_changes', INSERT, activity_events); cleanup on unmount
+- [2026-06-02] Phase 7d: Bulk deal operations — POST /workspaces/{id}/deals/bulk (move_stage|delete, max 100 IDs); DealCard checkboxes (hover visible, always visible in selection mode); fixed bottom toolbar with Move Stage dropdown + Delete; apiClient.bulkDealAction(); fixed time-dependent test; 318 tests pass
+
 ## Current Phase
-Phase 6 — Deal Detail, Slack Webhook, CSV Export
+Phase 7 — Rate limiting, E2E tests, Realtime, Bulk operations
 
 ## Next Task
-Phase 6 complete. Suggested Phase 7: (a) Rate-limit headers in API responses (slowapi with X-RateLimit-* headers), (b) Playwright E2E smoke tests (login→dashboard→contacts→pipeline→deal detail flow), (c) Activity feed realtime (Supabase Realtime on activity_events table instead of polling), (d) Bulk deal operations (bulk stage-move, bulk delete from pipeline board).
+Phase 8 (suggested): (a) Contact import via CSV upload (POST /workspaces/{id}/contacts/import, parse CSV, upsert rows, return {imported, skipped, errors}); (b) Notifications panel — bell icon in header, drawer showing recent activity_events with mark-all-read; (c) Deal probability trend chart on deal detail page (last 30 days of ml_win_probability via activity events); (d) Workspace analytics page /reports — pipeline funnel chart (deals per stage), conversion rate, avg deal cycle time.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
