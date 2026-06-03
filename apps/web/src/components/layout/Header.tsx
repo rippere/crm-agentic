@@ -29,11 +29,15 @@ function timeAgo(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+const LS_LAST_READ_KEY = "crm_notif_last_read";
+
 export default function Header({ title, subtitle }: HeaderProps) {
   const [searchFocused, setSearchFocused] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [events, setEvents] = useState<NotifEvent[]>([]);
-  const [seen, setSeen] = useState(false);
+  const [lastRead, setLastRead] = useState<number>(() => {
+    try { return parseInt(localStorage.getItem(LS_LAST_READ_KEY) ?? "0", 10); } catch { return 0; }
+  });
   const notifRef = useRef<HTMLDivElement>(null);
 
   // Fetch on first open
@@ -50,11 +54,6 @@ export default function Header({ title, subtitle }: HeaderProps) {
     });
   }, [notifOpen, events.length]);
 
-  // Mark seen when opened
-  useEffect(() => {
-    if (notifOpen) setSeen(true);
-  }, [notifOpen]);
-
   // Close on outside click
   useEffect(() => {
     if (!notifOpen) return;
@@ -67,7 +66,16 @@ export default function Header({ title, subtitle }: HeaderProps) {
     return () => document.removeEventListener("mousedown", handler);
   }, [notifOpen]);
 
-  const badgeCount = seen ? 0 : events.length || (notifOpen ? 0 : 3);
+  const handleMarkAllRead = () => {
+    const now = Date.now();
+    setLastRead(now);
+    try { localStorage.setItem(LS_LAST_READ_KEY, String(now)); } catch { /* ignore */ }
+  };
+
+  const unreadCount = events.filter(
+    (ev) => new Date(ev.created_at).getTime() > lastRead
+  ).length;
+  const badgeCount = notifOpen ? 0 : unreadCount;
 
   return (
     <header className="sticky top-14 md:top-0 z-20 flex items-center gap-2 sm:gap-4 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-xl px-4 md:px-6 py-3 md:py-4">
@@ -120,13 +128,24 @@ export default function Header({ title, subtitle }: HeaderProps) {
           <div className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl overflow-hidden z-50">
             <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
               <p className="text-sm font-semibold text-zinc-100">Activity</p>
-              <button
-                onClick={() => setNotifOpen(false)}
-                className="text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer"
-                aria-label="Close notifications"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                {unreadCount > 0 && (
+                  <button
+                    onClick={handleMarkAllRead}
+                    className="text-[10px] font-medium text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer"
+                    aria-label="Mark all notifications as read"
+                  >
+                    Mark all read
+                  </button>
+                )}
+                <button
+                  onClick={() => setNotifOpen(false)}
+                  className="text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer"
+                  aria-label="Close notifications"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
             <div className="max-h-80 overflow-y-auto divide-y divide-zinc-800/50">
@@ -135,15 +154,19 @@ export default function Header({ title, subtitle }: HeaderProps) {
                   No recent activity
                 </div>
               ) : (
-                events.map((ev) => (
-                  <div key={ev.id} className="flex items-start gap-3 px-4 py-3 hover:bg-zinc-800/30 transition-colors">
-                    <span className={cn("mt-1.5 h-1.5 w-1.5 rounded-full shrink-0", severityDot[ev.severity])} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-zinc-300 leading-snug truncate">{ev.description}</p>
-                      <p className="text-[10px] text-zinc-600 font-mono mt-0.5">{ev.agent_name} · {timeAgo(ev.created_at)}</p>
+                events.map((ev) => {
+                  const isUnread = new Date(ev.created_at).getTime() > lastRead;
+                  return (
+                    <div key={ev.id} className={cn("flex items-start gap-3 px-4 py-3 hover:bg-zinc-800/30 transition-colors", isUnread && "bg-indigo-600/5")}>
+                      <span className={cn("mt-1.5 h-1.5 w-1.5 rounded-full shrink-0", severityDot[ev.severity] ?? "bg-zinc-500")} />
+                      <div className="flex-1 min-w-0">
+                        <p className={cn("text-xs leading-snug truncate", isUnread ? "text-zinc-200 font-medium" : "text-zinc-300")}>{ev.description}</p>
+                        <p className="text-[10px] text-zinc-600 font-mono mt-0.5">{ev.agent_name} · {timeAgo(ev.created_at)}</p>
+                      </div>
+                      {isUnread && <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-indigo-500 shrink-0" />}
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

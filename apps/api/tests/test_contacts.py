@@ -872,3 +872,62 @@ async def test_export_contacts_csv_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/export")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/contacts/import — CSV import
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_import_contacts_csv_imports_new_contacts(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    # No existing contact found by email → insert
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    csv_content = b"name,email,company,role,status\nAlice,alice@ex.com,Acme,CEO,lead\n"
+    from httpx import AsyncClient, ASGITransport
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/contacts/import",
+            files={"file": ("contacts.csv", csv_content, "text/csv")},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["imported"] == 1
+    assert data["skipped"] == 0
+    assert data["errors"] == []
+    mock_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_import_contacts_csv_skips_rows_without_name(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    csv_content = b"name,email\n,missing@ex.com\nBob,bob@ex.com\n"
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/contacts/import",
+            files={"file": ("contacts.csv", csv_content, "text/csv")},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["skipped"] == 1
+    assert len(data["errors"]) == 1
+    assert data["imported"] == 1
+
+
+@pytest.mark.asyncio
+async def test_import_contacts_csv_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    csv_content = b"name,email\nAlice,alice@ex.com\n"
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/contacts/import",
+            files={"file": ("contacts.csv", csv_content, "text/csv")},
+        )
+    assert resp.status_code == 403

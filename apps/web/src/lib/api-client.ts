@@ -102,16 +102,17 @@ const DEMO_DEAL_TIMELINES: Record<string, Array<{ id: string; type: string; titl
 const FASTAPI_URL = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
 
-async function apiFetch(path: string, options: RequestInit = {}, token?: string) {
+async function apiFetch(path: string, options: RequestInit = {}, token?: string, isFormData = false) {
   let res: Response
   try {
+    const headers: Record<string, string> = {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers as Record<string, string> | undefined),
+    }
+    if (!isFormData) headers['Content-Type'] = 'application/json'
     res = await fetch(`${FASTAPI_URL}${path}`, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...options.headers,
-      },
+      headers,
     })
   } catch (err) {
     // Network/CORS failure — fetch rejects with a TypeError and no status. Log it so
@@ -576,6 +577,33 @@ export const apiClient = {
   getProjectTasks: (workspaceId: string, projectId: string, token: string) => {
     if (isDemoMode) return Promise.resolve([])
     return apiFetch(`/workspaces/${workspaceId}/tasks?project_id=${projectId}`, {}, token)
+  },
+
+  // Contact CSV import
+  importContactsCsv: (workspaceId: string, file: File, token: string): Promise<{ imported: number; skipped: number; errors: string[] }> => {
+    if (isDemoMode) return Promise.resolve({ imported: 0, skipped: 0, errors: ['Demo mode: import not available'] })
+    const form = new FormData()
+    form.append('file', file)
+    return apiFetch(`/workspaces/${workspaceId}/contacts/import`, { method: 'POST', body: form }, token, true)
+  },
+
+  // Deal probability trend
+  getDealProbabilityTrend: (workspaceId: string, dealId: string, token: string): Promise<{ date: string; probability: number }[]> => {
+    if (isDemoMode) {
+      const now = Date.now()
+      return Promise.resolve(
+        Array.from({ length: 20 }, (_, i) => {
+          const dt = new Date(now - (19 - i) * 86400000)
+          const frac = i / 19
+          const jitter = ((dealId.charCodeAt(0) * (i + 1)) % 11) - 5
+          return {
+            date: dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            probability: Math.max(5, Math.min(95, Math.round(25 + 45 * frac + jitter))),
+          }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/probability-trend`, {}, token)
   },
 
   // AI query

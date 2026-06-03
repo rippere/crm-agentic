@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 
 import anthropic as _anthropic
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_, select, insert
@@ -149,6 +149,77 @@ async def export_contacts_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=contacts.csv"},
     )
+
+
+@router.post("/workspaces/{workspace_id}/contacts/import")
+async def import_contacts_csv(
+    workspace_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Import contacts from a CSV file. Expected columns: name, email, company, role, status."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    content = await file.read()
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    imported = 0
+    skipped = 0
+    errors: list[str] = []
+    allowed_statuses = {"lead", "prospect", "customer", "churned"}
+
+    for i, row in enumerate(reader, start=2):
+        name = (row.get("name") or row.get("Name") or "").strip()
+        if not name:
+            errors.append(f"Row {i}: missing name — skipped")
+            skipped += 1
+            continue
+
+        email = (row.get("email") or row.get("Email") or "").strip() or None
+        company = (row.get("company") or row.get("Company") or "").strip() or None
+        role = (row.get("role") or row.get("Role") or "").strip() or None
+        raw_status = (row.get("status") or row.get("Status") or "lead").strip().lower()
+        contact_status = raw_status if raw_status in allowed_statuses else "lead"
+
+        # Upsert by email within workspace
+        if email:
+            result = await db.execute(
+                select(Contact).where(
+                    Contact.workspace_id == workspace_id,
+                    Contact.email == email,
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing is not None:
+                existing.name = name
+                if company:
+                    existing.company = company
+                if role:
+                    existing.role = role
+                existing.status = contact_status  # type: ignore[assignment]
+                db.add(existing)
+                imported += 1
+                continue
+
+        contact = Contact(
+            workspace_id=workspace_id,
+            name=name,
+            email=email,
+            company=company,
+            role=role,
+            status=contact_status,
+        )
+        db.add(contact)
+        imported += 1
+
+    await db.commit()
+    return {"imported": imported, "skipped": skipped, "errors": errors}
 
 
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/score", status_code=status.HTTP_200_OK)

@@ -13,7 +13,7 @@ import hashlib
 import hmac
 import json
 import time
-import uuid as uuid_mod
+import uuid
 
 from app.config import settings
 
@@ -40,18 +40,18 @@ def _sign(payload_b64: str) -> str:
     return _b64encode(sig)
 
 
-def build_state(workspace_id: uuid_mod.UUID, ttl_seconds: int = STATE_TTL_SECONDS) -> str:
+def build_state(workspace_id: uuid.UUID, ttl_seconds: int = STATE_TTL_SECONDS) -> str:
     """Build a signed, expiring state string bound to `workspace_id`."""
     payload = {
         "wid": str(workspace_id),
         "exp": int(time.time()) + ttl_seconds,
-        "nonce": str(uuid_mod.uuid4()),
+        "nonce": str(uuid.uuid4()),
     }
     payload_b64 = _b64encode(json.dumps(payload, separators=(",", ":")).encode())
     return f"{payload_b64}.{_sign(payload_b64)}"
 
 
-def verify_state(state: str) -> uuid_mod.UUID:
+def verify_state(state: str) -> uuid.UUID:
     """Verify HMAC signature + expiry and return the workspace_id from the
     *verified* payload. Raises ValueError on any tampering, malformation, or
     expiry — callers should map that to HTTP 400.
@@ -67,7 +67,7 @@ def verify_state(state: str) -> uuid_mod.UUID:
 
     try:
         payload = json.loads(_b64decode(payload_b64).decode())
-        workspace_id = uuid_mod.UUID(payload["wid"])
+        workspace_id = uuid.UUID(payload["wid"])
         exp = int(payload["exp"])
     except Exception:
         raise ValueError("invalid state payload")

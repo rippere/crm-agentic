@@ -19,6 +19,10 @@ import {
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
 } from "lucide-react";
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid,
+  Tooltip as RechartTooltip, ResponsiveContainer,
+} from "recharts";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -138,6 +142,8 @@ export default function DealDetailPage() {
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [probTrend, setProbTrend] = useState<{ date: string; probability: number }[]>([]);
+  const [probLoading, setProbLoading] = useState(false);
 
   const [moveSaving, setMoveSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -188,6 +194,13 @@ export default function DealDetailPage() {
       .then((data) => setTimeline(Array.isArray(data) ? (data as TimelineEvent[]) : []))
       .catch(() => setTimeline([]))
       .finally(() => setTimelineLoading(false));
+
+    setProbLoading(true);
+    apiClient
+      .getDealProbabilityTrend(workspaceId, dealId, token)
+      .then((data) => setProbTrend(Array.isArray(data) ? data : []))
+      .catch(() => setProbTrend([]))
+      .finally(() => setProbLoading(false));
 
     if (deal.contact_id) {
       apiClient
@@ -497,6 +510,64 @@ export default function DealDetailPage() {
                   );
                 })}
               </div>
+            </Card>
+          )}
+
+          {/* Win probability trend */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Brain className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Win Probability Trend</p>
+                <span className="ml-auto text-[10px] font-mono text-zinc-500">Last 30 days</span>
+              </div>
+              {probLoading ? (
+                <div className="h-28 rounded-xl bg-zinc-800/50 animate-pulse" />
+              ) : probTrend.length > 0 ? (
+                <div className="h-28">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={probTrend} margin={{ top: 4, right: 4, bottom: 0, left: -24 }}>
+                      <defs>
+                        <linearGradient id="probGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#6366F1" stopOpacity={0.25} />
+                          <stop offset="95%" stopColor="#6366F1" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fill: "#71717A", fontSize: 9 }}
+                        axisLine={false}
+                        tickLine={false}
+                        interval="preserveStartEnd"
+                      />
+                      <YAxis
+                        domain={[0, 100]}
+                        tick={{ fill: "#71717A", fontSize: 9 }}
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(v) => `${v}%`}
+                        width={36}
+                      />
+                      <RechartTooltip
+                        formatter={(v: number) => [`${v}%`, "Win Prob"]}
+                        contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="probability"
+                        stroke="#6366F1"
+                        strokeWidth={2}
+                        fill="url(#probGrad)"
+                        dot={false}
+                        activeDot={{ r: 4, fill: "#6366F1" }}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center py-4">No trend data available.</p>
+              )}
             </Card>
           )}
 

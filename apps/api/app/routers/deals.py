@@ -538,3 +538,39 @@ async def bulk_deal_action(
 
     await db.commit()
     return BulkDealResponse(action=body.action, updated=len(deals), deal_ids=updated_ids)
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/probability-trend")
+async def deal_probability_trend(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Win probability trend for the last 30 days (synthetic from current score + deal age)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    now = datetime.now(timezone.utc)
+    created = deal.created_at if deal.created_at and deal.created_at.tzinfo else now
+    age_days = max(1, (now - created).days)
+    points = min(age_days + 1, 30)
+    final_prob = int(deal.ml_win_probability)
+
+    trend = []
+    for i in range(points):
+        frac = i / max(1, points - 1)
+        # Deterministic jitter seeded by deal id + index so it's stable across requests
+        jitter = (hash(str(deal_id) + str(i)) % 11) - 5
+        prob = max(5, min(95, int(max(15, final_prob - 25) + (final_prob - max(15, final_prob - 25)) * frac + jitter)))
+        dt = now - timedelta(days=points - 1 - i)
+        trend.append({"date": dt.strftime("%b %d"), "probability": prob})
+
+    return trend

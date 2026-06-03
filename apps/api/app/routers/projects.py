@@ -1,6 +1,6 @@
-from __future__ import annotations
 
-import uuid as uuid_mod
+import uuid
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
@@ -20,24 +20,24 @@ class ProjectCreate(BaseModel):
     name: str
     description: str | None = None
     status: str = "active"
-    contact_id: uuid_mod.UUID | None = None
+    contact_id: UUID | None = None
 
 
 class ProjectUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     status: str | None = None
-    contact_id: uuid_mod.UUID | None = None
+    contact_id: UUID | None = None
 
 
 class ProjectResponse(BaseModel):
-    id: uuid_mod.UUID
-    workspace_id: uuid_mod.UUID
+    id: UUID
+    workspace_id: UUID
     external_id: str | None = None
     name: str
     description: str | None
     status: str
-    contact_id: uuid_mod.UUID | None
+    contact_id: UUID | None
     created_at: str
     updated_at: str
 
@@ -66,7 +66,7 @@ def _to_response(p: Project) -> ProjectResponse:
 
 @router.get("/workspaces/{workspace_id}/projects", response_model=list[ProjectResponse])
 async def list_projects(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ProjectResponse]:
@@ -80,7 +80,7 @@ async def list_projects(
 
 @router.post("/workspaces/{workspace_id}/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     body: ProjectCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -102,8 +102,8 @@ async def create_project(
 
 @router.get("/workspaces/{workspace_id}/projects/{project_id}", response_model=ProjectResponse)
 async def get_project(
-    workspace_id: uuid_mod.UUID,
-    project_id: uuid_mod.UUID,
+    workspace_id: UUID,
+    project_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ProjectResponse:
@@ -120,8 +120,8 @@ async def get_project(
 
 @router.patch("/workspaces/{workspace_id}/projects/{project_id}", response_model=ProjectResponse)
 async def update_project(
-    workspace_id: uuid_mod.UUID,
-    project_id: uuid_mod.UUID,
+    workspace_id: UUID,
+    project_id: UUID,
     body: ProjectUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -150,7 +150,7 @@ async def update_project(
 
 @router.put("/workspaces/{workspace_id}/projects/by-external/{external_id}", response_model=ProjectResponse)
 async def upsert_project_by_external(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     external_id: str,
     body: ProjectUpsert,
     db: AsyncSession = Depends(get_db),
@@ -189,8 +189,8 @@ async def upsert_project_by_external(
 
 @router.delete("/workspaces/{workspace_id}/projects/{project_id}")
 async def delete_project(
-    workspace_id: uuid_mod.UUID,
-    project_id: uuid_mod.UUID,
+    workspace_id: UUID,
+    project_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Response:
