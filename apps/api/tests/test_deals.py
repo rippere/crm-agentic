@@ -723,3 +723,49 @@ async def test_bulk_empty_ids_returns_422(app_client):
         resp = await ac.post(f"/workspaces/{workspace_id}/deals/bulk", json=payload)
 
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/probability-trend
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probability_trend_returns_list(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Demo Deal")
+    deal.created_at = datetime.now(timezone.utc) - timedelta(days=15)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(deal))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/probability-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) > 0
+    assert "date" in data[0]
+    assert "probability" in data[0]
+    assert 0 <= data[0]["probability"] <= 100
+
+
+@pytest.mark.asyncio
+async def test_probability_trend_not_found_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/probability-trend")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_probability_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/probability-trend")
+
+    assert resp.status_code == 403

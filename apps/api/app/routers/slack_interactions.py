@@ -13,13 +13,13 @@ The background task either:
   - dismiss: marks the event dismissed and replaces the Slack message with a
              "dismissed" notice.
 """
-from __future__ import annotations
 
 import hashlib
 import hmac
 import json
 import time
 import uuid
+from uuid import UUID
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Form, Header, HTTPException, Request, status, Depends

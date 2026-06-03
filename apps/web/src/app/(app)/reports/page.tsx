@@ -11,7 +11,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
 } from "recharts";
 import {
-  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy,
+  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock,
 } from "lucide-react";
 
 const STAGE_COLORS: Record<string, string> = {
@@ -48,6 +48,18 @@ export default function ReportsPage() {
     const pipelineValue = active.reduce((s, d) => s + d.value, 0);
     const avgDealSize = won.length > 0 ? wonValue / won.length : 0;
     const stale = active.filter((d) => d.healthScore < 40).length;
+
+    // Avg cycle time: days from deal creation to close (approximated as days since created)
+    const now = new Date();
+    const cycleTimes = won
+      .map((d) => {
+        if (!d.createdAt) return null;
+        return Math.max(1, Math.round((now.getTime() - new Date(d.createdAt).getTime()) / 86400000));
+      })
+      .filter((v): v is number => v !== null);
+    const avgCycleTime = cycleTimes.length > 0
+      ? Math.round(cycleTimes.reduce((s, v) => s + v, 0) / cycleTimes.length)
+      : null;
 
     const byStage = dealStageOrder.map((stage) => {
       const stageDeals = deals.filter((d) => d.stage === stage);
@@ -119,7 +131,7 @@ export default function ReportsPage() {
       }),
     ];
 
-    return { won, lost, active, winRate, wonValue, pipelineValue, avgDealSize, stale, byStage, topDeals, healthBuckets, revenueChart };
+    return { won, lost, active, winRate, wonValue, pipelineValue, avgDealSize, stale, byStage, topDeals, healthBuckets, revenueChart, avgCycleTime };
   }, [deals]);
 
   if (loading) {
@@ -138,7 +150,7 @@ export default function ReportsPage() {
       <Header title="Reports" subtitle={`${deals.length} total deals · win rate ${stats.winRate}%`} />
 
       {/* KPI row */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <Card compact accent="signal" className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#00C896]/10 border border-[#00C896]/20 flex-shrink-0">
             <Trophy className="h-4 w-4 text-[#00C896]" />
@@ -173,6 +185,17 @@ export default function ReportsPage() {
           <div>
             <p className="text-2xl font-bold font-mono text-zinc-100">{formatCurrency(stats.avgDealSize)}</p>
             <p className="text-xs text-zinc-500">Avg Deal Size</p>
+          </div>
+        </Card>
+        <Card compact className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-500/10 border border-violet-500/20 flex-shrink-0">
+            <Clock className="h-4 w-4 text-violet-400" />
+          </div>
+          <div>
+            <p className="text-2xl font-bold font-mono text-zinc-100">
+              {stats.avgCycleTime !== null ? `${stats.avgCycleTime}d` : "—"}
+            </p>
+            <p className="text-xs text-zinc-500">Avg Cycle Time</p>
           </div>
         </Card>
       </div>

@@ -11,9 +11,9 @@ Supported tools:
   - pipeline_summary: aggregate pipeline statistics
   - ask_crm         : free-text AI query over CRM data
 """
-from __future__ import annotations
 
 import uuid
+from uuid import UUID
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -84,7 +84,7 @@ TOOLS = [
 # Tool handlers
 # ──────────────────────────────────────────────────────────────
 
-async def _list_contacts(args: dict, workspace_id: uuid.UUID, db: AsyncSession) -> str:
+async def _list_contacts(args: dict, workspace_id: UUID, db: AsyncSession) -> str:
     from app.models.contact import Contact
 
     query = args.get("query", "").lower()
@@ -114,7 +114,7 @@ async def _list_contacts(args: dict, workspace_id: uuid.UUID, db: AsyncSession) 
     return "\n".join(lines)
 
 
-async def _list_deals(args: dict, workspace_id: uuid.UUID, db: AsyncSession) -> str:
+async def _list_deals(args: dict, workspace_id: UUID, db: AsyncSession) -> str:
     from app.models.deal import Deal
 
     stage = args.get("stage")
@@ -137,7 +137,7 @@ async def _list_deals(args: dict, workspace_id: uuid.UUID, db: AsyncSession) -> 
     return "\n".join(lines)
 
 
-async def _stale_deals(args: dict, workspace_id: uuid.UUID, db: AsyncSession) -> str:
+async def _stale_deals(args: dict, workspace_id: UUID, db: AsyncSession) -> str:
     from app.models.deal import Deal
     from sqlalchemy import asc
 
@@ -164,7 +164,7 @@ async def _stale_deals(args: dict, workspace_id: uuid.UUID, db: AsyncSession) ->
     return "\n".join(lines)
 
 
-async def _pipeline_summary(args: dict, workspace_id: uuid.UUID, db: AsyncSession) -> str:
+async def _pipeline_summary(args: dict, workspace_id: UUID, db: AsyncSession) -> str:
     from app.models.deal import Deal
 
     result = await db.execute(select(Deal).where(Deal.workspace_id == workspace_id))

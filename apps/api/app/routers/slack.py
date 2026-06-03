@@ -8,13 +8,13 @@ Endpoints:
   POST /workspaces/{id}/connectors/slack/subscribe — verify Events API URL
   POST /webhooks/slack/events                     — receive Slack Events API events
 """
-from __future__ import annotations
 
 import hashlib
 import hmac
 import logging
 import time
-import uuid as uuid_mod
+import uuid
+from uuid import UUID
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException, Query, Request, Response, status
@@ -63,7 +63,7 @@ def _build_redirect_uri() -> str:
 
 @router.get("/workspaces/{workspace_id}/connectors/slack/auth")
 async def slack_auth_url(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     current_user: User = Depends(get_current_user),
 ) -> dict:
     if current_user.workspace_id != workspace_id:
@@ -162,7 +162,7 @@ async def slack_callback(
 
 @router.post("/workspaces/{workspace_id}/connectors/slack/sync")
 async def slack_sync(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:

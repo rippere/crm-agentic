@@ -8,9 +8,7 @@ GET  /workspaces/{id}/contacts/search?q=<text>&limit=<n>
 POST /workspaces/{id}/contacts/embed
   — Enqueues a Celery task to embed all workspace contacts.
 """
-from __future__ import annotations
-
-import uuid as uuid_mod
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select, func, text
@@ -27,7 +25,7 @@ router = APIRouter()
 
 @router.get("/workspaces/{workspace_id}/contacts/search")
 async def semantic_search(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: uuid.UUID,
     q: str = Query(..., min_length=1, max_length=500),
     limit: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
@@ -81,7 +79,6 @@ async def semantic_search(
         ]
     else:
         # Fallback: substring match on name / company / email
-        like = f"%{q}%"
         result = await db.execute(
             select(Contact)
             .where(
@@ -114,7 +111,7 @@ async def semantic_search(
 
 @router.post("/workspaces/{workspace_id}/contacts/embed", status_code=202)
 async def trigger_embed(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Enqueue a Celery job to embed all contacts in this workspace."""
@@ -131,7 +128,7 @@ async def trigger_embed(
 @limiter.limit("2/minute")
 async def trigger_embed_all(
     request: Request,
-    workspace_id: uuid_mod.UUID,
+    workspace_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:

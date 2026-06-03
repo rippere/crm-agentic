@@ -14,11 +14,11 @@ GET  /workspaces/{id}/calls/{call_id}
 DELETE /workspaces/{id}/calls/{call_id}
   — Remove a call summary.
 """
-from __future__ import annotations
 
 import os
 import tempfile
-import uuid as uuid_mod
+import uuid
+from uuid import UUID
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -42,7 +42,7 @@ MAX_UPLOAD_MB = int(os.getenv("MAX_CALL_UPLOAD_MB", "50"))
 @limiter.limit("10/minute")
 async def upload_call(
     request: Request,
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     file: UploadFile = File(...),
     title: str = Form(default="Untitled Call"),
     contact_id: str | None = Form(default=None),
@@ -73,10 +73,10 @@ async def upload_call(
     tmp.flush()
     tmp.close()
 
-    contact_uuid: uuid_mod.UUID | None = None
+    contact_uuid: UUID | None = None
     if contact_id:
         try:
-            contact_uuid = uuid_mod.UUID(contact_id)
+            contact_uuid = uuid.UUID(contact_id)
         except ValueError:
             pass
 
@@ -101,7 +101,7 @@ async def upload_call(
 
 @router.get("/workspaces/{workspace_id}/calls")
 async def list_calls(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[dict]:
@@ -135,8 +135,8 @@ async def list_calls(
 
 @router.get("/workspaces/{workspace_id}/calls/{call_id}")
 async def get_call(
-    workspace_id: uuid_mod.UUID,
-    call_id: uuid_mod.UUID,
+    workspace_id: UUID,
+    call_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -170,8 +170,8 @@ async def get_call(
 
 @router.delete("/workspaces/{workspace_id}/calls/{call_id}")
 async def delete_call(
-    workspace_id: uuid_mod.UUID,
-    call_id: uuid_mod.UUID,
+    workspace_id: UUID,
+    call_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Response:

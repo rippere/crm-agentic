@@ -18,7 +18,7 @@ import {
   Search, SlidersHorizontal, Brain, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
   Copy, X, Loader2, Zap, ClipboardList, CheckSquare, Square, Tag,
-  ExternalLink, Download,
+  ExternalLink, Download, Upload, CheckCircle2, AlertCircle,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -955,6 +955,9 @@ export default function ContactsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { contacts, createContact } = useContacts();
@@ -1065,6 +1068,22 @@ export default function ContactsPage() {
     } catch { /* silent */ }
     finally { setExportLoading(false); }
   }, [workspaceId, token, exportLoading]);
+
+  const handleImportCsv = useCallback(async (file: File) => {
+    if (!workspaceId || !token || importLoading) return;
+    setImportLoading(true);
+    setImportResult(null);
+    try {
+      const result = await apiClient.importContactsCsv(workspaceId, file, token);
+      setImportResult(result);
+      setTimeout(() => setImportResult(null), 6000);
+    } catch {
+      setImportResult({ imported: 0, skipped: 0, errors: ["Upload failed — check file format"] });
+      setTimeout(() => setImportResult(null), 6000);
+    } finally {
+      setImportLoading(false);
+    }
+  }, [workspaceId, token, importLoading]);
 
   const filtered = useMemo(() => {
     return contacts.filter((c) => {
@@ -1217,11 +1236,64 @@ export default function ContactsPage() {
           Export CSV
         </button>
 
+        <button
+          onClick={() => importInputRef.current?.click()}
+          disabled={importLoading}
+          className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-400 transition-all hover:border-zinc-700 hover:text-zinc-300 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+          title="Import contacts from CSV (columns: name, email, company, role, status)"
+        >
+          {importLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+          Import CSV
+        </button>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleImportCsv(f);
+            e.target.value = "";
+          }}
+          aria-label="Import contacts CSV file"
+        />
+
         <Button variant="cta" size="sm" onClick={() => setNewContactOpen(true)}>
           <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
           Add Contact
         </Button>
       </div>
+
+      {/* Import result toast */}
+      {importResult && (
+        <div className={cn(
+          "flex items-start gap-3 rounded-xl border px-4 py-3 text-sm",
+          importResult.errors.length > 0 && importResult.imported === 0
+            ? "border-rose-500/20 bg-rose-500/5 text-rose-300"
+            : "border-emerald-500/20 bg-emerald-500/5 text-emerald-300"
+        )}>
+          {importResult.imported > 0
+            ? <CheckCircle2 className="h-4 w-4 mt-0.5 flex-shrink-0 text-emerald-400" />
+            : <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0 text-rose-400" />}
+          <div className="flex-1 min-w-0">
+            <p className="font-medium">
+              {importResult.imported > 0
+                ? `Imported ${importResult.imported} contact${importResult.imported !== 1 ? "s" : ""}`
+                : "Import failed"}
+              {importResult.skipped > 0 && ` · ${importResult.skipped} skipped`}
+            </p>
+            {importResult.errors.length > 0 && (
+              <ul className="mt-1 space-y-0.5 text-xs opacity-80">
+                {importResult.errors.slice(0, 3).map((e, i) => <li key={i}>{e}</li>)}
+                {importResult.errors.length > 3 && <li>…and {importResult.errors.length - 3} more</li>}
+              </ul>
+            )}
+          </div>
+          <button onClick={() => setImportResult(null)} className="text-zinc-500 hover:text-zinc-300">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Table */}
       <Card className="overflow-hidden p-0">

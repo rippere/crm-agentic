@@ -9,14 +9,14 @@ Endpoints:
   POST /webhooks/gmail/push                          — receive Pub/Sub push notifications
   DELETE /workspaces/{id}/connectors/{connector_id}  — remove connector
 """
-from __future__ import annotations
 
 import base64
 import hashlib
 import hmac
 import json
 import logging
-import uuid as uuid_mod
+import uuid
+from uuid import UUID
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
@@ -106,7 +106,7 @@ def _build_redirect_uri() -> str:
 
 @router.get("/workspaces/{workspace_id}/connectors/gmail/auth")
 async def gmail_auth_url(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     current_user: User = Depends(get_current_user),
 ) -> dict:
     if current_user.workspace_id != workspace_id:
@@ -212,7 +212,7 @@ async def gmail_callback(
 
 @router.post("/workspaces/{workspace_id}/connectors/gmail/sync")
 async def gmail_sync(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -241,7 +241,7 @@ async def gmail_sync(
 
 @router.get("/workspaces/{workspace_id}/connectors")
 async def list_connectors(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[dict]:
@@ -266,8 +266,8 @@ async def list_connectors(
 
 @router.get("/workspaces/{workspace_id}/connectors/{connector_id}/status")
 async def connector_status(
-    workspace_id: uuid_mod.UUID,
-    connector_id: uuid_mod.UUID,
+    workspace_id: UUID,
+    connector_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -302,7 +302,7 @@ _GMAIL_STOP_URL = "https://gmail.googleapis.com/gmail/v1/users/me/stop"
 
 @router.post("/workspaces/{workspace_id}/connectors/gmail/subscribe")
 async def gmail_subscribe(
-    workspace_id: uuid_mod.UUID,
+    workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -452,8 +452,8 @@ async def gmail_push_webhook(
 
 @router.delete("/workspaces/{workspace_id}/connectors/{connector_id}")
 async def delete_connector(
-    workspace_id: uuid_mod.UUID,
-    connector_id: uuid_mod.UUID,
+    workspace_id: UUID,
+    connector_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Response:
