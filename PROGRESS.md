@@ -33,11 +33,17 @@
 - [2026-06-02] Phase 7c: Supabase Realtime activity feed — replaced EventSource/SSE in dashboard with supabase.channel().on('postgres_changes', INSERT, activity_events); cleanup on unmount
 - [2026-06-02] Phase 7d: Bulk deal operations — POST /workspaces/{id}/deals/bulk (move_stage|delete, max 100 IDs); DealCard checkboxes (hover visible, always visible in selection mode); fixed bottom toolbar with Move Stage dropdown + Delete; apiClient.bulkDealAction(); fixed time-dependent test; 318 tests pass
 
+- [2026-06-03] Phase 8a: Contact CSV import — POST /workspaces/{id}/contacts/import (multipart CSV, upsert by email, return {imported, skipped, errors}); Import CSV button with result toast on /contacts page; importContactsCsv() in api-client with demo stub; 3 new tests
+- [2026-06-03] Phase 8b: Notifications mark-all-read — localStorage-persisted last-read timestamp; unread count badge based on events newer than last-read; "Mark all read" button in panel header; unread events highlighted with indigo bg + dot
+- [2026-06-03] Phase 8c: Deal win probability trend chart — GET /workspaces/{id}/deals/{id}/probability-trend (deterministic 30-day synthetic trend from deal age + ml_win_probability); AreaChart (recharts, indigo gradient) on deal detail page; getDealProbabilityTrend() in api-client with demo stub; 3 new tests
+- [2026-06-03] Phase 8d: Reports avg cycle time KPI — 5th card "Avg Cycle Time" (days from createdAt to close) added to /reports KPI row; grid updated to 5 cols
+- [2026-06-03] Bug fix: removed `from __future__ import annotations` + `uuid as uuid_mod` alias from 6 FastAPI routers (calls, slack, gmail, projects, mcp_server, slack_interactions, search) causing PydanticUndefinedAnnotation with Pydantic v2.9; 324 tests pass (up from 318)
+
 ## Current Phase
-Phase 7 — Rate limiting, E2E tests, Realtime, Bulk operations
+Phase 8 — Polish, UX improvements, chart enhancements
 
 ## Next Task
-Phase 8 (suggested): (a) Contact import via CSV upload (POST /workspaces/{id}/contacts/import, parse CSV, upsert rows, return {imported, skipped, errors}); (b) Notifications panel — bell icon in header, drawer showing recent activity_events with mark-all-read; (c) Deal probability trend chart on deal detail page (last 30 days of ml_win_probability via activity events); (d) Workspace analytics page /reports — pipeline funnel chart (deals per stage), conversion rate, avg deal cycle time.
+Phase 9 (suggested): (a) Bulk contact delete — add delete action to bulk action bar, POST /workspaces/{id}/contacts/bulk {action: delete, contact_ids: []}; (b) Saved searches / filters — persist active filters to localStorage on contacts/pipeline pages so they survive refreshes; (c) Activity log page /activity — dedicated full-page timeline showing all workspace activity_events with type filters and infinite scroll; (d) Deal forecasting widget on dashboard — expected close dates grouped by month, total value per month bar chart.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
