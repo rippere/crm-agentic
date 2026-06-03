@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Zap, Brain, Sparkles, TrendingUp, Bot, Shield,
@@ -9,6 +10,42 @@ import {
   BarChart3, Users, KanbanSquare, Menu, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { createBrowserClient } from "@/lib/supabase";
+
+// ─── Auth params rescue ───────────────────────────────────────────────────────
+// Supabase auth redirects fall back to the Site URL (this page) when the
+// intended /auth/callback target isn't matched by the redirect allowlist.
+// Catch those stragglers — a PKCE ?code= or implicit #access_token — and
+// finish the sign-in instead of stranding the user on the landing page.
+function AuthParamsRescue() {
+  const router = useRouter();
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search);
+    const code = search.get("code");
+    if (code) {
+      // PKCE code — the callback route exchanges it (verifier cookie is here).
+      router.replace(`/auth/callback?code=${encodeURIComponent(code)}`);
+      return;
+    }
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    if (hash.get("error") || hash.get("error_code")) {
+      router.replace("/login?error=confirm");
+      return;
+    }
+    const access_token = hash.get("access_token");
+    const refresh_token = hash.get("refresh_token");
+    if (access_token && refresh_token) {
+      const supabase = createBrowserClient();
+      supabase.auth
+        .setSession({ access_token, refresh_token })
+        .then(({ error }) => {
+          router.replace(error ? "/login?confirmed=1" : "/dashboard");
+        })
+        .catch(() => router.replace("/login?confirmed=1"));
+    }
+  }, [router]);
+  return null;
+}
 
 // ─── Nav ───────────────────────────────────────────────────────────────────────
 function Nav() {
@@ -460,6 +497,7 @@ function Footer() {
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-zinc-950">
+      <AuthParamsRescue />
       <Nav />
       <Hero />
       <FeaturesSection />
