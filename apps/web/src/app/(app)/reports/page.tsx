@@ -81,8 +81,7 @@ export default function ReportsPage() {
       { label: "Critical (<40)",   count: active.filter((d) => d.healthScore < 40).length, color: "#F43F5E" },
     ];
 
-    // Monthly revenue from closed_won deals (last 6 months)
-    const now = new Date();
+    // Monthly revenue from closed_won deals (last 6 months) — reuses `now` from above
     const abbr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     const historyMonths = 6;
     const monthKeys: string[] = [];
