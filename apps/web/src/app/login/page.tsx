@@ -1,18 +1,27 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase";
 import { Zap } from "lucide-react";
 
-export default function LoginPage() {
+function LoginInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() =>
+    searchParams.get("error") === "confirm"
+      ? "That confirmation link is invalid or expired. Sign up again to get a new one."
+      : null,
+  );
+  const [message, setMessage] = useState<string | null>(() =>
+    searchParams.get("confirmed") === "1"
+      ? "Email confirmed! Sign in to continue."
+      : null,
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,6 +46,11 @@ export default function LoginPage() {
       const { error: signUpError } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          // Confirmation email link redirects here; the callback exchanges the
+          // code for a session and forwards into the app.
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
       });
       if (signUpError) {
         setError(signUpError.message);
@@ -152,5 +166,14 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Next.js 16 requires useSearchParams() inside a Suspense boundary.
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginInner />
+    </Suspense>
   );
 }
