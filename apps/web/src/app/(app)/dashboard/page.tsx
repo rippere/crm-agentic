@@ -11,8 +11,8 @@ import { formatCurrency } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import {
-  AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend,
+  AreaChart, Area, BarChart, Bar, LineChart, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell,
 } from "recharts";
 import Link from "next/link";
 import {
@@ -233,6 +233,7 @@ export default function DashboardPage() {
   const [staleDeals, setStaleDeals] = useState<StaleDeal[]>([]);
   const [liveActivity, setLiveActivity] = useState<ActivityEvent[]>([]);
   const [revenueHistory, setRevenueHistory] = useState<{ month: string; revenue: number }[]>([]);
+  const [forecastData, setForecastData] = useState<{ month: string; value: number; deal_count: number }[]>([]);
   const [pollToken, setPollToken] = useState<string | null>(null);
   const [pollWorkspaceId, setPollWorkspaceId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -252,6 +253,9 @@ export default function DashboardPage() {
       }).catch(() => {});
       apiClient.getDealHistory("demo-workspace-1", "demo-token", 6).then((data) => {
         if (Array.isArray(data)) setRevenueHistory(data);
+      }).catch(() => {});
+      apiClient.getDealForecast("demo-workspace-1", "demo-token", 6).then((data) => {
+        if (Array.isArray(data)) setForecastData(data);
       }).catch(() => {});
       return;
     }
@@ -299,9 +303,12 @@ export default function DashboardPage() {
 
       if (!workspaceId) return;
 
-      // Fetch revenue history
+      // Fetch revenue history + forecast
       apiClient.getDealHistory(workspaceId, session.access_token, 6)
         .then((data) => { if (Array.isArray(data)) setRevenueHistory(data); })
+        .catch(() => {});
+      apiClient.getDealForecast(workspaceId, session.access_token, 6)
+        .then((data) => { if (Array.isArray(data)) setForecastData(data); })
         .catch(() => {});
 
       // Subscribe to Supabase Realtime for live activity feed
@@ -523,6 +530,72 @@ export default function DashboardPage() {
                 </Link>
               </div>
             )}
+          </Card>
+        </section>
+      )}
+
+      {/* Deal Forecast Widget */}
+      {forecastData.length > 0 && (
+        <section aria-labelledby="forecast-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="forecast-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Pipeline Forecast
+            </h2>
+            <Badge variant="indigo" size="sm">next 6 months</Badge>
+          </div>
+          <Card>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Expected Deal Closings</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">
+                  Grouped by expected_close · {forecastData.reduce((s, d) => s + d.deal_count, 0)} open deals
+                </p>
+              </div>
+              <p className="text-sm font-mono font-bold text-indigo-400">
+                ${(forecastData.reduce((s, d) => s + d.value, 0) / 1000).toFixed(0)}K total
+              </p>
+            </div>
+            <div className="h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={forecastData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }} barSize={28}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                  <XAxis dataKey="month" tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    tick={{ fill: "#71717A", fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v) => v >= 1000 ? `$${(v / 1000).toFixed(0)}K` : `$${v}`}
+                    width={44}
+                  />
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const d = payload[0];
+                      return (
+                        <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs space-y-1">
+                          <p className="font-mono text-zinc-400">{label}</p>
+                          <p className="text-zinc-200">
+                            <span className="text-indigo-400 font-bold">${((d.value as number) / 1000).toFixed(0)}K</span>
+                            {" "}expected
+                          </p>
+                          <p className="text-zinc-500">
+                            {payload[0]?.payload?.deal_count ?? 0} deal{payload[0]?.payload?.deal_count !== 1 ? "s" : ""}
+                          </p>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                    {forecastData.map((entry, i) => (
+                      <Cell
+                        key={entry.month}
+                        fill={entry.deal_count === 0 ? "#27272A" : i === 0 ? "#6366F1" : `rgba(99,102,241,${0.9 - i * 0.12})`}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </Card>
         </section>
       )}

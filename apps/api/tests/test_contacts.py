@@ -931,3 +931,56 @@ async def test_import_contacts_csv_wrong_workspace_returns_403(app_client):
             files={"file": ("contacts.csv", csv_content, "text/csv")},
         )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/contacts/bulk — bulk delete
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_contacts_returns_deleted_count(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    c1 = _fake_contact(workspace_id, name="Alice")
+    c2 = _fake_contact(workspace_id, name="Bob")
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([c1, c2]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/contacts/bulk",
+            json={"action": "delete", "contact_ids": [str(c1.id), str(c2.id)]},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action"] == "delete"
+    assert data["deleted"] == 2
+    assert len(data["contact_ids"]) == 2
+    mock_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_contacts_empty_list_returns_422(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/contacts/bulk",
+            json={"action": "delete", "contact_ids": []},
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_contacts_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/contacts/bulk",
+            json={"action": "delete", "contact_ids": [str(uuid.uuid4())]},
+        )
+
+    assert resp.status_code == 403

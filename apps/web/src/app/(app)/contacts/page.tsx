@@ -18,7 +18,7 @@ import {
   Search, SlidersHorizontal, Brain, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
   Copy, X, Loader2, Zap, ClipboardList, CheckSquare, Square, Tag,
-  ExternalLink, Download, Upload, CheckCircle2, AlertCircle,
+  ExternalLink, Download, Upload, CheckCircle2, AlertCircle, Trash2,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -211,12 +211,14 @@ function BulkActionBar({
   count,
   onStatusChange,
   onEnrich,
+  onDelete,
   onClear,
   busy,
 }: {
   count: number;
   onStatusChange: (status: ContactStatus) => void;
   onEnrich: () => void;
+  onDelete: () => void;
   onClear: () => void;
   busy: boolean;
 }) {
@@ -256,6 +258,14 @@ function BulkActionBar({
       >
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
         Enrich All
+      </button>
+      <button
+        onClick={onDelete}
+        disabled={busy}
+        className="flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-400 hover:bg-rose-500/20 disabled:opacity-50 transition"
+      >
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+        Delete
       </button>
       <div className="w-px h-4 bg-zinc-700 flex-shrink-0" />
       <button onClick={onClear} className="text-zinc-500 hover:text-zinc-300 transition">
@@ -939,10 +949,19 @@ function NewContactModal({ onClose, onCreate }: { onClose: () => void; onCreate:
   );
 }
 
+const LS_STATUS_KEY = "contacts_filter_status";
+const LS_SCORE_KEY = "contacts_filter_score";
+
 export default function ContactsPage() {
   const [search, setSearch] = useState("");
-  const [filterStatus, setFilterStatus] = useState<ContactStatus | "all">("all");
-  const [filterScore, setFilterScore] = useState<LeadScore | "all">("all");
+  const [filterStatus, setFilterStatus] = useState<ContactStatus | "all">(() => {
+    if (typeof window === "undefined") return "all";
+    return (localStorage.getItem(LS_STATUS_KEY) as ContactStatus | "all") ?? "all";
+  });
+  const [filterScore, setFilterScore] = useState<LeadScore | "all">(() => {
+    if (typeof window === "undefined") return "all";
+    return (localStorage.getItem(LS_SCORE_KEY) as LeadScore | "all") ?? "all";
+  });
   const [selected, setSelected] = useState<Contact | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -954,6 +973,7 @@ export default function ContactsPage() {
   const [hasGmailConnector, setHasGmailConnector] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
@@ -1018,6 +1038,21 @@ export default function ContactsPage() {
     setSelectedIds(new Set());
     setBulkBusy(false);
   }, [workspaceId, token, selectedIds, bulkBusy]);
+
+  const handleBulkDelete = useCallback(async () => {
+    if (!workspaceId || !token || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      await apiClient.bulkContactAction(workspaceId, { action: "delete", contact_ids: [...selectedIds] }, token);
+    } catch { /* silent — list refreshes on next render */ }
+    setSelectedIds(new Set());
+    setDeleteConfirmOpen(false);
+    setBulkBusy(false);
+  }, [workspaceId, token, selectedIds, bulkBusy]);
+
+  // Persist filter state to localStorage
+  useEffect(() => { localStorage.setItem(LS_STATUS_KEY, filterStatus); }, [filterStatus]);
+  useEffect(() => { localStorage.setItem(LS_SCORE_KEY, filterScore); }, [filterScore]);
 
   // Debounced semantic search
   useEffect(() => {
@@ -1446,8 +1481,21 @@ export default function ContactsPage() {
           count={selectedIds.size}
           onStatusChange={handleBulkStatus}
           onEnrich={handleBulkEnrich}
+          onDelete={() => setDeleteConfirmOpen(true)}
           onClear={() => setSelectedIds(new Set())}
           busy={bulkBusy}
+        />
+      )}
+
+      {/* Bulk delete confirm dialog */}
+      {deleteConfirmOpen && (
+        <ConfirmDialog
+          title={`Delete ${selectedIds.size} contact${selectedIds.size !== 1 ? "s" : ""}?`}
+          description="This action is permanent and cannot be undone. All associated tasks, messages, and timeline events will also be removed."
+          actionLabel={`Delete ${selectedIds.size} contact${selectedIds.size !== 1 ? "s" : ""}`}
+          variant="danger"
+          onConfirm={handleBulkDelete}
+          onClose={() => setDeleteConfirmOpen(false)}
         />
       )}
 

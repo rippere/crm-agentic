@@ -10,7 +10,7 @@ import type { AgentRow } from "@/lib/supabase";
 import {
   LayoutDashboard, Users, KanbanSquare, Bot, Settings,
   Zap, Inbox, CheckSquare, FolderOpen, Plug, Search,
-  PhoneCall, ChevronsUpDown, LogOut, BarChart2, X,
+  PhoneCall, ChevronsUpDown, LogOut, BarChart2, X, Activity,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 
@@ -63,6 +63,7 @@ const navGroups: NavGroup[] = [
       { href: "/contacts",  label: "Contacts",  icon: Users            },
       { href: "/pipeline",  label: "Pipeline",  icon: KanbanSquare,  hideModes: ["pm"] },
       { href: "/reports",   label: "Reports",   icon: BarChart2,     hideModes: ["pm"] },
+      { href: "/activity",  label: "Activity",  icon: Activity         },
     ],
   },
   {

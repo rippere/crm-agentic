@@ -131,3 +131,48 @@ async def test_stream_events_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/events")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/activity with type filter + offset
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_activity_type_filter_passes_query_param(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    from app.models.activity_event import ActivityEvent
+    import uuid as _uuid
+    from datetime import datetime, timezone
+    ev = MagicMock(spec=ActivityEvent)
+    ev.id = _uuid.uuid4()
+    ev.workspace_id = workspace_id
+    ev.type = "contact_created"
+    ev.agent_name = "System"
+    ev.description = "New contact"
+    ev.meta = ""
+    ev.severity = "info"
+    ev.created_at = datetime.now(timezone.utc)
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([ev]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/activity?event_type=contact_created&limit=10"
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 1
+    assert data[0]["type"] == "contact_created"
+
+
+@pytest.mark.asyncio
+async def test_list_activity_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/activity")
+
+    assert resp.status_code == 403
