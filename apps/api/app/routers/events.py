@@ -46,18 +46,26 @@ class ActivityEventCreate(BaseModel):
 async def list_activity(
     workspace_id: uuid.UUID,
     limit: int = 50,
+    offset: int = 0,
+    event_type: str | None = Query(default=None),
+    agent_id: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ActivityEventResponse]:
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    result = await db.execute(
+    q = (
         select(ActivityEvent)
         .where(ActivityEvent.workspace_id == workspace_id)
-        .order_by(desc(ActivityEvent.created_at))
-        .limit(limit)
     )
+    if event_type:
+        q = q.where(ActivityEvent.type == event_type)
+    if agent_id:
+        q = q.where(ActivityEvent.meta.like(f"%{agent_id}%"))
+
+    q = q.order_by(desc(ActivityEvent.created_at)).offset(offset).limit(limit)
+    result = await db.execute(q)
     return [ActivityEventResponse.model_validate(e) for e in result.scalars().all()]
 
 

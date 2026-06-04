@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime
 
 import anthropic as _anthropic
+from typing import Literal
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -748,3 +750,61 @@ async def pre_meeting_brief(
         "contact_name": contact.name,
         "brief": brief_text,
     }
+
+
+class BulkContactRequest(BaseModel):
+    action: Literal["delete"]
+    contact_ids: list[uuid.UUID]
+
+
+class BulkContactResponse(BaseModel):
+    action: str
+    deleted: int
+    contact_ids: list[str]
+
+
+@router.post("/workspaces/{workspace_id}/contacts/bulk", response_model=BulkContactResponse)
+async def bulk_contact_action(
+    workspace_id: uuid.UUID,
+    body: BulkContactRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BulkContactResponse:
+    """Bulk delete contacts (max 100 at a time)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if not body.contact_ids:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="contact_ids must not be empty")
+
+    if len(body.contact_ids) > 100:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Maximum 100 contacts per bulk operation")
+
+    result = await db.execute(
+        select(Contact).where(
+            Contact.workspace_id == workspace_id,
+            Contact.id.in_(body.contact_ids),
+        )
+    )
+    contacts = result.scalars().all()
+
+    if not contacts:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No matching contacts found")
+
+    deleted_ids = [str(c.id) for c in contacts]
+    names = [c.name or str(c.id) for c in contacts]
+
+    for contact in contacts:
+        await db.delete(contact)
+
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="contact_deleted",
+        agent_name="System",
+        description=f"Bulk deleted {len(contacts)} contact(s): {', '.join(names[:3])}" + ("…" if len(names) > 3 else ""),
+        severity="warning",
+    )
+    db.add(event)
+    await db.commit()
+
+    return BulkContactResponse(action="delete", deleted=len(contacts), contact_ids=deleted_ids)

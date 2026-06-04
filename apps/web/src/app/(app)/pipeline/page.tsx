@@ -9,7 +9,7 @@ import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import { cn, formatCurrency, stageConfig, dealStageOrder, SIGNAL } from "@/lib/utils";
 import Link from "next/link";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight } from "lucide-react";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight, Search } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
 interface PipelineSuggestion {
@@ -371,10 +371,16 @@ function NewDealModal({ defaultStage, onClose, onCreate }: { defaultStage: DealS
   );
 }
 
+const LS_PIPELINE_SEARCH_KEY = "pipeline_search";
+
 export default function PipelinePage() {
   const { deals, loading, createDeal, updateDeal, refetch } = useDeals();
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [newDealStage, setNewDealStage] = useState<DealStage | null>(null);
+  const [dealSearch, setDealSearch] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem(LS_PIPELINE_SEARCH_KEY) ?? "";
+  });
   const [suggestions, setSuggestions] = useState<PipelineSuggestion[]>([]);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
@@ -406,6 +412,19 @@ export default function PipelinePage() {
         .catch(() => {});
     });
   }, []);
+
+  // Persist search to localStorage
+  useEffect(() => { localStorage.setItem(LS_PIPELINE_SEARCH_KEY, dealSearch); }, [dealSearch]);
+
+  const filteredDeals = dealSearch.trim()
+    ? deals.filter((d) => {
+        const q = dealSearch.toLowerCase();
+        return (
+          (d.title ?? "").toLowerCase().includes(q) ||
+          (d.company ?? "").toLowerCase().includes(q)
+        );
+      })
+    : deals;
 
   const totalPipelineValue = deals.filter((d) => d.stage !== "closed_lost").reduce((s, d) => s + d.value, 0);
   const wonValue = deals.filter((d) => d.stage === "closed_won").reduce((s, d) => s + d.value, 0);
@@ -603,10 +622,26 @@ export default function PipelinePage() {
 
       {/* Pipeline Board */}
       <div className="flex-1">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Brain className="h-4 w-4 text-indigo-400" />
-            <span className="text-xs text-zinc-400 font-mono">ML win probability · Deal health (stage staleness + engagement)</span>
+        <div className="flex flex-wrap items-center gap-3 mb-4">
+          <div className="flex items-center gap-2 flex-1 min-w-48 max-w-xs">
+            <Search className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
+            <input
+              type="search"
+              placeholder="Filter deals by title or company…"
+              value={dealSearch}
+              onChange={(e) => setDealSearch(e.target.value)}
+              className="w-full rounded-lg border border-zinc-800 bg-zinc-900 py-1.5 px-2.5 text-xs text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50 transition"
+              aria-label="Filter deals"
+            />
+            {dealSearch && (
+              <button onClick={() => setDealSearch("")} className="text-zinc-600 hover:text-zinc-300 flex-shrink-0">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2 text-xs text-zinc-500 ml-auto">
+            <Brain className="h-3.5 w-3.5 text-indigo-400 flex-shrink-0" />
+            <span className="font-mono hidden sm:inline">ML win probability · Deal health</span>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -639,7 +674,7 @@ export default function PipelinePage() {
               <StageColumn
                 key={stage}
                 stage={stage}
-                deals={deals.filter((d) => d.stage === stage)}
+                deals={filteredDeals.filter((d) => d.stage === stage)}
                 onSelect={(d) => { if (!selectedIds.size) setSelectedDeal(d); }}
                 onAddDeal={setNewDealStage}
                 selectedIds={selectedIds}

@@ -548,9 +548,35 @@ export const apiClient = {
   },
 
   // Activity events
-  listActivity: (workspaceId: string, token: string, limit = 50) => {
-    if (isDemoMode) return Promise.resolve([])
-    return apiFetch(`/workspaces/${workspaceId}/activity?limit=${limit}`, {}, token)
+  listActivity: (workspaceId: string, token: string, opts?: { limit?: number; offset?: number; eventType?: string }): Promise<Array<{ id: string; type: string | null; agent_name: string | null; description: string | null; meta: string | null; severity: string; created_at: string }>> => {
+    if (isDemoMode) {
+      const DEMO_ACTIVITIES = [
+        { id: 'act-1', type: 'contact_created', agent_name: 'System', description: 'New contact added: Sarah Chen', meta: '', severity: 'info', created_at: new Date(Date.now() - 600000).toISOString() },
+        { id: 'act-2', type: 'email_sent', agent_name: 'Gmail', description: 'Email sent to sarah.chen@techcorp.com: TechCorp Platform Expansion — SLA Final Terms', meta: '', severity: 'success', created_at: new Date(Date.now() - 1800000).toISOString() },
+        { id: 'act-3', type: 'deal_moved', agent_name: 'System', description: "Deal 'Global Finance Enterprise Suite' updated → proposal", meta: '', severity: 'info', created_at: new Date(Date.now() - 3600000).toISOString() },
+        { id: 'act-4', type: 'contact_created', agent_name: 'System', description: 'New contact added: Marcus Rivera', meta: '', severity: 'info', created_at: new Date(Date.now() - 7200000).toISOString() },
+        { id: 'act-5', type: 'agent_run', agent_name: 'Lead Scorer', description: 'Lead scoring completed for 8 contacts — 3 upgraded to hot', meta: '', severity: 'success', created_at: new Date(Date.now() - 10800000).toISOString() },
+        { id: 'act-6', type: 'deal_moved', agent_name: 'System', description: "Deal 'TechCorp Platform Expansion' updated → negotiation", meta: '', severity: 'info', created_at: new Date(Date.now() - 18000000).toISOString() },
+        { id: 'act-7', type: 'contact_updated', agent_name: 'System', description: 'Contact updated: Priya Nair flagged as prospect', meta: '', severity: 'warning', created_at: new Date(Date.now() - 21600000).toISOString() },
+        { id: 'act-8', type: 'agent_run', agent_name: 'Email Composer', description: 'Draft generated for contact c-002: subject "Global Finance Enterprise Suite — Board Summary"', meta: '', severity: 'success', created_at: new Date(Date.now() - 28800000).toISOString() },
+        { id: 'act-9', type: 'contact_created', agent_name: 'System', description: 'New contact added: James Whitfield', meta: '', severity: 'info', created_at: new Date(Date.now() - 36000000).toISOString() },
+        { id: 'act-10', type: 'deal_moved', agent_name: 'System', description: "Deal 'Accelarate Renewal + Upsell' updated → closed_won", meta: '', severity: 'success', created_at: new Date(Date.now() - 43200000).toISOString() },
+        { id: 'act-11', type: 'agent_run', agent_name: 'Pipeline Optimizer', description: 'Deal health flagged: 21 days without stage change on Global Finance deal', meta: '', severity: 'warning', created_at: new Date(Date.now() - 86400000).toISOString() },
+        { id: 'act-12', type: 'contact_deleted', agent_name: 'System', description: 'Contact removed: Old Lead', meta: '', severity: 'warning', created_at: new Date(Date.now() - 129600000).toISOString() },
+        { id: 'act-13', type: 'email_sent', agent_name: 'Gmail', description: 'Email sent to james.whitfield@accelarate.com: Renewal — Upsell Proposal', meta: '', severity: 'success', created_at: new Date(Date.now() - 172800000).toISOString() },
+        { id: 'act-14', type: 'agent_run', agent_name: 'Sentiment Analyzer', description: 'Sentiment analysis completed: 12 messages scored (avg positive 0.72)', meta: '', severity: 'info', created_at: new Date(Date.now() - 216000000).toISOString() },
+        { id: 'act-15', type: 'contact_created', agent_name: 'System', description: 'New contact added: Devon Park', meta: '', severity: 'info', created_at: new Date(Date.now() - 259200000).toISOString() },
+      ]
+      const { offset = 0, limit = 50, eventType } = opts ?? {}
+      let data = eventType ? DEMO_ACTIVITIES.filter(a => a.type === eventType) : DEMO_ACTIVITIES
+      data = data.slice(offset, offset + limit)
+      return Promise.resolve(data)
+    }
+    const params = new URLSearchParams()
+    params.set('limit', String(opts?.limit ?? 50))
+    if (opts?.offset) params.set('offset', String(opts.offset))
+    if (opts?.eventType) params.set('event_type', opts.eventType)
+    return apiFetch(`/workspaces/${workspaceId}/activity?${params}`, {}, token)
   },
   createActivity: (workspaceId: string, data: { type: string; agent_name: string; description: string; meta?: string; severity?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: `demo-activity-${Date.now()}`, ...data })
@@ -585,6 +611,30 @@ export const apiClient = {
     const form = new FormData()
     form.append('file', file)
     return apiFetch(`/workspaces/${workspaceId}/contacts/import`, { method: 'POST', body: form }, token, true)
+  },
+
+  // Bulk contact delete
+  bulkContactAction: (workspaceId: string, data: { action: 'delete'; contact_ids: string[] }, token: string): Promise<{ action: string; deleted: number; contact_ids: string[] }> => {
+    if (isDemoMode) return Promise.resolve({ action: data.action, deleted: data.contact_ids.length, contact_ids: data.contact_ids })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/bulk`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+
+  // Deal forecast
+  getDealForecast: (workspaceId: string, token: string, monthsAhead = 6): Promise<{ month: string; value: number; deal_count: number }[]> => {
+    if (isDemoMode) {
+      const now = new Date()
+      return Promise.resolve(
+        Array.from({ length: monthsAhead }, (_, i) => {
+          const d = new Date(now.getFullYear(), now.getMonth() + i, 1)
+          const label = d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+          const seed = d.getMonth() + d.getFullYear()
+          const value = [145000, 95000, 210000, 68000, 175000, 130000][i % 6]
+          const deal_count = [2, 1, 3, 1, 2, 2][i % 6]
+          return { month: label, value: Math.round(value + ((seed * 7919) % 30000) - 15000), deal_count }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/forecast?months_ahead=${monthsAhead}`, {}, token)
   },
 
   // Deal probability trend
