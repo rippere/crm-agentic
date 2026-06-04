@@ -312,6 +312,10 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve()
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}`, { method: 'DELETE' }, token)
   },
+  bulkContactAction: (workspaceId: string, data: { action: 'delete'; contact_ids: string[] }, token: string) => {
+    if (isDemoMode) return Promise.resolve({ action: data.action, updated: data.contact_ids.length, contact_ids: data.contact_ids })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/bulk`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
 
   // Calls
   uploadCall: (workspaceId: string, formData: FormData, token: string) => {
@@ -548,9 +552,29 @@ export const apiClient = {
   },
 
   // Activity events
-  listActivity: (workspaceId: string, token: string, limit = 50) => {
-    if (isDemoMode) return Promise.resolve([])
-    return apiFetch(`/workspaces/${workspaceId}/activity?limit=${limit}`, {}, token)
+  listActivity: (workspaceId: string, token: string, optsOrLimit?: number | { limit?: number; offset?: number; type?: string }) => {
+    const opts = typeof optsOrLimit === 'number' ? { limit: optsOrLimit } : (optsOrLimit ?? {})
+    const limit = opts.limit ?? 50
+    const offset = opts.offset ?? 0
+    if (isDemoMode) {
+      const { demoActivity } = require('./demo-data')
+      const now = Date.now()
+      let rows = (demoActivity as Array<Record<string, unknown>>).map((e, i) => ({
+        id: e.id,
+        workspace_id: workspaceId,
+        type: e.type,
+        agent_name: e.agentName,
+        description: e.description,
+        meta: e.meta ?? null,
+        severity: e.severity ?? 'info',
+        created_at: new Date(now - i * 1800000).toISOString(),
+      }))
+      if (opts.type) rows = rows.filter((r) => r.type === opts.type)
+      return Promise.resolve(rows.slice(offset, offset + limit))
+    }
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (opts.type) params.set('type', opts.type)
+    return apiFetch(`/workspaces/${workspaceId}/activity?${params.toString()}`, {}, token)
   },
   createActivity: (workspaceId: string, data: { type: string; agent_name: string; description: string; meta?: string; severity?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: `demo-activity-${Date.now()}`, ...data })
@@ -604,6 +628,36 @@ export const apiClient = {
       )
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/probability-trend`, {}, token)
+  },
+
+  // Deal forecast (open pipeline value grouped by expected-close month)
+  getDealsForecast: (workspaceId: string, token: string, months = 6): Promise<{ month: string; label: string; value: number; weighted_value: number; count: number }[]> => {
+    if (isDemoMode) {
+      const { demoDeals } = require('./demo-data')
+      const now = new Date()
+      const buckets: { month: string; label: string; value: number; weighted_value: number; count: number }[] = []
+      for (let i = 0; i < months; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() + i, 1)
+        buckets.push({
+          month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+          label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+          value: 0, weighted_value: 0, count: 0,
+        })
+      }
+      const open = (demoDeals as Array<Record<string, unknown>>).filter(
+        (d) => !['closed_won', 'closed_lost'].includes(d.stage as string)
+      )
+      open.forEach((d, i) => {
+        const bucket = buckets[i % buckets.length]
+        const value = Number(d.value) || 0
+        bucket.value += value
+        bucket.weighted_value += value * ((Number(d.mlWinProbability ?? d.ml_win_probability) || 50) / 100)
+        bucket.count += 1
+      })
+      buckets.forEach((b) => { b.value = Math.round(b.value); b.weighted_value = Math.round(b.weighted_value) })
+      return Promise.resolve(buckets)
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/forecast?months=${months}`, {}, token)
   },
 
   // AI query

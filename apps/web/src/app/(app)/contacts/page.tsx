@@ -18,7 +18,7 @@ import {
   Search, SlidersHorizontal, Brain, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
   Copy, X, Loader2, Zap, ClipboardList, CheckSquare, Square, Tag,
-  ExternalLink, Download, Upload, CheckCircle2, AlertCircle,
+  ExternalLink, Download, Upload, CheckCircle2, AlertCircle, Trash2,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -211,12 +211,14 @@ function BulkActionBar({
   count,
   onStatusChange,
   onEnrich,
+  onDelete,
   onClear,
   busy,
 }: {
   count: number;
   onStatusChange: (status: ContactStatus) => void;
   onEnrich: () => void;
+  onDelete: () => void;
   onClear: () => void;
   busy: boolean;
 }) {
@@ -256,6 +258,13 @@ function BulkActionBar({
       >
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
         Enrich All
+      </button>
+      <button
+        onClick={onDelete}
+        disabled={busy}
+        className="flex items-center gap-1.5 rounded-lg border border-rose-500/30 px-3 py-1.5 text-xs font-medium text-rose-400 hover:border-rose-500/50 hover:bg-rose-500/10 disabled:opacity-50 transition"
+      >
+        <Trash2 className="h-3.5 w-3.5" /> Delete
       </button>
       <div className="w-px h-4 bg-zinc-700 flex-shrink-0" />
       <button onClick={onClear} className="text-zinc-500 hover:text-zinc-300 transition">
@@ -939,10 +948,13 @@ function NewContactModal({ onClose, onCreate }: { onClose: () => void; onCreate:
   );
 }
 
+const CONTACT_FILTERS_KEY = "crm:contacts:filters";
+
 export default function ContactsPage() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<ContactStatus | "all">("all");
   const [filterScore, setFilterScore] = useState<LeadScore | "all">("all");
+  const [filtersLoaded, setFiltersLoaded] = useState(false);
   const [selected, setSelected] = useState<Contact | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -954,6 +966,7 @@ export default function ContactsPage() {
   const [hasGmailConnector, setHasGmailConnector] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
@@ -1018,6 +1031,38 @@ export default function ContactsPage() {
     setSelectedIds(new Set());
     setBulkBusy(false);
   }, [workspaceId, token, selectedIds, bulkBusy]);
+
+  const handleBulkDelete = useCallback(async () => {
+    if (!workspaceId || !token || bulkBusy || selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      await apiClient.bulkContactAction(workspaceId, { action: "delete", contact_ids: [...selectedIds] }, token);
+    } catch { /* silent — list refreshes on next visit */ }
+    setSelectedIds(new Set());
+    setBulkDeleteConfirm(false);
+    setBulkBusy(false);
+  }, [workspaceId, token, selectedIds, bulkBusy]);
+
+  // Restore persisted filters on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CONTACT_FILTERS_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (saved.filterStatus) setFilterStatus(saved.filterStatus);
+        if (saved.filterScore) setFilterScore(saved.filterScore);
+      }
+    } catch { /* ignore */ }
+    setFiltersLoaded(true);
+  }, []);
+
+  // Persist filters when they change (after initial restore)
+  useEffect(() => {
+    if (!filtersLoaded) return;
+    try {
+      localStorage.setItem(CONTACT_FILTERS_KEY, JSON.stringify({ filterStatus, filterScore }));
+    } catch { /* ignore */ }
+  }, [filtersLoaded, filterStatus, filterScore]);
 
   // Debounced semantic search
   useEffect(() => {
@@ -1446,8 +1491,21 @@ export default function ContactsPage() {
           count={selectedIds.size}
           onStatusChange={handleBulkStatus}
           onEnrich={handleBulkEnrich}
+          onDelete={() => setBulkDeleteConfirm(true)}
           onClear={() => setSelectedIds(new Set())}
           busy={bulkBusy}
+        />
+      )}
+
+      {/* Bulk delete confirmation */}
+      {bulkDeleteConfirm && (
+        <ConfirmDialog
+          title={`Delete ${selectedIds.size} contact${selectedIds.size !== 1 ? "s" : ""}?`}
+          description="This permanently removes the selected contacts and cannot be undone."
+          actionLabel={`Delete ${selectedIds.size}`}
+          variant="danger"
+          onConfirm={handleBulkDelete}
+          onClose={() => setBulkDeleteConfirm(false)}
         />
       )}
 

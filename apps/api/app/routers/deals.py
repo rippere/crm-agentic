@@ -322,6 +322,97 @@ async def create_deal(
     return DealResponse.model_validate(deal)
 
 
+_CLOSED_STAGES = {"closed_won", "closed_lost"}
+
+
+def _parse_close_date(raw: str | None) -> datetime | None:
+    """Best-effort parse of a deal's expected_close string into a datetime."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    # Try ISO first (handles "2026-07-15", "2026-07-15T00:00:00", "...Z")
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y", "%Y-%m"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+@router.get("/workspaces/{workspace_id}/deals/forecast")
+async def deals_forecast(
+    workspace_id: uuid.UUID,
+    months: int = Query(6, ge=1, le=24),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Forecast of open-deal value grouped by expected-close month.
+
+    Returns one bucket per upcoming month (from the current month forward) with
+    the raw pipeline value and the win-probability-weighted value, plus a
+    trailing "Unscheduled" bucket for open deals with no/unparseable close date.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(_CLOSED_STAGES),
+        )
+    )
+    deals = result.scalars().all()
+
+    now = datetime.now(timezone.utc)
+    # Pre-seed ordered month buckets starting from the current month
+    buckets: dict[str, dict] = {}
+    order: list[str] = []
+    year, month = now.year, now.month
+    for _ in range(months):
+        key = f"{year:04d}-{month:02d}"
+        order.append(key)
+        buckets[key] = {
+            "month": key,
+            "label": f"{month_abbr[month]} {year}",
+            "value": 0.0,
+            "weighted_value": 0.0,
+            "count": 0,
+        }
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+
+    unscheduled = {"month": "unscheduled", "label": "Unscheduled", "value": 0.0, "weighted_value": 0.0, "count": 0}
+
+    for deal in deals:
+        value = float(deal.value or 0)
+        weighted = value * (int(deal.ml_win_probability or 0) / 100.0)
+        close = _parse_close_date(deal.expected_close)
+        key = f"{close.year:04d}-{close.month:02d}" if close else None
+        bucket = buckets.get(key) if key else None
+        if bucket is None:
+            bucket = unscheduled
+        bucket["value"] += value
+        bucket["weighted_value"] += weighted
+        bucket["count"] += 1
+
+    out = [buckets[k] for k in order]
+    if unscheduled["count"]:
+        out.append(unscheduled)
+    # Round for clean JSON
+    for b in out:
+        b["value"] = round(b["value"], 2)
+        b["weighted_value"] = round(b["weighted_value"], 2)
+    return out
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,

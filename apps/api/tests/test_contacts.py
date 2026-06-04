@@ -931,3 +931,62 @@ async def test_import_contacts_csv_wrong_workspace_returns_403(app_client):
             files={"file": ("contacts.csv", csv_content, "text/csv")},
         )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/contacts/bulk — bulk delete
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_contacts(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    c1 = _fake_contact(workspace_id, name="Doomed One")
+    c2 = _fake_contact(workspace_id, name="Doomed Two")
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalars_result([c1, c2]),  # SELECT contacts
+        MagicMock(),  # INSERT activity event
+    ])
+
+    payload = {"action": "delete", "contact_ids": [str(c1.id), str(c2.id)]}
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{workspace_id}/contacts/bulk", json=payload)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action"] == "delete"
+    assert data["updated"] == 2
+    assert len(data["contact_ids"]) == 2
+    mock_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_contacts_empty_ids_returns_422(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    payload = {"action": "delete", "contact_ids": []}
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{workspace_id}/contacts/bulk", json=payload)
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_contacts_no_match_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([]))
+    payload = {"action": "delete", "contact_ids": [str(uuid.uuid4())]}
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{workspace_id}/contacts/bulk", json=payload)
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_contacts_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    payload = {"action": "delete", "contact_ids": [str(uuid.uuid4())]}
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/contacts/bulk", json=payload)
+
+    assert resp.status_code == 403

@@ -11,7 +11,7 @@ import { formatCurrency } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import {
-  AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid,
+  AreaChart, Area, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import Link from "next/link";
@@ -64,6 +64,25 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
             <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ background: p.color }} />
             <span className="text-zinc-300">
               {p.dataKey === "revenue" ? formatCurrency(p.value) : `${p.value}%`}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
+
+const ForecastTooltip = ({ active, payload, label }: { active?: boolean; payload?: { value: number; dataKey: string; color: string; name?: string }[]; label?: string }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs space-y-1.5">
+        <p className="font-mono text-zinc-400">{label}</p>
+        {payload.map((p) => (
+          <div key={p.dataKey} className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ background: p.color }} />
+            <span className="text-zinc-300">
+              {p.name ?? p.dataKey}: {formatCurrency(p.value)}
             </span>
           </div>
         ))}
@@ -233,6 +252,7 @@ export default function DashboardPage() {
   const [staleDeals, setStaleDeals] = useState<StaleDeal[]>([]);
   const [liveActivity, setLiveActivity] = useState<ActivityEvent[]>([]);
   const [revenueHistory, setRevenueHistory] = useState<{ month: string; revenue: number }[]>([]);
+  const [forecast, setForecast] = useState<{ month: string; label: string; value: number; weighted_value: number; count: number }[]>([]);
   const [pollToken, setPollToken] = useState<string | null>(null);
   const [pollWorkspaceId, setPollWorkspaceId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -252,6 +272,9 @@ export default function DashboardPage() {
       }).catch(() => {});
       apiClient.getDealHistory("demo-workspace-1", "demo-token", 6).then((data) => {
         if (Array.isArray(data)) setRevenueHistory(data);
+      }).catch(() => {});
+      apiClient.getDealsForecast("demo-workspace-1", "demo-token", 6).then((data) => {
+        if (Array.isArray(data)) setForecast(data);
       }).catch(() => {});
       return;
     }
@@ -302,6 +325,11 @@ export default function DashboardPage() {
       // Fetch revenue history
       apiClient.getDealHistory(workspaceId, session.access_token, 6)
         .then((data) => { if (Array.isArray(data)) setRevenueHistory(data); })
+        .catch(() => {});
+
+      // Fetch deal forecast (open pipeline value by expected-close month)
+      apiClient.getDealsForecast(workspaceId, session.access_token, 6)
+        .then((data) => { if (Array.isArray(data)) setForecast(data); })
         .catch(() => {});
 
       // Subscribe to Supabase Realtime for live activity feed
@@ -608,6 +636,43 @@ export default function DashboardPage() {
           </div>
         </Card>
       </section>
+
+      {/* Deal Forecast — expected close value grouped by month */}
+      {forecast.some((f) => f.count > 0) && (
+        <section aria-labelledby="forecast-heading">
+          <Card>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 id="forecast-heading" className="text-sm font-semibold text-zinc-100">Deal Forecast</h2>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">
+                  Open pipeline by expected close · {forecast.reduce((s, f) => s + f.count, 0)} deals ·{" "}
+                  {formatCurrency(forecast.reduce((s, f) => s + f.value, 0))} total
+                </p>
+              </div>
+              <Badge variant="indigo" dot>Projected</Badge>
+            </div>
+            <div className="h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={forecast} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    tick={{ fill: "#71717A", fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v) => `$${Math.round(v / 1000)}K`}
+                    width={44}
+                  />
+                  <Tooltip content={<ForecastTooltip />} cursor={{ fill: "#27272A66" }} />
+                  <Legend iconType="circle" iconSize={6} wrapperStyle={{ fontSize: "10px", color: "#71717A" }} />
+                  <Bar dataKey="value" name="Pipeline Value" fill="#6366F1" radius={[4, 4, 0, 0]} maxBarSize={48} />
+                  <Bar dataKey="weighted_value" name="Weighted (win %)" fill="#10B981" radius={[4, 4, 0, 0]} maxBarSize={48} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        </section>
+      )}
 
       {/* Bottom row: Active agents + Activity feed */}
       <section aria-labelledby="activity-heading" className="grid grid-cols-1 gap-4 lg:grid-cols-2">

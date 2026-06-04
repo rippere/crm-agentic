@@ -39,11 +39,16 @@
 - [2026-06-03] Phase 8d: Reports avg cycle time KPI — 5th card "Avg Cycle Time" (days from createdAt to close) added to /reports KPI row; grid updated to 5 cols
 - [2026-06-03] Bug fix: removed `from __future__ import annotations` + `uuid as uuid_mod` alias from 6 FastAPI routers (calls, slack, gmail, projects, mcp_server, slack_interactions, search) causing PydanticUndefinedAnnotation with Pydantic v2.9; 324 tests pass (up from 318)
 
+- [2026-06-04] Phase 9a: Bulk contact delete — POST /workspaces/{id}/contacts/bulk {action: delete, contact_ids: []} (max 100, route registered before /{contact_id} to avoid path capture, logs contact_deleted activity event); Delete button added to contacts BulkActionBar with type-aware ConfirmDialog; apiClient.bulkContactAction() with demo stub; 4 new tests
+- [2026-06-04] Phase 9b: Persisted contact filters — filterStatus + filterScore saved to localStorage (crm:contacts:filters) and restored on mount via filtersLoaded guard so they survive refresh. (Pipeline is a full kanban board with no filter state to persist.)
+- [2026-06-04] Phase 9c: Activity log page /activity — dedicated full-page timeline of all workspace activity_events; type filter pills + IntersectionObserver infinite scroll (PAGE_SIZE 25); GET /workspaces/{id}/activity extended with offset + type query params (limit clamped 1–200); apiClient.listActivity() now accepts {limit, offset, type} (back-compat with numeric limit) + demo feed mapped from demoActivity; Activity nav item added to Sidebar Intelligence group; 1 new test
+- [2026-06-04] Phase 9d: Deal forecast widget on dashboard — GET /workspaces/{id}/deals/forecast?months=N groups open deals by expected-close month (raw value + win-prob-weighted value + count, trailing Unscheduled bucket; route before /{deal_id}); recharts grouped BarChart (pipeline vs weighted) on dashboard with ForecastTooltip; apiClient.getDealsForecast() with demo stub; 3 new tests; 332 tests pass (up from 324)
+
 ## Current Phase
-Phase 8 — Polish, UX improvements, chart enhancements
+Phase 9 — Bulk ops, persisted filters, activity log, forecasting
 
 ## Next Task
-Phase 9 (suggested): (a) Bulk contact delete — add delete action to bulk action bar, POST /workspaces/{id}/contacts/bulk {action: delete, contact_ids: []}; (b) Saved searches / filters — persist active filters to localStorage on contacts/pipeline pages so they survive refreshes; (c) Activity log page /activity — dedicated full-page timeline showing all workspace activity_events with type filters and infinite scroll; (d) Deal forecasting widget on dashboard — expected close dates grouped by month, total value per month bar chart.
+Phase 10 (suggested): (a) Pipeline saved views — add a search/stage-filter bar to the kanban and persist it to localStorage; (b) Activity log CSV export + date-range filter; (c) Forecast drill-down — click a month bar to see the deals in that bucket; (d) Bulk task operations on the tasks kanban (multi-select → move status / delete).
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.

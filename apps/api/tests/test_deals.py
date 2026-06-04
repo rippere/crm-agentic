@@ -769,3 +769,66 @@ async def test_probability_trend_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/probability-trend")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/forecast
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_forecast_groups_open_deals_by_month(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = datetime.now(timezone.utc)
+    this_month = f"{now.year:04d}-{now.month:02d}"
+    d1 = _fake_deal(workspace_id, stage="proposal", value=20000.0, ml_win_probability=50,
+                    expected_close=now.strftime("%Y-%m-%d"))
+    d2 = _fake_deal(workspace_id, stage="qualified", value=10000.0, ml_win_probability=80,
+                    expected_close=now.strftime("%Y-%m-%d"))
+    # No close date → Unscheduled bucket
+    d3 = _fake_deal(workspace_id, stage="discovery", value=5000.0, ml_win_probability=20,
+                    expected_close=None)
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([d1, d2, d3]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/forecast?months=6")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # 6 month buckets + 1 unscheduled
+    assert len(data) == 7
+    current = next(b for b in data if b["month"] == this_month)
+    assert current["value"] == 30000.0
+    assert current["weighted_value"] == 18000.0  # 20000*0.5 + 10000*0.8
+    assert current["count"] == 2
+    unscheduled = next(b for b in data if b["month"] == "unscheduled")
+    assert unscheduled["value"] == 5000.0
+    assert unscheduled["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_forecast_no_unscheduled_bucket_when_all_scheduled(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = datetime.now(timezone.utc)
+    d1 = _fake_deal(workspace_id, stage="proposal", value=1000.0,
+                    expected_close=now.strftime("%Y-%m-%d"))
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([d1]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/forecast?months=3")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 3
+    assert all(b["month"] != "unscheduled" for b in data)
+
+
+@pytest.mark.asyncio
+async def test_forecast_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/forecast")
+
+    assert resp.status_code == 403

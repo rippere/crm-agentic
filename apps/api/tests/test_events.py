@@ -66,6 +66,29 @@ async def test_list_activity_wrong_workspace_returns_403(app_client):
     assert resp.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_list_activity_with_offset_and_type_filter(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    ev = _fake_event(workspace_id, type="deal_moved", description="Moved to proposal")
+    captured = {}
+
+    async def _capture_execute(stmt):
+        captured["stmt"] = str(stmt)
+        return _make_scalars_result([ev])
+
+    mock_db.execute = AsyncMock(side_effect=_capture_execute)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/activity?limit=10&offset=20&type=deal_moved"
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()[0]["type"] == "deal_moved"
+    # type filter should add a second WHERE predicate on the type column
+    assert "type" in captured["stmt"].lower()
+
+
 # ---------------------------------------------------------------------------
 # POST /workspaces/{wid}/activity — create
 # ---------------------------------------------------------------------------
