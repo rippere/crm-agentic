@@ -39,11 +39,16 @@
 - [2026-06-03] Phase 8d: Reports avg cycle time KPI — 5th card "Avg Cycle Time" (days from createdAt to close) added to /reports KPI row; grid updated to 5 cols
 - [2026-06-03] Bug fix: removed `from __future__ import annotations` + `uuid as uuid_mod` alias from 6 FastAPI routers (calls, slack, gmail, projects, mcp_server, slack_interactions, search) causing PydanticUndefinedAnnotation with Pydantic v2.9; 324 tests pass (up from 318)
 
+- [2026-06-04] Phase 9a: Bulk contact delete — POST /workspaces/{id}/contacts/bulk (action: delete, max 100); Delete button in contacts BulkActionBar with ConfirmDialog; bulkContactAction() in api-client; 3 new tests
+- [2026-06-04] Phase 9b: Saved filters — contacts filterStatus + filterScore persisted to localStorage; deal title/company search on pipeline board with localStorage persistence
+- [2026-06-04] Phase 9c: Activity log page /activity — full workspace timeline with type filter chips and Load More infinite scroll; GET /workspaces/{id}/activity gains event_type + offset params; Activity added to sidebar; 15-event demo stub; 2 new tests
+- [2026-06-04] Phase 9d: Deal forecast widget — GET /workspaces/{id}/deals/forecast groups active deals by expected_close month; recharts BarChart on dashboard; getDealForecast() in api-client with demo data; 2 new tests
+
 ## Current Phase
-Phase 8 — Polish, UX improvements, chart enhancements
+Phase 9 — Polish, UX, and new features (complete)
 
 ## Next Task
-Phase 9 (suggested): (a) Bulk contact delete — add delete action to bulk action bar, POST /workspaces/{id}/contacts/bulk {action: delete, contact_ids: []}; (b) Saved searches / filters — persist active filters to localStorage on contacts/pipeline pages so they survive refreshes; (c) Activity log page /activity — dedicated full-page timeline showing all workspace activity_events with type filters and infinite scroll; (d) Deal forecasting widget on dashboard — expected close dates grouped by month, total value per month bar chart.
+Phase 10 (suggested): (a) Search global command palette — Cmd+K modal searching across contacts, deals, and tasks at once; (b) Notification preferences — per-event-type opt-in/opt-out stored in localStorage, filter activity feed; (c) Deal notes editor — rich textarea with Markdown preview on deal detail page; (d) Contact merge — POST /workspaces/{id}/contacts/merge {primary_id, duplicate_id} merges tasks/messages/deals onto primary then deletes duplicate.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
