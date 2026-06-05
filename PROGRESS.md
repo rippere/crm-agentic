@@ -44,11 +44,16 @@
 - [2026-06-04] Phase 9c: Activity log page /activity — full workspace timeline with type filter chips and Load More infinite scroll; GET /workspaces/{id}/activity gains event_type + offset params; Activity added to sidebar; 15-event demo stub; 2 new tests
 - [2026-06-04] Phase 9d: Deal forecast widget — GET /workspaces/{id}/deals/forecast groups active deals by expected_close month; recharts BarChart on dashboard; getDealForecast() in api-client with demo data; 2 new tests
 
+- [2026-06-05] Phase 10a: Global Cmd+K search command palette — two-mode design (Search + Nova AI tabs); typeahead search across contacts, deals, tasks with 280ms debounce; arrow-key navigation + Enter to navigate; grouped results with section headers; GET /workspaces/{id}/search FastAPI endpoint (parallel ILIKE on 3 tables); globalSearch() demo stub; 3 new tests; fixed 4 pre-existing tsc errors (listActivity signature, recharts formatter, auth/callback implicit any, nullable activity fields); 327 tests
+- [2026-06-05] Phase 10b: Notification preferences — SlidersHorizontal gear icon in notification panel toggles prefs pane; 5 categories (Contacts, Deals, Agent runs, Email/Inbox, System) each with toggle switch; preferences saved to localStorage 'crm_notif_prefs'; events filtered before rendering + unread count respects active prefs; amber dot badge shows disabled category count; NotifEvent type updated to include 'type' field
+- [2026-06-05] Phase 10c: Deal notes editor — DealNotesEditor sub-component on deal detail page; read-only Markdown preview by default; Edit button → Write/Preview tabs + textarea; live Preview renders via renderMarkdown(); Save calls apiClient.updateDeal({notes}) with Loader2 spinner; Cancel restores previous text; empty-state "Add a note →" prompt; Markdown hint in footer
+- [2026-06-05] Phase 10d: Contact merge — POST /workspaces/{id}/contacts/merge (validates both contacts in workspace, bulk-reassigns tasks/messages/deals via UPDATE, deletes duplicate, logs ActivityEvent); mergeContacts() in api-client with demo stub; BulkActionBar "Merge" button (visible only when 2 selected); merge modal shows primary/duplicate side-by-side with role colors; success toast with reassignment counts; 3 new tests; 330 tests total
+
 ## Current Phase
-Phase 9 — Polish, UX, and new features (complete)
+Phase 10 — UX & Feature Polish (complete)
 
 ## Next Task
-Phase 10 (suggested): (a) Search global command palette — Cmd+K modal searching across contacts, deals, and tasks at once; (b) Notification preferences — per-event-type opt-in/opt-out stored in localStorage, filter activity feed; (c) Deal notes editor — rich textarea with Markdown preview on deal detail page; (d) Contact merge — POST /workspaces/{id}/contacts/merge {primary_id, duplicate_id} merges tasks/messages/deals onto primary then deletes duplicate.
+Phase 11 (suggested): (a) Webhook delivery log — track FastAPI webhook calls (Gmail push, Slack events) in a new webhook_logs table + UI at /settings/webhooks; (b) Contact tag editor — inline tag chip editing on contact detail page (add/remove semantic tags stored in DB); (c) Pipeline swimlane view — toggle between kanban board and horizontal swimlane (grouped by deal value range); (d) API key management — generate/revoke workspace API keys stored in Supabase, shown in /settings.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
