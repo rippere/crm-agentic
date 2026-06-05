@@ -63,6 +63,16 @@ def _compute_win_probability(deal: Any, now: datetime) -> int:
     return max(0, min(95, prob))
 
 
+async def _enumerate_workspace_ids() -> list[str]:
+    """Return every workspace id in the DB as a string (sync-land safe)."""
+    from app.models.workspace import Workspace
+
+    SessionFactory = _get_async_session()
+    async with SessionFactory() as db:
+        result = await db.execute(select(Workspace.id))
+        return [str(ws_id) for ws_id in result.scalars().all()]
+
+
 async def _run_optimize(workspace_id: str) -> dict[str, Any]:
     from app.models.deal import Deal
     from app.models.activity_event import ActivityEvent
@@ -104,3 +114,16 @@ async def _run_optimize(workspace_id: str) -> dict[str, Any]:
 def optimize_pipeline(self: Any, workspace_id: str) -> dict[str, Any]:
     """Celery task: compute heuristic win probabilities for all open pipeline deals."""
     return asyncio.get_event_loop().run_until_complete(_run_optimize(workspace_id))
+
+
+@celery_app.task(name="app.workers.pipeline.optimize_pipeline_all", bind=True)
+def optimize_pipeline_all(self: Any) -> dict[str, Any]:
+    """Beat dispatcher: fan optimize_pipeline out across every workspace.
+
+    optimize_pipeline requires a workspace_id, which celery beat cannot supply.
+    This no-arg task enumerates all workspaces and enqueues one child task each.
+    """
+    workspace_ids = asyncio.get_event_loop().run_until_complete(_enumerate_workspace_ids())
+    for ws_id in workspace_ids:
+        optimize_pipeline.delay(str(ws_id))
+    return {"dispatched": len(workspace_ids), "workspace_ids": workspace_ids}

@@ -38,7 +38,7 @@ interface ActivityEvent {
 }
 
 interface SparkPoint {
-  v: number; // accuracy proxy 0–100
+  v: number; // run outcome: 1 = success, 0 = failure, 0.5 = other
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -89,24 +89,16 @@ function formatRelative(dateStr: string | null | undefined): string {
 }
 
 /**
- * Build 7 sparkline points from activity events for this agent.
- * Each point is a mock accuracy reading derived from severity: success=high, error=low.
- * Falls back to a flat line seeded from agent.accuracy when no events exist.
+ * Build sparkline points from REAL activity events for this agent — an honest
+ * run-outcome trend (success / failure), not a fabricated accuracy reading.
+ * Returns an empty array when there are no events so the caller can render an
+ * empty state instead of inventing a line.
  */
-function buildSparkData(events: ActivityEvent[], baseAccuracy: number): SparkPoint[] {
-  if (events.length === 0) {
-    // Generate a subtly varied flat line so the sparkline always renders
-    return Array.from({ length: 7 }, (_, i) => ({
-      v: Math.max(50, Math.min(100, baseAccuracy + (Math.sin(i) * 3))),
-    }));
-  }
+function buildSparkData(events: ActivityEvent[]): SparkPoint[] {
+  if (events.length === 0) return [];
   const last7 = events.slice(0, 7).reverse();
   return last7.map((e) => ({
-    v: e.severity === "success"
-      ? Math.min(100, baseAccuracy + 3)
-      : e.severity === "error"
-      ? Math.max(50, baseAccuracy - 8)
-      : baseAccuracy,
+    v: e.severity === "success" ? 1 : e.severity === "error" ? 0 : 0.5,
   }));
 }
 
@@ -210,7 +202,7 @@ function AgentCard({ agent, onSelect, token, workspaceId, onRun }: AgentCardProp
     }
   }, [poller.state]);
 
-  const sparkData = buildSparkData(activity, agent.accuracy);
+  const sparkData = buildSparkData(activity);
 
   const isRunning = poller.state === "pending" || poller.state === "started" || agent.status === "processing";
   const runFailed = poller.state === "failure";
@@ -297,34 +289,42 @@ function AgentCard({ agent, onSelect, token, workspaceId, onRun }: AgentCardProp
             />
           </div>
         </div>
-        {/* Sparkline — 7-point accuracy trend */}
+        {/* Sparkline — honest recent-run outcomes (success/failure). Empty until
+            real runs exist, rather than a fabricated trend. */}
         <div
           className="flex-shrink-0 w-20 h-8"
-          title="Accuracy trend (last 7 runs)"
-          aria-label={`${agent.name} accuracy sparkline`}
+          title="Recent run outcomes (last 7)"
+          aria-label={`${agent.name} recent run outcomes`}
         >
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={sparkData} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
-              <Line
-                type="monotone"
-                dataKey="v"
-                stroke={runFailed ? "#f87171" : "#34d399"}
-                strokeWidth={1.5}
-                dot={false}
-                isAnimationActive={false}
-              />
-              <Tooltip
-                content={({ active, payload }) => {
-                  if (!active || !payload?.length) return null;
-                  return (
-                    <div className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] text-zinc-300 font-mono shadow-xl">
-                      {(payload[0].value as number).toFixed(1)}%
-                    </div>
-                  );
-                }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          {sparkData.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={sparkData} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+                <Line
+                  type="monotone"
+                  dataKey="v"
+                  stroke={runFailed ? "#f87171" : "#34d399"}
+                  strokeWidth={1.5}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const v = payload[0].value as number;
+                    return (
+                      <div className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] text-zinc-300 font-mono shadow-xl">
+                        {v === 1 ? "Success" : v === 0 ? "Failed" : "Ran"}
+                      </div>
+                    );
+                  }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-[9px] text-zinc-600 font-mono">
+              No runs yet
+            </div>
+          )}
         </div>
       </div>
 
@@ -524,7 +524,9 @@ function AgentDetailPanel({
         {/* Tasks stats */}
         <div className="grid grid-cols-2 gap-3">
           <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-3 text-center">
-            <p className="text-2xl font-bold font-mono text-zinc-100">{agent.tasksToday.toLocaleString()}</p>
+            {/* Per-agent daily counts aren't tracked yet — show the real last-run
+                instead of a fabricated per-agent number. */}
+            <p className="text-2xl font-bold font-mono text-zinc-100">—</p>
             <p className="text-xs text-zinc-500 mt-1">Tasks Today</p>
           </div>
           <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-3 text-center">
@@ -555,6 +557,9 @@ export default function AgentsPage() {
   const [token, setToken] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // Real "tasks today" = count of agent_run activity events dated today. null until
+  // loaded, so we can show "—" rather than a fabricated number.
+  const [tasksToday, setTasksToday] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const addToast = useCallback((message: string, type: Toast["type"] = "info") => {
@@ -608,8 +613,27 @@ export default function AgentsPage() {
       .catch((err) => console.error("[agents] failed to load agents (network/CORS):", err));
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Derive real "tasks today" from agent_run activity events dated today, instead
+  // of trusting the seeded agent.tasks_today column. Works in demo mode too (the
+  // api-client serves demo activity), so the number is always sourced from events.
+  useEffect(() => {
+    if (!token || !workspaceId) return;
+    apiClient
+      .listActivity(workspaceId, token, { eventType: "agent_run", limit: 200 })
+      .then((events) => {
+        if (!Array.isArray(events)) return;
+        const today = new Date().toDateString();
+        const count = events.filter(
+          (e) => new Date(e.created_at).toDateString() === today
+        ).length;
+        setTasksToday(count);
+      })
+      .catch(() => {});
+  }, [token, workspaceId]);
+
   // Poll /agents every 5s while any agent is processing
   const pollAgents = useCallback(async () => {
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === "true") return;
     if (!token) return;
     try {
       const data = await fetch(
@@ -645,7 +669,17 @@ export default function AgentsPage() {
     if (!token) return null;
     try {
       const result = await apiClient.triggerAgent(agentId, token);
-      const jobId: string = result?.job_id ?? result?.id ?? "unknown";
+      // Agent type has no on-demand task (HTTP 501) — don't start the poller for a
+      // job that was never created; just explain why.
+      if (result?.not_implemented) {
+        addToast(result.detail ?? "This agent runs via its own flow, not an on-demand run.", "info");
+        return null;
+      }
+      const jobId: string | null = result?.job_id ?? null;
+      if (!jobId) {
+        addToast("Agent did not return a job id — nothing to track.", "error");
+        return null;
+      }
       addToast(`Agent started — job ${jobId}`, "success");
       setAgents((prev) =>
         prev.map((a) => a.id === agentId ? { ...a, status: "processing" as const } : a)
@@ -705,7 +739,7 @@ export default function AgentsPage() {
           </div>
           <div>
             <p className="text-xl font-bold font-mono text-zinc-100">
-              {agents.reduce((s, a) => s + a.tasksToday, 0).toLocaleString()}
+              {tasksToday !== null ? tasksToday.toLocaleString() : "—"}
             </p>
             <p className="text-xs text-zinc-500">Tasks Today</p>
           </div>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import uuid as uuid_mod
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -323,3 +324,79 @@ async def test_draft_email_strips_plain_markdown_fence():
         result = await fseq_mod._draft_email("Deal Z", "LLC", None, "qualified")
 
     assert result["subject"] == "Checking in"
+
+
+# ---------------------------------------------------------------------------
+# Beat dispatchers — enumerate all workspaces and fan out per-workspace tasks
+# ---------------------------------------------------------------------------
+
+
+def test_optimize_pipeline_all_dispatches_per_workspace():
+    """The no-arg beat dispatcher enumerates workspace ids and .delay()s one
+    optimize_pipeline child per workspace (beat can't supply workspace_id itself)."""
+    import app.workers.pipeline as pipeline_mod
+
+    ws_ids = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"]
+
+    with patch.object(pipeline_mod, "_enumerate_workspace_ids", new=AsyncMock(return_value=ws_ids)), \
+         patch.object(pipeline_mod.optimize_pipeline, "delay") as mock_delay:
+        result = pipeline_mod.optimize_pipeline_all.run()
+
+    assert result["dispatched"] == 2
+    assert result["workspace_ids"] == ws_ids
+    assert mock_delay.call_count == 2
+    mock_delay.assert_any_call(ws_ids[0])
+    mock_delay.assert_any_call(ws_ids[1])
+
+
+def test_optimize_pipeline_all_no_workspaces_dispatches_nothing():
+    import app.workers.pipeline as pipeline_mod
+
+    with patch.object(pipeline_mod, "_enumerate_workspace_ids", new=AsyncMock(return_value=[])), \
+         patch.object(pipeline_mod.optimize_pipeline, "delay") as mock_delay:
+        result = pipeline_mod.optimize_pipeline_all.run()
+
+    assert result["dispatched"] == 0
+    mock_delay.assert_not_called()
+
+
+def test_compute_deal_health_all_dispatches_per_workspace():
+    import app.workers.deal_health_worker as dh_mod
+
+    ws_ids = ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
+
+    with patch.object(dh_mod, "_enumerate_workspace_ids", new=AsyncMock(return_value=ws_ids)), \
+         patch.object(dh_mod.compute_deal_health, "delay") as mock_delay:
+        result = dh_mod.compute_deal_health_all.run()
+
+    assert result["dispatched"] == 2
+    assert mock_delay.call_count == 2
+    mock_delay.assert_any_call(ws_ids[0])
+    mock_delay.assert_any_call(ws_ids[1])
+
+
+def test_enumerate_workspace_ids_queries_workspace_table():
+    """_enumerate_workspace_ids stringifies whatever the Workspace.id query returns,
+    using the same async-sessionmaker pattern as the rest of the worker."""
+    import asyncio
+    import app.workers.pipeline as pipeline_mod
+
+    raw_ids = [uuid_mod.UUID("33333333-3333-3333-3333-333333333333")]
+
+    scalars_result = MagicMock()
+    scalars_result.scalars.return_value.all.return_value = raw_ids
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=scalars_result)
+
+    # async context manager that yields mock_db
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=mock_db)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    session_factory = MagicMock(return_value=session_cm)
+
+    with patch.object(pipeline_mod, "_get_async_session", return_value=session_factory):
+        out = asyncio.get_event_loop().run_until_complete(pipeline_mod._enumerate_workspace_ids())
+
+    assert out == ["33333333-3333-3333-3333-333333333333"]
+    assert all(isinstance(x, str) for x in out)

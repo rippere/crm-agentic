@@ -235,9 +235,28 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve([])
     return apiFetch('/agents', {}, token)
   },
-  triggerAgent: (agentId: string, token: string) => {
-    if (isDemoMode) return Promise.resolve({ job_id: `demo-job-${agentId}` })
-    return apiFetch(`/agents/${agentId}/run`, { method: 'POST' }, token)
+  // Returns { job_id } on a real dispatch, or { not_implemented: true, detail }
+  // when the agent type has no on-demand task (HTTP 501) so the caller can skip
+  // starting the job poller instead of polling a job that was never created.
+  triggerAgent: async (
+    agentId: string,
+    token: string,
+  ): Promise<{ job_id?: string; not_implemented?: boolean; detail?: string }> => {
+    if (isDemoMode) return { job_id: `demo-job-${agentId}` }
+    const res = await fetch(`${FASTAPI_URL}/agents/${agentId}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    })
+    if (res.status === 501) {
+      let detail = 'This agent runs via its own flow, not an on-demand job.'
+      try { detail = (await res.json())?.detail ?? detail } catch { /* keep default */ }
+      return { not_implemented: true, detail }
+    }
+    if (!res.ok) {
+      console.error(`[api] POST /agents/${agentId}/run → ${res.status}`)
+      throw new Error(`API error ${res.status}`)
+    }
+    return res.json()
   },
   updateAgent: (agentId: string, data: { status?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: agentId, ...data })
@@ -795,7 +814,7 @@ export const apiClient = {
   // AI query
   aiQuery: (workspaceId: string, query: string, token: string) => {
     if (isDemoMode) return Promise.resolve({
-      answer: `Nova here. Your pipeline looks healthy — 6 active deals, $1.2M in value. The TechCorp deal in Negotiation has a health score of 32, meaning it hasn't moved in a while. I'd suggest reaching out to James Whitfield to re-engage. You can use the AI Search on /contacts to find similar prospects, or check the Deal Health Alerts on /dashboard for a full stale-deal view.`
+      answer: `Nova here. Across your 5 open deals ($517K in pipeline), two need attention this week. The Global Finance Enterprise Suite deal ($250K, Proposal) is your biggest risk — health score 35, stalled 21 days with no reply to the last two follow-ups. ScalePath Japan Starter ($18K, Discovery) is lower at 22 but earlier-stage. I'd prioritize re-engaging Marcus Rivera at Global Finance — open his Pre-Meeting Brief for a ready-made re-engagement plan. You can also check the full Deal Health Alerts on /dashboard.`
     })
     return apiFetch(`/workspaces/${workspaceId}/ai/query`, { method: 'POST', body: JSON.stringify({ query }) }, token)
   },
