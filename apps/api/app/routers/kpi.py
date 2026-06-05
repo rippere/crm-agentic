@@ -31,7 +31,7 @@ class KpiSnapshotIn(BaseModel):
     domain: str
     metric: str
     value: float
-    meta: dict = {}
+    meta: dict | None = None  # tolerate explicit null from collectors
 
 
 class KpiSnapshotBatch(BaseModel):
@@ -85,13 +85,13 @@ async def upsert_kpi_snapshots(
                 domain=snap.domain,
                 metric=snap.metric,
                 value=snap.value,
-                meta=snap.meta,
+                meta=snap.meta or {},
             )
             db.add(row)
         else:
             row.domain = snap.domain  # type: ignore[assignment]
             row.value = snap.value  # type: ignore[assignment]
-            row.meta = snap.meta  # type: ignore[assignment]
+            row.meta = snap.meta or {}  # type: ignore[assignment]
         upserted += 1
 
     await db.commit()
