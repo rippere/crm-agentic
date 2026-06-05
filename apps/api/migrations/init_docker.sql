@@ -172,6 +172,38 @@ CREATE TABLE IF NOT EXISTS call_summaries (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Ledger: daily life-KPI snapshots (see migration 012_ledger.sql).
+CREATE TABLE IF NOT EXISTS kpi_snapshots (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  date         DATE NOT NULL,
+  domain       TEXT NOT NULL,
+  metric       TEXT NOT NULL,
+  value        NUMERIC NOT NULL,
+  meta         JSONB NOT NULL DEFAULT '{}',
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (workspace_id, date, metric)
+);
+
+-- Ledger: commitments harvested from session records (see migration 012_ledger.sql).
+CREATE TABLE IF NOT EXISTS commitments (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  external_id  TEXT,
+  title        TEXT NOT NULL,
+  kind         TEXT NOT NULL DEFAULT 'auto',
+  source       TEXT,
+  declared_at  TIMESTAMPTZ NOT NULL,
+  due_date     DATE,
+  status       TEXT NOT NULL DEFAULT 'open',
+  evidence     TEXT,
+  scored_at    TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (workspace_id, external_id)
+);
+
 -- ─── INDEXES ─────────────────────────────────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_messages_workspace_processed ON messages(workspace_id, processed);
@@ -182,6 +214,9 @@ CREATE INDEX IF NOT EXISTS idx_contacts_embedding ON contacts USING hnsw (embedd
 CREATE INDEX IF NOT EXISTS idx_deals_workspace_health ON deals (workspace_id, health_score);
 CREATE INDEX IF NOT EXISTS idx_call_summaries_workspace ON call_summaries (workspace_id, call_date DESC);
 CREATE INDEX IF NOT EXISTS idx_call_summaries_contact ON call_summaries (contact_id);
+CREATE INDEX IF NOT EXISTS idx_kpi_ws_date ON kpi_snapshots(workspace_id, date);
+CREATE INDEX IF NOT EXISTS idx_kpi_ws_metric_date ON kpi_snapshots(workspace_id, metric, date);
+CREATE INDEX IF NOT EXISTS idx_commitments_ws_status ON commitments(workspace_id, status);
 
 -- ─── SEED DATA ────────────────────────────────────────────────────────────────
 -- Default workspace so a fresh deployment has something to show.
