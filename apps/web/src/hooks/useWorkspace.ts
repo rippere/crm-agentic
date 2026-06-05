@@ -36,7 +36,7 @@ export function useWorkspace(): UseWorkspaceResult {
           return;
         }
 
-        const workspaceId = user.user_metadata?.workspace_id as string | undefined;
+        const workspaceId = (user.app_metadata?.workspace_id ?? user.user_metadata?.workspace_id) as string | undefined;
         if (!workspaceId) {
           if (!cancelled) setError("No workspace found. Please complete onboarding.");
           return;

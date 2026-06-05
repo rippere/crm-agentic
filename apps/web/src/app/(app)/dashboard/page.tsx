@@ -264,7 +264,7 @@ export default function DashboardPage() {
     let realtimeChannelRef: ReturnType<typeof supabase.channel> | null = null;
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) return;
-      const workspaceId: string | undefined = session.user.user_metadata?.workspace_id;
+      const workspaceId: string | undefined = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id);
       setPollToken(session.access_token);
       if (workspaceId) setPollWorkspaceId(workspaceId);
 

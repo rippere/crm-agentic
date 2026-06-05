@@ -234,7 +234,7 @@ export default function InboxPage() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         setToken(session.access_token);
-        setWorkspaceId(session.user.user_metadata?.workspace_id ?? null);
+        setWorkspaceId((session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id) ?? null);
       }
     });
   }, [isDemoMode, loadMessages]);
