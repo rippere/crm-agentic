@@ -29,8 +29,27 @@ router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/verify", auto_error=True)
 
 
+def _read_bound_workspace_id(payload: dict) -> str | None:
+    """Read the server-bound workspace_id from a Supabase JWT.
+
+    ONLY reads server-only app_metadata, which is NOT writable by the user via
+    supabase.auth.updateUser. We deliberately do NOT fall back to user_metadata:
+    a forgeable user_metadata.workspace_id let an attacker bind a brand-new account
+    to an existing foreign workspace (cross-tenant takeover). Existing users are
+    migrated into app_metadata by the one-time backfill run at the WS-B deploy
+    cutover; a user whose JWT lacks app_metadata is provisioned a fresh workspace
+    rather than bound to any user-supplied id.
+    """
+    app_meta = payload.get("app_metadata") or {}
+    return app_meta.get("workspace_id") or None
+
+
 async def _sync_workspace_metadata(supabase_uid: str, workspace_id: str) -> None:
-    """Push workspace_id into Supabase user_metadata via admin API (non-fatal)."""
+    """Push workspace_id into Supabase server-only app_metadata via admin API (non-fatal).
+
+    app_metadata is NOT writable by the user through supabase.auth.updateUser, so binding
+    the workspace here closes the cross-tenant IDOR that user-writable user_metadata allowed.
+    """
     from app.config import settings as _s
 
     try:
@@ -42,7 +61,7 @@ async def _sync_workspace_metadata(supabase_uid: str, workspace_id: str) -> None
                     "Authorization": f"Bearer {_s.SUPABASE_SERVICE_ROLE_KEY}",
                     "Content-Type": "application/json",
                 },
-                json={"user_metadata": {"workspace_id": workspace_id}},
+                json={"app_metadata": {"workspace_id": workspace_id}},
             )
     except Exception:
         pass  # metadata sync is best-effort; never block the auth response
@@ -62,8 +81,12 @@ async def verify(
 ) -> VerifyResponse:
     """
     Verify a Supabase JWT. Auto-provisions a users row on first login.
-    Reconciles workspace_id if the user completed onboarding after first provision.
     Returns user_id and workspace_id.
+
+    The DB row is the source of truth for workspace binding. We never overwrite an
+    existing user's workspace_id from the JWT — doing so let a user pivot into another
+    tenant by editing user_metadata. Server-side binding happens only in POST /workspaces
+    (onboarding) and first-login auto-provision below.
     """
     try:
         payload = verify_supabase_jwt(token)
@@ -72,41 +95,49 @@ async def verify(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
     email: str | None = payload.get("email")
-    user_meta: dict = payload.get("user_metadata", {})
-    meta_ws_id_str: str | None = user_meta.get("workspace_id")
 
     # Look up existing user
     result = await db.execute(select(User).where(User.supabase_uid == supabase_uid))
     user = result.scalar_one_or_none()
 
     if user is None:
-        # Auto-provision: create a default workspace + user row
-        ws = Workspace(name=f"{email or 'My'} Workspace", slug=str(uuid.uuid4())[:8], mode="sales")
-        db.add(ws)
-        await db.flush()
-
-        user = User(supabase_uid=supabase_uid, email=email, workspace_id=ws.id, role="admin")
-        db.add(user)
-
-        for spec in _DEFAULT_AGENTS:
-            db.add(Agent(workspace_id=ws.id, **spec))
-
-        await db.commit()
-        await db.refresh(user)
-
-        # Push workspace_id back into Supabase user_metadata so the JWT stays in sync
-        await _sync_workspace_metadata(supabase_uid, str(ws.id))
-    else:
-        # Reconcile: if the JWT now carries a different workspace_id (e.g. after onboarding
-        # created a new workspace via direct Supabase insert + updateUser), update our DB row.
-        if meta_ws_id_str and meta_ws_id_str != str(user.workspace_id):
+        # First login. If the JWT already carries a server-bound workspace_id (e.g. an
+        # invited teammate, where the admin invite seeds app_metadata), join that workspace;
+        # otherwise auto-provision a fresh default workspace + agent roster.
+        bound_ws_id_str = _read_bound_workspace_id(payload)
+        bound_ws_id: uuid.UUID | None = None
+        if bound_ws_id_str:
             try:
-                new_ws_id = uuid.UUID(meta_ws_id_str)
-                user.workspace_id = new_ws_id  # type: ignore[assignment]
-                await db.commit()
-                await db.refresh(user)
+                bound_ws_id = uuid.UUID(bound_ws_id_str)
             except ValueError:
-                pass
+                bound_ws_id = None
+
+        existing_ws = None
+        if bound_ws_id:
+            ws_result = await db.execute(select(Workspace).where(Workspace.id == bound_ws_id))
+            existing_ws = ws_result.scalar_one_or_none()
+
+        if existing_ws is not None:
+            user = User(supabase_uid=supabase_uid, email=email, workspace_id=existing_ws.id, role="member")
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        else:
+            ws = Workspace(name=f"{email or 'My'} Workspace", slug=str(uuid.uuid4())[:8], mode="sales")
+            db.add(ws)
+            await db.flush()
+
+            user = User(supabase_uid=supabase_uid, email=email, workspace_id=ws.id, role="admin")
+            db.add(user)
+
+            for spec in _DEFAULT_AGENTS:
+                db.add(Agent(workspace_id=ws.id, **spec))
+
+            await db.commit()
+            await db.refresh(user)
+
+            # Bind workspace_id into server-only app_metadata so the JWT stays in sync.
+            await _sync_workspace_metadata(supabase_uid, str(ws.id))
 
     return VerifyResponse(user_id=user.id, workspace_id=user.workspace_id)
 
