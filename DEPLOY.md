@@ -107,6 +107,13 @@ apps/api/migrations/002_vector_embeddings.sql # vector(384) column + HNSW index
 apps/api/migrations/003_deal_health.sql       # health_score + stage_changed_at on deals
 apps/api/migrations/004_call_summaries.sql    # call_summaries table
 apps/api/migrations/005_activity_severity_error.sql  # FIX: adds 'error' to severity CHECK
+apps/api/migrations/006_projects_table.sql    # projects table + RLS policy
+apps/api/migrations/007_project_tasks.sql     # tasks.project_id link
+apps/api/migrations/008_rls_indexes.sql       # workspace_id indexes for RLS
+apps/api/migrations/009_message_relevant.sql  # messages.relevant flag
+apps/api/migrations/010_task_project_external_id.sql  # external_id for idempotent vault sync
+apps/api/migrations/011_tasks_project_id.sql  # FIX: adds missing tasks.project_id column
+apps/api/migrations/012_ledger.sql            # ledger: kpi_snapshots + commitments tables
 ```
 
 > `init_docker.sql` is for local Docker only (no RLS). Do NOT run it on Supabase production.
