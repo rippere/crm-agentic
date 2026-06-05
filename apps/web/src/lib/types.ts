@@ -210,3 +210,52 @@ export interface MetricTemplate {
   data_type: MetricDataType | null;
   created_at: string;
 }
+
+// ─── Life / Accountability Ledger ─────────────────────────────────────────────
+// Daily KPI snapshots pushed by the local collector, keyed on (date, metric).
+// `meta` is metric-specific (e.g. git_commits carries per-project counts).
+export type KpiDomain = "engineering" | "knowledge" | "product" | "life";
+
+export interface KpiSnapshot {
+  id: string;
+  workspace_id: string;
+  date: string;        // ISO date (YYYY-MM-DD)
+  domain: KpiDomain | string;
+  metric: string;
+  value: number;
+  meta: Record<string, unknown>;
+  updated_at?: string | null;
+}
+
+// Commitments harvested from work-session logs (kind 'auto') or declared in the
+// UI (kind 'explicit'), scored kept/broken with evidence by the weekly retro agent.
+export type CommitmentKind = "auto" | "explicit";
+export type CommitmentStatus = "open" | "kept" | "broken" | "dropped";
+
+export interface Commitment {
+  id: string;
+  workspace_id: string;
+  external_id: string | null;
+  title: string;
+  kind: CommitmentKind | string;
+  source: string | null;
+  declared_at: string;        // ISO datetime
+  due_date: string | null;    // ISO date
+  status: CommitmentStatus | string;
+  evidence: string | null;
+  scored_at: string | null;   // ISO datetime
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+// Per ISO-week (Monday-anchored) rollup over the last N weeks. `kept_rate` is
+// null when no outcomes were scored that week (denominator 0) — a gap, not a zero.
+export interface CommitmentWeekStats {
+  week_start: string;         // ISO date (Monday)
+  declared: number;
+  kept: number;
+  broken: number;
+  dropped: number;
+  open: number;
+  kept_rate: number | null;
+}
