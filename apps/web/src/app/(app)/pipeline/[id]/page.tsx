@@ -17,7 +17,8 @@ import {
   ArrowLeft, Brain, Heart, AlertTriangle, TrendingUp,
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
-  ExternalLink, DollarSign, Clock, User,
+  ExternalLink, DollarSign, Clock, User, Pencil, Eye,
+  FileText,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -124,6 +125,141 @@ function StageBadge({ stage }: { stage: string }) {
     "zinc";
   const cfg = stageConfig[stage as DealStage] ?? { label: stage };
   return <Badge variant={variant} size="sm">{cfg.label}</Badge>;
+}
+
+// ─── Deal Notes Editor ────────────────────────────────────────────────────────
+
+interface DealNotesEditorProps {
+  initialNotes: string | null;
+  dealId: string;
+  workspaceId: string;
+  token: string;
+  onSaved: (notes: string) => void;
+}
+
+function DealNotesEditor({ initialNotes, dealId, workspaceId, token, onSaved }: DealNotesEditorProps) {
+  const [isEditing,  setIsEditing]  = useState(false);
+  const [previewTab, setPreviewTab] = useState<"write" | "preview">("write");
+  const [draftText,  setDraftText]  = useState(initialNotes ?? "");
+  const [saved,      setSaved]      = useState(initialNotes ?? "");
+  const [saving,     setSaving]     = useState(false);
+
+  const handleEdit = () => { setDraftText(saved); setPreviewTab("write"); setIsEditing(true); }
+  const handleCancel = () => { setDraftText(saved); setIsEditing(false); }
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await apiClient.updateDeal(workspaceId, dealId, { notes: draftText }, token);
+      setSaved(draftText);
+      onSaved(draftText);
+      setIsEditing(false);
+    } catch {
+      /* save failed — stay in edit mode */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-zinc-500" aria-hidden />
+          <p className="text-sm font-semibold text-zinc-200">Notes</p>
+        </div>
+        {!isEditing ? (
+          <button
+            onClick={handleEdit}
+            className="flex items-center gap-1.5 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer font-mono"
+            aria-label="Edit notes"
+          >
+            <Pencil className="h-3 w-3" />
+            Edit
+          </button>
+        ) : (
+          <div className="flex items-center gap-1 rounded-lg border border-zinc-700/60 bg-zinc-800/40 p-0.5">
+            <button
+              onClick={() => setPreviewTab("write")}
+              className={cn(
+                "flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-mono transition-all cursor-pointer",
+                previewTab === "write" ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"
+              )}
+            >
+              <Pencil className="h-3 w-3" /> Write
+            </button>
+            <button
+              onClick={() => setPreviewTab("preview")}
+              className={cn(
+                "flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-mono transition-all cursor-pointer",
+                previewTab === "preview" ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"
+              )}
+            >
+              <Eye className="h-3 w-3" /> Preview
+            </button>
+          </div>
+        )}
+      </div>
+
+      {!isEditing ? (
+        saved ? (
+          <div
+            className="text-xs text-zinc-400 leading-relaxed prose-notes"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(saved) }}
+          />
+        ) : (
+          <p className="text-xs text-zinc-600 italic">
+            No notes yet.{" "}
+            <button onClick={handleEdit} className="text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer not-italic">
+              Add a note →
+            </button>
+          </p>
+        )
+      ) : previewTab === "write" ? (
+        <textarea
+          value={draftText}
+          onChange={e => setDraftText(e.target.value)}
+          rows={6}
+          placeholder={"Add notes about this deal…\n\nSupports **bold**, - lists, and paragraphs."}
+          className="w-full rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none resize-none focus:border-indigo-500/50 transition-colors leading-relaxed font-mono"
+          autoFocus
+        />
+      ) : (
+        <div
+          className="min-h-[8rem] rounded-lg border border-zinc-700/60 bg-zinc-800/20 px-3 py-2.5 text-xs text-zinc-300 leading-relaxed"
+          dangerouslySetInnerHTML={{
+            __html: draftText ? renderMarkdown(draftText) : '<span class="text-zinc-600 italic">Nothing to preview</span>',
+          }}
+        />
+      )}
+
+      {isEditing && (
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer",
+              saving
+                ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+                : "bg-indigo-600 hover:bg-indigo-500 text-white"
+            )}
+          >
+            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+            {saving ? "Saving…" : "Save notes"}
+          </button>
+          <button
+            onClick={handleCancel}
+            disabled={saving}
+            className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer px-2 py-1.5"
+          >
+            Cancel
+          </button>
+          <span className="ml-auto text-[10px] text-zinc-600 font-mono">Markdown supported</span>
+        </div>
+      )}
+    </Card>
+  );
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -469,12 +605,15 @@ export default function DealDetailPage() {
             </Card>
           )}
 
-          {/* Notes */}
-          {deal.notes && (
-            <Card className="p-4 space-y-2">
-              <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Notes</p>
-              <p className="text-xs text-zinc-400 leading-relaxed">{deal.notes}</p>
-            </Card>
+          {/* Notes editor */}
+          {token && workspaceId && (
+            <DealNotesEditor
+              initialNotes={deal.notes}
+              dealId={deal.id}
+              workspaceId={workspaceId}
+              token={token}
+              onSaved={(notes) => setDeal(prev => prev ? { ...prev, notes } : prev)}
+            />
           )}
         </div>
 
