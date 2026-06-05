@@ -38,3 +38,18 @@ CREATE TABLE IF NOT EXISTS commitments (
     UNIQUE (workspace_id, external_id)
 );
 CREATE INDEX IF NOT EXISTS idx_commitments_ws_status ON commitments(workspace_id, status);
+
+-- ─── RLS (prod posture — match 008 pattern) ────────────────────────────────────
+-- Without this, a no-RLS table in the exposed schema is readable/writable via
+-- PostgREST with the public anon key. The API itself connects as the table
+-- owner and is unaffected; these policies gate direct PostgREST access only.
+
+ALTER TABLE kpi_snapshots ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "kpi_snapshots_policy" ON kpi_snapshots;
+CREATE POLICY "kpi_snapshots_policy" ON kpi_snapshots
+  USING (workspace_id = (SELECT workspace_id FROM users WHERE supabase_uid = auth.uid()));
+
+ALTER TABLE commitments ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "commitments_policy" ON commitments;
+CREATE POLICY "commitments_policy" ON commitments
+  USING (workspace_id = (SELECT workspace_id FROM users WHERE supabase_uid = auth.uid()));
