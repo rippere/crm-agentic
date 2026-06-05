@@ -212,6 +212,7 @@ function BulkActionBar({
   onStatusChange,
   onEnrich,
   onDelete,
+  onMerge,
   onClear,
   busy,
 }: {
@@ -219,6 +220,7 @@ function BulkActionBar({
   onStatusChange: (status: ContactStatus) => void;
   onEnrich: () => void;
   onDelete: () => void;
+  onMerge?: () => void;
   onClear: () => void;
   busy: boolean;
 }) {
@@ -259,6 +261,17 @@ function BulkActionBar({
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
         Enrich All
       </button>
+      {/* Merge — only shown when exactly 2 contacts are selected */}
+      {count === 2 && onMerge && (
+        <button
+          onClick={onMerge}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs font-medium text-indigo-400 hover:bg-indigo-500/20 disabled:opacity-50 transition"
+        >
+          <Copy className="h-3.5 w-3.5" />
+          Merge
+        </button>
+      )}
       <button
         onClick={onDelete}
         disabled={busy}
@@ -974,6 +987,8 @@ export default function ContactsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergeResult, setMergeResult] = useState<{ tasks: number; messages: number; deals: number } | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
@@ -1047,6 +1062,19 @@ export default function ContactsPage() {
     } catch { /* silent — list refreshes on next render */ }
     setSelectedIds(new Set());
     setDeleteConfirmOpen(false);
+    setBulkBusy(false);
+  }, [workspaceId, token, selectedIds, bulkBusy]);
+
+  const handleMerge = useCallback(async () => {
+    if (!workspaceId || !token || bulkBusy || selectedIds.size !== 2) return;
+    const [primaryId, duplicateId] = [...selectedIds];
+    setBulkBusy(true);
+    try {
+      const res = await apiClient.mergeContacts(workspaceId, { primary_id: primaryId, duplicate_id: duplicateId }, token);
+      setMergeResult({ tasks: res.tasks_reassigned, messages: res.messages_reassigned, deals: res.deals_reassigned });
+      setSelectedIds(new Set());
+      setMergeOpen(false);
+    } catch { /* silent */ }
     setBulkBusy(false);
   }, [workspaceId, token, selectedIds, bulkBusy]);
 
@@ -1482,6 +1510,7 @@ export default function ContactsPage() {
           onStatusChange={handleBulkStatus}
           onEnrich={handleBulkEnrich}
           onDelete={() => setDeleteConfirmOpen(true)}
+          onMerge={selectedIds.size === 2 ? () => setMergeOpen(true) : undefined}
           onClear={() => setSelectedIds(new Set())}
           busy={bulkBusy}
         />
@@ -1497,6 +1526,77 @@ export default function ContactsPage() {
           onConfirm={handleBulkDelete}
           onClose={() => setDeleteConfirmOpen(false)}
         />
+      )}
+
+      {/* Merge confirm dialog */}
+      {mergeOpen && (() => {
+        const ids = [...selectedIds];
+        const primary   = contacts.find(c => c.id === ids[0]);
+        const duplicate = contacts.find(c => c.id === ids[1]);
+        if (!primary || !duplicate) return null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+            <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl p-6 space-y-4">
+              <h3 className="text-base font-semibold text-zinc-100">Merge contacts</h3>
+              <p className="text-sm text-zinc-400">
+                All tasks, messages, and deals from{" "}
+                <span className="font-medium text-zinc-200">{duplicate.name}</span>{" "}
+                will be moved to{" "}
+                <span className="font-medium text-zinc-200">{primary.name}</span>, then{" "}
+                <span className="font-medium text-rose-400">{duplicate.name}</span> will be permanently deleted.
+              </p>
+              <div className="flex gap-3 rounded-xl border border-zinc-700/60 bg-zinc-800/40 p-3">
+                <div className="flex-1 space-y-0.5">
+                  <p className="text-[10px] font-mono text-emerald-500 uppercase tracking-widest">Keep (primary)</p>
+                  <p className="text-sm font-medium text-zinc-200">{primary.name}</p>
+                  <p className="text-xs text-zinc-500">{primary.email ?? primary.company}</p>
+                </div>
+                <div className="w-px bg-zinc-700" />
+                <div className="flex-1 space-y-0.5">
+                  <p className="text-[10px] font-mono text-rose-500 uppercase tracking-widest">Delete (duplicate)</p>
+                  <p className="text-sm font-medium text-zinc-200">{duplicate.name}</p>
+                  <p className="text-xs text-zinc-500">{duplicate.email ?? duplicate.company}</p>
+                </div>
+              </div>
+              <p className="text-xs text-zinc-600">
+                Tip: the first contact you selected becomes the primary. Deselect and re-select to change order.
+              </p>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={handleMerge}
+                  disabled={bulkBusy}
+                  className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium py-2.5 transition disabled:opacity-50 cursor-pointer"
+                >
+                  {bulkBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+                  Merge contacts
+                </button>
+                <button
+                  onClick={() => setMergeOpen(false)}
+                  disabled={bulkBusy}
+                  className="flex-1 rounded-xl border border-zinc-700 text-zinc-300 hover:text-zinc-100 text-sm font-medium py-2.5 transition disabled:opacity-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Merge success toast */}
+      {mergeResult && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-start gap-3 rounded-xl border border-emerald-500/30 bg-zinc-900 px-4 py-3 shadow-2xl">
+          <CheckCircle2 className="h-4 w-4 text-emerald-400 mt-0.5 shrink-0" />
+          <div className="space-y-0.5">
+            <p className="text-sm font-medium text-zinc-100">Contacts merged</p>
+            <p className="text-xs text-zinc-400">
+              {mergeResult.deals}d · {mergeResult.tasks}t · {mergeResult.messages}m reassigned
+            </p>
+          </div>
+          <button onClick={() => setMergeResult(null)} className="text-zinc-600 hover:text-zinc-400 ml-2 cursor-pointer">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       )}
 
       {/* Contact drawer overlay */}

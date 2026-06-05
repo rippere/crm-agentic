@@ -10,7 +10,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import or_, select, insert
+from sqlalchemy import or_, select, insert, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -808,3 +808,102 @@ async def bulk_contact_action(
     await db.commit()
 
     return BulkContactResponse(action="delete", deleted=len(contacts), contact_ids=deleted_ids)
+
+
+# ─── Contact merge ─────────────────────────────────────────────────────────────
+
+class MergeContactRequest(BaseModel):
+    primary_id: uuid.UUID
+    duplicate_id: uuid.UUID
+
+
+class MergeContactResponse(BaseModel):
+    primary_id: str
+    duplicate_id: str
+    tasks_reassigned: int
+    messages_reassigned: int
+    deals_reassigned: int
+
+
+@router.post("/workspaces/{workspace_id}/contacts/merge", response_model=MergeContactResponse)
+async def merge_contacts(
+    workspace_id: uuid.UUID,
+    body: MergeContactRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> MergeContactResponse:
+    """Merge duplicate into primary: reassign tasks/messages/deals, then delete duplicate."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if body.primary_id == body.duplicate_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="primary_id and duplicate_id must differ")
+
+    # Verify both contacts exist in this workspace
+    result = await db.execute(
+        select(Contact).where(
+            Contact.workspace_id == workspace_id,
+            Contact.id.in_([body.primary_id, body.duplicate_id]),
+        )
+    )
+    contacts = {c.id: c for c in result.scalars().all()}
+    if body.primary_id not in contacts:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="primary contact not found")
+    if body.duplicate_id not in contacts:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="duplicate contact not found")
+
+    from app.models.task import Task
+    from app.models.message import Message
+    from app.models.deal import Deal
+
+    # Reassign tasks
+    task_result = await db.execute(
+        update(Task)
+        .where(Task.workspace_id == workspace_id, Task.contact_id == body.duplicate_id)
+        .values(contact_id=body.primary_id)
+    )
+    tasks_updated: int = task_result.rowcount or 0
+
+    # Reassign messages
+    msg_result = await db.execute(
+        update(Message)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == body.duplicate_id)
+        .values(contact_id=body.primary_id)
+    )
+    messages_updated: int = msg_result.rowcount or 0
+
+    # Reassign deals
+    deal_result = await db.execute(
+        update(Deal)
+        .where(Deal.workspace_id == workspace_id, Deal.contact_id == body.duplicate_id)
+        .values(contact_id=body.primary_id)
+    )
+    deals_updated: int = deal_result.rowcount or 0
+
+    # Delete the duplicate
+    duplicate = contacts[body.duplicate_id]
+    duplicate_name = duplicate.name or str(body.duplicate_id)
+    primary_name   = contacts[body.primary_id].name or str(body.primary_id)
+    await db.delete(duplicate)
+
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="contact_deleted",
+        agent_name="System",
+        description=(
+            f"Merged '{duplicate_name}' into '{primary_name}' — "
+            f"{tasks_updated} task(s), {messages_updated} message(s), "
+            f"{deals_updated} deal(s) reassigned"
+        ),
+        severity="info",
+    )
+    db.add(event)
+    await db.commit()
+
+    return MergeContactResponse(
+        primary_id=str(body.primary_id),
+        duplicate_id=str(body.duplicate_id),
+        tasks_reassigned=tasks_updated,
+        messages_reassigned=messages_updated,
+        deals_reassigned=deals_updated,
+    )
