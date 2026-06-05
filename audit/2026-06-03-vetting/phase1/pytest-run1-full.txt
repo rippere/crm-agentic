@@ -1,0 +1,18 @@
+........................................................................ [ 22%]
+........................................................................ [ 44%]
+........................................................................ [ 66%]
+........................................................................ [ 88%]
+....................................                                     [100%]
+=============================== warnings summary ===============================
+../../../../mnt/external/Projects/crm-agentic/apps/api/.venv/lib/python3.11/site-packages/starlette/formparsers.py:12
+  /mnt/external/Projects/crm-agentic/apps/api/.venv/lib/python3.11/site-packages/starlette/formparsers.py:12: PendingDeprecationWarning: Please use `import python_multipart` instead.
+    import multipart
+
+../../../../mnt/external/Projects/crm-agentic/apps/api/.venv/lib/python3.11/site-packages/pydantic/_internal/_fields.py:132
+  /mnt/external/Projects/crm-agentic/apps/api/.venv/lib/python3.11/site-packages/pydantic/_internal/_fields.py:132: UserWarning: Field "model_used" in ScoreClarityResponse has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+324 passed, 2 warnings in 1.91s
