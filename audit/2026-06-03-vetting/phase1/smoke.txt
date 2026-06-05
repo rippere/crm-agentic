@@ -1,0 +1,75 @@
+
+Running 9 tests using 8 workers
+
+  ✓  1 [chromium] › e2e/smoke.spec.ts:79:7 › Navigation smoke tests › inbox page loads (1.6s)
+  ✓  5 [chromium] › e2e/smoke.spec.ts:29:7 › Navigation smoke tests › pipeline page renders deal columns (1.6s)
+  ✓  3 [chromium] › e2e/smoke.spec.ts:84:7 › Navigation smoke tests › tasks page loads with kanban columns (1.7s)
+  ✓  6 [chromium] › e2e/smoke.spec.ts:41:7 › Navigation smoke tests › pipeline → deal detail navigation (1.7s)
+  ✓  8 [chromium] › e2e/smoke.spec.ts:20:7 › Navigation smoke tests › contacts page renders contact rows (1.7s)
+  ✘  7 [chromium] › e2e/smoke.spec.ts:56:7 › Navigation smoke tests › contacts page search filters results (1.7s)
+  ✓  2 [chromium] › e2e/smoke.spec.ts:71:7 › Navigation smoke tests › agents page renders agent cards (2.0s)
+  ✓  9 [chromium] › e2e/smoke.spec.ts:89:7 › Navigation smoke tests › settings page loads (430ms)
+  ✘  4 [chromium] › e2e/smoke.spec.ts:7:7 › Navigation smoke tests › dashboard loads with KPI cards (11.6s)
+
+
+  1) [chromium] › e2e/smoke.spec.ts:7:7 › Navigation smoke tests › dashboard loads with KPI cards ──
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator:  getByRole('region', { name: /kpi/i }).first().or(locator('[class*="font-mono"]').first())
+    Expected: visible
+    Received: hidden
+    Timeout:  10000ms
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 10000ms[22m
+    [2m  - waiting for getByRole('region', { name: /kpi/i }).first().or(locator('[class*="font-mono"]').first())[22m
+    [2m    23 × locator resolved to <p class="text-[10px] text-zinc-500 mt-0.5 font-mono">Agentic Intelligence</p>[22m
+    [2m       - unexpected value "hidden"[22m
+
+
+      12 |     await expect(page.getByRole("region", { name: /kpi/i }).first().or(
+      13 |       page.locator('[class*="font-mono"]').first()
+    > 14 |     )).toBeVisible({ timeout: 10_000 });
+         |        ^
+      15 |
+      16 |     // Main heading
+      17 |     await expect(page.getByRole("heading", { name: /dashboard/i, exact: false })).toBeVisible();
+        at /tmp/crm-signup-fix/apps/web/e2e/smoke.spec.ts:14:8
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/smoke-Navigation-smoke-tests-dashboard-loads-with-KPI-cards-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/smoke-Navigation-smoke-tests-dashboard-loads-with-KPI-cards-chromium/error-context.md
+
+  2) [chromium] › e2e/smoke.spec.ts:56:7 › Navigation smoke tests › contacts page search filters results 
+
+    Error: locator.fill: Error: strict mode violation: getByPlaceholder(/search/i).or(getByRole('searchbox')) resolved to 2 elements:
+        1) <input type="search" placeholder="Search contacts, deals..." aria-label="Search contacts, deals, and agents" class="flex-1 bg-transparent text-sm text-zinc-300 placeholder-zinc-600 outline-none min-w-0"/> aka getByRole('searchbox', { name: 'Search contacts, deals, and' })
+        2) <input value="" type="search" aria-label="Search contacts" placeholder="Search by name, company, email…" class="w-full rounded-xl border bg-zinc-900 py-2 pl-9 pr-4 text-base sm:text-sm text-zinc-300 placeholder-zinc-600 outline-none transition-all duration-200 border-zinc-800 focus:border-indigo-500/50 focus:shadow-glow-sm"/> aka getByRole('searchbox', { name: 'Search contacts', exact: true })
+
+    Call log:
+    [2m  - waiting for getByPlaceholder(/search/i).or(getByRole('searchbox'))[22m
+
+
+      61 |     const searchInput = page.getByPlaceholder(/search/i).or(page.getByRole("searchbox"));
+      62 |     if (await searchInput.count() > 0) {
+    > 63 |       await searchInput.fill("zzzz_no_match_expected");
+         |                         ^
+      64 |       // After filtering, some no-results state or reduced list
+      65 |       await page.waitForTimeout(300);
+      66 |       // Just assert the page doesn't crash
+        at /tmp/crm-signup-fix/apps/web/e2e/smoke.spec.ts:63:25
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/smoke-Navigation-smoke-tes-d67eb-page-search-filters-results-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/smoke-Navigation-smoke-tes-d67eb-page-search-filters-results-chromium/error-context.md
+
+  2 failed
+    [chromium] › e2e/smoke.spec.ts:7:7 › Navigation smoke tests › dashboard loads with KPI cards ───
+    [chromium] › e2e/smoke.spec.ts:56:7 › Navigation smoke tests › contacts page search filters results 
+  7 passed (12.7s)
+SMOKE_EXIT=1
