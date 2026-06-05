@@ -270,15 +270,15 @@ export default function DashboardPage() {
 
       // Seed activity feed with recent events, then subscribe to Realtime
       if (workspaceId) {
-        apiClient.listActivity(workspaceId, session.access_token, 20)
-          .then((data: Array<{ id: string; type: string; agent_name: string; description: string; meta?: string; severity: string; created_at: string }>) => {
+        apiClient.listActivity(workspaceId, session.access_token, { limit: 20 })
+          .then((data) => {
             if (!Array.isArray(data)) return;
             setLiveActivity(data.map((e) => ({
               id: e.id,
               type: e.type as ActivityEvent["type"],
-              agentName: e.agent_name,
-              description: e.description,
-              meta: e.meta,
+              agentName: e.agent_name ?? "",
+              description: e.description ?? "",
+              meta: e.meta ?? "",
               severity: e.severity as ActivityEvent["severity"],
               timestamp: (() => {
                 const diff = Date.now() - new Date(e.created_at).getTime();

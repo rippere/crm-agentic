@@ -656,6 +656,35 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/probability-trend`, {}, token)
   },
 
+  // Global search across contacts, deals, and tasks
+  globalSearch: (workspaceId: string, q: string, token: string): Promise<{
+    contacts: Array<{ id: string; name: string; email: string; company: string; role: string; status: string }>;
+    deals: Array<{ id: string; title: string; company: string; value: number; stage: string }>;
+    tasks: Array<{ id: string; title: string; status: string; due_date: string | null; contact_id: string | null }>;
+  }> => {
+    if (isDemoMode) {
+      const lq = q.toLowerCase()
+      const contacts = demoContacts
+        .filter(c =>
+          c.name.toLowerCase().includes(lq) ||
+          (c.company ?? '').toLowerCase().includes(lq) ||
+          (c.email ?? '').toLowerCase().includes(lq)
+        )
+        .slice(0, 5)
+        .map(c => ({ id: c.id, name: c.name, email: c.email ?? '', company: c.company ?? '', role: c.role ?? '', status: c.status }))
+      const deals = (demoDeals as unknown as Array<Record<string, unknown>>)
+        .filter(d => ((d.title as string) ?? '').toLowerCase().includes(lq) || ((d.company as string) ?? '').toLowerCase().includes(lq))
+        .slice(0, 5)
+        .map(d => ({ id: d.id as string, title: (d.title as string) ?? '', company: (d.company as string) ?? '', value: (d.value as number) ?? 0, stage: (d.stage as string) ?? '' }))
+      const tasks = (demoTasks as unknown as Array<Record<string, unknown>>)
+        .filter(t => ((t.title as string) ?? '').toLowerCase().includes(lq))
+        .slice(0, 5)
+        .map(t => ({ id: t.id as string, title: (t.title as string) ?? '', status: (t.status as string) ?? 'open', due_date: (t.due_date as string) ?? null, contact_id: (t.contact_id as string) ?? null }))
+      return Promise.resolve({ contacts, deals, tasks })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/search?q=${encodeURIComponent(q)}&limit=5`, {}, token)
+  },
+
   // AI query
   aiQuery: (workspaceId: string, query: string, token: string) => {
     if (isDemoMode) return Promise.resolve({
