@@ -26,12 +26,16 @@ celery_app.conf.update(
     task_track_started=True,
     beat_schedule={
         "nightly-pipeline-optimize": {
-            "task": "app.workers.pipeline.optimize_pipeline",
+            # Dispatcher fans out per-workspace; the bare optimize_pipeline task
+            # requires a workspace_id that beat cannot supply (it would crash).
+            "task": "app.workers.pipeline.optimize_pipeline_all",
             "schedule": crontab(hour=2, minute=0),
             "args": [],
         },
         "nightly-deal-health": {
-            "task": "app.workers.deal_health_worker.compute_deal_health",
+            # Dispatcher fans out per-workspace; the bare compute_deal_health task
+            # requires a workspace_id that beat cannot supply (it would crash).
+            "task": "app.workers.deal_health_worker.compute_deal_health_all",
             "schedule": crontab(hour=2, minute=15),
             "args": [],
         },

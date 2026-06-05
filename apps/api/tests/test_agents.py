@@ -57,24 +57,77 @@ async def test_list_agents_returns_agents(app_client):
 
 
 # ---------------------------------------------------------------------------
-# POST /agents/{id}/run
+# POST /agents/{id}/run — dispatch real Celery tasks, honest job ids
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_run_agent_returns_job_id(app_client):
+async def test_run_pipeline_optimizer_dispatches_real_task(app_client):
     fastapi_app, mock_db, workspace_id = app_client
-    agent = _fake_agent(workspace_id)
+    agent = _fake_agent(workspace_id, type="pipeline_optimizer", tasks_today=4)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(agent))
+
+    fake_task = MagicMock()
+    fake_task.id = "celery-pipeline-task-id"
+
+    with patch("app.workers.pipeline.optimize_pipeline.delay", return_value=fake_task) as mock_delay, \
+         patch("app.routers.agents._mark_job_dispatched") as mock_marker:
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/agents/{agent.id}/run")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # The returned job_id is the REAL Celery task id, not a fabricated uuid.
+    assert data["job_id"] == "celery-pipeline-task-id"
+    assert data["status"] == "processing"
+    mock_delay.assert_called_once_with(str(workspace_id))
+    mock_marker.assert_called_once_with("celery-pipeline-task-id")
+    # Agent bookkeeping updated only after successful dispatch.
+    assert agent.status == "processing"
+    assert agent.tasks_today == 5  # incremented from 4
+    assert agent.last_run != "Never"
+    mock_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_pm_agent_dispatches_health_check(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    agent = _fake_agent(workspace_id, type="pm_agent", tasks_today=0)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(agent))
+
+    fake_task = MagicMock()
+    fake_task.id = "celery-pm-task-id"
+
+    with patch("app.workers.pm_agent.run_health_check.delay", return_value=fake_task) as mock_delay, \
+         patch("app.routers.agents._mark_job_dispatched"):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/agents/{agent.id}/run")
+
+    assert resp.status_code == 200
+    assert resp.json()["job_id"] == "celery-pm-task-id"
+    mock_delay.assert_called_once_with()  # run_health_check takes no args
+    assert agent.tasks_today == 1
+
+
+@pytest.mark.parametrize(
+    "unbacked_type",
+    ["email_composer", "call_summarizer", "sentiment_analyzer", "semantic_sorter"],
+)
+@pytest.mark.asyncio
+async def test_run_unbacked_type_returns_501(app_client, unbacked_type):
+    fastapi_app, mock_db, workspace_id = app_client
+    agent = _fake_agent(workspace_id, type=unbacked_type, tasks_today=7)
     mock_db.execute = AsyncMock(return_value=_make_scalar_result(agent))
 
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.post(f"/agents/{agent.id}/run")
 
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "job_id" in data
-    assert data["status"] == "processing"
-    mock_db.commit.assert_awaited()
+    assert resp.status_code == 501
+    assert resp.json()["detail"]  # a non-empty, explanatory message
+    # No dispatch ⇒ no bookkeeping side effects and no commit.
+    assert agent.status == "idle"
+    assert agent.tasks_today == 7
+    mock_db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -178,14 +231,16 @@ async def test_get_job_status_failure(app_client):
 
 
 @pytest.mark.asyncio
-async def test_get_job_status_pending(app_client):
+async def test_get_job_status_pending_when_dispatched(app_client):
+    """PENDING + a present dispatch marker ⇒ still PENDING (a real in-flight job)."""
     fastapi_app, mock_db, workspace_id = app_client
 
     mock_result = MagicMock()
     mock_result.state = "PENDING"
     mock_result.result = None
 
-    with patch("app.workers.celery_app.celery_app") as mock_celery:
+    with patch("app.workers.celery_app.celery_app") as mock_celery, \
+         patch("app.routers.agents._job_was_dispatched", return_value=True):
         mock_celery.AsyncResult.return_value = mock_result
         async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
             resp = await ac.get("/jobs/pending-job-id")
@@ -194,3 +249,44 @@ async def test_get_job_status_pending(app_client):
     assert resp.json()["state"] == "PENDING"
     assert resp.json()["result"] is None
     assert resp.json()["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_unknown_id_is_terminal(app_client):
+    """Celery reports PENDING for ids it never saw — without a dispatch marker we
+    must return the terminal 'unknown' state, not PENDING-forever (the trap)."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_result = MagicMock()
+    mock_result.state = "PENDING"  # the trap: nonexistent ids look identical to queued
+    mock_result.result = None
+
+    with patch("app.workers.celery_app.celery_app") as mock_celery, \
+         patch("app.routers.agents._job_was_dispatched", return_value=False):
+        mock_celery.AsyncResult.return_value = mock_result
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get("/jobs/never-dispatched-id")
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "unknown"
+    assert resp.json()["error"] is not None
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_pending_when_redis_unreachable(app_client):
+    """If Redis can't be reached (marker check returns None) we keep PENDING rather
+    than risk masking a real in-flight job as unknown."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_result = MagicMock()
+    mock_result.state = "PENDING"
+    mock_result.result = None
+
+    with patch("app.workers.celery_app.celery_app") as mock_celery, \
+         patch("app.routers.agents._job_was_dispatched", return_value=None):
+        mock_celery.AsyncResult.return_value = mock_result
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get("/jobs/pending-during-redis-blip")
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "PENDING"

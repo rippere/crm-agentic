@@ -713,7 +713,10 @@ export default function DashboardPage() {
                 </div>
                 <div className="text-right flex-shrink-0">
                   <p className="text-xs font-mono text-emerald-400">{agent.accuracy}%</p>
-                  <p className="text-[10px] text-zinc-600">{agent.tasksToday} tasks</p>
+                  {/* Per-agent daily task counts aren't tracked yet — don't show a
+                      seeded/fabricated number. The live Activity feed below is the
+                      honest signal of what agents are doing. */}
+                  <p className="text-[10px] text-zinc-600 capitalize">{agent.status}</p>
                 </div>
               </div>
             ))}
