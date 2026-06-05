@@ -613,6 +613,12 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/contacts/import`, { method: 'POST', body: form }, token, true)
   },
 
+  // Contact merge
+  mergeContacts: (workspaceId: string, data: { primary_id: string; duplicate_id: string }, token: string): Promise<{ primary_id: string; duplicate_id: string; tasks_reassigned: number; messages_reassigned: number; deals_reassigned: number }> => {
+    if (isDemoMode) return Promise.resolve({ primary_id: data.primary_id, duplicate_id: data.duplicate_id, tasks_reassigned: 0, messages_reassigned: 0, deals_reassigned: 1 })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/merge`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+
   // Bulk contact delete
   bulkContactAction: (workspaceId: string, data: { action: 'delete'; contact_ids: string[] }, token: string): Promise<{ action: string; deleted: number; contact_ids: string[] }> => {
     if (isDemoMode) return Promise.resolve({ action: data.action, deleted: data.contact_ids.length, contact_ids: data.contact_ids })

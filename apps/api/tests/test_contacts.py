@@ -984,3 +984,66 @@ async def test_bulk_delete_contacts_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/contacts/merge
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_merge_contacts_reassigns_and_deletes_duplicate(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    primary   = _fake_contact(workspace_id, name="Alice Smith")
+    duplicate = _fake_contact(workspace_id, name="Alice S.")
+
+    # First execute: fetch both contacts
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalars_result([primary, duplicate]),  # select contacts
+        MagicMock(rowcount=2),   # update tasks
+        MagicMock(rowcount=1),   # update messages
+        MagicMock(rowcount=1),   # update deals
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/contacts/merge",
+            json={"primary_id": str(primary.id), "duplicate_id": str(duplicate.id)},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["primary_id"] == str(primary.id)
+    assert data["duplicate_id"] == str(duplicate.id)
+    assert data["tasks_reassigned"] == 2
+    assert data["messages_reassigned"] == 1
+    assert data["deals_reassigned"] == 1
+    mock_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_merge_contacts_same_ids_returns_422(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/contacts/merge",
+            json={"primary_id": str(contact_id), "duplicate_id": str(contact_id)},
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_merge_contacts_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/contacts/merge",
+            json={"primary_id": str(uuid.uuid4()), "duplicate_id": str(uuid.uuid4())},
+        )
+
+    assert resp.status_code == 403
