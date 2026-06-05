@@ -24,7 +24,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect("/login");
   }
 
-  const workspaceId = user.user_metadata?.workspace_id as string | undefined;
+  const workspaceId = (user.app_metadata?.workspace_id ?? user.user_metadata?.workspace_id) as string | undefined;
 
   if (!workspaceId) {
     redirect("/onboarding");

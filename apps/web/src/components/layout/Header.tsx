@@ -100,7 +100,7 @@ export default function Header({ title, subtitle }: HeaderProps) {
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) return;
-      const workspaceId = session.user.user_metadata?.workspace_id as string | undefined;
+      const workspaceId = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id) as string | undefined;
       if (!workspaceId) return;
       apiClient.listActivity(workspaceId, session.access_token, { limit: 20 })
         .then((data) => { if (Array.isArray(data)) setEvents(data as NotifEvent[]); })

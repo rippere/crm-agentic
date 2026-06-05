@@ -113,7 +113,7 @@ export default function CommandPalette({ onClose }: CommandPaletteProps) {
     const supabase = createBrowserClient()
     supabase.auth.getSession().then(({ data: { session } }) => {
       const token       = session?.access_token                         ?? "demo-token"
-      const workspaceId = session?.user?.user_metadata?.workspace_id   ?? "demo-workspace-1"
+      const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id)   ?? "demo-workspace-1"
       apiClient.globalSearch(workspaceId, debouncedQuery, token)
         .then(data => { if (!cancelled) { setResults(data); setActiveIdx(-1) } })
         .catch(() => { if (!cancelled) setResults({ contacts: [], deals: [], tasks: [] }) })
@@ -156,7 +156,7 @@ export default function CommandPalette({ onClose }: CommandPaletteProps) {
       const supabase = createBrowserClient()
       const { data: { session } } = await supabase.auth.getSession()
       const token       = session?.access_token                        ?? "demo-token"
-      const workspaceId = session?.user?.user_metadata?.workspace_id  ?? "demo-workspace-1"
+      const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id)  ?? "demo-workspace-1"
       const result = await apiClient.aiQuery(workspaceId, aiValue.trim(), token)
       setAiAnswer(result?.answer ?? "No response.")
     } catch {

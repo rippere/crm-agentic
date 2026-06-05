@@ -51,7 +51,7 @@ export function useDeals(stage?: string) {
     try {
       const supabase = createBrowserClient();
       const { data: { session } } = await supabase.auth.getSession();
-      const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+      const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) as string | undefined;
       const token = session?.access_token;
       if (!workspaceId || !token) {
         setError("No workspace found");
@@ -80,7 +80,7 @@ export function useDeals(stage?: string) {
     const supabase = createBrowserClient();
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
-    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) as string | undefined;
     if (!workspaceId || !token) throw new Error("Not authenticated");
 
     const result = await apiClient.createDeal(workspaceId, {
@@ -101,7 +101,7 @@ export function useDeals(stage?: string) {
     const supabase = createBrowserClient();
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
-    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) as string | undefined;
     if (!workspaceId || !token) throw new Error("Not authenticated");
 
     const result = await apiClient.updateDeal(workspaceId, id, {
@@ -122,7 +122,7 @@ export function useDeals(stage?: string) {
     const supabase = createBrowserClient();
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
-    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) as string | undefined;
     if (!workspaceId || !token) throw new Error("Not authenticated");
 
     await apiClient.deleteDeal(workspaceId, id, token);

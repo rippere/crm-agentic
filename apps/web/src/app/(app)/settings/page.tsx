@@ -52,7 +52,7 @@ export default function SettingsPage() {
       setToken(session.access_token);
       const user = session.user;
       setUserEmail(user.email ?? null);
-      const wsId = user.user_metadata?.workspace_id as string | undefined;
+      const wsId = (user.app_metadata?.workspace_id ?? user.user_metadata?.workspace_id) as string | undefined;
       if (!wsId) return;
       setWorkspaceId(wsId);
 

@@ -405,7 +405,7 @@ export default function PipelinePage() {
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) return;
-      const workspaceId: string | undefined = session.user.user_metadata?.workspace_id;
+      const workspaceId: string | undefined = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id);
       if (!workspaceId) return;
       apiClient.getPipelineSuggestions(workspaceId, session.access_token)
         .then((data) => { if (Array.isArray(data)) setSuggestions(data as PipelineSuggestion[]); })
@@ -467,7 +467,7 @@ export default function PipelinePage() {
       if (!isDemoMode) {
         const supabase = createBrowserClient();
         const { data: { session } } = await supabase.auth.getSession();
-        const workspaceId = session?.user?.user_metadata?.workspace_id ?? "";
+        const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
         const token = session?.access_token ?? "";
         if (workspaceId && token) {
           await apiClient.bulkDealAction(workspaceId, { action: "delete", deal_ids: Array.from(selectedIds) }, token);
@@ -487,7 +487,7 @@ export default function PipelinePage() {
       if (!isDemoMode) {
         const supabase = createBrowserClient();
         const { data: { session } } = await supabase.auth.getSession();
-        const workspaceId = session?.user?.user_metadata?.workspace_id ?? "";
+        const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
         const token = session?.access_token ?? "";
         if (workspaceId && token) {
           await apiClient.bulkDealAction(workspaceId, { action: "move_stage", deal_ids: Array.from(selectedIds), stage }, token);
@@ -510,7 +510,7 @@ export default function PipelinePage() {
       if (!isDemoMode) {
         const supabase = createBrowserClient();
         const { data: { session } } = await supabase.auth.getSession();
-        workspaceId = session?.user?.user_metadata?.workspace_id ?? "";
+        workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
         token = session?.access_token ?? "";
       }
       if (!workspaceId || !token) return;
