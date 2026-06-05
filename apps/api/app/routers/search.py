@@ -5,6 +5,9 @@ GET  /workspaces/{id}/contacts/search?q=<text>&limit=<n>
   — Returns contacts ranked by cosine similarity to query embedding.
   — Falls back to ILIKE name/company search if no embeddings exist yet.
 
+GET  /workspaces/{id}/search?q=<text>&limit=<n>
+  — Global search across contacts, deals, and tasks simultaneously.
+
 POST /workspaces/{id}/contacts/embed
   — Enqueues a Celery task to embed all workspace contacts.
 """
@@ -18,6 +21,8 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.limiter import limiter
 from app.models.contact import Contact
+from app.models.deal import Deal
+from app.models.task import Task
 from app.models.user import User
 
 router = APIRouter()
@@ -122,6 +127,92 @@ async def trigger_embed(
 
     task = embed_workspace_contacts.delay(str(workspace_id))
     return {"job_id": task.id, "status": "queued"}
+
+
+@router.get("/workspaces/{workspace_id}/search")
+async def global_search(
+    workspace_id: uuid.UUID,
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(5, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Search contacts, deals, and tasks in a single request."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    q_lower = q.lower()
+
+    contact_result = await db.execute(
+        select(Contact)
+        .where(
+            Contact.workspace_id == workspace_id,
+            (
+                func.lower(Contact.name).contains(q_lower)
+                | func.lower(Contact.company).contains(q_lower)
+                | func.lower(Contact.email).contains(q_lower)
+            ),
+        )
+        .limit(limit)
+    )
+    contacts = contact_result.scalars().all()
+
+    deal_result = await db.execute(
+        select(Deal)
+        .where(
+            Deal.workspace_id == workspace_id,
+            (
+                func.lower(Deal.title).contains(q_lower)
+                | func.lower(Deal.company).contains(q_lower)
+            ),
+        )
+        .limit(limit)
+    )
+    deals = deal_result.scalars().all()
+
+    task_result = await db.execute(
+        select(Task)
+        .where(
+            Task.workspace_id == workspace_id,
+            func.lower(Task.title).contains(q_lower),
+        )
+        .limit(limit)
+    )
+    tasks = task_result.scalars().all()
+
+    return {
+        "contacts": [
+            {
+                "id": str(c.id),
+                "name": c.name,
+                "email": c.email,
+                "company": c.company,
+                "role": c.role,
+                "status": c.status,
+            }
+            for c in contacts
+        ],
+        "deals": [
+            {
+                "id": str(d.id),
+                "title": d.title,
+                "company": d.company,
+                "value": float(d.value or 0),
+                "stage": d.stage,
+            }
+            for d in deals
+        ],
+        "tasks": [
+            {
+                "id": str(t.id),
+                "title": t.title,
+                "status": t.status,
+                "due_date": t.due_date.isoformat() if t.due_date else None,
+                "contact_id": str(t.contact_id) if t.contact_id else None,
+            }
+            for t in tasks
+        ],
+    }
 
 
 @router.post("/workspaces/{workspace_id}/contacts/embed-all", status_code=202)

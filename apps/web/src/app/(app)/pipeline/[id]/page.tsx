@@ -550,7 +550,7 @@ export default function DealDetailPage() {
                         width={36}
                       />
                       <RechartTooltip
-                        formatter={(v: number) => [`${v}%`, "Win Prob"]}
+                        formatter={(v) => [`${v ?? 0}%`, "Win Prob"]}
                         contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }}
                       />
                       <Area

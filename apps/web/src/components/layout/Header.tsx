@@ -48,8 +48,8 @@ export default function Header({ title, subtitle }: HeaderProps) {
       if (!session) return;
       const workspaceId = session.user.user_metadata?.workspace_id as string | undefined;
       if (!workspaceId) return;
-      apiClient.listActivity(workspaceId, session.access_token, 8)
-        .then((data: NotifEvent[]) => { if (Array.isArray(data)) setEvents(data); })
+      apiClient.listActivity(workspaceId, session.access_token, { limit: 8 })
+        .then((data) => { if (Array.isArray(data)) setEvents(data as NotifEvent[]); })
         .catch(() => {});
     });
   }, [notifOpen, events.length]);
