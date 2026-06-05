@@ -1,4 +1,5 @@
 import { demoMessages, demoTasks, demoConnectors, demoDeals, demoContacts } from './demo-data'
+import type { KpiSnapshot, Commitment, CommitmentWeekStats } from './types'
 
 // ─── Contact-aware demo stubs ─────────────────────────────────────────────────
 const DEMO_CONTACT_BRIEFS: Record<string, { contact_name: string; brief: string }> = {
@@ -126,6 +127,106 @@ async function apiFetch(path: string, options: RequestInit = {}, token?: string,
     throw new Error(`API error ${res.status}`)
   }
   return res.json()
+}
+
+// ─── Demo data for the Life / accountability dashboard ───────────────────────
+// Deterministic-ish sample arrays so /life demos nicely without a live ledger.
+// Intentionally leaves gaps (missing days, null kept_rate weeks) to mirror the
+// honest "no zero-fill fabrication" behaviour of the real collector.
+const DEMO_KPI_SPECS: Array<{ domain: string; metric: string; base: number; amp: number; skip: number }> = [
+  { domain: 'engineering', metric: 'git_commits', base: 6, amp: 5, skip: 6 },   // weekends mostly off
+  { domain: 'engineering', metric: 'sessions', base: 3, amp: 2, skip: 6 },
+  { domain: 'knowledge', metric: 'records.main', base: 4, amp: 3, skip: 5 },
+  { domain: 'knowledge', metric: 'records.neuroscience', base: 2, amp: 2, skip: 4 },
+  { domain: 'knowledge', metric: 'records.content', base: 1, amp: 2, skip: 3 },
+  { domain: 'knowledge', metric: 'topics_distilled', base: 3, amp: 3, skip: 5 },
+  { domain: 'knowledge', metric: 'api_cost_usd', base: 8, amp: 6, skip: 6 },
+  { domain: 'product', metric: 'crm_users', base: 42, amp: 4, skip: 6 },
+  { domain: 'product', metric: 'tribe_corpus_videos', base: 120, amp: 8, skip: 5 },
+  { domain: 'product', metric: 'tribe_avg_score', base: 71, amp: 6, skip: 5 },
+  { domain: 'life', metric: 'records.personal', base: 2, amp: 2, skip: 3 },
+  { domain: 'life', metric: 'records.finance', base: 1, amp: 2, skip: 2 },
+]
+
+function demoKpiSnapshots(opts?: { fromDate?: string; toDate?: string; domain?: string; metric?: string }): KpiSnapshot[] {
+  const today = new Date()
+  const from = opts?.fromDate ? new Date(opts.fromDate) : new Date(today.getTime() - 89 * 86400000)
+  const out: KpiSnapshot[] = []
+  const days = Math.max(1, Math.round((today.getTime() - from.getTime()) / 86400000) + 1)
+  for (const spec of DEMO_KPI_SPECS) {
+    if (opts?.domain && spec.domain !== opts.domain) continue
+    if (opts?.metric && spec.metric !== opts.metric) continue
+    for (let i = 0; i < days; i++) {
+      const d = new Date(from.getTime() + i * 86400000)
+      const seed = (d.getDate() + d.getMonth() * 31 + spec.metric.length * 7) % 7
+      // Honest gaps: some days have no snapshot for this metric (no zero-fill).
+      if (seed > spec.skip) continue
+      const dow = d.getDay()
+      const weekendDamp = (dow === 0 || dow === 6) ? 0.4 : 1
+      const raw = spec.base + Math.round(((seed * 9301 + 49297) % (spec.amp + 1)) * weekendDamp)
+      const value = spec.metric === 'api_cost_usd' || spec.metric === 'tribe_avg_score'
+        ? Math.round((raw + (seed % 3) * 0.5) * 100) / 100
+        : Math.max(0, raw)
+      out.push({
+        id: `demo-kpi-${spec.metric}-${i}`,
+        workspace_id: 'demo-workspace-1',
+        date: d.toISOString().slice(0, 10),
+        domain: spec.domain,
+        metric: spec.metric,
+        value,
+        meta: spec.metric === 'git_commits'
+          ? { 'crm-agentic': Math.round(value * 0.5), 'tribe-social': Math.round(value * 0.3), 'alfred-v2': Math.round(value * 0.2) }
+          : {},
+      })
+    }
+  }
+  return out
+}
+
+const DEMO_COMMITMENTS: Commitment[] = [
+  { id: 'dc-1', workspace_id: 'demo-workspace-1', external_id: 'auto-ship-life-page-20260603', title: 'Ship the /life accountability dashboard', kind: 'auto', source: 'sessions/2026-06-03-crm.md', declared_at: new Date(Date.now() - 2 * 86400000).toISOString(), due_date: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10), status: 'open', evidence: null, scored_at: null },
+  { id: 'dc-2', workspace_id: 'demo-workspace-1', external_id: 'auto-rls-ledger-20260531', title: 'Enable RLS on the ledger tables', kind: 'auto', source: 'sessions/2026-05-31-api.md', declared_at: new Date(Date.now() - 5 * 86400000).toISOString(), due_date: null, status: 'kept', evidence: 'Commit b134efc enabled RLS on kpi_snapshots + commitments following the 008 pattern.', scored_at: new Date(Date.now() - 1 * 86400000).toISOString() },
+  { id: 'dc-3', workspace_id: 'demo-workspace-1', external_id: 'explicit-write-retro-tests-20260529', title: 'Write integration tests for the retro scorer', kind: 'explicit', source: null, declared_at: new Date(Date.now() - 7 * 86400000).toISOString(), due_date: new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10), status: 'broken', evidence: 'No test files added under apps/api/tests/ for the scorer by the due date.', scored_at: new Date(Date.now() - 1 * 86400000).toISOString() },
+  { id: 'dc-4', workspace_id: 'demo-workspace-1', external_id: 'auto-tribe-rescore-20260528', title: 'Re-score the tribe-social v2 corpus on RunPod', kind: 'auto', source: 'sessions/2026-05-28-tribe.md', declared_at: new Date(Date.now() - 8 * 86400000).toISOString(), due_date: null, status: 'kept', evidence: 'RunPod job completed; 137 videos rescored, avg 71.4.', scored_at: new Date(Date.now() - 6 * 86400000).toISOString() },
+  { id: 'dc-5', workspace_id: 'demo-workspace-1', external_id: 'auto-distill-neuro-20260527', title: 'Distill the week\'s neuroscience reading into the vault', kind: 'auto', source: 'sessions/2026-05-27-research.md', declared_at: new Date(Date.now() - 9 * 86400000).toISOString(), due_date: null, status: 'dropped', evidence: 'Deprioritised in favour of the ledger API work.', scored_at: new Date(Date.now() - 7 * 86400000).toISOString() },
+  { id: 'dc-6', workspace_id: 'demo-workspace-1', external_id: 'explicit-daily-finance-log-20260526', title: 'Log a daily finance record for the week', kind: 'explicit', source: null, declared_at: new Date(Date.now() - 10 * 86400000).toISOString(), due_date: new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10), status: 'open', evidence: null, scored_at: null },
+]
+
+function demoCommitments(opts?: { status?: string; kind?: string }): Commitment[] {
+  let rows = DEMO_COMMITMENTS
+  if (opts?.status) rows = rows.filter((c) => c.status === opts.status)
+  if (opts?.kind) rows = rows.filter((c) => c.kind === opts.kind)
+  return rows
+}
+
+function demoCommitmentStats(weeks: number): CommitmentWeekStats[] {
+  const today = new Date()
+  const day = today.getUTCDay()
+  const mondayOffset = (day + 6) % 7
+  const thisMonday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - mondayOffset))
+  const out: CommitmentWeekStats[] = []
+  for (let i = weeks - 1; i >= 0; i--) {
+    const wk = new Date(thisMonday.getTime() - i * 7 * 86400000)
+    const seed = (wk.getUTCDate() + wk.getUTCMonth() * 4) % 7
+    // Early weeks have no scored outcomes yet -> declared but kept_rate null (a gap).
+    const noOutcomes = i > weeks - 4
+    const declared = noOutcomes ? seed % 3 : 2 + (seed % 4)
+    const kept = noOutcomes ? 0 : Math.min(declared, 1 + (seed % 3))
+    const broken = noOutcomes ? 0 : Math.max(0, Math.min(declared - kept, seed % 2))
+    const dropped = noOutcomes ? 0 : (seed === 6 ? 1 : 0)
+    const open = Math.max(0, declared - kept - broken - dropped)
+    const denom = kept + broken
+    out.push({
+      week_start: wk.toISOString().slice(0, 10),
+      declared,
+      kept,
+      broken,
+      dropped,
+      open,
+      kept_rate: denom ? Math.round((kept / denom) * 100) / 100 : null,
+    })
+  }
+  return out
 }
 
 export const apiClient = {
@@ -697,5 +798,107 @@ export const apiClient = {
       answer: `Nova here. Your pipeline looks healthy — 6 active deals, $1.2M in value. The TechCorp deal in Negotiation has a health score of 32, meaning it hasn't moved in a while. I'd suggest reaching out to James Whitfield to re-engage. You can use the AI Search on /contacts to find similar prospects, or check the Deal Health Alerts on /dashboard for a full stale-deal view.`
     })
     return apiFetch(`/workspaces/${workspaceId}/ai/query`, { method: 'POST', body: JSON.stringify({ query }) }, token)
+  },
+
+  // ─── Life / Accountability ledger ───────────────────────────────────────────
+  // Daily KPI snapshots pushed by the local collector. Optional date-range /
+  // domain / metric filters map straight to query params.
+  getKpi: (
+    workspaceId: string,
+    token: string,
+    opts?: { fromDate?: string; toDate?: string; domain?: string; metric?: string },
+  ): Promise<KpiSnapshot[]> => {
+    if (isDemoMode) return Promise.resolve(demoKpiSnapshots(opts))
+    const params = new URLSearchParams()
+    if (opts?.fromDate) params.set('from_date', opts.fromDate)
+    if (opts?.toDate) params.set('to_date', opts.toDate)
+    if (opts?.domain) params.set('domain', opts.domain)
+    if (opts?.metric) params.set('metric', opts.metric)
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/kpi${qs ? `?${qs}` : ''}`, {}, token)
+  },
+
+  // Commitments list, newest first. Optional status / kind / declared_at window.
+  getCommitments: (
+    workspaceId: string,
+    token: string,
+    opts?: { status?: string; kind?: string; since?: string; until?: string },
+  ): Promise<Commitment[]> => {
+    if (isDemoMode) return Promise.resolve(demoCommitments(opts))
+    const params = new URLSearchParams()
+    if (opts?.status) params.set('status', opts.status)
+    if (opts?.kind) params.set('kind', opts.kind)
+    if (opts?.since) params.set('since', opts.since)
+    if (opts?.until) params.set('until', opts.until)
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/commitments${qs ? `?${qs}` : ''}`, {}, token)
+  },
+
+  // Per ISO-week kept/broken rollup over the last `weeks` weeks (one row per week,
+  // zero-filled by the API; kept_rate is null on weeks with no scored outcomes).
+  getCommitmentStats: (
+    workspaceId: string,
+    token: string,
+    weeks = 12,
+  ): Promise<CommitmentWeekStats[]> => {
+    if (isDemoMode) return Promise.resolve(demoCommitmentStats(weeks))
+    return apiFetch(`/workspaces/${workspaceId}/commitments/stats?weeks=${weeks}`, {}, token)
+  },
+
+  // Idempotent create-or-update keyed on external_id. Used by the "declare a
+  // commitment" form (kind 'explicit') and by the retro harvest (kind 'auto').
+  upsertCommitmentByExternal: (
+    workspaceId: string,
+    externalId: string,
+    data: {
+      title: string
+      kind?: string
+      source?: string | null
+      declared_at: string
+      due_date?: string | null
+      status?: string | null
+      evidence?: string | null
+      scored_at?: string | null
+    },
+    token: string,
+  ): Promise<{ commitment: Commitment; created: boolean }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        commitment: {
+          id: `demo-commitment-${Date.now()}`,
+          workspace_id: workspaceId,
+          external_id: externalId,
+          title: data.title,
+          kind: data.kind ?? 'auto',
+          source: data.source ?? null,
+          declared_at: data.declared_at,
+          due_date: data.due_date ?? null,
+          status: data.status ?? 'open',
+          evidence: data.evidence ?? null,
+          scored_at: data.scored_at ?? null,
+        },
+        created: true,
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/commitments/by-external/${encodeURIComponent(externalId)}`,
+      { method: 'PUT', body: JSON.stringify(data) },
+      token,
+    )
+  },
+
+  // Partial update of a single commitment (e.g. status='dropped').
+  patchCommitment: (
+    workspaceId: string,
+    commitmentId: string,
+    data: { title?: string; status?: string; evidence?: string; scored_at?: string; due_date?: string },
+    token: string,
+  ): Promise<Commitment> => {
+    if (isDemoMode) return Promise.resolve({ id: commitmentId, ...data } as unknown as Commitment)
+    return apiFetch(
+      `/workspaces/${workspaceId}/commitments/${commitmentId}`,
+      { method: 'PATCH', body: JSON.stringify(data) },
+      token,
+    )
   },
 }
