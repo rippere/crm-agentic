@@ -322,6 +322,55 @@ async def create_deal(
     return DealResponse.model_validate(deal)
 
 
+@router.get("/workspaces/{workspace_id}/deals/forecast")
+async def deal_forecast(
+    workspace_id: uuid.UUID,
+    months_ahead: int = Query(default=6, ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Group active deals by expected_close month — pipeline forecast.
+
+    NOTE: must be registered BEFORE the /deals/{deal_id} routes — otherwise
+    "forecast" is captured by the {deal_id} path param and 422s on UUID parsing.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.expected_close.is_not(None),
+        )
+    )
+    deals = result.scalars().all()
+
+    now = datetime.now(timezone.utc)
+    buckets: dict[str, dict] = {}
+    for i in range(months_ahead):
+        target = now + timedelta(days=30 * i)
+        key = target.strftime("%b %Y")
+        buckets[key] = {"month": key, "value": 0.0, "deal_count": 0}
+
+    for deal in deals:
+        if not deal.expected_close:
+            continue
+        try:
+            ec = datetime.strptime(str(deal.expected_close), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+        key = ec.strftime("%b %Y")
+        if key in buckets:
+            buckets[key]["value"] += float(deal.value or 0)
+            buckets[key]["deal_count"] += 1
+
+    return [
+        {"month": v["month"], "value": round(v["value"]), "deal_count": v["deal_count"]}
+        for v in buckets.values()
+    ]
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
@@ -538,51 +587,6 @@ async def bulk_deal_action(
 
     await db.commit()
     return BulkDealResponse(action=body.action, updated=len(deals), deal_ids=updated_ids)
-
-
-@router.get("/workspaces/{workspace_id}/deals/forecast")
-async def deal_forecast(
-    workspace_id: uuid.UUID,
-    months_ahead: int = Query(default=6, ge=1, le=12),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> list[dict]:
-    """Group active deals by expected_close month — pipeline forecast."""
-    if current_user.workspace_id != workspace_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
-    result = await db.execute(
-        select(Deal).where(
-            Deal.workspace_id == workspace_id,
-            Deal.stage.not_in(["closed_won", "closed_lost"]),
-            Deal.expected_close.is_not(None),
-        )
-    )
-    deals = result.scalars().all()
-
-    now = datetime.now(timezone.utc)
-    buckets: dict[str, dict] = {}
-    for i in range(months_ahead):
-        target = now + timedelta(days=30 * i)
-        key = target.strftime("%b %Y")
-        buckets[key] = {"month": key, "value": 0.0, "deal_count": 0}
-
-    for deal in deals:
-        if not deal.expected_close:
-            continue
-        try:
-            ec = datetime.strptime(str(deal.expected_close), "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            continue
-        key = ec.strftime("%b %Y")
-        if key in buckets:
-            buckets[key]["value"] += float(deal.value or 0)
-            buckets[key]["deal_count"] += 1
-
-    return [
-        {"month": v["month"], "value": round(v["value"]), "deal_count": v["deal_count"]}
-        for v in buckets.values()
-    ]
 
 
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}/probability-trend")
