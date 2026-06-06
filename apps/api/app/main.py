@@ -14,7 +14,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.limiter import limiter
-from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments
+from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments, webhook_logs
 
 # ── Structured logging (JSON-like key=value to stdout) ───────────────────────
 _LOG_CONFIG: dict = {
@@ -133,6 +133,7 @@ app.include_router(mcp_server.router, tags=["mcp"])
 app.include_router(projects.router, tags=["projects"])
 app.include_router(kpi.router, tags=["kpi"])
 app.include_router(commitments.router, tags=["commitments"])
+app.include_router(webhook_logs.router, tags=["webhooks"])
 
 
 @app.get("/health")

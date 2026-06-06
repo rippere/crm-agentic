@@ -383,7 +383,9 @@ def _verify_pubsub_secret(request_secret: str | None) -> bool:
 
 
 async def _trigger_ingest_for_email(email: str, db: AsyncSession) -> str | None:
-    """Find the Gmail connector matching the push email and enqueue a sync."""
+    """Find the Gmail connector matching the push email, enqueue a sync, and log the event."""
+    from app.models.webhook_log import WebhookLog
+
     result = await db.execute(
         select(Connector).where(
             Connector.service == "gmail",
@@ -391,13 +393,30 @@ async def _trigger_ingest_for_email(email: str, db: AsyncSession) -> str | None:
         )
     )
     connector = result.scalar_one_or_none()
+
     if connector is None:
         logger.warning("gmail_push_no_connector email=%s", email)
+        db.add(WebhookLog(
+            source="gmail",
+            event_type="pubsub_push",
+            status="received",
+            payload_summary=f"email={email} connector=not_found",
+        ))
+        await db.commit()
         return None
 
     from app.workers.ingest import process_gmail_sync
 
     task = process_gmail_sync.delay(str(connector.id))
+    db.add(WebhookLog(
+        workspace_id=connector.workspace_id,
+        source="gmail",
+        event_type="pubsub_push",
+        status="queued",
+        payload_summary=f"email={email}",
+        job_id=task.id,
+    ))
+    await db.commit()
     logger.info("gmail_push_ingest_queued connector=%s job=%s", connector.id, task.id)
     return task.id
 
