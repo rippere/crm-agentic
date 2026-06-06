@@ -24,6 +24,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
+from app.database import PGBOUNCER_CONNECT_ARGS
+
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -38,7 +40,7 @@ _SKIP_SENDER_PATTERNS = [
 
 def _get_async_session() -> async_sessionmaker[AsyncSession]:
     url = os.getenv("DATABASE_URL", "")
-    engine = create_async_engine(url, echo=False)
+    engine = create_async_engine(url, echo=False, connect_args=PGBOUNCER_CONNECT_ARGS)
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

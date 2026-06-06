@@ -19,6 +19,8 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
+from app.database import PGBOUNCER_CONNECT_ARGS
+
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -31,7 +33,7 @@ def _get_async_session() -> async_sessionmaker[AsyncSession]:
         url = url.replace("postgres://", "postgresql+asyncpg://", 1)
     elif url.startswith("postgresql://") and "+asyncpg" not in url:
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    engine = create_async_engine(url, echo=False)
+    engine = create_async_engine(url, echo=False, connect_args=PGBOUNCER_CONNECT_ARGS)
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
