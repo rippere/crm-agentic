@@ -46,6 +46,8 @@ interface NavItem {
   icon: React.ElementType;
   hideModes?: WorkspaceMode[];
   badge?: string;
+  /** Owner-private: only shown when the workspace is on the Life allowlist. */
+  requiresLife?: boolean;
 }
 
 interface NavGroup {
@@ -64,7 +66,7 @@ const navGroups: NavGroup[] = [
       { href: "/pipeline",  label: "Pipeline",  icon: KanbanSquare,  hideModes: ["pm"] },
       { href: "/reports",   label: "Reports",   icon: BarChart2,     hideModes: ["pm"] },
       { href: "/activity",  label: "Activity",  icon: Activity         },
-      { href: "/life",      label: "Life",      icon: Target           },
+      { href: "/life",      label: "Life",      icon: Target, requiresLife: true },
     ],
   },
   {
@@ -99,6 +101,8 @@ interface SidebarProps {
   mode?: WorkspaceMode;
   userEmail?: string;
   userName?: string;
+  /** Owner-private: gates the Life nav item. Resolved server-side from the allowlist. */
+  lifeEnabled?: boolean;
   onSearchClick?: () => void;
   isCollapsed: boolean;
   onExpand: () => void;
@@ -112,6 +116,7 @@ export default function Sidebar({
   mode = "sales",
   userEmail = "",
   userName = "User",
+  lifeEnabled = false,
   onSearchClick,
   isCollapsed,
   onExpand,
@@ -236,7 +241,9 @@ export default function Sidebar({
       <nav className="flex-1 px-2 py-2 overflow-y-auto overflow-x-hidden" aria-label="Main navigation">
         <div className="space-y-4">
           {navGroups.map(({ id, label, items }) => {
-            const visible = items.filter((item) => !item.hideModes?.includes(mode));
+            const visible = items.filter(
+              (item) => !item.hideModes?.includes(mode) && (!item.requiresLife || lifeEnabled),
+            );
             if (visible.length === 0) return null;
 
             return (
