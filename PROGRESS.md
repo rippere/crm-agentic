@@ -49,11 +49,13 @@
 - [2026-06-05] Phase 10c: Deal notes editor — DealNotesEditor sub-component on deal detail page; read-only Markdown preview by default; Edit button → Write/Preview tabs + textarea; live Preview renders via renderMarkdown(); Save calls apiClient.updateDeal({notes}) with Loader2 spinner; Cancel restores previous text; empty-state "Add a note →" prompt; Markdown hint in footer
 - [2026-06-05] Phase 10d: Contact merge — POST /workspaces/{id}/contacts/merge (validates both contacts in workspace, bulk-reassigns tasks/messages/deals via UPDATE, deletes duplicate, logs ActivityEvent); mergeContacts() in api-client with demo stub; BulkActionBar "Merge" button (visible only when 2 selected); merge modal shows primary/duplicate side-by-side with role colors; success toast with reassignment counts; 3 new tests; 330 tests total
 
+- [2026-06-06] Phase 11a: Webhook delivery log — 002_webhook_logs.sql migration, WebhookLog model, GET /workspaces/{id}/webhook-logs router, gmail.py + slack.py logging side-effects in background tasks (queued/received status + job_id), 8 tests, api-client getWebhookLogs() with demo stub, /settings/webhooks page (table, source/status filter tabs, load-more), settings page Developer section with link; 375 tests pass (367+8)
+
 ## Current Phase
-Phase 10 — UX & Feature Polish (complete)
+Phase 11 — Developer & Admin Features
 
 ## Next Task
-Phase 11 (suggested): (a) Webhook delivery log — track FastAPI webhook calls (Gmail push, Slack events) in a new webhook_logs table + UI at /settings/webhooks; (b) Contact tag editor — inline tag chip editing on contact detail page (add/remove semantic tags stored in DB); (c) Pipeline swimlane view — toggle between kanban board and horizontal swimlane (grouped by deal value range); (d) API key management — generate/revoke workspace API keys stored in Supabase, shown in /settings.
+Phase 11b: Contact tag editor — inline tag chip editing on /contacts/[id] page. Tags stored in contacts.semantic_tags (JSONB array). Add/remove chips inline (no modal), PUT /contacts/{id}/tags endpoint, demo mode support, optimistic update.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
