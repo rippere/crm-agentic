@@ -229,6 +229,39 @@ function demoCommitmentStats(weeks: number): CommitmentWeekStats[] {
   return out
 }
 
+// Demo `life_retro` activity event. `meta` is a JSON string to mirror the real
+// API (activity_events.meta is stored as text), so the Life card's defensive
+// parse path is exercised in demo too.
+function demoActivity(opts?: { eventType?: string; limit?: number }): Array<{ id: string; type: string | null; agent_name: string | null; description: string | null; meta: string | null; severity: string; created_at: string }> {
+  if (opts?.eventType && opts.eventType !== 'life_retro') return []
+  const sunday = new Date()
+  sunday.setDate(sunday.getDate() - ((sunday.getDay() + 0) % 7 || 7)) // most recent past Sunday
+  const week = sunday.toISOString().slice(0, 10)
+  const retro = {
+    id: `demo-retro-${week}`,
+    type: 'life_retro',
+    agent_name: 'Retro Agent',
+    description: `Weekly retro for the week of ${week}`,
+    meta: JSON.stringify({
+      week,
+      kept_rate: 0.67,
+      kept: 4,
+      broken: 2,
+      dropped: 1,
+      harvested: 7,
+      open: 3,
+      judgment: [
+        'Shipping outran scoring this week — four commitments kept, but two slipped because the retro tests never landed. The pattern is real: infra work keeps getting deferred behind feature work.',
+        'Attention concentrated hard on crm-agentic (over half of all commits). tribe-social got a single rescore and otherwise went dark — fine for a sprint week, a risk if it holds.',
+        'Three commitments are still open past their declared window. They face judgment Sunday; clear or drop them rather than letting them rot into broken.',
+      ],
+    }),
+    severity: 'info',
+    created_at: sunday.toISOString(),
+  }
+  return [retro].slice(0, opts?.limit ?? 1)
+}
+
 export const apiClient = {
   // Agents
   listAgents: (token: string) => {
@@ -835,6 +868,22 @@ export const apiClient = {
     if (opts?.metric) params.set('metric', opts.metric)
     const qs = params.toString()
     return apiFetch(`/workspaces/${workspaceId}/kpi${qs ? `?${qs}` : ''}`, {}, token)
+  },
+
+  // Latest activity events, newest first. Used by the Life retro card to pull the
+  // most recent `life_retro` event. The API returns `meta` as a JSON string (or
+  // null); callers parse it defensively. Mirrors the `/activity` shape, narrowed
+  // to the fields the ledger needs.
+  getActivity: (
+    workspaceId: string,
+    token: string,
+    opts?: { eventType?: string; limit?: number },
+  ): Promise<Array<{ id: string; type: string | null; agent_name: string | null; description: string | null; meta: string | null; severity: string; created_at: string }>> => {
+    if (isDemoMode) return Promise.resolve(demoActivity(opts))
+    const params = new URLSearchParams()
+    if (opts?.eventType) params.set('event_type', opts.eventType)
+    params.set('limit', String(opts?.limit ?? 1))
+    return apiFetch(`/workspaces/${workspaceId}/activity?${params}`, {}, token)
   },
 
   // Commitments list, newest first. Optional status / kind / declared_at window.

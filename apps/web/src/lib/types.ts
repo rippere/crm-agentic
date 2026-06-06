@@ -248,6 +248,20 @@ export interface Commitment {
   updated_at?: string | null;
 }
 
+// Shape of the `meta` payload carried by a `life_retro` activity event, written
+// by the weekly retro agent. Arrives JSON-encoded (activity_events.meta is text)
+// and is parsed defensively on the client — every field may be absent.
+export interface RetroMeta {
+  week?: string;              // ISO date of the retro's week (Monday or Sunday anchor)
+  kept_rate?: number | null;  // 0-1, null on the first week before anything is scored
+  kept?: number;
+  broken?: number;
+  dropped?: number;
+  harvested?: number;
+  open?: number;
+  judgment?: string[];        // prose conclusions — the centrepiece of the retro card
+}
+
 // Per ISO-week (Monday-anchored) rollup over the last N weeks. `kept_rate` is
 // null when no outcomes were scored that week (denominator 0) — a gap, not a zero.
 export interface CommitmentWeekStats {

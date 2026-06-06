@@ -6,23 +6,26 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
-import { cn } from "@/lib/utils";
 import KpiTrendCard from "@/components/life/KpiTrendCard";
 import CommitmentsTable from "@/components/life/CommitmentsTable";
-import type { KpiSnapshot, Commitment, CommitmentWeekStats } from "@/lib/types";
+import RetroCard from "@/components/life/RetroCard";
+import VerdictStrip from "@/components/life/VerdictStrip";
+import WeekAllocationCard from "@/components/life/WeekAllocationCard";
+import type { KpiSnapshot, Commitment, CommitmentWeekStats, RetroMeta } from "@/lib/types";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {
-  Target, GitCommitHorizontal, Brain, Package, Activity,
-  Trophy, CircleDashed, TrendingUp,
+  Target, GitCommitHorizontal, Brain, Package, Activity, TrendingUp,
 } from "lucide-react";
 
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
 const WEEKS = 12;
-const KPI_WINDOW_DAYS = 90; // fetch 90d once; cards toggle 30/90 client-side
+// Fetch 90d once; the trend + allocation cards toggle 30/90 client-side, and the
+// verdict strip windows the most recent 35d (this week + 4 prior) out of it.
+const KPI_WINDOW_DAYS = 90;
 
 function slug(s: string): string {
   return s
@@ -40,12 +43,31 @@ function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
 }
 
-// Sum a metric's values across snapshots dated within the last `days` days.
-function sumThisWeek(snaps: KpiSnapshot[], metric: string, days = 7): number {
-  const cutoff = isoDaysAgo(days - 1);
-  return snaps
-    .filter((s) => s.metric === metric && s.date >= cutoff)
-    .reduce((acc, s) => acc + s.value, 0);
+// The retro event's `meta` may arrive as a parsed object OR a JSON string (the
+// API stores activity_events.meta as text). Parse both shapes; never throw.
+function parseRetroMeta(meta: unknown): RetroMeta | null {
+  let obj: unknown = meta;
+  if (typeof meta === "string") {
+    const trimmed = meta.trim();
+    if (!trimmed) return null;
+    try { obj = JSON.parse(trimmed); } catch { return null; }
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  const m = obj as Record<string, unknown>;
+  const judgment = Array.isArray(m.judgment)
+    ? m.judgment.filter((x): x is string => typeof x === "string")
+    : undefined;
+  const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  return {
+    week: typeof m.week === "string" ? m.week : undefined,
+    kept_rate: m.kept_rate === null ? null : num(m.kept_rate),
+    kept: num(m.kept),
+    broken: num(m.broken),
+    dropped: num(m.dropped),
+    harvested: num(m.harvested),
+    open: num(m.open),
+    judgment,
+  };
 }
 
 // ─── Kept-rate weekly trend chart ─────────────────────────────────────────────
@@ -99,31 +121,6 @@ function toChartWeeks(stats: CommitmentWeekStats[]): ChartWeek[] {
   }));
 }
 
-// ─── Headline metric tile ─────────────────────────────────────────────────────
-function HeadlineTile({
-  icon, label, value, sublabel, accent = "violet", tone,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  sublabel?: string;
-  accent?: "violet" | "signal" | "amber" | "rose";
-  tone?: string; // optional explicit value color
-}) {
-  return (
-    <Card compact accent={accent} className="flex items-center gap-3">
-      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-800/60 border border-zinc-700 flex-shrink-0">
-        {icon}
-      </div>
-      <div className="min-w-0">
-        <p className={cn("text-2xl font-bold font-mono tabular-nums leading-none", tone ?? "text-zinc-100")}>{value}</p>
-        <p className="text-xs text-zinc-500 mt-1 truncate">{label}</p>
-        {sublabel && <p className="text-[10px] text-zinc-600 font-mono mt-0.5 truncate">{sublabel}</p>}
-      </div>
-    </Card>
-  );
-}
-
 export default function LifePage() {
   const [token, setToken] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -132,6 +129,7 @@ export default function LifePage() {
   const [snapshots, setSnapshots] = useState<KpiSnapshot[]>([]);
   const [commitments, setCommitments] = useState<Commitment[]>([]);
   const [weekStats, setWeekStats] = useState<CommitmentWeekStats[]>([]);
+  const [retro, setRetro] = useState<RetroMeta | null>(null);
   const [loading, setLoading] = useState(true);
 
   // ── Auth / workspace acquisition (mirrors dashboard + tasks pages) ──
@@ -167,11 +165,13 @@ export default function LifePage() {
       apiClient.getKpi(wid, tok, { fromDate: isoDaysAgo(KPI_WINDOW_DAYS - 1) }).catch(() => [] as KpiSnapshot[]),
       apiClient.getCommitments(wid, tok).catch(() => [] as Commitment[]),
       apiClient.getCommitmentStats(wid, tok, WEEKS).catch(() => [] as CommitmentWeekStats[]),
-    ]).then(([kpi, commits, stats]) => {
+      apiClient.getActivity(wid, tok, { eventType: "life_retro", limit: 1 }).catch(() => []),
+    ]).then(([kpi, commits, stats, activity]) => {
       if (cancelled) return;
       setSnapshots(Array.isArray(kpi) ? kpi : []);
       setCommitments(Array.isArray(commits) ? commits.slice(0, 25) : []);
       setWeekStats(Array.isArray(stats) ? stats : []);
+      setRetro(Array.isArray(activity) && activity.length > 0 ? parseRetroMeta(activity[0].meta) : null);
       setLoading(false);
     });
 
@@ -194,15 +194,11 @@ export default function LifePage() {
     const scored = weekStats.filter((w) => w.kept_rate != null);
     const latest = scored.length ? scored[scored.length - 1] : null;
     const keptRatePct = latest?.kept_rate != null ? Math.round(latest.kept_rate * 100) : null;
-
     const openCount = commitments.filter((c) => c.status === "open").length;
-    const commitsThisWeek = sumThisWeek(snapshots, "git_commits");
-    const sessionsThisWeek = sumThisWeek(snapshots, "sessions");
+    return { keptRatePct, openCount, latestWeek: latest };
+  }, [weekStats, commitments]);
 
-    return { keptRatePct, openCount, commitsThisWeek, sessionsThisWeek, latestWeek: latest };
-  }, [weekStats, commitments, snapshots]);
-
-  const hasAnyData = snapshots.length > 0 || commitments.length > 0 || weekStats.some((w) => w.declared > 0);
+  const hasAnyData = snapshots.length > 0 || commitments.length > 0 || weekStats.some((w) => w.declared > 0) || retro != null;
 
   // ── Write actions (optimistic) ──
   const handleDrop = async (id: string) => {
@@ -263,8 +259,9 @@ export default function LifePage() {
     return (
       <div className="flex flex-col gap-6 p-4 md:p-6">
         <Header title="Life" subtitle="Personal accountability ledger" />
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {[1, 2, 3, 4].map((i) => <div key={i} className="h-20 rounded-xl bg-zinc-800/50 animate-pulse" />)}
+        <div className="h-48 rounded-xl bg-zinc-800/40 animate-pulse" />
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
+          {[1, 2, 3, 4, 5, 6].map((i) => <div key={i} className="h-20 rounded-xl bg-zinc-800/50 animate-pulse" />)}
         </div>
         <div className="h-64 rounded-xl bg-zinc-800/40 animate-pulse" />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -294,44 +291,23 @@ export default function LifePage() {
         </Card>
       )}
 
-      {/* ── HEADLINE STRIP ── */}
-      <section aria-labelledby="headline-heading">
-        <h2 id="headline-heading" className="sr-only">Headline metrics</h2>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <HeadlineTile
-            icon={<Trophy className="h-4 w-4 text-[#00C896]" />}
-            label="Kept rate (latest week)"
-            value={headline.keptRatePct != null ? `${headline.keptRatePct}%` : "—"}
-            sublabel={
-              headline.latestWeek
-                ? `${headline.latestWeek.kept} kept · ${headline.latestWeek.broken} broken`
-                : "no scored week yet"
-            }
-            accent="signal"
-            tone={headline.keptRatePct == null ? "text-zinc-500" : "text-[#00C896]"}
-          />
-          <HeadlineTile
-            icon={<CircleDashed className="h-4 w-4 text-indigo-400" />}
-            label="Open commitments"
-            value={String(headline.openCount)}
-            sublabel={headline.openCount === 0 ? "all resolved" : "awaiting outcome"}
-            accent="violet"
-          />
-          <HeadlineTile
-            icon={<GitCommitHorizontal className="h-4 w-4 text-indigo-400" />}
-            label="Commits this week"
-            value={String(headline.commitsThisWeek)}
-            sublabel="last 7 days"
-            accent="violet"
-          />
-          <HeadlineTile
-            icon={<Activity className="h-4 w-4 text-violet-400" />}
-            label="Sessions this week"
-            value={String(headline.sessionsThisWeek)}
-            sublabel="last 7 days"
-            accent="amber"
-          />
-        </div>
+      {/* ── RETRO JUDGMENT — the verdict on the week ── */}
+      <section aria-labelledby="retro-heading">
+        <h2 id="retro-heading" className="sr-only">Weekly retro judgment</h2>
+        <RetroCard retro={retro} />
+      </section>
+
+      {/* ── VERDICT STRIP — this week vs the trailing baseline ── */}
+      <section aria-labelledby="verdict-heading">
+        <h2 id="verdict-heading" className="sr-only">This week, judged against baseline</h2>
+        <VerdictStrip
+          snapshots={snapshots}
+          keptRatePct={headline.keptRatePct}
+          keptRateSub={headline.latestWeek
+            ? `${headline.latestWeek.kept} kept · ${headline.latestWeek.broken} broken`
+            : "no scored week yet"}
+          openCount={headline.openCount}
+        />
       </section>
 
       {/* ── KEPT-RATE TREND ── */}
@@ -425,6 +401,8 @@ export default function LifePage() {
               { metric: "sessions", label: "Sessions", color: "#A78BFA" },
             ]}
           />
+          {/* Where-the-week-went sits beside Engineering — same git_commits source, judged by repo. */}
+          <WeekAllocationCard snapshots={byDomain.engineering} />
           <KpiTrendCard
             title="Knowledge"
             subtitle="records distilled by vault"
