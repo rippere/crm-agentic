@@ -221,7 +221,9 @@ def _verify_slack_signature(
 
 
 async def _trigger_slack_ingest_for_team(team_id: str, db: AsyncSession) -> str | None:
-    """Find the Slack connector matching the team and enqueue a sync."""
+    """Find the Slack connector matching the team, enqueue a sync, and log the event."""
+    from app.models.webhook_log import WebhookLog
+
     result = await db.execute(
         select(Connector).where(
             Connector.service == "slack",
@@ -229,13 +231,30 @@ async def _trigger_slack_ingest_for_team(team_id: str, db: AsyncSession) -> str 
         )
     )
     connector = result.scalar_one_or_none()
+
     if connector is None:
         logger.warning("slack_push_no_connector team_id=%s", team_id)
+        db.add(WebhookLog(
+            source="slack",
+            event_type="event_callback",
+            status="received",
+            payload_summary=f"team={team_id} connector=not_found",
+        ))
+        await db.commit()
         return None
 
     from app.workers.slack_ingest import process_slack_sync
 
     task = process_slack_sync.delay(str(connector.id))
+    db.add(WebhookLog(
+        workspace_id=connector.workspace_id,
+        source="slack",
+        event_type="event_callback",
+        status="queued",
+        payload_summary=f"team={team_id}",
+        job_id=task.id,
+    ))
+    await db.commit()
     logger.info("slack_push_ingest_queued connector=%s job=%s", connector.id, task.id)
     return task.id
 
@@ -276,6 +295,14 @@ async def slack_events_webhook(
 
     # Slack sends a url_verification challenge when the endpoint is first registered
     if event_type == "url_verification":
+        from app.models.webhook_log import WebhookLog
+        db.add(WebhookLog(
+            source="slack",
+            event_type="url_verification",
+            status="received",
+            payload_summary="Slack URL verification challenge",
+        ))
+        await db.commit()
         return {"challenge": payload.get("challenge")}
 
     if event_type == "event_callback":

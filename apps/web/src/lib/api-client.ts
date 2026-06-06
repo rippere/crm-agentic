@@ -955,6 +955,50 @@ export const apiClient = {
     )
   },
 
+  // ─── Webhook delivery log ────────────────────────────────────────────────────
+  // Returns the most recent webhook_logs rows for the workspace. Useful for
+  // auditing Gmail Pub/Sub and Slack Events API delivery and Celery job dispatch.
+  getWebhookLogs: (
+    workspaceId: string,
+    token: string,
+    opts?: { source?: 'gmail' | 'slack'; status?: 'received' | 'queued' | 'error'; limit?: number; offset?: number },
+  ): Promise<Array<{
+    id: string
+    workspace_id: string | null
+    source: string
+    event_type: string
+    status: string
+    payload_summary: string | null
+    job_id: string | null
+    error_detail: string | null
+    created_at: string
+  }>> => {
+    if (isDemoMode) {
+      const DEMO_LOGS = [
+        { id: 'whl-001', workspace_id: workspaceId, source: 'gmail', event_type: 'pubsub_push', status: 'queued', payload_summary: 'email=sarah.chen@techcorp.com', job_id: 'celery-a1b2c3', error_detail: null, created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
+        { id: 'whl-002', workspace_id: workspaceId, source: 'gmail', event_type: 'pubsub_push', status: 'queued', payload_summary: 'email=mrivera@globalfinance.io', job_id: 'celery-d4e5f6', error_detail: null, created_at: new Date(Date.now() - 18 * 60 * 1000).toISOString() },
+        { id: 'whl-003', workspace_id: workspaceId, source: 'slack', event_type: 'url_verification', status: 'received', payload_summary: 'Slack URL verification challenge', job_id: null, error_detail: null, created_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString() },
+        { id: 'whl-004', workspace_id: workspaceId, source: 'slack', event_type: 'event_callback', status: 'queued', payload_summary: 'team=T-ABC123', job_id: 'celery-g7h8i9', error_detail: null, created_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString() },
+        { id: 'whl-005', workspace_id: workspaceId, source: 'gmail', event_type: 'pubsub_push', status: 'received', payload_summary: 'email=unknown@external.com connector=not_found', job_id: null, error_detail: null, created_at: new Date(Date.now() - 6 * 3600 * 1000).toISOString() },
+        { id: 'whl-006', workspace_id: workspaceId, source: 'gmail', event_type: 'pubsub_push', status: 'queued', payload_summary: 'email=sarah.chen@techcorp.com', job_id: 'celery-j1k2l3', error_detail: null, created_at: new Date(Date.now() - 25 * 3600 * 1000).toISOString() },
+        { id: 'whl-007', workspace_id: workspaceId, source: 'slack', event_type: 'event_callback', status: 'error', payload_summary: 'team=T-XYZ987', job_id: null, error_detail: 'Signature verification failed', created_at: new Date(Date.now() - 48 * 3600 * 1000).toISOString() },
+      ]
+      let logs = DEMO_LOGS
+      if (opts?.source) logs = logs.filter((l) => l.source === opts.source)
+      if (opts?.status) logs = logs.filter((l) => l.status === opts.status)
+      const offset = opts?.offset ?? 0
+      const limit = opts?.limit ?? 50
+      return Promise.resolve(logs.slice(offset, offset + limit))
+    }
+    const params = new URLSearchParams()
+    if (opts?.source) params.set('source', opts.source)
+    if (opts?.status) params.set('status', opts.status)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.offset) params.set('offset', String(opts.offset))
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/webhook-logs${qs ? `?${qs}` : ''}`, {}, token)
+  },
+
   // Partial update of a single commitment (e.g. status='dropped').
   patchCommitment: (
     workspaceId: string,
