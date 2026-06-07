@@ -1047,3 +1047,55 @@ async def test_merge_contacts_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# PUT /workspaces/{wid}/contacts/{cid}/tags
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_put_tags_updates_semantic_tags(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(contact))
+
+    tags = [{"label": "enterprise", "confidence": 0.9, "color": "indigo"}]
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{workspace_id}/contacts/{contact.id}/tags",
+            json={"tags": tags},
+        )
+
+    assert resp.status_code == 200
+    mock_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_put_tags_invalid_tag_missing_label_returns_422(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(contact))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{workspace_id}/contacts/{contact.id}/tags",
+            json={"tags": [{"confidence": 0.5}]},
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_put_tags_not_found_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/tags",
+            json={"tags": [{"label": "test", "confidence": 1.0, "color": "indigo"}]},
+        )
+
+    assert resp.status_code == 404

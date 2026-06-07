@@ -16,7 +16,7 @@ import {
   ArrowLeft, Mail, Brain, Zap, TrendingUp, TrendingDown, Minus,
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
-  Star, Calendar,
+  Star, Calendar, X, Plus,
 } from "lucide-react";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -157,6 +157,8 @@ function DealCard({ deal }: { deal: DealRow }) {
   );
 }
 
+const TAG_COLORS = ["indigo", "emerald", "amber", "rose"] as const;
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function ContactDetailPage() {
@@ -185,6 +187,43 @@ export default function ContactDetailPage() {
 
   const scorePoller = useJobPoller();
   const enrichPoller = useJobPoller();
+
+  // Tag editor state
+  const [addingTag, setAddingTag] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+  const [savingTags, setSavingTags] = useState(false);
+
+  const persistTags = useCallback(async (updated: Contact["semanticTags"]) => {
+    if (!token || !workspaceId) return;
+    setSavingTags(true);
+    try {
+      await apiClient.updateContactTags(workspaceId, contactId, updated, token);
+    } finally {
+      setSavingTags(false);
+    }
+  }, [token, workspaceId, contactId]);
+
+  const removeTag = useCallback((index: number) => {
+    if (!contact) return;
+    const prev = contact.semanticTags;
+    const updated = prev.filter((_, i) => i !== index);
+    setContact(c => c ? { ...c, semanticTags: updated } : c);
+    persistTags(updated).catch(() => setContact(c => c ? { ...c, semanticTags: prev } : c));
+  }, [contact, persistTags]);
+
+  const commitTag = useCallback(() => {
+    const label = tagInput.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "");
+    setAddingTag(false);
+    setTagInput("");
+    if (!label || !contact) return;
+    if (contact.semanticTags.some(t => t.label === label)) return;
+    const color = TAG_COLORS[contact.semanticTags.length % TAG_COLORS.length];
+    const updated = [...contact.semanticTags, { label, confidence: 1.0, color }];
+    setContact(c => c ? { ...c, semanticTags: updated } : c);
+    persistTags(updated).catch(() =>
+      setContact(c => c ? { ...c, semanticTags: updated.slice(0, -1) } : c)
+    );
+  }, [tagInput, contact, persistTags]);
 
   // Auth init
   useEffect(() => {
@@ -496,31 +535,59 @@ export default function ContactDetailPage() {
             )}
           </Card>
 
-          {/* Semantic tags */}
-          {contact.semanticTags.length > 0 && (
-            <Card className="p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Tag className="h-4 w-4 text-indigo-400" />
-                <p className="text-xs font-semibold text-zinc-300">Semantic Tags</p>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {contact.semanticTags.map((tag, i) => (
-                  <span
-                    key={i}
-                    className={cn(
-                      "inline-flex items-center rounded-lg border px-2.5 py-0.5 text-xs font-medium",
-                      tag.color === "indigo" && "border-indigo-500/30 bg-indigo-500/10 text-indigo-300",
-                      tag.color === "emerald" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-                      tag.color === "amber" && "border-amber-500/30 bg-amber-500/10 text-amber-300",
-                      tag.color === "rose" && "border-rose-500/30 bg-rose-500/10 text-rose-300",
-                    )}
+          {/* Semantic tags — inline chip editor */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Tag className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Semantic Tags</p>
+              {savingTags && <Loader2 className="h-3 w-3 animate-spin text-zinc-500 ml-auto" />}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {contact.semanticTags.map((tag, i) => (
+                <span
+                  key={i}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-lg border px-2.5 py-0.5 text-xs font-medium",
+                    tag.color === "indigo" && "border-indigo-500/30 bg-indigo-500/10 text-indigo-300",
+                    tag.color === "emerald" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+                    tag.color === "amber" && "border-amber-500/30 bg-amber-500/10 text-amber-300",
+                    tag.color === "rose" && "border-rose-500/30 bg-rose-500/10 text-rose-300",
+                  )}
+                >
+                  {tag.label}
+                  <button
+                    onClick={() => removeTag(i)}
+                    className="ml-0.5 rounded-full text-current opacity-50 hover:opacity-100 transition-opacity"
+                    aria-label={`Remove tag ${tag.label}`}
                   >
-                    {tag.label}
-                  </span>
-                ))}
-              </div>
-            </Card>
-          )}
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </span>
+              ))}
+              {addingTag ? (
+                <input
+                  autoFocus
+                  value={tagInput}
+                  onChange={e => setTagInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" || e.key === ",") { e.preventDefault(); commitTag(); }
+                    if (e.key === "Escape") { setAddingTag(false); setTagInput(""); }
+                  }}
+                  onBlur={commitTag}
+                  className="text-xs bg-zinc-800 border border-zinc-600 rounded-lg px-2.5 py-0.5 text-zinc-100 focus:outline-none focus:border-indigo-500 w-24"
+                  placeholder="tag name"
+                />
+              ) : (
+                <button
+                  onClick={() => setAddingTag(true)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-dashed border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-500 hover:border-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  <Plus className="h-3 w-3" />
+                  Add tag
+                </button>
+              )}
+            </div>
+          </Card>
 
           {/* Revenue snapshot */}
           <Card className="p-4">
