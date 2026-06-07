@@ -461,6 +461,10 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ id: contactId, ...data })
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
   },
+  updateContactTags: (workspaceId: string, contactId: string, tags: { label: string; confidence: number; color: string }[], token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: contactId, semantic_tags: tags })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/tags`, { method: 'PUT', body: JSON.stringify({ tags }) }, token)
+  },
   deleteContact: (workspaceId: string, contactId: string, token: string) => {
     if (isDemoMode) return Promise.resolve()
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}`, { method: 'DELETE' }, token)

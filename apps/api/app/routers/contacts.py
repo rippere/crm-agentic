@@ -434,6 +434,52 @@ async def update_contact(
     return ContactResponse.model_validate(contact)
 
 
+class UpdateTagsRequest(BaseModel):
+    tags: list[dict]
+
+
+@router.put("/workspaces/{workspace_id}/contacts/{contact_id}/tags", response_model=ContactResponse)
+async def update_contact_tags(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    body: UpdateTagsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ContactResponse:
+    """Replace the semantic_tags list on a contact."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    for tag in body.tags:
+        if "label" not in tag:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Each tag must have a 'label' field",
+            )
+
+    contact.semantic_tags = body.tags
+    db.add(contact)
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="contact_updated",
+        agent_name="System",
+        description=f"Tags updated for contact: {contact.name}",
+        severity="info",
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(contact)
+
+    return ContactResponse.model_validate(contact)
+
+
 @router.delete("/workspaces/{workspace_id}/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_contact(
     workspace_id: uuid.UUID,
