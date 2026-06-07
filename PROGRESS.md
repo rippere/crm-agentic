@@ -50,12 +50,13 @@
 - [2026-06-05] Phase 10d: Contact merge — POST /workspaces/{id}/contacts/merge (validates both contacts in workspace, bulk-reassigns tasks/messages/deals via UPDATE, deletes duplicate, logs ActivityEvent); mergeContacts() in api-client with demo stub; BulkActionBar "Merge" button (visible only when 2 selected); merge modal shows primary/duplicate side-by-side with role colors; success toast with reassignment counts; 3 new tests; 330 tests total
 
 - [2026-06-06] Phase 11a: Webhook delivery log — 002_webhook_logs.sql migration, WebhookLog model, GET /workspaces/{id}/webhook-logs router, gmail.py + slack.py logging side-effects in background tasks (queued/received status + job_id), 8 tests, api-client getWebhookLogs() with demo stub, /settings/webhooks page (table, source/status filter tabs, load-more), settings page Developer section with link; 375 tests pass (367+8)
+- [2026-06-07] Phase 11b: Inline contact tag chip editor — PUT /workspaces/{id}/contacts/{id}/tags endpoint (full replace with label validation); updateContactTags() in api-client with demo stub; contact detail page: X button on each chip removes tag, "+ Add tag" opens inline input (Enter/comma commits, Escape cancels, onBlur commits), colors cycle through indigo/emerald/amber/rose, Loader2 spinner while saving; optimistic update with revert-on-error; TAG_COLORS hoisted to module scope; 3 new tests (success/422/404); 378 tests total
 
 ## Current Phase
 Phase 11 — Developer & Admin Features
 
 ## Next Task
-Phase 11b: Contact tag editor — inline tag chip editing on /contacts/[id] page. Tags stored in contacts.semantic_tags (JSONB array). Add/remove chips inline (no modal), PUT /contacts/{id}/tags endpoint, demo mode support, optimistic update.
+Phase 11c: Deal notes history — store deal notes as append-only log (DealNote model, POST /deals/{id}/notes, GET /deals/{id}/notes), display chronological note thread on deal detail page, replace current single-text notes editor with threaded view.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
