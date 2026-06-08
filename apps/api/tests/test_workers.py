@@ -400,3 +400,173 @@ def test_enumerate_workspace_ids_queries_workspace_table():
 
     assert out == ["33333333-3333-3333-3333-333333333333"]
     assert all(isinstance(x, str) for x in out)
+
+
+# ---------------------------------------------------------------------------
+# ingest._link_contact — workspace-scoped, case-insensitive, link-only matcher
+# ---------------------------------------------------------------------------
+
+_WS_ID = uuid_mod.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+
+def _scalar_result(obj):
+    """Mock execute() result whose scalar_one_or_none() returns obj."""
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = obj
+    return result
+
+
+@pytest.mark.asyncio
+async def test_link_contact_matches_workspace_contact():
+    """A message gets the contact_id of a matching workspace contact."""
+    from app.workers.ingest import _link_contact
+
+    contact_id = uuid_mod.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    contact = MagicMock()
+    contact.id = contact_id
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_result(contact))
+
+    result = await _link_contact(db, _WS_ID, "alice@example.com")
+    assert result == contact_id
+
+
+@pytest.mark.asyncio
+async def test_link_contact_no_match_returns_none():
+    """No matching workspace contact -> contact_id stays None."""
+    from app.workers.ingest import _link_contact
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_result(None))
+
+    result = await _link_contact(db, _WS_ID, "stranger@nowhere.com")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_link_contact_parses_rfc2822_header_lowercased():
+    """A display-name + angle-bracket header is parsed to the bare address and
+    matched case-insensitively (the SELECT lowercases via sa_func.lower)."""
+    from sqlalchemy.dialects import postgresql
+
+    from app.workers.ingest import _link_contact
+
+    contact_id = uuid_mod.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    contact = MagicMock()
+    contact.id = contact_id
+
+    captured: dict = {}
+
+    async def _fake_execute(stmt):
+        # Stash the compiled WHERE (postgres dialect — what prod actually runs)
+        # so we can assert the bare, lowercased address is what gets matched
+        # (proves parseaddr + lower happened pre-query).
+        captured["sql"] = str(
+            stmt.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        return _scalar_result(contact)
+
+    db = AsyncMock()
+    db.execute = _fake_execute
+
+    result = await _link_contact(db, _WS_ID, "Alice Example <Alice@Example.COM>")
+    assert result == contact_id
+    # parseaddr strips the display name; the value compared is lowercased.
+    assert "alice@example.com" in captured["sql"]
+    assert "Alice Example" not in captured["sql"]
+
+
+@pytest.mark.asyncio
+async def test_link_contact_empty_sender_returns_none_without_query():
+    """Empty/None sender short-circuits to None and never hits the DB."""
+    from app.workers.ingest import _link_contact
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=AssertionError("should not query on empty sender"))
+
+    assert await _link_contact(db, _WS_ID, "") is None
+    assert await _link_contact(db, _WS_ID, None) is None
+    assert await _link_contact(db, _WS_ID, "   ") is None
+    db.execute.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# ingest._run_backfill_contacts — retroactive link-only backfill
+# ---------------------------------------------------------------------------
+
+
+def _backfill_session(messages):
+    """Build a patched (_get_async_session, mock_db) pair seeded with `messages`.
+
+    db.execute first returns the multi-row Message query (the unlinked scan),
+    then a scalar contact-lookup result per call as driven by side_effect list.
+    """
+    scan_result = MagicMock()
+    scan_result.scalars.return_value.all.return_value = messages
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=mock_db)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    session_factory = MagicMock(return_value=session_cm)
+    return session_factory, mock_db, scan_result
+
+
+def test_backfill_links_matching_messages_only():
+    """Unlinked messages with a matching contact get linked; non-matches stay None."""
+    import asyncio
+    import app.workers.ingest as ingest_mod
+
+    msg_match = MagicMock()
+    msg_match.sender_email = "alice@example.com"
+    msg_match.contact_id = None
+
+    msg_no_match = MagicMock()
+    msg_no_match.sender_email = "stranger@nowhere.com"
+    msg_no_match.contact_id = None
+
+    session_factory, mock_db, scan_result = _backfill_session([msg_match, msg_no_match])
+
+    matched_contact_id = uuid_mod.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    # 1st execute() = the unlinked-message scan; subsequent = _link_contact lookups
+    # (match for alice, None for stranger).
+    mock_db.execute = AsyncMock(side_effect=[
+        scan_result,
+        _scalar_result(MagicMock(id=matched_contact_id)),
+        _scalar_result(None),
+    ])
+
+    with patch.object(ingest_mod, "_get_async_session", return_value=session_factory):
+        result = asyncio.get_event_loop().run_until_complete(
+            ingest_mod._run_backfill_contacts(str(_WS_ID))
+        )
+
+    assert result["scanned"] == 2
+    assert result["linked"] == 1
+    assert msg_match.contact_id == matched_contact_id
+    assert msg_no_match.contact_id is None
+    mock_db.commit.assert_awaited_once()
+
+
+def test_backfill_no_unlinked_messages_links_nothing():
+    import asyncio
+    import app.workers.ingest as ingest_mod
+
+    session_factory, mock_db, scan_result = _backfill_session([])
+    mock_db.execute = AsyncMock(side_effect=[scan_result])
+
+    with patch.object(ingest_mod, "_get_async_session", return_value=session_factory):
+        result = asyncio.get_event_loop().run_until_complete(
+            ingest_mod._run_backfill_contacts(str(_WS_ID))
+        )
+
+    assert result == {"workspace_id": str(_WS_ID), "scanned": 0, "linked": 0}
+    mock_db.commit.assert_awaited_once()

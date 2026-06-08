@@ -2,7 +2,7 @@
 import uuid
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -67,13 +67,19 @@ def _to_response(p: Project) -> ProjectResponse:
 @router.get("/workspaces/{workspace_id}/projects", response_model=list[ProjectResponse])
 async def list_projects(
     workspace_id: UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ProjectResponse]:
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     result = await db.execute(
-        select(Project).where(Project.workspace_id == workspace_id).order_by(Project.created_at.desc())
+        select(Project)
+        .where(Project.workspace_id == workspace_id)
+        .order_by(Project.created_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
     return [_to_response(p) for p in result.scalars().all()]
 

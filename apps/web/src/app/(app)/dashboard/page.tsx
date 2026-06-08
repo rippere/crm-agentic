@@ -229,6 +229,7 @@ export default function DashboardPage() {
   const { deals } = useDeals();
   const [activeAgents, setActiveAgents] = useState<typeof mockAgents>([]);
   const [pmKpis, setPmKpis] = useState<PMKpis | null>(null);
+  const [pmError, setPmError] = useState(false);
   const [workspaceMode, setWorkspaceMode] = useState<"sales" | "pm" | "both">("sales");
   const [staleDeals, setStaleDeals] = useState<StaleDeal[]>([]);
   const [liveActivity, setLiveActivity] = useState<ActivityEvent[]>([]);
@@ -339,13 +340,25 @@ export default function DashboardPage() {
         .subscribe();
       realtimeChannelRef = channel;
 
-      // Fetch PM aggregate KPIs + stale deals in parallel
+      // Fetch PM aggregate KPIs + stale deals in parallel. Use allSettled so one
+      // failing endpoint surfaces a "some metrics unavailable" notice instead of
+      // silently zeroing the affected KPI.
       try {
-        const [tasksData, messagesData, staleData] = await Promise.all([
-          apiClient.getTasks(workspaceId, session.access_token).catch(() => []),
-          apiClient.getMessages(workspaceId, session.access_token).catch(() => []),
-          apiClient.getStaleDeals(workspaceId, session.access_token).catch(() => []),
+        const [tasksResult, messagesResult, staleResult] = await Promise.allSettled([
+          apiClient.getTasks(workspaceId, session.access_token),
+          apiClient.getMessages(workspaceId, session.access_token),
+          apiClient.getStaleDeals(workspaceId, session.access_token),
         ]);
+
+        const anyFailed =
+          tasksResult.status === "rejected" ||
+          messagesResult.status === "rejected" ||
+          staleResult.status === "rejected";
+        setPmError(anyFailed);
+
+        const tasksData = tasksResult.status === "fulfilled" ? tasksResult.value : [];
+        const messagesData = messagesResult.status === "fulfilled" ? messagesResult.value : [];
+        const staleData = staleResult.status === "fulfilled" ? staleResult.value : [];
 
         const today = new Date().toISOString().slice(0, 10);
         const tasks: Array<{ status: string; created_at?: string; clarity_score?: { score: number } | null }> =
@@ -373,7 +386,8 @@ export default function DashboardPage() {
         });
         setStaleDeals(Array.isArray(staleData) ? staleData : []);
       } catch {
-        // Non-critical — dashboard still renders with sales KPIs
+        // Total failure of the PM block — still render sales KPIs, but flag it.
+        setPmError(true);
       }
     });
     return () => {
@@ -410,14 +424,21 @@ export default function DashboardPage() {
       </section>
 
       {/* PM KPI Cards — only visible in pm or both modes */}
-      {(workspaceMode === "pm" || workspaceMode === "both") && pmKpis && (
+      {(workspaceMode === "pm" || workspaceMode === "both") && (pmKpis || pmError) && (
         <section aria-labelledby="pm-kpi-heading">
           <div className="flex items-center gap-2 mb-3">
             <h2 id="pm-kpi-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
               PM Intelligence
             </h2>
             <Badge variant="indigo" size="sm" dot>Live</Badge>
+            {pmError && (
+              <span className="flex items-center gap-1.5 text-[11px] text-amber-400">
+                <AlertTriangle className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
+                Some metrics unavailable
+              </span>
+            )}
           </div>
+          {pmKpis && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <PMKpiCard
               icon={<ListTodo className="h-4 w-4" />}
@@ -458,6 +479,7 @@ export default function DashboardPage() {
               deltaType="neutral"
             />
           </div>
+          )}
         </section>
       )}
 

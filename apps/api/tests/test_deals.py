@@ -90,7 +90,8 @@ async def test_create_deal_returns_201(app_client):
     def fake_refresh(obj):
         for attr in ("id", "workspace_id", "title", "company", "contact_name",
                      "contact_id", "value", "stage", "ml_win_probability",
-                     "expected_close", "assigned_agent", "health_score"):
+                     "expected_close", "assigned_agent", "health_score",
+                     "created_at"):
             setattr(obj, attr, getattr(deal, attr))
 
     mock_db.refresh.side_effect = fake_refresh
@@ -807,3 +808,189 @@ async def test_deal_forecast_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/forecast")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Deal notes — POST / GET /workspaces/{wid}/deals/{did}/notes
+# ---------------------------------------------------------------------------
+
+
+def _fake_note(workspace_id: uuid.UUID, deal_id: uuid.UUID, **kwargs) -> MagicMock:
+    note = MagicMock()
+    note.id = kwargs.get("id", uuid.uuid4())
+    note.workspace_id = workspace_id
+    note.deal_id = deal_id
+    note.body = kwargs.get("body", "A note body")
+    note.author = kwargs.get("author", "user@example.com")
+    note.created_at = kwargs.get("created_at", _NOW)
+    return note
+
+
+@pytest.mark.asyncio
+async def test_create_deal_note_returns_201(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Noted Deal")
+    note = _fake_note(workspace_id, deal.id, body="First touchpoint summary", author="me@example.com")
+
+    # create_deal_note: one execute (deal lookup) → commit → refresh
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(deal))
+
+    def fake_refresh(obj):
+        for attr in ("id", "workspace_id", "deal_id", "body", "author", "created_at"):
+            setattr(obj, attr, getattr(note, attr))
+
+    mock_db.refresh.side_effect = fake_refresh
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/deals/{deal.id}/notes",
+            json={"body": "First touchpoint summary", "author": "me@example.com"},
+        )
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["body"] == "First touchpoint summary"
+    assert data["author"] == "me@example.com"
+    assert data["deal_id"] == str(deal.id)
+    mock_db.add.assert_called()
+    mock_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_deal_note_empty_body_returns_422(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/notes",
+            json={"body": "   "},
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_deal_note_missing_deal_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/notes",
+            json={"body": "orphan note"},
+        )
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_deal_note_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/notes",
+            json={"body": "note"},
+        )
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_deal_notes_chronological(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Threaded Deal")
+    n1 = _fake_note(workspace_id, deal.id, body="Oldest", created_at=_NOW - timedelta(days=2))
+    n2 = _fake_note(workspace_id, deal.id, body="Newest", created_at=_NOW)
+
+    call_count = 0
+
+    async def _execute_side_effect(q):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_scalar_result(deal)  # deal lookup
+        return _make_scalars_result([n1, n2])  # notes query (already ordered)
+
+    mock_db.execute = AsyncMock(side_effect=_execute_side_effect)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/notes")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [n["body"] for n in data] == ["Oldest", "Newest"]
+
+
+@pytest.mark.asyncio
+async def test_list_deal_notes_empty(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id)
+
+    call_count = 0
+
+    async def _execute_side_effect(q):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_scalar_result(deal)
+        return _make_scalars_result([])
+
+    mock_db.execute = AsyncMock(side_effect=_execute_side_effect)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/notes")
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_list_deal_notes_missing_deal_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/notes")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_deal_notes_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/notes")
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# WS-L: list deals limit/offset pagination
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_deals_with_limit_offset(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Paged Deal")
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([deal]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals?limit=1&offset=2")
+
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_deals_invalid_limit_returns_422(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals?limit=0")
+
+    assert resp.status_code == 422

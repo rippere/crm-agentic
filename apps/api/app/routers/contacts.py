@@ -40,6 +40,7 @@ class ContactResponse(BaseModel):
     deal_count: int
     last_activity: str
     created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -100,6 +101,8 @@ async def list_contacts(
     workspace_id: uuid.UUID,
     contact_status: str | None = Query(default=None, alias="status"),
     q: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ContactResponse]:
@@ -116,6 +119,7 @@ async def list_contacts(
             Contact.email.ilike(pattern),
             Contact.company.ilike(pattern),
         ))
+    stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
     contacts = result.scalars().all()
     return [ContactResponse.model_validate(c) for c in contacts]
