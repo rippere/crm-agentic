@@ -27,6 +27,7 @@ def _fake_contact(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
     contact.deal_count = 0
     contact.last_activity = "Never"
     contact.created_at = None
+    contact.updated_at = None
     return contact
 
 
@@ -188,7 +189,8 @@ async def test_create_contact_returns_201(app_client):
     def fake_refresh(obj):
         for attr in ("id", "workspace_id", "name", "email", "company", "role",
                      "avatar", "status", "ml_score", "semantic_tags",
-                     "revenue", "deal_count", "last_activity", "created_at"):
+                     "revenue", "deal_count", "last_activity", "created_at",
+                     "updated_at"):
             setattr(obj, attr, getattr(seeded, attr))
 
     mock_db.refresh.side_effect = fake_refresh
@@ -284,6 +286,40 @@ async def test_list_contacts_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts")
 
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_pagination_applies_limit_offset(app_client):
+    """limit/offset query params are accepted and forwarded into the SQL statement,
+    while the JSON response shape stays a bare list."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id, name="Paged Contact")
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([contact]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts?limit=5&offset=10")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body, list)
+    assert body[0]["name"] == "Paged Contact"
+
+    # The compiled SELECT should carry the LIMIT/OFFSET we asked for.
+    stmt = mock_db.execute.call_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "LIMIT 5" in compiled
+    assert "OFFSET 10" in compiled
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_limit_over_cap_returns_422(app_client):
+    """limit above the max cap is rejected by FastAPI validation."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts?limit=99999")
+
+    assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------

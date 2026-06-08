@@ -94,6 +94,53 @@ async def _link_contact(db: AsyncSession, workspace_id: uuid.UUID, sender_email:
     return contact.id if contact is not None else None
 
 
+async def _run_backfill_contacts(workspace_id: str) -> dict[str, Any]:
+    """Link existing messages whose contact_id IS NULL to a workspace contact.
+
+    Uses the exact same parse+case-insensitive-match logic as the live ingest
+    path (via _link_contact), so a contact added after a message was ingested
+    retroactively picks up its history. Link-only — never auto-creates a Contact,
+    never overwrites an existing link, never deletes anything.
+    """
+    from app.models.message import Message
+
+    ws_uuid = uuid.UUID(workspace_id)
+    SessionFactory = _get_async_session()
+    scanned = 0
+    linked = 0
+
+    async with SessionFactory() as db:
+        result = await db.execute(
+            select(Message).where(
+                Message.workspace_id == ws_uuid,
+                Message.contact_id.is_(None),
+            )
+        )
+        messages = list(result.scalars().all())
+
+        for message in messages:
+            scanned += 1
+            contact_id = await _link_contact(db, ws_uuid, message.sender_email)
+            if contact_id is not None:
+                message.contact_id = contact_id  # type: ignore[assignment]
+                db.add(message)
+                linked += 1
+
+        await db.commit()
+
+    logger.info(
+        "backfill_contacts complete workspace=%s scanned=%d linked=%d",
+        workspace_id, scanned, linked,
+    )
+    return {"workspace_id": workspace_id, "scanned": scanned, "linked": linked}
+
+
+@celery_app.task(name="app.workers.ingest.backfill_message_contact_ids", bind=True)
+def backfill_message_contact_ids(self: Any, workspace_id: str) -> dict[str, Any]:
+    """Celery task: link existing unlinked messages to workspace contacts (link-only)."""
+    return asyncio.get_event_loop().run_until_complete(_run_backfill_contacts(workspace_id))
+
+
 def _build_relevance_prompt(subject: str, sender: str, snippet: str) -> str:
     return (
         f"Subject: {subject}\nFrom: {sender}\nPreview: {snippet[:300]}\n\n"

@@ -47,7 +47,8 @@
 | `SECRET_KEY` | **REQUIRED** | Generate: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` — used for Fernet encryption of OAuth tokens. Must be the same on all API, worker, and beat services. |
 | `ANTHROPIC_API_KEY` | **REQUIRED** | console.anthropic.com → API Keys |
 | `REDIS_URL` | **REQUIRED** | Add a **Redis plugin** in Railway — it auto-injects `REDIS_URL` into all services in the project. |
-| `FRONTEND_URL` | **REQUIRED** | Your Railway web service URL, e.g. `https://novacrm.up.railway.app`. OAuth callbacks are derived from this. |
+| `FRONTEND_URL` | **REQUIRED** | Your Railway web service URL, e.g. `https://novacrm.up.railway.app`. Used for frontend redirects after OAuth completes. |
+| `API_URL` | **REQUIRED** | Your Railway API service URL, e.g. `https://novacrm-api.up.railway.app`. OAuth redirect URIs (Gmail and Slack callbacks) are derived from this. Set on all API, worker, and beat services. |
 | `GOOGLE_CLIENT_ID` | optional | Gmail connector — see Section 4 |
 | `GOOGLE_CLIENT_SECRET` | optional | Gmail connector — see Section 4 |
 | `SLACK_CLIENT_ID` | optional | Slack connector OAuth |
@@ -135,18 +136,17 @@ Note the `postgresql+asyncpg://` scheme — asyncpg requires this prefix. Railwa
 ## Google Cloud OAuth Setup (Gmail connector)
 
 > The Gmail redirect URI in this app is built as:  
-> `{FRONTEND_URL}/auth/gmail/callback` (handled by the Next.js frontend, which passes `code` to the backend).  
-> The backend's `/auth/gmail/callback` endpoint is **not** the Google redirect target — the frontend page is.
+> `{API_URL}/auth/gmail/callback` — the Google redirect target is the **API** service's `/auth/gmail/callback` endpoint, which exchanges the `code` and then redirects the browser to `{FRONTEND_URL}/connectors?connected=gmail`.
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials
 2. Create OAuth 2.0 Client ID → Application type: **Web application**
 3. Authorized redirect URIs — add **both**:
    ```
-   https://<your-web-service>.up.railway.app/auth/gmail/callback
+   https://<your-api-service>.up.railway.app/auth/gmail/callback
    ```
    For local dev:
    ```
-   http://localhost:3000/auth/gmail/callback
+   http://localhost:8000/auth/gmail/callback
    ```
 4. Copy **Client ID** → `GOOGLE_CLIENT_ID`
 5. Copy **Client Secret** → `GOOGLE_CLIENT_SECRET`
@@ -157,12 +157,12 @@ Note the `postgresql+asyncpg://` scheme — asyncpg requires this prefix. Railwa
 ## Slack App Setup (HITL workflows)
 
 > The Slack redirect URI is built as:  
-> `{FRONTEND_URL}/auth/slack/callback` (Next.js frontend page, not the API directly).
+> `{API_URL}/auth/slack/callback` — the redirect target is the **API** service's `/auth/slack/callback` endpoint (not the frontend), which exchanges the `code` and then redirects the browser to `{FRONTEND_URL}/connectors?connected=slack`.
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → Create New App → From scratch
 2. **OAuth & Permissions** → Redirect URLs → add:
    ```
-   https://<your-web-service>.up.railway.app/auth/slack/callback
+   https://<your-api-service>.up.railway.app/auth/slack/callback
    ```
 3. **User Token Scopes** (not Bot): `channels:read`, `channels:history`, `chat:write`, `groups:read`, `groups:history`, `im:read`, `im:history`, `mpim:read`, `mpim:history`, `users:read`, `users:read.email`
 4. **Basic Information** → App Credentials → copy **Signing Secret** → `SLACK_SIGNING_SECRET`
@@ -230,10 +230,10 @@ The `severity='error'` value is written by `slack_interactions.py` on HITL failu
 
 ### 2. Set all required Railway env vars
 See the environment variables table above. The minimum set to boot:
-`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `SECRET_KEY`, `ANTHROPIC_API_KEY`, `REDIS_URL`, `FRONTEND_URL`
+`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `SECRET_KEY`, `ANTHROPIC_API_KEY`, `REDIS_URL`, `FRONTEND_URL`, `API_URL`
 
-### 3. Verify `FRONTEND_URL` is the production web URL
-OAuth redirect URIs for both Gmail and Slack are derived from `FRONTEND_URL`. If this is wrong, OAuth flows will redirect users to the wrong domain.
+### 3. Verify `API_URL` and `FRONTEND_URL` are the production URLs
+OAuth redirect URIs for both Gmail and Slack are derived from `API_URL` (the callback endpoints live on the API service). The post-OAuth browser redirect to the connectors page is derived from `FRONTEND_URL`. If `API_URL` is wrong, the OAuth provider will reject the callback (redirect_uri mismatch); if `FRONTEND_URL` is wrong, users land on the wrong domain after connecting.
 
 ### 4. Register OAuth redirect URIs with Google and Slack
 Both providers require explicit allowlisting of redirect URIs. Localhost URIs work for dev but must be supplemented with production URIs for Railway deployment. See Sections 4 and 5 above.

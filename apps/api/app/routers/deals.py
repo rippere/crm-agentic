@@ -15,6 +15,7 @@ from app.database import get_db
 from app.dependencies import get_current_user, require_admin
 from app.models.user import User
 from app.models.deal import Deal
+from app.models.deal_note import DealNote
 from app.models.activity_event import ActivityEvent
 
 router = APIRouter()
@@ -34,7 +35,7 @@ class DealResponse(BaseModel):
     assigned_agent: str | None
     notes: str | None
     health_score: int = 100
-    created_at: datetime | None = None
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -44,6 +45,8 @@ async def list_deals(
     workspace_id: uuid.UUID,
     stage: str | None = Query(default=None),
     contact_id: uuid.UUID | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[DealResponse]:
@@ -55,6 +58,7 @@ async def list_deals(
         q = q.where(Deal.stage == stage)
     if contact_id is not None:
         q = q.where(Deal.contact_id == contact_id)
+    q = q.offset(offset).limit(limit)
     result = await db.execute(q)
     deals = result.scalars().all()
     return [DealResponse.model_validate(d) for d in deals]
@@ -288,6 +292,22 @@ class CreateDealRequest(BaseModel):
     notes: str | None = None
 
 
+class CreateDealNoteRequest(BaseModel):
+    body: str
+    author: str | None = None
+
+
+class DealNoteResponse(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    deal_id: uuid.UUID
+    body: str
+    author: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 @router.post("/workspaces/{workspace_id}/deals", response_model=DealResponse, status_code=201)
 async def create_deal(
     workspace_id: uuid.UUID,
@@ -477,6 +497,81 @@ async def get_deal_timeline(
         }
         for e in events
     ]
+
+
+@router.get(
+    "/workspaces/{workspace_id}/deals/{deal_id}/notes",
+    response_model=list[DealNoteResponse],
+)
+async def list_deal_notes(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[DealNoteResponse]:
+    """Return all notes for a deal, oldest-first (chronological thread)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    result = await db.execute(
+        select(DealNote)
+        .where(
+            DealNote.workspace_id == workspace_id,
+            DealNote.deal_id == deal_id,
+        )
+        .order_by(DealNote.created_at.asc())
+    )
+    notes = result.scalars().all()
+    return [DealNoteResponse.model_validate(n) for n in notes]
+
+
+@router.post(
+    "/workspaces/{workspace_id}/deals/{deal_id}/notes",
+    response_model=DealNoteResponse,
+    status_code=201,
+)
+async def create_deal_note(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    body: CreateDealNoteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DealNoteResponse:
+    """Append a note to a deal. Notes are immutable once created."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    text = (body.body or "").strip()
+    if not text:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Note body must not be empty",
+        )
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    note = DealNote(
+        workspace_id=workspace_id,
+        deal_id=deal_id,
+        body=text,
+        author=body.author or getattr(current_user, "email", None),
+    )
+    db.add(note)
+    await db.commit()
+    await db.refresh(note)
+    return DealNoteResponse.model_validate(note)
 
 
 @router.delete("/workspaces/{workspace_id}/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)

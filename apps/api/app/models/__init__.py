@@ -12,6 +12,7 @@ from app.models.clarity_score import ClarityScore
 from app.models.project import Project
 from app.models.kpi_snapshot import KpiSnapshot
 from app.models.commitment import Commitment
+from app.models.deal_note import DealNote
 
 __all__ = [
     "Workspace",
@@ -28,4 +29,5 @@ __all__ = [
     "Project",
     "KpiSnapshot",
     "Commitment",
+    "DealNote",
 ]
