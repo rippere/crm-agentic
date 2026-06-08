@@ -231,8 +231,10 @@ async def gmail_sync(
 
     # Import here to avoid circular imports at module load
     from app.workers.ingest import process_gmail_sync
+    from app.routers.agents import _mark_job_dispatched
 
     task = process_gmail_sync.delay(str(connector.id))
+    _mark_job_dispatched(task.id, str(workspace_id))
     return {"job_id": task.id}
 
 
@@ -372,14 +374,21 @@ async def gmail_subscribe(
 def _verify_pubsub_secret(request_secret: str | None) -> bool:
     """Verify the shared secret in the push URL matches our configured value.
 
-    Returns True if GMAIL_WEBHOOK_SECRET is empty (dev mode) or if the
-    provided secret matches.
+    Fail closed: if GMAIL_WEBHOOK_SECRET is unset we cannot authenticate the
+    Pub/Sub push, so we reject it. (Otherwise an unauthenticated POST to
+    /webhooks/gmail/push could trigger a forced Gmail sync for any connector —
+    a zero-credential amplification vector.) To enable push, set
+    GMAIL_WEBHOOK_SECRET in the API env and append ?secret=<value> to the Google
+    Cloud push subscription URL.
     """
     if not settings.GMAIL_WEBHOOK_SECRET:
-        return True  # no secret configured — accept all (dev/test only)
+        return False  # fail closed — no secret configured means we cannot verify
     if not request_secret:
         return False
-    return hmac.compare_digest(settings.GMAIL_WEBHOOK_SECRET, request_secret)
+    try:
+        return hmac.compare_digest(settings.GMAIL_WEBHOOK_SECRET, request_secret)
+    except TypeError:
+        return False  # non-ASCII secret -> treat as mismatch, never surface a 500
 
 
 async def _trigger_ingest_for_email(email: str, db: AsyncSession) -> str | None:
@@ -406,8 +415,10 @@ async def _trigger_ingest_for_email(email: str, db: AsyncSession) -> str | None:
         return None
 
     from app.workers.ingest import process_gmail_sync
+    from app.routers.agents import _mark_job_dispatched
 
     task = process_gmail_sync.delay(str(connector.id))
+    _mark_job_dispatched(task.id, str(connector.workspace_id))
     db.add(WebhookLog(
         workspace_id=connector.workspace_id,
         source="gmail",

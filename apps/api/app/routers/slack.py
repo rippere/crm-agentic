@@ -180,8 +180,10 @@ async def slack_sync(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Slack connector not found")
 
     from app.workers.slack_ingest import process_slack_sync
+    from app.routers.agents import _mark_job_dispatched
 
     task = process_slack_sync.delay(str(connector.id))
+    _mark_job_dispatched(task.id, str(workspace_id))
     return {"job_id": task.id}
 
 
@@ -201,10 +203,12 @@ def _verify_slack_signature(
     Slack signs each request with HMAC-SHA256(signing_secret, "v0:{ts}:{body}").
     We also check that the timestamp is within 5 minutes to prevent replay attacks.
 
-    Returns True when SLACK_SIGNING_SECRET is empty (dev/test mode).
+    Fails closed when SLACK_SIGNING_SECRET is empty: without it we cannot
+    authenticate the request, so we reject it (an unauthenticated POST to
+    /webhooks/slack/events would otherwise trigger a Slack sync for any team_id).
     """
     if not signing_secret:
-        return True  # dev mode — accept all
+        return False  # fail closed — no signing secret means we cannot verify
     if not timestamp or not signature:
         return False
     try:
@@ -217,7 +221,10 @@ def _verify_slack_signature(
     expected = "v0=" + hmac.new(  # type: ignore[attr-defined]
         signing_secret.encode(), base.encode(), hashlib.sha256
     ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    try:
+        return hmac.compare_digest(expected, signature)
+    except TypeError:
+        return False  # non-ASCII signature -> treat as mismatch, never surface a 500
 
 
 async def _trigger_slack_ingest_for_team(team_id: str, db: AsyncSession) -> str | None:
@@ -244,8 +251,10 @@ async def _trigger_slack_ingest_for_team(team_id: str, db: AsyncSession) -> str 
         return None
 
     from app.workers.slack_ingest import process_slack_sync
+    from app.routers.agents import _mark_job_dispatched
 
     task = process_slack_sync.delay(str(connector.id))
+    _mark_job_dispatched(task.id, str(connector.workspace_id))
     db.add(WebhookLog(
         workspace_id=connector.workspace_id,
         source="slack",
