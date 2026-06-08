@@ -119,6 +119,23 @@ function demoDealNotes(dealId: string) {
   return _DEMO_DEAL_NOTES_RUNTIME[dealId] ?? DEMO_DEAL_NOTES[dealId] ?? []
 }
 
+// Seed notes for demo contacts, oldest-first.
+const DEMO_CONTACT_NOTES: Record<string, Array<{ id: string; workspace_id: string; contact_id: string; body: string; author: string; created_at: string }>> = {
+  'c-001': [
+    { id: 'cn-001-1', workspace_id: 'demo-workspace-1', contact_id: 'c-001', body: 'Strong champion at Acme Corp. Verified budget authority in Q1 review call.', author: 'Alex', created_at: new Date(Date.now() - 1209600000).toISOString() },
+    { id: 'cn-001-2', workspace_id: 'demo-workspace-1', contact_id: 'c-001', body: 'Prefers async comms — send Loom videos instead of scheduling calls when possible.', author: 'Alex', created_at: new Date(Date.now() - 604800000).toISOString() },
+  ],
+  'c-002': [
+    { id: 'cn-002-1', workspace_id: 'demo-workspace-1', contact_id: 'c-002', body: 'Decision maker for the TechStart deal. Board sign-off required before any contract.', author: 'Alex', created_at: new Date(Date.now() - 2592000000).toISOString() },
+  ],
+}
+
+const _DEMO_CONTACT_NOTES_RUNTIME: Record<string, Array<{ id: string; workspace_id: string; contact_id: string; body: string; author: string; created_at: string }>> = {}
+
+function demoContactNotes(contactId: string) {
+  return _DEMO_CONTACT_NOTES_RUNTIME[contactId] ?? DEMO_CONTACT_NOTES[contactId] ?? []
+}
+
 const FASTAPI_URL = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
 
@@ -595,6 +612,31 @@ export const apiClient = {
     }
     return apiFetch(
       `/workspaces/${workspaceId}/deals/${dealId}/notes`,
+      { method: 'POST', body: JSON.stringify({ body, author }) },
+      token,
+    )
+  },
+
+  // Contact notes (append-only, chronological thread)
+  getContactNotes: (workspaceId: string, contactId: string, token: string): Promise<Array<{ id: string; workspace_id: string; contact_id: string; body: string; author: string | null; created_at: string }>> => {
+    if (isDemoMode) return Promise.resolve(demoContactNotes(contactId))
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/notes`, {}, token)
+  },
+  createContactNote: (workspaceId: string, contactId: string, body: string, token: string, author?: string): Promise<{ id: string; workspace_id: string; contact_id: string; body: string; author: string | null; created_at: string }> => {
+    if (isDemoMode) {
+      const note = {
+        id: `demo-cnote-${Date.now()}`,
+        workspace_id: workspaceId,
+        contact_id: contactId,
+        body,
+        author: author ?? 'You',
+        created_at: new Date().toISOString(),
+      }
+      _DEMO_CONTACT_NOTES_RUNTIME[contactId] = [...demoContactNotes(contactId), note]
+      return Promise.resolve(note)
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/contacts/${contactId}/notes`,
       { method: 'POST', body: JSON.stringify({ body, author }) },
       token,
     )
