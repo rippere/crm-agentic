@@ -51,12 +51,15 @@
 
 - [2026-06-06] Phase 11a: Webhook delivery log — 002_webhook_logs.sql migration, WebhookLog model, GET /workspaces/{id}/webhook-logs router, gmail.py + slack.py logging side-effects in background tasks (queued/received status + job_id), 8 tests, api-client getWebhookLogs() with demo stub, /settings/webhooks page (table, source/status filter tabs, load-more), settings page Developer section with link; 375 tests pass (367+8)
 - [2026-06-07] Phase 11b: Inline contact tag chip editor — PUT /workspaces/{id}/contacts/{id}/tags endpoint (full replace with label validation); updateContactTags() in api-client with demo stub; contact detail page: X button on each chip removes tag, "+ Add tag" opens inline input (Enter/comma commits, Escape cancels, onBlur commits), colors cycle through indigo/emerald/amber/rose, Loader2 spinner while saving; optimistic update with revert-on-error; TAG_COLORS hoisted to module scope; 3 new tests (success/422/404); 378 tests total
+- [2026-06-08] Phase 11c: Already implemented in remote batch (PR #3 "feat(roadmap): land WS-E..M remainder") — DealNote model, 014_deal_notes.sql migration, GET+POST /deals/{id}/notes endpoints, DealNotesThread UI component on deal detail page, getDealNotes/createDealNote in api-client with demo stubs
+- [2026-06-08] Remote batch (PR #3): WS-E..M security+reliability fixes landed — ingest contact linking, OAuth state signing, workspace isolation (app_metadata), Slack HITL fail-closed, agent dispatch pipeline, beat tasks, KPI router, commitments router, /life page, commitment tracker UI, useJobPoller hardening, test workers suite (247 tests), roadmap E2E spec; total 412 tests passing
+- [2026-06-08] Phase 11d: Contact notes thread — 015_contact_notes.sql migration; ContactNote SQLAlchemy model; GET+POST /workspaces/{id}/contacts/{id}/notes endpoints; 8 new tests (create/empty-body/404/403, list/chronological/empty/404/403); getContactNotes()/createContactNote() in api-client with demo stubs (seed notes for c-001/c-002); ContactNotesThread UI component on /contacts/[id] page (avatar initials, relative timestamps, markdown rendering, ⌘↵ shortcut); 412 tests pass (8 new + 6 pre-existing worker failures unchanged)
 
 ## Current Phase
-Phase 11 — Developer & Admin Features
+Phase 12 — Analytics & Reporting
 
 ## Next Task
-Phase 11c: Deal notes history — store deal notes as append-only log (DealNote model, POST /deals/{id}/notes, GET /deals/{id}/notes), display chronological note thread on deal detail page, replace current single-text notes editor with threaded view.
+Phase 12a: Pipeline velocity analytics — GET /workspaces/{id}/deals/velocity endpoint (avg days per stage across all closed/won deals, computed from stage_changed_at vs created_at); stacked horizontal bar chart on /reports page showing avg time-in-stage; getDealVelocity() in api-client with demo stub; 3 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
