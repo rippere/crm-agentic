@@ -105,8 +105,10 @@ async def trigger_deal_health(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     from app.workers.deal_health_worker import compute_deal_health
+    from app.routers.agents import _mark_job_dispatched
 
     task = compute_deal_health.delay(str(workspace_id))
+    _mark_job_dispatched(task.id, str(workspace_id))
     return {"job_id": task.id, "status": "queued"}
 
 
@@ -257,7 +259,9 @@ async def trigger_pipeline_optimize(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     from app.workers.pipeline import optimize_pipeline
+    from app.routers.agents import _mark_job_dispatched
     task = optimize_pipeline.delay(str(workspace_id))
+    _mark_job_dispatched(task.id, str(workspace_id))
     return {"job_id": task.id, "status": "queued"}
 
 

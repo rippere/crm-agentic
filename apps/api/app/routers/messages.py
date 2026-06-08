@@ -154,6 +154,8 @@ async def reprocess_messages(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     from app.workers.ingest import reprocess_workspace_messages
+    from app.routers.agents import _mark_job_dispatched
 
     task = reprocess_workspace_messages.delay(str(workspace_id))
+    _mark_job_dispatched(task.id, str(workspace_id))
     return ReprocessResponse(job_id=task.id)

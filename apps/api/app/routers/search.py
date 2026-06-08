@@ -124,8 +124,10 @@ async def trigger_embed(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     from app.workers.embed_contacts import embed_workspace_contacts
+    from app.routers.agents import _mark_job_dispatched
 
     task = embed_workspace_contacts.delay(str(workspace_id))
+    _mark_job_dispatched(task.id, str(workspace_id))
     return {"job_id": task.id, "status": "queued"}
 
 
@@ -234,6 +236,8 @@ async def trigger_embed_all(
     contacts_total: int = count_result.scalar() or 0
 
     from app.workers.embed_contacts import embed_workspace_contacts
+    from app.routers.agents import _mark_job_dispatched
 
     task = embed_workspace_contacts.delay(str(workspace_id))
+    _mark_job_dispatched(task.id, str(workspace_id))
     return {"job_id": task.id, "status": "queued", "contacts_total": contacts_total}

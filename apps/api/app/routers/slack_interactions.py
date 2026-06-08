@@ -171,7 +171,10 @@ async def _handle_approve(
         try:
             contact_id = uuid.UUID(contact_id_str)
             contact_result = await db.execute(
-                select(Contact).where(Contact.id == contact_id)
+                select(Contact).where(
+                    Contact.id == contact_id,
+                    Contact.workspace_id == workspace_id,
+                )
             )
             contact = contact_result.scalar_one_or_none()
             if contact is not None:
