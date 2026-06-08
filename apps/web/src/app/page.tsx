@@ -176,7 +176,7 @@ function Hero() {
         </a>
       </div>
 
-      <p className="mt-8 text-xs text-zinc-600">No credit card required · SOC 2 Type II · 99.9% uptime</p>
+      <p className="mt-8 text-xs text-zinc-600">No credit card required · Cancel anytime</p>
 
       {/* Dashboard preview */}
       <div className="relative mt-16 w-full max-w-4xl mx-auto">
@@ -383,7 +383,7 @@ const plans = [
   {
     name: "Enterprise", price: "Custom", per: "",
     description: "Dedicated infrastructure, custom training, and SLAs.",
-    features: ["Custom agent development", "On-premise deployment", "SSO + SCIM", "Dedicated ML engineer", "99.99% SLA"],
+    features: ["Custom agent development", "On-premise deployment", "SSO + SCIM", "Dedicated ML engineer", "Custom SLA"],
     cta: "Contact Sales", highlight: false,
   },
 ];
@@ -459,7 +459,7 @@ function CTASection() {
           </Link>
         </div>
         <div className="mt-8 flex flex-wrap justify-center gap-6">
-          {[{ icon: <Shield className="h-4 w-4" />, label: "SOC 2 Type II" }, { icon: <BarChart3 className="h-4 w-4" />, label: "99.9% Uptime" }, { icon: <Users className="h-4 w-4" />, label: "GDPR Compliant" }].map(({ icon, label }) => (
+          {[{ icon: <Shield className="h-4 w-4" />, label: "Encrypted in transit & at rest" }, { icon: <BarChart3 className="h-4 w-4" />, label: "Per-workspace data isolation" }, { icon: <Users className="h-4 w-4" />, label: "You own your data" }].map(({ icon, label }) => (
             <div key={label} className="flex items-center gap-2 text-sm text-zinc-500">
               <span className="text-indigo-400" aria-hidden="true">{icon}</span>
               {label}

@@ -100,6 +100,25 @@ const DEMO_DEAL_TIMELINES: Record<string, Array<{ id: string; type: string; titl
   ],
 }
 
+// Seed notes for the demo deals, oldest-first. Mirrors the append-only
+// deal_notes thread the real API returns from GET …/deals/{id}/notes.
+const DEMO_DEAL_NOTES: Record<string, Array<{ id: string; workspace_id: string; deal_id: string; body: string; author: string; created_at: string }>> = {
+  'd-001': [
+    { id: 'dn-001-1', workspace_id: 'demo-workspace-1', deal_id: 'd-001', body: 'Champion (Sarah) confirmed budget is approved for this quarter. SLA terms are the last open item.', author: 'Alex', created_at: new Date(Date.now() - 432000000).toISOString() },
+    { id: 'dn-001-2', workspace_id: 'demo-workspace-1', deal_id: 'd-001', body: 'Legal signed off on the indemnification clause. Targeting May 15 for signature.', author: 'Alex', created_at: new Date(Date.now() - 86400000).toISOString() },
+  ],
+  'd-002': [
+    { id: 'dn-002-1', workspace_id: 'demo-workspace-1', deal_id: 'd-002', body: 'Custom proposal sent. Marcus needs board sign-off before next cycle — flagged as a churn risk if silence continues.', author: 'Alex', created_at: new Date(Date.now() - 1814400000).toISOString() },
+  ],
+}
+
+// Runtime overlay so notes added during a demo session persist in-memory.
+const _DEMO_DEAL_NOTES_RUNTIME: Record<string, Array<{ id: string; workspace_id: string; deal_id: string; body: string; author: string; created_at: string }>> = {}
+
+function demoDealNotes(dealId: string) {
+  return _DEMO_DEAL_NOTES_RUNTIME[dealId] ?? DEMO_DEAL_NOTES[dealId] ?? []
+}
+
 const FASTAPI_URL = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
 
@@ -554,6 +573,31 @@ export const apiClient = {
   bulkDealAction: (workspaceId: string, data: { action: 'move_stage' | 'delete'; deal_ids: string[]; stage?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ action: data.action, updated: data.deal_ids.length, deal_ids: data.deal_ids })
     return apiFetch(`/workspaces/${workspaceId}/deals/bulk`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+
+  // Deal notes (append-only, chronological thread)
+  getDealNotes: (workspaceId: string, dealId: string, token: string): Promise<Array<{ id: string; workspace_id: string; deal_id: string; body: string; author: string | null; created_at: string }>> => {
+    if (isDemoMode) return Promise.resolve(demoDealNotes(dealId))
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/notes`, {}, token)
+  },
+  createDealNote: (workspaceId: string, dealId: string, body: string, token: string, author?: string): Promise<{ id: string; workspace_id: string; deal_id: string; body: string; author: string | null; created_at: string }> => {
+    if (isDemoMode) {
+      const note = {
+        id: `demo-note-${Date.now()}`,
+        workspace_id: workspaceId,
+        deal_id: dealId,
+        body,
+        author: author ?? 'You',
+        created_at: new Date().toISOString(),
+      }
+      _DEMO_DEAL_NOTES_RUNTIME[dealId] = [...demoDealNotes(dealId), note]
+      return Promise.resolve(note)
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/notes`,
+      { method: 'POST', body: JSON.stringify({ body, author }) },
+      token,
+    )
   },
 
   // Deal health

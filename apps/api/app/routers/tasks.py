@@ -69,6 +69,8 @@ async def list_tasks(
     workspace_id: uuid.UUID,
     project_id: uuid.UUID | None = Query(default=None),
     contact_id: uuid.UUID | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[TaskResponse]:
@@ -80,7 +82,8 @@ async def list_tasks(
         q = q.where(Task.project_id == project_id)
     if contact_id is not None:
         q = q.where(Task.contact_id == contact_id)
-    result = await db.execute(q.order_by(Task.created_at.desc()))
+    q = q.order_by(Task.created_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(q)
     return [_to_response(t) for t in result.scalars().all()]
 
 

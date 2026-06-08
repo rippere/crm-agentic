@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, Suspense } from "react";
+import { useState, useEffect, useMemo, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   DndContext,
@@ -24,7 +24,7 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { apiClient } from "@/lib/api-client";
-import { Plus, Brain, Calendar, X, GripVertical } from "lucide-react";
+import { Plus, Brain, Calendar, X, GripVertical, AlertTriangle, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Task {
@@ -194,6 +194,7 @@ function TasksPageInner() {
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [detailTask, setDetailTask] = useState<Task | null>(null);
@@ -208,15 +209,22 @@ function TasksPageInner() {
 
   const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 
+  const loadTasks = useCallback((wsId: string, tok: string) => {
+    setLoading(true);
+    setError(false);
+    apiClient
+      .getTasks(wsId, tok)
+      .then((data) => setTasks(Array.isArray(data) ? data : []))
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  }, []);
+
   useEffect(() => {
     if (isDemoMode) {
       // In demo mode, skip auth and load mock data directly
-      apiClient.getTasks('demo-workspace-1', 'demo-token')
-        .then((data) => setTasks(Array.isArray(data) ? data : []))
-        .catch(() => setTasks([]))
-        .finally(() => setLoading(false));
       setWorkspaceId('demo-workspace-1');
       setToken('demo-token');
+      loadTasks('demo-workspace-1', 'demo-token');
       return;
     }
     const supabase = createBrowserClient();
@@ -226,17 +234,21 @@ function TasksPageInner() {
         setWorkspaceId((session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id) ?? null);
       }
     });
-  }, [isDemoMode]);
+  }, [isDemoMode, loadTasks]);
 
   useEffect(() => {
     if (isDemoMode) return; // already loaded above
     if (!workspaceId || !token) return;
-    apiClient
-      .getTasks(workspaceId, token)
-      .then((data) => setTasks(Array.isArray(data) ? data : []))
-      .catch(() => setTasks([]))
-      .finally(() => setLoading(false));
-  }, [workspaceId, token, isDemoMode]);
+    loadTasks(workspaceId, token);
+  }, [workspaceId, token, isDemoMode, loadTasks]);
+
+  function handleRetry() {
+    if (isDemoMode) {
+      loadTasks('demo-workspace-1', 'demo-token');
+    } else if (workspaceId && token) {
+      loadTasks(workspaceId, token);
+    }
+  }
 
   const tasksByColumn = useMemo(() => {
     let visible = contactFilter
@@ -365,8 +377,22 @@ function TasksPageInner() {
         </Card>
       )}
 
+      {/* Error / retry banner — replaces the old silent .catch(()=>setTasks([])) */}
+      {error && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3">
+          <div className="flex items-center gap-2 text-xs text-rose-300">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            Couldn&apos;t load your tasks. Check your connection and try again.
+          </div>
+          <Button variant="ghost" size="sm" onClick={handleRetry} className="text-xs flex-shrink-0">
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+            Retry
+          </Button>
+        </div>
+      )}
+
       {/* Kanban board */}
-      {loading ? (
+      {!error && (loading ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {COLUMNS.map((col) => (
             <div key={col.id} className="space-y-3">
@@ -425,7 +451,7 @@ function TasksPageInner() {
             )}
           </DragOverlay>
         </DndContext>
-      )}
+      ))}
 
       {/* Task detail modal */}
       {detailTask && (

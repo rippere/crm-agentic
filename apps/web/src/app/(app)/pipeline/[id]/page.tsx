@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type KeyboardEvent } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Header from "@/components/layout/Header";
@@ -17,8 +17,8 @@ import {
   ArrowLeft, Brain, Heart, AlertTriangle, TrendingUp,
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
-  ExternalLink, DollarSign, Clock, User, Pencil, Eye,
-  FileText,
+  ExternalLink, DollarSign, Clock, User,
+  FileText, Send,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -127,137 +127,136 @@ function StageBadge({ stage }: { stage: string }) {
   return <Badge variant={variant} size="sm">{cfg.label}</Badge>;
 }
 
-// ─── Deal Notes Editor ────────────────────────────────────────────────────────
+// ─── Deal Notes Thread ─────────────────────────────────────────────────────────
 
-interface DealNotesEditorProps {
-  initialNotes: string | null;
+type DealNote = {
+  id: string;
+  workspace_id: string;
+  deal_id: string;
+  body: string;
+  author: string | null;
+  created_at: string;
+};
+
+interface DealNotesThreadProps {
   dealId: string;
   workspaceId: string;
   token: string;
-  onSaved: (notes: string) => void;
 }
 
-function DealNotesEditor({ initialNotes, dealId, workspaceId, token, onSaved }: DealNotesEditorProps) {
-  const [isEditing,  setIsEditing]  = useState(false);
-  const [previewTab, setPreviewTab] = useState<"write" | "preview">("write");
-  const [draftText,  setDraftText]  = useState(initialNotes ?? "");
-  const [saved,      setSaved]      = useState(initialNotes ?? "");
-  const [saving,     setSaving]     = useState(false);
+function authorInitials(author: string | null): string {
+  if (!author) return "?";
+  const parts = author.replace(/@.*/, "").replace(/[._-]+/g, " ").trim().split(/\s+/);
+  return parts.map((p) => p[0]).join("").slice(0, 2).toUpperCase() || "?";
+}
 
-  const handleEdit = () => { setDraftText(saved); setPreviewTab("write"); setIsEditing(true); }
-  const handleCancel = () => { setDraftText(saved); setIsEditing(false); }
+function DealNotesThread({ dealId, workspaceId, token }: DealNotesThreadProps) {
+  const [notes, setNotes]     = useState<DealNote[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [draft, setDraft]     = useState("");
+  const [saving, setSaving]   = useState(false);
+  const [error, setError]     = useState(false);
 
-  const handleSave = async () => {
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    apiClient
+      .getDealNotes(workspaceId, dealId, token)
+      .then((data) => { if (!cancelled) setNotes(Array.isArray(data) ? (data as DealNote[]) : []); })
+      .catch(() => { if (!cancelled) setNotes([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [workspaceId, dealId, token]);
+
+  const handleAdd = async () => {
+    const body = draft.trim();
+    if (!body || saving) return;
     setSaving(true);
+    setError(false);
     try {
-      await apiClient.updateDeal(workspaceId, dealId, { notes: draftText }, token);
-      setSaved(draftText);
-      onSaved(draftText);
-      setIsEditing(false);
+      const created = (await apiClient.createDealNote(workspaceId, dealId, body, token)) as DealNote;
+      setNotes((prev) => [...prev, created]);
+      setDraft("");
     } catch {
-      /* save failed — stay in edit mode */
+      setError(true);
     } finally {
       setSaving(false);
     }
   };
 
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      handleAdd();
+    }
+  };
+
   return (
     <Card className="p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <FileText className="h-4 w-4 text-zinc-500" aria-hidden />
-          <p className="text-sm font-semibold text-zinc-200">Notes</p>
-        </div>
-        {!isEditing ? (
-          <button
-            onClick={handleEdit}
-            className="flex items-center gap-1.5 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer font-mono"
-            aria-label="Edit notes"
-          >
-            <Pencil className="h-3 w-3" />
-            Edit
-          </button>
-        ) : (
-          <div className="flex items-center gap-1 rounded-lg border border-zinc-700/60 bg-zinc-800/40 p-0.5">
-            <button
-              onClick={() => setPreviewTab("write")}
-              className={cn(
-                "flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-mono transition-all cursor-pointer",
-                previewTab === "write" ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"
-              )}
-            >
-              <Pencil className="h-3 w-3" /> Write
-            </button>
-            <button
-              onClick={() => setPreviewTab("preview")}
-              className={cn(
-                "flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-mono transition-all cursor-pointer",
-                previewTab === "preview" ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"
-              )}
-            >
-              <Eye className="h-3 w-3" /> Preview
-            </button>
-          </div>
+      <div className="flex items-center gap-2">
+        <FileText className="h-4 w-4 text-zinc-500" aria-hidden />
+        <p className="text-sm font-semibold text-zinc-200">Notes</p>
+        {notes.length > 0 && (
+          <span className="ml-auto text-xs font-mono text-zinc-500">{notes.length}</span>
         )}
       </div>
 
-      {!isEditing ? (
-        saved ? (
-          <div
-            className="text-xs text-zinc-400 leading-relaxed prose-notes"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(saved) }}
-          />
-        ) : (
-          <p className="text-xs text-zinc-600 italic">
-            No notes yet.{" "}
-            <button onClick={handleEdit} className="text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer not-italic">
-              Add a note →
-            </button>
-          </p>
-        )
-      ) : previewTab === "write" ? (
-        <textarea
-          value={draftText}
-          onChange={e => setDraftText(e.target.value)}
-          rows={6}
-          placeholder={"Add notes about this deal…\n\nSupports **bold**, - lists, and paragraphs."}
-          className="w-full rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none resize-none focus:border-indigo-500/50 transition-colors leading-relaxed font-mono"
-          autoFocus
-        />
+      {/* Thread */}
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2].map((i) => (
+            <div key={i} className="h-14 rounded-xl border border-zinc-800 bg-zinc-900 animate-pulse" />
+          ))}
+        </div>
+      ) : notes.length === 0 ? (
+        <p className="text-xs text-zinc-600 italic py-1">No notes yet. Add the first one below.</p>
       ) : (
-        <div
-          className="min-h-[8rem] rounded-lg border border-zinc-700/60 bg-zinc-800/20 px-3 py-2.5 text-xs text-zinc-300 leading-relaxed"
-          dangerouslySetInnerHTML={{
-            __html: draftText ? renderMarkdown(draftText) : '<span class="text-zinc-600 italic">Nothing to preview</span>',
-          }}
-        />
-      )}
-
-      {isEditing && (
-        <div className="flex items-center gap-2 pt-1">
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer",
-              saving
-                ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
-                : "bg-indigo-600 hover:bg-indigo-500 text-white"
-            )}
-          >
-            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-            {saving ? "Saving…" : "Save notes"}
-          </button>
-          <button
-            onClick={handleCancel}
-            disabled={saving}
-            className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer px-2 py-1.5"
-          >
-            Cancel
-          </button>
-          <span className="ml-auto text-[10px] text-zinc-600 font-mono">Markdown supported</span>
+        <div className="space-y-2.5">
+          {notes.map((note) => (
+            <div key={note.id} className="flex gap-2.5">
+              <Avatar initials={authorInitials(note.author)} size="sm" />
+              <div className="flex-1 min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-xs font-medium text-zinc-300 truncate">{note.author ?? "Unknown"}</span>
+                  <span className="text-[10px] text-zinc-600 ml-auto flex-shrink-0">{formatRelative(note.created_at)}</span>
+                </div>
+                <div
+                  className="text-xs text-zinc-400 leading-relaxed prose-notes break-words"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(note.body) }}
+                />
+              </div>
+            </div>
+          ))}
         </div>
       )}
+
+      {/* Add-note composer */}
+      <div className="space-y-2 pt-1 border-t border-zinc-800">
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          rows={3}
+          placeholder={"Add a note…  Supports **bold**, - lists. ⌘↵ to post."}
+          className="w-full rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none resize-none focus:border-indigo-500/50 transition-colors leading-relaxed font-mono mt-2"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleAdd}
+            disabled={saving || !draft.trim()}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+              saving || !draft.trim()
+                ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+                : "bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer"
+            )}
+          >
+            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+            {saving ? "Posting…" : "Add note"}
+          </button>
+          {error && <span className="text-[11px] text-rose-400">Failed to add note — try again.</span>}
+        </div>
+      </div>
     </Card>
   );
 }
@@ -605,14 +604,12 @@ export default function DealDetailPage() {
             </Card>
           )}
 
-          {/* Notes editor */}
+          {/* Notes thread */}
           {token && workspaceId && (
-            <DealNotesEditor
-              initialNotes={deal.notes}
+            <DealNotesThread
               dealId={deal.id}
               workspaceId={workspaceId}
               token={token}
-              onSaved={(notes) => setDeal(prev => prev ? { ...prev, notes } : prev)}
             />
           )}
         </div>
