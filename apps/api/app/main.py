@@ -59,6 +59,14 @@ async def lifespan(app: FastAPI):
             "event=startup_check check=slack_signing_secret status=missing "
             "detail=POST_/slack/interactions_will_reject_all_requests_until_set"
         )
+    # Gmail Pub/Sub push verification also fails closed when GMAIL_WEBHOOK_SECRET
+    # is unset (POST /webhooks/gmail/push will 403 every request). Warn loudly so a
+    # missing secret is visible rather than silently disabling Gmail push-sync.
+    if not settings.GMAIL_WEBHOOK_SECRET:
+        logger.warning(
+            "event=startup_check check=gmail_webhook_secret status=missing "
+            "detail=POST_/webhooks/gmail/push_will_reject_all_requests_until_set"
+        )
     yield
     logger.info("event=shutdown")
 

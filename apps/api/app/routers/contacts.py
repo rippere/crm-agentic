@@ -244,7 +244,9 @@ async def score_contact(
 
     # Import here to avoid circular-import at module load time
     from app.workers.score_contact import score_lead  # noqa: PLC0415
+    from app.routers.agents import _mark_job_dispatched
     task = score_lead.delay(str(contact_id), str(workspace_id))
+    _mark_job_dispatched(task.id, str(workspace_id))
 
     return {"status": "queued", "contact_id": str(contact_id), "job_id": task.id}
 
@@ -355,7 +357,9 @@ async def enrich_contact_endpoint(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
     from app.workers.enrich_contact import enrich_contact
+    from app.routers.agents import _mark_job_dispatched
     task = enrich_contact.delay(str(contact_id))
+    _mark_job_dispatched(task.id, str(workspace_id))
     return {"status": "queued", "contact_id": str(contact_id), "job_id": task.id}
 
 
