@@ -81,7 +81,7 @@ async def test_run_pipeline_optimizer_dispatches_real_task(app_client):
     assert data["job_id"] == "celery-pipeline-task-id"
     assert data["status"] == "processing"
     mock_delay.assert_called_once_with(str(workspace_id))
-    mock_marker.assert_called_once_with("celery-pipeline-task-id")
+    mock_marker.assert_called_once_with("celery-pipeline-task-id", str(workspace_id))
     # Agent bookkeeping updated only after successful dispatch.
     assert agent.status == "processing"
     assert agent.tasks_today == 5  # incremented from 4
@@ -290,3 +290,86 @@ async def test_get_job_status_pending_when_redis_unreachable(app_client):
 
     assert resp.status_code == 200
     assert resp.json()["state"] == "PENDING"
+
+
+# ---------------------------------------------------------------------------
+# GET /jobs/{job_id} — tenant isolation (IDOR fix): a job's result is only
+# visible to the workspace that dispatched it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_foreign_workspace_returns_404(app_client):
+    """A job owned by another workspace must look like it does not exist (404),
+    and its result body must never be leaked cross-tenant."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_result = MagicMock()
+    mock_result.state = "SUCCESS"
+    mock_result.result = {"workspace_id": "ffffffff-ffff-ffff-ffff-ffffffffffff", "deals_updated": 9}
+
+    with patch("app.workers.celery_app.celery_app") as mock_celery, \
+         patch("app.routers.agents._job_owner_workspace",
+               return_value="ffffffff-ffff-ffff-ffff-ffffffffffff"):
+        mock_celery.AsyncResult.return_value = mock_result
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get("/jobs/victim-job-id")
+
+    assert resp.status_code == 404
+    assert "deals_updated" not in resp.text  # result never leaked to a foreign tenant
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_own_workspace_returns_result(app_client):
+    """The owning workspace still gets its result unchanged."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_result = MagicMock()
+    mock_result.state = "SUCCESS"
+    mock_result.result = {"workspace_id": str(workspace_id), "deals_updated": 3}
+
+    with patch("app.workers.celery_app.celery_app") as mock_celery, \
+         patch("app.routers.agents._job_owner_workspace", return_value=str(workspace_id)):
+        mock_celery.AsyncResult.return_value = mock_result
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get("/jobs/own-job-id")
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["deals_updated"] == 3
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_unknown_owner_preserves_behavior(app_client):
+    """Marker missing/expired or Redis down (_job_owner_workspace -> None) must NOT
+    404: the rightful caller still gets the result and a Redis blip cannot mask a
+    real job."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_result = MagicMock()
+    mock_result.state = "SUCCESS"
+    mock_result.result = {"output": "ok"}
+
+    with patch("app.workers.celery_app.celery_app") as mock_celery, \
+         patch("app.routers.agents._job_owner_workspace", return_value=None):
+        mock_celery.AsyncResult.return_value = mock_result
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get("/jobs/marker-missing-id")
+
+    assert resp.status_code == 200
+    assert resp.json()["result"] == {"output": "ok"}
+
+
+def test_mark_job_dispatched_stores_workspace_not_constant():
+    """The dispatch marker stores the owning workspace id (so ownership can be
+    enforced), never the legacy constant '1'."""
+    captured = {}
+    fake_client = MagicMock()
+    fake_client.set = lambda *a, **k: captured.update(args=a, kwargs=k)
+
+    with patch("redis.Redis.from_url", return_value=fake_client):
+        from app.routers.agents import _mark_job_dispatched
+
+        _mark_job_dispatched("task-xyz", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+    assert captured["args"][0] == "crm:job:task-xyz"
+    assert captured["args"][1] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"  # not "1"

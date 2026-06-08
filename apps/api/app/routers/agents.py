@@ -34,13 +34,14 @@ _NO_BACKING_TASK_DETAIL = {
 }
 
 
-def _mark_job_dispatched(task_id: str) -> None:
-    """Record that we dispatched this Celery task id (best-effort).
+def _mark_job_dispatched(task_id: str, workspace_id: str) -> None:
+    """Record that we dispatched this Celery task id AND which workspace owns it.
 
-    Celery's result backend cannot distinguish 'queued but not started' from
-    'never existed' — both report PENDING. We write a short-lived Redis marker on
-    dispatch so GET /jobs/{id} can return a terminal 'unknown' state for ids we
-    never issued instead of polling a fabricated PENDING forever.
+    The marker VALUE is the owning workspace id (string). GET /jobs/{id} reads it
+    back to enforce tenant isolation — a job's result is only visible to the
+    workspace that dispatched it — and still uses presence/absence to tell a
+    never-dispatched id from a real-but-pending one. Best-effort; never fail the
+    request.
     """
     from app.config import settings
 
@@ -49,7 +50,7 @@ def _mark_job_dispatched(task_id: str) -> None:
 
         client = _redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
         try:
-            client.set(f"{_JOB_MARKER_PREFIX}{task_id}", "1", ex=_JOB_MARKER_TTL_SECONDS)
+            client.set(f"{_JOB_MARKER_PREFIX}{task_id}", str(workspace_id), ex=_JOB_MARKER_TTL_SECONDS)
         finally:
             client.close()
     except Exception as exc:  # noqa: BLE001 — marker is best-effort, never fail the request
@@ -75,6 +76,38 @@ def _job_was_dispatched(task_id: str) -> bool | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("event=job_marker_read_failed task_id=%s error=%s", task_id, exc)
         return None
+
+
+def _job_owner_workspace(task_id: str) -> str | None:
+    """Return the owning workspace id stored in the dispatch marker, else None.
+
+    None means 'can't tell' — marker missing/expired OR Redis unreachable. Callers
+    must NOT deny access on None alone (that would 404 a legitimate job whose marker
+    expired, or during a Redis blip); they deny only on a DEFINITE foreign owner.
+    Legacy markers written before tenant-scoping hold the literal "1" and carry no
+    owner — treated as None so they neither leak cross-tenant nor 404 the owner
+    (they self-heal within the 24h TTL).
+    """
+    from app.config import settings
+
+    try:
+        import redis as _redis
+
+        client = _redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        try:
+            raw = client.get(f"{_JOB_MARKER_PREFIX}{task_id}")
+        finally:
+            client.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("event=job_marker_owner_read_failed task_id=%s error=%s", task_id, exc)
+        return None
+
+    if raw is None:
+        return None
+    owner = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+    if owner == "1":  # legacy marker, no tenant identity
+        return None
+    return owner
 
 
 class AgentResponse(BaseModel):
@@ -150,7 +183,7 @@ async def run_agent(
         task = run_health_check.delay()
 
     job_id = task.id
-    _mark_job_dispatched(job_id)
+    _mark_job_dispatched(job_id, workspace_id_str)
 
     # Bookkeeping — only reached on a successful dispatch.
     agent.status = "processing"  # type: ignore[assignment]
@@ -219,7 +252,15 @@ async def get_job_status(
     marker: a PENDING state with NO marker is reported as the terminal state
     "unknown" instead. SUCCESS/FAILURE/STARTED/REVOKED come straight from the
     backend and are trusted as-is.
+
+    Tenant isolation: a job's result is only visible to the workspace that
+    dispatched it. We read the owning workspace from the dispatch marker and 404
+    (not 403, to avoid confirming the id exists) when a different tenant asks.
     """
+    owner = _job_owner_workspace(job_id)
+    if owner is not None and owner != str(current_user.workspace_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
     from app.workers.celery_app import celery_app
 
     task = celery_app.AsyncResult(job_id)

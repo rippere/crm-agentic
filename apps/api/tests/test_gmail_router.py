@@ -395,8 +395,10 @@ async def test_gmail_push_invalid_secret_returns_403(app_client):
 
 
 @pytest.mark.asyncio
-async def test_gmail_push_no_secret_configured_accepts(app_client):
-    """When GMAIL_WEBHOOK_SECRET is empty, all requests are accepted (dev mode)."""
+async def test_gmail_push_no_secret_configured_rejects(app_client):
+    """Fail closed: when GMAIL_WEBHOOK_SECRET is empty we cannot authenticate the
+    push, so every request is rejected (an unauthenticated push would otherwise
+    force a Gmail sync for any connector)."""
     fastapi_app, mock_db, _ = app_client
     mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
 
@@ -405,7 +407,7 @@ async def test_gmail_push_no_secret_configured_accepts(app_client):
         async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
             resp = await ac.post("/webhooks/gmail/push", json=_make_pubsub_body())
 
-    assert resp.status_code == 204
+    assert resp.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -414,9 +416,9 @@ async def test_gmail_push_malformed_body_returns_204(app_client):
     fastapi_app, mock_db, _ = app_client
 
     with patch("app.routers.gmail.settings") as mock_settings:
-        mock_settings.GMAIL_WEBHOOK_SECRET = ""
+        mock_settings.GMAIL_WEBHOOK_SECRET = "real-secret"
         async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
-            resp = await ac.post("/webhooks/gmail/push", json={"not": "a-pubsub-message"})
+            resp = await ac.post("/webhooks/gmail/push?secret=real-secret", json={"not": "a-pubsub-message"})
 
     assert resp.status_code == 204
 
@@ -428,9 +430,9 @@ async def test_gmail_push_no_connector_still_returns_204(app_client):
     mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
 
     with patch("app.routers.gmail.settings") as mock_settings:
-        mock_settings.GMAIL_WEBHOOK_SECRET = ""
+        mock_settings.GMAIL_WEBHOOK_SECRET = "real-secret"
         async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
-            resp = await ac.post("/webhooks/gmail/push", json=_make_pubsub_body("unknown@example.com"))
+            resp = await ac.post("/webhooks/gmail/push?secret=real-secret", json=_make_pubsub_body("unknown@example.com"))
 
     assert resp.status_code == 204
 
@@ -447,12 +449,12 @@ async def test_gmail_push_triggers_ingest(app_client):
     mock_task.id = "push-job-id"
 
     with patch("app.routers.gmail.settings") as mock_settings:
-        mock_settings.GMAIL_WEBHOOK_SECRET = ""
+        mock_settings.GMAIL_WEBHOOK_SECRET = "real-secret"
         with patch("app.workers.ingest.process_gmail_sync") as mock_celery:
             mock_celery.delay.return_value = mock_task
             async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
                 resp = await ac.post(
-                    "/webhooks/gmail/push",
+                    "/webhooks/gmail/push?secret=real-secret",
                     json=_make_pubsub_body("user@gmail.com"),
                 )
 
