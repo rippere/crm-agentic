@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type KeyboardEvent } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
@@ -16,7 +16,7 @@ import {
   ArrowLeft, Mail, Brain, Zap, TrendingUp, TrendingDown, Minus,
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
-  Star, Calendar, X, Plus,
+  Star, Calendar, X, Plus, Send,
 } from "lucide-react";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -154,6 +154,138 @@ function DealCard({ deal }: { deal: DealRow }) {
         <span className="text-[11px] font-mono text-zinc-500">{deal.health_score} health</span>
       </div>
     </div>
+  );
+}
+
+// ─── Contact Notes Thread ─────────────────────────────────────────────────────
+
+type ContactNote = {
+  id: string;
+  workspace_id: string;
+  contact_id: string;
+  body: string;
+  author: string | null;
+  created_at: string;
+};
+
+interface ContactNotesThreadProps {
+  contactId: string;
+  workspaceId: string;
+  token: string;
+}
+
+function noteAuthorInitials(author: string | null): string {
+  if (!author) return "?";
+  const parts = author.replace(/@.*/, "").replace(/[._-]+/g, " ").trim().split(/\s+/);
+  return parts.map((p) => p[0]).join("").slice(0, 2).toUpperCase() || "?";
+}
+
+function ContactNotesThread({ contactId, workspaceId, token }: ContactNotesThreadProps) {
+  const [notes, setNotes]     = useState<ContactNote[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [draft, setDraft]     = useState("");
+  const [saving, setSaving]   = useState(false);
+  const [error, setError]     = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    apiClient
+      .getContactNotes(workspaceId, contactId, token)
+      .then((data) => { if (!cancelled) setNotes(Array.isArray(data) ? (data as ContactNote[]) : []); })
+      .catch(() => { if (!cancelled) setNotes([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [workspaceId, contactId, token]);
+
+  const handleAdd = async () => {
+    const body = draft.trim();
+    if (!body || saving) return;
+    setSaving(true);
+    setError(false);
+    try {
+      const created = (await apiClient.createContactNote(workspaceId, contactId, body, token)) as ContactNote;
+      setNotes((prev) => [...prev, created]);
+      setDraft("");
+    } catch {
+      setError(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      handleAdd();
+    }
+  };
+
+  return (
+    <Card className="p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <FileText className="h-4 w-4 text-zinc-500" aria-hidden />
+        <p className="text-sm font-semibold text-zinc-200">Notes</p>
+        {notes.length > 0 && (
+          <span className="ml-auto text-xs font-mono text-zinc-500">{notes.length}</span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2].map((i) => (
+            <div key={i} className="h-14 rounded-xl border border-zinc-800 bg-zinc-900 animate-pulse" />
+          ))}
+        </div>
+      ) : notes.length === 0 ? (
+        <p className="text-xs text-zinc-600 italic py-1">No notes yet. Add the first one below.</p>
+      ) : (
+        <div className="space-y-2.5">
+          {notes.map((note) => (
+            <div key={note.id} className="flex gap-2.5">
+              <Avatar initials={noteAuthorInitials(note.author)} size="sm" />
+              <div className="flex-1 min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-xs font-medium text-zinc-300 truncate">{note.author ?? "Unknown"}</span>
+                  <span className="text-[10px] text-zinc-600 ml-auto flex-shrink-0">{formatRelative(note.created_at)}</span>
+                </div>
+                <div
+                  className="text-xs text-zinc-400 leading-relaxed prose-notes break-words"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(note.body) }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="space-y-2 pt-1 border-t border-zinc-800">
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          rows={3}
+          placeholder={"Add a note…  Supports **bold**, - lists. ⌘↵ to post."}
+          className="w-full rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none resize-none focus:border-indigo-500/50 transition-colors leading-relaxed font-mono mt-2"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleAdd}
+            disabled={saving || !draft.trim()}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+              saving || !draft.trim()
+                ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+                : "bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer"
+            )}
+          >
+            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+            {saving ? "Posting…" : "Add note"}
+          </button>
+          {error && <span className="text-[11px] text-rose-400">Failed to add note — try again.</span>}
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -732,6 +864,15 @@ export default function ContactDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* Notes */}
+          {workspaceId && token && (
+            <ContactNotesThread
+              contactId={contactId}
+              workspaceId={workspaceId}
+              token={token}
+            />
+          )}
         </div>
       </div>
 

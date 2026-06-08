@@ -13,6 +13,7 @@ from app.models.project import Project
 from app.models.kpi_snapshot import KpiSnapshot
 from app.models.commitment import Commitment
 from app.models.deal_note import DealNote
+from app.models.contact_note import ContactNote
 
 __all__ = [
     "Workspace",
@@ -30,4 +31,5 @@ __all__ = [
     "KpiSnapshot",
     "Commitment",
     "DealNote",
+    "ContactNote",
 ]

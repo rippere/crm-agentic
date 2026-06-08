@@ -19,6 +19,7 @@ from app.dependencies import get_current_user
 from app.limiter import limiter
 from app.models.user import User
 from app.models.contact import Contact
+from app.models.contact_note import ContactNote
 from app.models.activity_event import ActivityEvent
 from app.services.supabase_rest import get_row
 
@@ -51,6 +52,22 @@ class CreateContactRequest(BaseModel):
     company: str | None = None
     role: str | None = None
     status: str = "lead"
+
+
+class ContactNoteResponse(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    contact_id: uuid.UUID
+    body: str
+    author: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CreateContactNoteRequest(BaseModel):
+    body: str
+    author: str | None = None
 
 
 @router.post("/workspaces/{workspace_id}/contacts", response_model=ContactResponse, status_code=201)
@@ -961,3 +978,78 @@ async def merge_contacts(
         messages_reassigned=messages_updated,
         deals_reassigned=deals_updated,
     )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/contacts/{contact_id}/notes",
+    response_model=list[ContactNoteResponse],
+)
+async def list_contact_notes(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ContactNoteResponse]:
+    """Return all notes for a contact, oldest-first (chronological thread)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    result = await db.execute(
+        select(ContactNote)
+        .where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+        )
+        .order_by(ContactNote.created_at.asc())
+    )
+    notes = result.scalars().all()
+    return [ContactNoteResponse.model_validate(n) for n in notes]
+
+
+@router.post(
+    "/workspaces/{workspace_id}/contacts/{contact_id}/notes",
+    response_model=ContactNoteResponse,
+    status_code=201,
+)
+async def create_contact_note(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    body: CreateContactNoteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ContactNoteResponse:
+    """Append a note to a contact. Notes are immutable once created."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    text = (body.body or "").strip()
+    if not text:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Note body must not be empty",
+        )
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    note = ContactNote(
+        workspace_id=workspace_id,
+        contact_id=contact_id,
+        body=text,
+        author=body.author or getattr(current_user, "email", None),
+    )
+    db.add(note)
+    await db.commit()
+    await db.refresh(note)
+    return ContactNoteResponse.model_validate(note)
