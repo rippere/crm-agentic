@@ -395,6 +395,45 @@ async def deal_forecast(
     ]
 
 
+@router.get("/workspaces/{workspace_id}/deals/velocity")
+async def deal_velocity(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Average days each deal has spent in its current stage, grouped by stage.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.workspace_id == workspace_id)
+    )
+    deals = result.scalars().all()
+
+    now = datetime.now(timezone.utc)
+    stage_data: dict[str, list[float]] = {}
+
+    for deal in deals:
+        sc = deal.stage_changed_at or deal.created_at
+        if sc and sc.tzinfo is None:
+            sc = sc.replace(tzinfo=timezone.utc)
+        days = max(0.0, (now - sc).total_seconds() / 86400) if sc else 0.0
+        stage = deal.stage or "unknown"
+        stage_data.setdefault(stage, []).append(days)
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"]
+    out = []
+    for stage in stage_order:
+        if stage in stage_data:
+            days_list = stage_data[stage]
+            avg = round(sum(days_list) / len(days_list), 1)
+            out.append({"stage": stage, "avg_days": avg, "deal_count": len(days_list)})
+    return out
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,

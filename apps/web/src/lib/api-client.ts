@@ -886,6 +886,21 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/forecast?months_ahead=${monthsAhead}`, {}, token)
   },
 
+  // Pipeline velocity — avg days each deal has spent in its current stage, by stage
+  getDealVelocity: (workspaceId: string, token: string): Promise<{ stage: string; avg_days: number; deal_count: number }[]> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { stage: 'discovery',   avg_days: 14.2, deal_count: 3 },
+        { stage: 'qualified',   avg_days: 9.5,  deal_count: 4 },
+        { stage: 'proposal',    avg_days: 18.7, deal_count: 3 },
+        { stage: 'negotiation', avg_days: 11.3, deal_count: 2 },
+        { stage: 'closed_won',  avg_days: 42.1, deal_count: 3 },
+        { stage: 'closed_lost', avg_days: 28.4, deal_count: 2 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/velocity`, {}, token)
+  },
+
   // Deal probability trend
   getDealProbabilityTrend: (workspaceId: string, dealId: string, token: string): Promise<{ date: string; probability: number }[]> => {
     if (isDemoMode) {
