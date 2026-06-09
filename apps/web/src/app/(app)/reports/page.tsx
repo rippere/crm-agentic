@@ -1,18 +1,22 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import { useDeals } from "@/hooks/useDeals";
 import { cn, formatCurrency, stageConfig, dealStageOrder } from "@/lib/utils";
+import { apiClient } from "@/lib/api-client";
+import { createBrowserClient } from "@/lib/supabase";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
 } from "recharts";
 import {
-  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock,
+  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer,
 } from "lucide-react";
+
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
 const STAGE_COLORS: Record<string, string> = {
   discovery:   "#52525B",
@@ -35,8 +39,38 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
   );
 };
 
+const VelocityTooltip = ({ active, payload, label }: { active?: boolean; payload?: { value: number; payload: { deal_count: number } }[]; label?: string }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+      <p className="font-mono text-zinc-400 mb-1">{label}</p>
+      <p className="text-zinc-200">Avg: <span className="font-mono text-indigo-300">{payload[0].value}d</span></p>
+      <p className="text-zinc-500">{payload[0].payload.deal_count} deal{payload[0].payload.deal_count !== 1 ? "s" : ""}</p>
+    </div>
+  );
+};
+
 export default function ReportsPage() {
   const { deals, loading } = useDeals();
+  const [velocityData, setVelocityData] = useState<{ stage: string; avg_days: number; deal_count: number; label: string }[]>([]);
+
+  useEffect(() => {
+    if (DEMO_MODE) {
+      apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
+        setVelocityData(data.map((v) => ({ ...v, label: stageConfig[v.stage as keyof typeof stageConfig]?.label ?? v.stage })));
+      }).catch(() => {});
+      return;
+    }
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) return;
+      const workspaceId: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+      if (!workspaceId) return;
+      apiClient.getDealVelocity(workspaceId, session.access_token).then((data) => {
+        setVelocityData(data.map((v) => ({ ...v, label: stageConfig[v.stage as keyof typeof stageConfig]?.label ?? v.stage })));
+      }).catch(() => {});
+    });
+  }, []);
 
   const stats = useMemo(() => {
     const won = deals.filter((d) => d.stage === "closed_won");
@@ -363,6 +397,50 @@ export default function ReportsPage() {
           </ResponsiveContainer>
         </div>
       </Card>
+
+      {/* Pipeline velocity — avg days in stage */}
+      {velocityData.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Pipeline Velocity</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Avg days each deal has spent in current stage</p>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+              <Timer className="h-3.5 w-3.5" />
+              <span>{velocityData.reduce((s, v) => s + v.deal_count, 0)} deals measured</span>
+            </div>
+          </div>
+          <div className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={velocityData} layout="vertical" margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272A" horizontal={false} />
+                <XAxis
+                  type="number"
+                  tick={{ fill: "#71717A", fontSize: 10 }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(v) => `${v}d`}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="label"
+                  tick={{ fill: "#71717A", fontSize: 10 }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={80}
+                />
+                <Tooltip content={<VelocityTooltip />} />
+                <Bar dataKey="avg_days" name="Avg days" radius={[0, 4, 4, 0]} maxBarSize={18} label={{ position: "right", fill: "#71717A", fontSize: 10, formatter: (v: number) => `${v}d` }}>
+                  {velocityData.map((entry) => (
+                    <Cell key={entry.stage} fill={STAGE_COLORS[entry.stage] ?? "#52525B"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
 
       {/* Stale alert */}
       {stats.stale > 0 && (
