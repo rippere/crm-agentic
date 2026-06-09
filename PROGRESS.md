@@ -55,11 +55,13 @@
 - [2026-06-08] Remote batch (PR #3): WS-E..M security+reliability fixes landed — ingest contact linking, OAuth state signing, workspace isolation (app_metadata), Slack HITL fail-closed, agent dispatch pipeline, beat tasks, KPI router, commitments router, /life page, commitment tracker UI, useJobPoller hardening, test workers suite (247 tests), roadmap E2E spec; total 412 tests passing
 - [2026-06-08] Phase 11d: Contact notes thread — 015_contact_notes.sql migration; ContactNote SQLAlchemy model; GET+POST /workspaces/{id}/contacts/{id}/notes endpoints; 8 new tests (create/empty-body/404/403, list/chronological/empty/404/403); getContactNotes()/createContactNote() in api-client with demo stubs (seed notes for c-001/c-002); ContactNotesThread UI component on /contacts/[id] page (avatar initials, relative timestamps, markdown rendering, ⌘↵ shortcut); 412 tests pass (8 new + 6 pre-existing worker failures unchanged)
 
+- [2026-06-09] Phase 12a: Pipeline velocity analytics — GET /workspaces/{id}/deals/velocity (avg days per stage, groups all deals by current stage, computes avg of now − stage_changed_at); horizontal recharts BarChart on /reports page (color-coded by stage, deal count in tooltip); getDealVelocity() in api-client with 6-stage demo stub; 3 new tests (groups-by-stage, empty-workspace, 403); 415 tests pass (up from 412)
+
 ## Current Phase
 Phase 12 — Analytics & Reporting
 
 ## Next Task
-Phase 12a: Pipeline velocity analytics — GET /workspaces/{id}/deals/velocity endpoint (avg days per stage across all closed/won deals, computed from stage_changed_at vs created_at); stacked horizontal bar chart on /reports page showing avg time-in-stage; getDealVelocity() in api-client with demo stub; 3 new tests.
+Phase 12b: Stage conversion funnel — GET /workspaces/{id}/deals/funnel endpoint (count of deals per stage for active pipeline; conversion rate between consecutive stages); funnel/sankey visualization on /reports page (horizontal bar with % conversion arrows between stages); getDealFunnel() in api-client with demo stub; 3 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
