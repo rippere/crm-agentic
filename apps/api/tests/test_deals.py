@@ -1045,3 +1045,61 @@ async def test_deal_velocity_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/velocity")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/funnel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_funnel_groups_by_stage(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deals = [
+        _fake_deal(workspace_id, stage="discovery"),
+        _fake_deal(workspace_id, stage="discovery"),
+        _fake_deal(workspace_id, stage="qualified"),
+        _fake_deal(workspace_id, stage="proposal"),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result(deals))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/funnel")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    disc = next(r for r in data if r["stage"] == "discovery")
+    qual = next(r for r in data if r["stage"] == "qualified")
+    prop = next(r for r in data if r["stage"] == "proposal")
+    assert disc["deal_count"] == 2
+    assert disc["conversion_rate"] is None
+    assert qual["deal_count"] == 1
+    assert qual["conversion_rate"] == 50.0
+    assert prop["deal_count"] == 1
+    assert prop["conversion_rate"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_deal_funnel_empty_workspace(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/funnel")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 6
+    assert all(row["deal_count"] == 0 for row in data)
+
+
+@pytest.mark.asyncio
+async def test_deal_funnel_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/funnel")
+
+    assert resp.status_code == 403

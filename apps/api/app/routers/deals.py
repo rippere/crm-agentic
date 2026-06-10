@@ -434,6 +434,44 @@ async def deal_velocity(
     return out
 
 
+@router.get("/workspaces/{workspace_id}/deals/funnel")
+async def deal_funnel(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Deal count and stage-to-stage conversion rate for the pipeline funnel.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.workspace_id == workspace_id)
+    )
+    deals = result.scalars().all()
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"]
+    counts: dict[str, int] = {s: 0 for s in stage_order}
+    for deal in deals:
+        stage = deal.stage or "unknown"
+        if stage in counts:
+            counts[stage] += 1
+
+    out: list[dict] = []
+    for i, stage in enumerate(stage_order):
+        count = counts[stage]
+        if i == 0:
+            conversion_rate = None
+        else:
+            prev = out[-1]["deal_count"]
+            conversion_rate = round((count / prev) * 100, 1) if prev > 0 else 0.0
+        out.append({"stage": stage, "deal_count": count, "conversion_rate": conversion_rate})
+
+    return out
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
