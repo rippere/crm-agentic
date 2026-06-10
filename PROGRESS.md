@@ -56,12 +56,13 @@
 - [2026-06-08] Phase 11d: Contact notes thread — 015_contact_notes.sql migration; ContactNote SQLAlchemy model; GET+POST /workspaces/{id}/contacts/{id}/notes endpoints; 8 new tests (create/empty-body/404/403, list/chronological/empty/404/403); getContactNotes()/createContactNote() in api-client with demo stubs (seed notes for c-001/c-002); ContactNotesThread UI component on /contacts/[id] page (avatar initials, relative timestamps, markdown rendering, ⌘↵ shortcut); 412 tests pass (8 new + 6 pre-existing worker failures unchanged)
 
 - [2026-06-09] Phase 12a: Pipeline velocity analytics — GET /workspaces/{id}/deals/velocity (avg days per stage, groups all deals by current stage, computes avg of now − stage_changed_at); horizontal recharts BarChart on /reports page (color-coded by stage, deal count in tooltip); getDealVelocity() in api-client with 6-stage demo stub; 3 new tests (groups-by-stage, empty-workspace, 403); 415 tests pass (up from 412)
+- [2026-06-10] Phase 12b: Stage conversion funnel — GET /workspaces/{id}/deals/funnel (deal count per stage + stage-to-stage conversion rate, all 6 stages always returned); horizontal funnel visualization on /reports page (proportional bars colored by stage, conversion % annotation between each stage, Filter icon header with total deal count); getDealFunnel() in api-client with demo stub (12→8→5→3→2→1); 3 new tests (groups-by-stage + conversion math, empty-workspace zeros, 403); 417 tests pass
 
 ## Current Phase
 Phase 12 — Analytics & Reporting
 
 ## Next Task
-Phase 12b: Stage conversion funnel — GET /workspaces/{id}/deals/funnel endpoint (count of deals per stage for active pipeline; conversion rate between consecutive stages); funnel/sankey visualization on /reports page (horizontal bar with % conversion arrows between stages); getDealFunnel() in api-client with demo stub; 3 new tests.
+Phase 12c: Win/loss reason tagging — PUT /workspaces/{id}/deals/{id}/outcome (sets stage to closed_won or closed_lost + stores reason tag from enum: price, competition, timing, fit, champion_left, other); outcome reason chip on deal detail page; reason breakdown chart on /reports page (grouped bar: won vs lost by reason); 3 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
