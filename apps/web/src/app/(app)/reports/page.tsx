@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
 } from "recharts";
 import {
-  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer,
+  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -50,14 +50,20 @@ const VelocityTooltip = ({ active, payload, label }: { active?: boolean; payload
   );
 };
 
+type FunnelRow = { stage: string; deal_count: number; conversion_rate: number | null; label: string };
+
 export default function ReportsPage() {
   const { deals, loading } = useDeals();
   const [velocityData, setVelocityData] = useState<{ stage: string; avg_days: number; deal_count: number; label: string }[]>([]);
+  const [funnelData, setFunnelData] = useState<FunnelRow[]>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
         setVelocityData(data.map((v) => ({ ...v, label: stageConfig[v.stage as keyof typeof stageConfig]?.label ?? v.stage })));
+      }).catch(() => {});
+      apiClient.getDealFunnel("demo-workspace-1", "demo-token").then((data) => {
+        setFunnelData(data.map((r) => ({ ...r, label: stageConfig[r.stage as keyof typeof stageConfig]?.label ?? r.stage })));
       }).catch(() => {});
       return;
     }
@@ -68,6 +74,9 @@ export default function ReportsPage() {
       if (!workspaceId) return;
       apiClient.getDealVelocity(workspaceId, session.access_token).then((data) => {
         setVelocityData(data.map((v) => ({ ...v, label: stageConfig[v.stage as keyof typeof stageConfig]?.label ?? v.stage })));
+      }).catch(() => {});
+      apiClient.getDealFunnel(workspaceId, session.access_token).then((data) => {
+        setFunnelData(data.map((r) => ({ ...r, label: stageConfig[r.stage as keyof typeof stageConfig]?.label ?? r.stage })));
       }).catch(() => {});
     });
   }, []);
@@ -441,6 +450,64 @@ export default function ReportsPage() {
           </div>
         </Card>
       )}
+
+      {/* Stage conversion funnel */}
+      {funnelData.length > 0 && (() => {
+        const maxCount = Math.max(...funnelData.map((r) => r.deal_count), 1);
+        return (
+          <Card>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Stage Conversion Funnel</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">Deal count per stage · % converted from previous</p>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                <Filter className="h-3.5 w-3.5" />
+                <span>{funnelData.reduce((s, r) => s + r.deal_count, 0)} total deals</span>
+              </div>
+            </div>
+            <div className="space-y-0.5">
+              {funnelData.map((row, i) => (
+                <div key={row.stage}>
+                  {i > 0 && (
+                    <div className="flex items-center gap-2 pl-28 py-1">
+                      <span className="text-[10px] font-mono text-zinc-600">
+                        {row.conversion_rate !== null && row.conversion_rate > 0
+                          ? `↓ ${row.conversion_rate.toFixed(1)}% converted`
+                          : "↓ 0% converted"}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3">
+                    <div className="w-24 flex-shrink-0 text-right">
+                      <span className="text-[11px] text-zinc-400">{row.label}</span>
+                    </div>
+                    <div className="flex-1 h-7 bg-zinc-800/40 rounded-md overflow-hidden">
+                      <div
+                        className="h-full rounded-md flex items-center pl-2 transition-all duration-500"
+                        style={{
+                          width: row.deal_count > 0 ? `${Math.max(4, (row.deal_count / maxCount) * 100)}%` : "3px",
+                          background: STAGE_COLORS[row.stage] ?? "#52525B",
+                          opacity: row.deal_count === 0 ? 0.25 : 1,
+                        }}
+                      >
+                        {row.deal_count > 0 && (
+                          <span className="text-[10px] font-mono font-bold text-white/80 select-none">
+                            {row.deal_count}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="w-8 flex-shrink-0">
+                      <span className="text-xs font-mono text-zinc-500">{row.deal_count}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* Stale alert */}
       {stats.stale > 0 && (

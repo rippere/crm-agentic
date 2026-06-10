@@ -901,6 +901,21 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/velocity`, {}, token)
   },
 
+  // Stage conversion funnel — deal count per stage + conversion rate between consecutive stages
+  getDealFunnel: (workspaceId: string, token: string): Promise<{ stage: string; deal_count: number; conversion_rate: number | null }[]> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { stage: 'discovery',   deal_count: 12, conversion_rate: null },
+        { stage: 'qualified',   deal_count: 8,  conversion_rate: 66.7 },
+        { stage: 'proposal',    deal_count: 5,  conversion_rate: 62.5 },
+        { stage: 'negotiation', deal_count: 3,  conversion_rate: 60.0 },
+        { stage: 'closed_won',  deal_count: 2,  conversion_rate: 66.7 },
+        { stage: 'closed_lost', deal_count: 1,  conversion_rate: 33.3 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/funnel`, {}, token)
+  },
+
   // Deal probability trend
   getDealProbabilityTrend: (workspaceId: string, dealId: string, token: string): Promise<{ date: string; probability: number }[]> => {
     if (isDemoMode) {
