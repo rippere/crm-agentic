@@ -57,12 +57,13 @@
 
 - [2026-06-09] Phase 12a: Pipeline velocity analytics — GET /workspaces/{id}/deals/velocity (avg days per stage, groups all deals by current stage, computes avg of now − stage_changed_at); horizontal recharts BarChart on /reports page (color-coded by stage, deal count in tooltip); getDealVelocity() in api-client with 6-stage demo stub; 3 new tests (groups-by-stage, empty-workspace, 403); 415 tests pass (up from 412)
 - [2026-06-10] Phase 12b: Stage conversion funnel — GET /workspaces/{id}/deals/funnel (deal count per stage + stage-to-stage conversion rate, all 6 stages always returned); horizontal funnel visualization on /reports page (proportional bars colored by stage, conversion % annotation between each stage, Filter icon header with total deal count); getDealFunnel() in api-client with demo stub (12→8→5→3→2→1); 3 new tests (groups-by-stage + conversion math, empty-workspace zeros, 403); 417 tests pass
+- [2026-06-11] Phase 12c: Win/loss reason tagging — migration 016_win_loss_reason.sql (CHECK enum: price, competition, timing, fit, champion_left, other); PUT /workspaces/{id}/deals/{id}/outcome (validates enum, sets stage+reason, logs ActivityEvent); GET /workspaces/{id}/deals/outcome-reasons (groups closed deals by reason × won/lost); outcome reason chip on deal detail page with inline 2×3 picker to set/change; Win/Loss Reasons grouped bar chart on /reports page (won=emerald, lost=rose); setDealOutcome()+getDealOutcomeReasons() in api-client with demo stubs; 3 new tests (success, invalid_reason_422, groups_correctly); 421 tests pass
 
 ## Current Phase
 Phase 12 — Analytics & Reporting
 
 ## Next Task
-Phase 12c: Win/loss reason tagging — PUT /workspaces/{id}/deals/{id}/outcome (sets stage to closed_won or closed_lost + stores reason tag from enum: price, competition, timing, fit, champion_left, other); outcome reason chip on deal detail page; reason breakdown chart on /reports page (grouped bar: won vs lost by reason); 3 new tests.
+Phase 12d: Contact activity heatmap — GET /workspaces/{id}/contacts/{id}/activity-heatmap (weekly message + task counts for last 12 weeks); calendar-style heatmap on contact detail page; getContactActivityHeatmap() in api-client with demo stub; 2 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
