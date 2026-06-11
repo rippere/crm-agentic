@@ -1,0 +1,79 @@
+# Global gitignore template — secret & sensitive-file safety net.
+#
+# Install (one-time):
+#   cp scripts/gitignore_global.template ~/.gitignore_global
+#   git config --global core.excludesfile ~/.gitignore_global
+#
+# This is your FIRST line of defense: files matched here are never even staged,
+# so the daily-commit scripts never see them. Keep it broad. Add project-local
+# entries to each repo's own .gitignore as needed.
+
+# ---- Environment & dotenv ----
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.envrc
+
+# ---- Private keys & certificates ----
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.ppk
+*.asc
+*.gpg
+*.kdbx
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.der
+
+# ---- Cloud / service credentials ----
+*credentials*
+!*credentials*.example
+*secret*
+!*secret*.example
+service-account*.json
+serviceaccount*.json
+*-key.json
+gcp-*.json
+.aws/
+aws-credentials
+*.kubeconfig
+kubeconfig
+.netrc
+.npmrc
+.pypirc
+.dockercfg
+.docker/config.json
+.htpasswd
+
+# ---- Tokens / auth ----
+.netlify
+.vercel
+*.token
+.terraform/
+*.tfvars
+!*.tfvars.example
+*.tfstate
+*.tfstate.*
+
+# ---- Databases / dumps (often contain real data) ----
+*.sqlite
+*.sqlite3
+*.db
+*.sql
+*.dump
+
+# ---- OS / editor noise ----
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/

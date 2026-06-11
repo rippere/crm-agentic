@@ -12,6 +12,9 @@
 #
 set -euo pipefail
 
+# Shared secret-leak protection (provides staged_is_safe).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/secret-guard.sh"
+
 # --- Configuration -----------------------------------------------------------
 # Absolute path to the repository this script should commit in.
 # Defaults to the repo this script lives in.
@@ -19,6 +22,10 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # Branch to commit/push to. Empty = use the currently checked-out branch.
 TARGET_BRANCH="${TARGET_BRANCH:-}"
+
+# By default, stage only already-tracked modifications. Untracked files (the
+# usual home of a stray .env/key) are excluded unless you opt in.
+INCLUDE_UNTRACKED="${INCLUDE_UNTRACKED:-0}"
 # -----------------------------------------------------------------------------
 
 cd "$REPO_DIR"
@@ -34,13 +41,34 @@ if [ -n "$TARGET_BRANCH" ]; then
 fi
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
-
-# Build a commit message that reflects what actually changed.
-files_changed="$(git status --porcelain | wc -l | tr -d ' ')"
-summary="$(git status --porcelain | awk '{print $2}' | head -5 | paste -sd ', ' -)"
 stamp="$(date '+%Y-%m-%d')"
 
-git add -A
+# Stage conservatively, starting from a clean index so the secret scan only
+# sees what we are about to commit.
+git reset -q
+if [ "$INCLUDE_UNTRACKED" = "1" ]; then
+  git add -A
+else
+  git add -u
+fi
+
+if [ -z "$(git diff --cached --name-only)" ]; then
+  echo "$(date '+%Y-%m-%d %H:%M:%S') — only untracked files present (set INCLUDE_UNTRACKED=1 to include); nothing to commit."
+  git reset -q
+  exit 0
+fi
+
+# SECRET GATE — fail closed. If anything looks sensitive, commit nothing.
+if ! staged_is_safe "$REPO_DIR"; then
+  echo "$(date '+%Y-%m-%d %H:%M:%S') — left uncommitted for manual review. Fix/ignore the flagged item, then commit by hand." >&2
+  git reset -q
+  exit 1
+fi
+
+# Build a commit message that reflects what actually changed.
+files_changed="$(git diff --cached --name-only | wc -l | tr -d ' ')"
+summary="$(git diff --cached --name-only | head -5 | paste -sd ', ' -)"
+
 git commit -m "chore: daily work checkpoint ($stamp)" \
            -m "${files_changed} file(s) changed: ${summary}"
 
@@ -79,4 +107,19 @@ exit 1
 # Tip: this only greens days you actually worked. If you want more consistent
 # green, the real lever is committing more often — not faking days. Running this
 # at end-of-session, or committing per-feature, will reflect your work honestly.
+#
+# --- Secret-leak protection --------------------------------------------------
+# This script shares the same fail-closed secret gate as daily-commit-all.sh
+# (scripts/lib/secret-guard.sh):
+# - Stages tracked changes only by default; set INCLUDE_UNTRACKED=1 to include
+#   new files (riskier — that's where stray .env/keys usually live).
+# - Blocks sensitive filenames (.env, *.pem/*.key, id_rsa, *credentials*, ...),
+#   secret content patterns (private keys, AWS/GitHub/Slack/Google/Stripe/OpenAI
+#   tokens, JWTs, api_key/password assignments), oversized files, and uses
+#   gitleaks/git-secrets if installed.
+# - On ANY hit it unstages and exits WITHOUT committing, for manual review.
+#
+# Also install the global gitignore template as a first line of defense:
+#   cp scripts/gitignore_global.template ~/.gitignore_global
+#   git config --global core.excludesfile ~/.gitignore_global
 # -----------------------------------------------------------------------------
