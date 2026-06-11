@@ -29,6 +29,7 @@ def _fake_deal(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
     deal.assigned_agent = kwargs.get("assigned_agent", None)
     deal.health_score = kwargs.get("health_score", 100)
     deal.notes = kwargs.get("notes", None)
+    deal.win_loss_reason = kwargs.get("win_loss_reason", None)
     deal.created_at = kwargs.get("created_at", _NOW - timedelta(days=5))
     deal.updated_at = kwargs.get("updated_at", _NOW - timedelta(days=5))
     deal.stage_changed_at = kwargs.get("stage_changed_at", _NOW - timedelta(days=5))
@@ -1103,3 +1104,81 @@ async def test_deal_funnel_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/funnel")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# PUT /workspaces/{wid}/deals/{did}/outcome — win/loss reason tagging
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_deal_outcome_success(app_client):
+    """PUT /outcome sets stage + reason and returns updated deal."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, stage="negotiation")
+
+    scalar_result = _make_scalar_result(deal)
+    mock_db.execute = AsyncMock(return_value=scalar_result)
+    mock_db.commit = AsyncMock()
+    mock_db.refresh = AsyncMock()
+
+    # After commit/refresh the deal attributes are updated
+    deal.stage = "closed_lost"
+    deal.win_loss_reason = "price"
+
+    deal_id = deal.id
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{workspace_id}/deals/{deal_id}/outcome",
+            json={"stage": "closed_lost", "reason": "price"},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["stage"] == "closed_lost"
+    assert data["win_loss_reason"] == "price"
+
+
+@pytest.mark.asyncio
+async def test_set_deal_outcome_invalid_reason_returns_422(app_client):
+    """PUT /outcome with unknown reason returns 422."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, stage="proposal")
+
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(deal))
+
+    deal_id = deal.id
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{workspace_id}/deals/{deal_id}/outcome",
+            json={"stage": "closed_won", "reason": "not_a_real_reason"},
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_outcome_reasons_groups_by_reason(app_client):
+    """GET /outcome-reasons groups closed deals by reason × outcome."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deals = [
+        _fake_deal(workspace_id, stage="closed_won", win_loss_reason="price"),
+        _fake_deal(workspace_id, stage="closed_won", win_loss_reason="price"),
+        _fake_deal(workspace_id, stage="closed_lost", win_loss_reason="price"),
+        _fake_deal(workspace_id, stage="closed_lost", win_loss_reason="timing"),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result(deals))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/outcome-reasons")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    price_row = next((r for r in data if r["reason"] == "price"), None)
+    timing_row = next((r for r in data if r["reason"] == "timing"), None)
+    assert price_row is not None
+    assert price_row["won"] == 2
+    assert price_row["lost"] == 1
+    assert timing_row is not None
+    assert timing_row["won"] == 0
+    assert timing_row["lost"] == 1

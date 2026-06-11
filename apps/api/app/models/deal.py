@@ -24,6 +24,7 @@ class Deal(Base):
     assigned_agent: Mapped[str | None] = mapped_column(String, nullable=True)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
     health_score: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    win_loss_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     stage_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
