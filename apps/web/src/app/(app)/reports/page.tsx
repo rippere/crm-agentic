@@ -52,10 +52,13 @@ const VelocityTooltip = ({ active, payload, label }: { active?: boolean; payload
 
 type FunnelRow = { stage: string; deal_count: number; conversion_rate: number | null; label: string };
 
+type OutcomeReasonRow = { reason: string; label: string; won: number; lost: number };
+
 export default function ReportsPage() {
   const { deals, loading } = useDeals();
   const [velocityData, setVelocityData] = useState<{ stage: string; avg_days: number; deal_count: number; label: string }[]>([]);
   const [funnelData, setFunnelData] = useState<FunnelRow[]>([]);
+  const [outcomeReasons, setOutcomeReasons] = useState<OutcomeReasonRow[]>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -65,6 +68,7 @@ export default function ReportsPage() {
       apiClient.getDealFunnel("demo-workspace-1", "demo-token").then((data) => {
         setFunnelData(data.map((r) => ({ ...r, label: stageConfig[r.stage as keyof typeof stageConfig]?.label ?? r.stage })));
       }).catch(() => {});
+      apiClient.getDealOutcomeReasons("demo-workspace-1", "demo-token").then(setOutcomeReasons).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -78,6 +82,7 @@ export default function ReportsPage() {
       apiClient.getDealFunnel(workspaceId, session.access_token).then((data) => {
         setFunnelData(data.map((r) => ({ ...r, label: stageConfig[r.stage as keyof typeof stageConfig]?.label ?? r.stage })));
       }).catch(() => {});
+      apiClient.getDealOutcomeReasons(workspaceId, session.access_token).then(setOutcomeReasons).catch(() => {});
     });
   }, []);
 
@@ -508,6 +513,51 @@ export default function ReportsPage() {
           </Card>
         );
       })()}
+
+      {/* Win/Loss Reason Breakdown */}
+      {outcomeReasons.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Win / Loss Reasons</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Closed deal count by tagged outcome reason</p>
+            </div>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="flex items-center gap-1.5 text-[#00C896]">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm bg-[#00C896]" /> Won
+              </span>
+              <span className="flex items-center gap-1.5 text-[#F43F5E]">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm bg-[#F43F5E]" /> Lost
+              </span>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={outcomeReasons} margin={{ top: 0, right: 8, left: -24, bottom: 0 }} barCategoryGap="30%">
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis dataKey="label" tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-2">{label}</p>
+                      {payload.map((p) => (
+                        <div key={p.name} className="flex items-center gap-2" style={{ color: p.color }}>
+                          <span>{p.name === "won" ? "Won" : "Lost"}:</span>
+                          <span className="font-mono font-bold">{p.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="won" name="won" fill="#00C896" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              <Bar dataKey="lost" name="lost" fill="#F43F5E" radius={[4, 4, 0, 0]} maxBarSize={28} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
 
       {/* Stale alert */}
       {stats.stale > 0 && (

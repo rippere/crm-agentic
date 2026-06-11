@@ -1133,4 +1133,38 @@ export const apiClient = {
       token,
     )
   },
+
+  // Set a deal's outcome stage (closed_won|closed_lost) and attach a reason tag.
+  setDealOutcome: (
+    workspaceId: string,
+    dealId: string,
+    stage: 'closed_won' | 'closed_lost',
+    reason: string,
+    token: string,
+  ): Promise<Record<string, unknown>> => {
+    if (isDemoMode) return Promise.resolve({ id: dealId, stage, win_loss_reason: reason })
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/outcome`,
+      { method: 'PUT', body: JSON.stringify({ stage, reason }) },
+      token,
+    )
+  },
+
+  // Win/loss reason breakdown: [{reason, label, won, lost}] for all closed deals with a tag.
+  getDealOutcomeReasons: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ reason: string; label: string; won: number; lost: number }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { reason: 'price',        label: 'Price',         won: 2, lost: 5 },
+        { reason: 'competition',  label: 'Competition',   won: 1, lost: 3 },
+        { reason: 'timing',       label: 'Timing',        won: 3, lost: 2 },
+        { reason: 'fit',          label: 'Product Fit',   won: 4, lost: 1 },
+        { reason: 'champion_left',label: 'Champion Left', won: 0, lost: 2 },
+        { reason: 'other',        label: 'Other',         won: 1, lost: 1 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/outcome-reasons`, {}, token)
+  },
 }

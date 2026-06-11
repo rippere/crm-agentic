@@ -21,6 +21,9 @@ from app.models.activity_event import ActivityEvent
 router = APIRouter()
 
 
+OUTCOME_REASONS = ("price", "competition", "timing", "fit", "champion_left", "other")
+
+
 class DealResponse(BaseModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
@@ -35,6 +38,7 @@ class DealResponse(BaseModel):
     assigned_agent: str | None
     notes: str | None
     health_score: int = 100
+    win_loss_reason: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -470,6 +474,103 @@ async def deal_funnel(
         out.append({"stage": stage, "deal_count": count, "conversion_rate": conversion_rate})
 
     return out
+
+
+class SetOutcomeRequest(BaseModel):
+    stage: Literal["closed_won", "closed_lost"]
+    reason: str
+
+
+@router.put("/workspaces/{workspace_id}/deals/{deal_id}/outcome", response_model=DealResponse)
+async def set_deal_outcome(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    body: SetOutcomeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DealResponse:
+    """Set a deal's outcome stage (closed_won|closed_lost) and attach a reason tag."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if body.reason not in OUTCOME_REASONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid reason. Must be one of: {', '.join(OUTCOME_REASONS)}",
+        )
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    old_stage = deal.stage
+    deal.stage = body.stage
+    deal.win_loss_reason = body.reason
+    if body.stage != old_stage:
+        deal.stage_changed_at = datetime.now(timezone.utc)
+
+    db.add(deal)
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="deal_moved",
+        agent_name="System",
+        description=f"Deal '{deal.title}' → {body.stage} (reason: {body.reason})",
+        severity="info",
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(deal)
+    return DealResponse.model_validate(deal)
+
+
+@router.get("/workspaces/{workspace_id}/deals/outcome-reasons")
+async def outcome_reasons(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Count closed deals grouped by win_loss_reason × outcome (won/lost).
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.win_loss_reason.is_not(None),
+        )
+    )
+    deals = result.scalars().all()
+
+    buckets: dict[str, dict[str, int]] = {r: {"won": 0, "lost": 0} for r in OUTCOME_REASONS}
+    for deal in deals:
+        reason = deal.win_loss_reason
+        if reason not in buckets:
+            continue
+        if deal.stage == "closed_won":
+            buckets[reason]["won"] += 1
+        else:
+            buckets[reason]["lost"] += 1
+
+    reason_labels = {
+        "price": "Price",
+        "competition": "Competition",
+        "timing": "Timing",
+        "fit": "Product Fit",
+        "champion_left": "Champion Left",
+        "other": "Other",
+    }
+    return [
+        {"reason": r, "label": reason_labels[r], "won": v["won"], "lost": v["lost"]}
+        for r, v in buckets.items()
+        if v["won"] > 0 or v["lost"] > 0
+    ]
 
 
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)

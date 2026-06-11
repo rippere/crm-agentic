@@ -41,8 +41,18 @@ type DealDetail = {
   expected_close: string | null;
   assigned_agent: string | null;
   notes: string | null;
+  win_loss_reason: string | null;
   created_at: string | null;
 };
+
+const OUTCOME_REASONS = [
+  { value: "price",         label: "Price" },
+  { value: "competition",   label: "Competition" },
+  { value: "timing",        label: "Timing" },
+  { value: "fit",           label: "Product Fit" },
+  { value: "champion_left", label: "Champion Left" },
+  { value: "other",         label: "Other" },
+];
 
 type TimelineEvent = {
   id: string;
@@ -288,6 +298,9 @@ export default function DealDetailPage() {
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [emailLoading, setEmailLoading] = useState(false);
 
+  const [outcomePickerOpen, setOutcomePickerOpen] = useState(false);
+  const [outcomeSaving, setOutcomeSaving] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -381,6 +394,20 @@ export default function DealDetailPage() {
       const res = await apiClient.triggerAgent("pipeline_optimizer", token) as { job_id?: string };
       if (res?.job_id) optimizePoller.start(res.job_id);
     } catch { /* ignore */ }
+  };
+
+  const handleSetOutcome = async (reason: string) => {
+    if (!token || !workspaceId || !deal) return;
+    const outcomeStage = deal.stage === "closed_won" || deal.stage === "closed_lost"
+      ? (deal.stage as "closed_won" | "closed_lost")
+      : "closed_lost";
+    setOutcomeSaving(true);
+    try {
+      const updated = (await apiClient.setDealOutcome(workspaceId, deal.id, outcomeStage, reason, token)) as DealDetail;
+      setDeal((prev) => prev ? { ...prev, win_loss_reason: updated.win_loss_reason ?? reason } : null);
+      setOutcomePickerOpen(false);
+    } catch { /* ignore */ }
+    finally { setOutcomeSaving(false); }
   };
 
   const handleDelete = async () => {
@@ -539,15 +566,70 @@ export default function DealDetailPage() {
             )}
 
             {isClosedStage && (
-              <div className={cn(
-                "rounded-xl border px-4 py-3 text-center",
-                stage === "closed_won"
-                  ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400"
-                  : "border-rose-500/20 bg-rose-500/5 text-rose-400"
-              )}>
-                <span className="text-sm font-semibold">
-                  {stage === "closed_won" ? "🏆 Closed Won" : "✗ Closed Lost"}
-                </span>
+              <div className="space-y-2">
+                <div className={cn(
+                  "rounded-xl border px-4 py-3 text-center",
+                  stage === "closed_won"
+                    ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400"
+                    : "border-rose-500/20 bg-rose-500/5 text-rose-400"
+                )}>
+                  <span className="text-sm font-semibold">
+                    {stage === "closed_won" ? "🏆 Closed Won" : "✗ Closed Lost"}
+                  </span>
+                </div>
+
+                {/* Outcome reason chip */}
+                {deal.win_loss_reason ? (
+                  <div className="flex items-center gap-2">
+                    <span className={cn(
+                      "flex-1 text-center text-xs font-mono font-medium rounded-lg px-3 py-1.5 border",
+                      stage === "closed_won"
+                        ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                        : "border-rose-500/20 bg-rose-500/10 text-rose-300"
+                    )}>
+                      {OUTCOME_REASONS.find((r) => r.value === deal.win_loss_reason)?.label ?? deal.win_loss_reason}
+                    </span>
+                    <button
+                      onClick={() => setOutcomePickerOpen((v) => !v)}
+                      className="text-[10px] text-zinc-500 hover:text-zinc-300 underline transition-colors"
+                    >
+                      change
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setOutcomePickerOpen((v) => !v)}
+                    className="w-full rounded-lg border border-dashed border-zinc-700 px-3 py-2 text-xs text-zinc-500 hover:border-zinc-500 hover:text-zinc-300 transition-all"
+                  >
+                    + Tag reason
+                  </button>
+                )}
+
+                {/* Inline reason picker */}
+                {outcomePickerOpen && (
+                  <div className="grid grid-cols-2 gap-1 pt-1">
+                    {OUTCOME_REASONS.map((r) => (
+                      <button
+                        key={r.value}
+                        onClick={() => handleSetOutcome(r.value)}
+                        disabled={outcomeSaving}
+                        className={cn(
+                          "rounded-lg border px-2 py-1.5 text-[11px] font-medium transition-all",
+                          deal.win_loss_reason === r.value
+                            ? stage === "closed_won"
+                              ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                              : "border-rose-500/40 bg-rose-500/15 text-rose-300"
+                            : "border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200",
+                          outcomeSaving && "opacity-50 cursor-not-allowed"
+                        )}
+                      >
+                        {outcomeSaving && deal.win_loss_reason === r.value
+                          ? <Loader2 className="h-3 w-3 animate-spin mx-auto" />
+                          : r.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </Card>
