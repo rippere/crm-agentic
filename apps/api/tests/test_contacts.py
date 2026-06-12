@@ -1135,3 +1135,45 @@ async def test_put_tags_not_found_returns_404(app_client):
         )
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/activity-heatmap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_activity_heatmap_returns_12_weeks(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    # db.execute is called 3 times: contact lookup, messages query, notes query
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_scalars_result([]),
+        _make_scalars_result([]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact.id}/activity-heatmap")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 12
+    assert "week_start" in data[0]
+    assert "messages" in data[0]
+    assert "notes" in data[0]
+    assert "total" in data[0]
+    # All counts should be 0 (no mock messages or notes)
+    assert all(w["total"] == 0 for w in data)
+
+
+@pytest.mark.asyncio
+async def test_activity_heatmap_contact_not_found_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/activity-heatmap")
+
+    assert resp.status_code == 404

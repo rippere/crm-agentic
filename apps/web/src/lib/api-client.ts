@@ -1167,4 +1167,36 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/outcome-reasons`, {}, token)
   },
+
+  // Contact activity heatmap: 12-week weekly message + note counts (oldest → newest).
+  getContactActivityHeatmap: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<Array<{ week_start: string; messages: number; notes: number; total: number }>> => {
+    if (isDemoMode) {
+      const seed = contactId.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+      const now = new Date()
+      const dayOfWeek = now.getDay()
+      const monday = new Date(now)
+      monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7))
+      return Promise.resolve(
+        Array.from({ length: 12 }, (_, idx) => {
+          const i = 11 - idx
+          const ws = new Date(monday)
+          ws.setDate(monday.getDate() - i * 7)
+          const s = (seed + i * 37) % 100
+          const messages = s < 20 ? 0 : s < 50 ? 1 : s < 70 ? 2 : s < 85 ? 3 : s < 95 ? 4 : 5
+          const notes = (seed + i * 13) % 3
+          return {
+            week_start: ws.toISOString().slice(0, 10),
+            messages,
+            notes,
+            total: messages + notes,
+          }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/activity-heatmap`, {}, token)
+  },
 }

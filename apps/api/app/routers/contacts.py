@@ -2,7 +2,7 @@ import csv
 import io
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import anthropic as _anthropic
 from typing import Literal
@@ -1053,3 +1053,63 @@ async def create_contact_note(
     await db.commit()
     await db.refresh(note)
     return ContactNoteResponse.model_validate(note)
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/activity-heatmap")
+async def contact_activity_heatmap(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return weekly message + note counts for the last 12 weeks (Mon–Sun buckets)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+
+    today = datetime.utcnow().date()
+    this_monday = today - timedelta(days=today.weekday())
+    # Oldest-first list of 12 week-start dates
+    week_starts = [this_monday - timedelta(weeks=i) for i in range(11, -1, -1)]
+    cutoff = datetime.combine(week_starts[0], datetime.min.time())
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= cutoff,
+        )
+    )
+    messages = msg_result.scalars().all()
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+            ContactNote.created_at >= cutoff,
+        )
+    )
+    notes = note_result.scalars().all()
+
+    output = []
+    for ws in week_starts:
+        we = ws + timedelta(weeks=1)
+        ws_dt = datetime.combine(ws, datetime.min.time())
+        we_dt = datetime.combine(we, datetime.min.time())
+        msgs = sum(1 for m in messages if m.received_at and ws_dt <= m.received_at < we_dt)
+        nts = sum(1 for n in notes if n.created_at and ws_dt <= n.created_at < we_dt)
+        output.append({
+            "week_start": ws.isoformat(),
+            "messages": msgs,
+            "notes": nts,
+            "total": msgs + nts,
+        })
+
+    return output
