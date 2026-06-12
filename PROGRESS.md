@@ -66,6 +66,9 @@ Phase 12 — Analytics & Reporting
 ## Next Task
 Phase 12e: Deal timeline sparkline — add a compact recharts AreaChart on the deal detail page showing deal value changes over time (from activity events or a new endpoint); GET /workspaces/{id}/deals/{id}/timeline-summary endpoint aggregating value/stage-change events by week; getDealTimelineSummary() in api-client with demo stub; 2 new tests.
 
+## Planned / Backlog
+- **Help & FAQ + Feedback Loop** (requested 2026-06-12): Add an in-app "How-To" and FAQ section to educate users on NovaCRM's features (onboarding walkthroughs, per-page guidance, searchable FAQ entries). Pair it with a feedback-capture loop so users can submit questions, report confusion, and request improvements directly from the help surface — feeding a backlog of user-driven enhancements. Scope to define: `/help` route (or slide-over panel) with categorized how-to articles + FAQ accordion; feedback submission form (POST endpoint + storage table) with optional context tagging (page, feature); admin/owner view to triage submitted feedback; demo-mode stubs; tests.
+
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
 - Local DATABASE_URL points to localhost:5433 (Docker Postgres) — /health returns `degraded` locally unless docker-compose is running. Supabase production credentials ARE present in apps/api/.env and apps/web/.env.local.
