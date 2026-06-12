@@ -16,7 +16,7 @@ import {
   ArrowLeft, Mail, Brain, Zap, TrendingUp, TrendingDown, Minus,
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
-  Star, Calendar, X, Plus, Send,
+  Star, Calendar, X, Plus, Send, BarChart2,
 } from "lucide-react";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -76,6 +76,13 @@ type DealRow = {
   health_score: number;
   ml_win_probability: number;
   expected_close: string | null;
+};
+
+type HeatmapWeek = {
+  week_start: string;
+  messages: number;
+  notes: number;
+  total: number;
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -309,6 +316,8 @@ export default function ContactDetailPage() {
   const [dealsLoading, setDealsLoading] = useState(false);
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [heatmap, setHeatmap] = useState<HeatmapWeek[]>([]);
+  const [heatmapLoading, setHeatmapLoading] = useState(false);
 
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -403,6 +412,7 @@ export default function ContactDetailPage() {
     setTimelineLoading(true);
     setDealsLoading(true);
     setTasksLoading(true);
+    setHeatmapLoading(true);
 
     apiClient
       .getContactTimeline(workspaceId, contactId, token)
@@ -421,6 +431,12 @@ export default function ContactDetailPage() {
       .then((data: TaskRow[]) => setTasks(Array.isArray(data) ? data : []))
       .catch(() => setTasks([]))
       .finally(() => setTasksLoading(false));
+
+    apiClient
+      .getContactActivityHeatmap(workspaceId, contactId, token)
+      .then((data: HeatmapWeek[]) => setHeatmap(Array.isArray(data) ? data : []))
+      .catch(() => setHeatmap([]))
+      .finally(() => setHeatmapLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -861,6 +877,57 @@ export default function ContactDetailPage() {
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </Card>
+
+          {/* 12-Week Activity Heatmap */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-indigo-400" />
+              <p className="text-sm font-semibold text-zinc-200">12-Week Activity</p>
+            </div>
+
+            {heatmapLoading ? (
+              <div className="flex gap-1">
+                {Array.from({ length: 12 }).map((_, i) => (
+                  <div key={i} className="flex-1 h-8 rounded bg-zinc-800 animate-pulse" />
+                ))}
+              </div>
+            ) : heatmap.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-4 text-center">
+                <BarChart2 className="h-6 w-6 text-zinc-700" />
+                <p className="text-xs text-zinc-500">No activity data.</p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="flex gap-1">
+                  {heatmap.map((w) => {
+                    const bg =
+                      w.total === 0 ? "bg-zinc-800" :
+                      w.total === 1 ? "bg-indigo-900" :
+                      w.total <= 3 ? "bg-indigo-700" :
+                      w.total <= 5 ? "bg-indigo-500" : "bg-indigo-400";
+                    return (
+                      <div
+                        key={w.week_start}
+                        title={`${w.week_start}: ${w.total} event${w.total !== 1 ? "s" : ""} (${w.messages} msg, ${w.notes} note${w.notes !== 1 ? "s" : ""})`}
+                        className={cn("flex-1 h-8 rounded cursor-default transition-opacity hover:opacity-75", bg)}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[10px] text-zinc-600">{heatmap[0]?.week_start}</span>
+                  <span className="text-[10px] text-zinc-600">This week</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-zinc-500">Less</span>
+                  {(["bg-zinc-800", "bg-indigo-900", "bg-indigo-700", "bg-indigo-500", "bg-indigo-400"] as const).map((c, i) => (
+                    <span key={i} className={cn("h-3 w-3 rounded-sm", c)} />
+                  ))}
+                  <span className="text-[10px] text-zinc-500">More</span>
+                </div>
               </div>
             )}
           </Card>
