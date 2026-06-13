@@ -288,3 +288,75 @@ async def test_two_principals_same_ip_independent_buckets_end_to_end():
         app.dependency_overrides.clear()
         if hasattr(_limiter, "reset"):
             _limiter.reset()
+
+
+# ---------------------------------------------------------------------------
+# 4. Long-queue routing is gated (deploy-safe by default)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled,expect_long", [(False, False), (True, True)])
+async def test_reprocess_queue_routing_is_flag_gated(enabled, expect_long, monkeypatch):
+    """LONG_QUEUE_ENABLED gates whether reprocess routes to the isolated `long`
+    queue. Default OFF => no queue kwarg, so the task takes the default queue and
+    the existing worker consumes it (deploy-safe without the `-Q default,long`
+    worker change). ON => queue='long'."""
+    from app.main import app
+    from app.config import settings as _settings
+    from app.dependencies import get_db, get_current_user
+
+    monkeypatch.setattr(_settings, "LONG_QUEUE_ENABLED", enabled)
+
+    ws = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    uid = uuid.UUID("33333333-3333-3333-3333-333333333333")
+    user = MagicMock()
+    user.workspace_id = ws
+    user.role = "admin"
+    user.id = uuid.uuid4()
+    user.supabase_uid = uid
+
+    db = AsyncMock()
+    count_res = MagicMock()
+    count_res.scalar_one.return_value = 1
+    db.execute = AsyncMock(return_value=count_res)
+
+    async def _get_db():
+        yield db
+
+    async def _get_user():
+        return user
+
+    app.dependency_overrides[get_db] = _get_db
+    app.dependency_overrides[get_current_user] = _get_user
+
+    fake_task = MagicMock()
+    fake_task.id = "job-x"
+
+    from app.limiter import limiter as _limiter
+    if hasattr(_limiter, "reset"):
+        _limiter.reset()
+
+    try:
+        with patch("app.services.auth.verify_supabase_jwt", side_effect=lambda t: {"sub": str(uid)}), \
+             patch("app.services.auth.extract_supabase_uid", side_effect=lambda p: uuid.UUID(p["sub"])), \
+             patch("app.workers.ingest.reprocess_workspace_messages") as mock_task, \
+             patch("app.routers.agents._mark_job_dispatched"):
+            mock_task.apply_async.return_value = fake_task
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as ac:
+                r = await ac.post(
+                    f"/workspaces/{ws}/messages/reprocess",
+                    headers={"Authorization": "Bearer tok"},
+                )
+        assert r.status_code == 202
+        kwargs = mock_task.apply_async.call_args.kwargs
+        if expect_long:
+            assert kwargs.get("queue") == "long"
+        else:
+            assert kwargs.get("queue") != "long"
+    finally:
+        app.dependency_overrides.clear()
+        if hasattr(_limiter, "reset"):
+            _limiter.reset()
