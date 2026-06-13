@@ -916,6 +916,23 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/funnel`, {}, token)
   },
 
+  // Deal activity timeline summary (weekly buckets, last 12 weeks)
+  getDealTimelineSummary: (workspaceId: string, dealId: string, token: string): Promise<{ week: string; events: number }[]> => {
+    if (isDemoMode) {
+      const now = Date.now()
+      return Promise.resolve(
+        Array.from({ length: 12 }, (_, i) => {
+          const dt = new Date(now - (11 - i) * 7 * 86400000)
+          const label = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          // Seed deterministic event counts from dealId + week index
+          const seed = (dealId.charCodeAt(dealId.length - 1) * (i + 1)) % 5
+          return { week: label, events: seed }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/timeline-summary`, {}, token)
+  },
+
   // Deal probability trend
   getDealProbabilityTrend: (workspaceId: string, dealId: string, token: string): Promise<{ date: string; probability: number }[]> => {
     if (isDemoMode) {
