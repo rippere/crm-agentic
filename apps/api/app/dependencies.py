@@ -1,12 +1,12 @@
 import logging
 import uuid
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import get_db, set_tenant_context
 from app.models.user import User
 from app.services.auth import verify_supabase_jwt, extract_supabase_uid
 
@@ -16,12 +16,21 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/verify", auto_error=True)
 
 
 async def get_current_user(
+    request: Request = None,  # type: ignore[assignment]
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """
     Validate Bearer JWT, look up the User row, and return it.
     Auto-provisions the user (and workspace if needed) on first hit.
+
+    Side effects (both safe no-ops when not applicable):
+      * Sets ``request.state.user`` so the rate limiter keys per authenticated
+        principal instead of silently collapsing to a single shared proxy IP
+        (F5 / evidence-cost-dos.md A1).
+      * Binds the tenant identity to the DB transaction via ``set_tenant_context``
+        so migration 013's workspace RLS policies resolve under a non-BYPASSRLS
+        role (F3). INERT unless ``DB_RLS_CONTEXT_ENABLED`` is set.
     """
     from app.models.workspace import Workspace
 
@@ -103,6 +112,18 @@ async def get_current_user(
         # carries it (best-effort; never blocks the request).
         if synced_workspace_id is not None:
             await _sync_workspace_metadata(str(supabase_uid), str(synced_workspace_id))
+
+    # F5: expose the authenticated principal to the rate limiter (per-user bucket).
+    # request may be None in unit tests that call this helper directly.
+    if request is not None:
+        request.state.user = user
+
+    # F3: bind tenant identity to this request's DB transaction (inert unless the
+    # flag is on). Best-effort: never fail the request on a context-binding error.
+    try:
+        await set_tenant_context(db, user.workspace_id, user.supabase_uid)
+    except Exception:  # noqa: BLE001
+        logger.warning("event=set_tenant_context_failed workspace_id=%s", user.workspace_id)
 
     return user
 

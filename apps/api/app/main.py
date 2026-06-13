@@ -104,6 +104,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Rate-limit principal resolver (F5) ────────────────────────────────────────
+# SlowAPIMiddleware evaluates the limiter key_func BEFORE route dependencies run,
+# so setting request.state.user inside get_current_user is too late for the
+# limiter — it would still key on the (shared, behind-proxy) client IP, which is
+# the exact defect in evidence-cost-dos.md (A1: one global bucket for all
+# tenants). This middleware runs OUTERMOST (registered after SlowAPIMiddleware,
+# so it wraps it) and pre-populates request.state.user with a lightweight
+# principal derived from the verified bearer token, so the limiter buckets
+# per-authenticated-user. No DB hit: the principal id is the JWT subject
+# (supabase_uid), which is stable per user. get_current_user still overwrites
+# request.state.user with the full User row for downstream use.
+#
+# Authenticated requests therefore NEVER silently fall back to a shared IP bucket.
+# Unauthenticated/pre-auth requests (no/invalid token) legitimately key by IP.
+class _RatePrincipal:
+    __slots__ = ("id",)
+
+    def __init__(self, principal_id: str) -> None:
+        self.id = principal_id
+
+
+@app.middleware("http")
+async def resolve_rate_principal(request: Request, call_next):
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth and auth.lower().startswith("bearer "):
+        token = auth.split(" ", 1)[1].strip()
+        try:
+            from app.services.auth import verify_supabase_jwt, extract_supabase_uid
+
+            payload = verify_supabase_jwt(token)
+            uid = extract_supabase_uid(payload)
+            request.state.user = _RatePrincipal(str(uid))
+        except Exception:  # noqa: BLE001 — invalid token => leave unset, key by IP
+            pass
+    return await call_next(request)
+
+
 # ── Request logging middleware ────────────────────────────────────────────────
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

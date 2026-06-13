@@ -3,16 +3,18 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.limiter import limiter
 from app.models.user import User
 from app.models.message import Message
 from app.models.clarity_score import ClarityScore
+from app.services.llm_budget import check_and_reserve, estimate_reprocess_tokens
 
 router = APIRouter()
 
@@ -147,19 +149,43 @@ class ReprocessResponse(BaseModel):
     response_model=ReprocessResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
+@limiter.limit(settings.REPROCESS_RATE_LIMIT)
 async def reprocess_messages(
+    request: Request,
     workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ReprocessResponse:
     """Enqueue a non-destructive re-enrichment + relevance-flagging pass over all
     existing messages in the workspace. Returns the Celery task id as job_id so the
-    frontend can poll /jobs/{id}."""
+    frontend can poll /jobs/{id}.
+
+    F5 cost/DoS hardening: this endpoint is the heaviest model-call amplifier
+    (~4 model calls per message, previously un-rate-limited and unbounded). It is
+    now (1) per-principal rate-limited, (2) capped/charged against the workspace's
+    LLM token budget *before* enqueue based on the message count, and (3) routed
+    to the dedicated low-concurrency `long` Celery queue so it cannot pin the pool
+    that serves short enrich/scoring jobs.
+    """
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # Bound the per-call fan-out: count the workspace's messages and reserve the
+    # estimated token spend against the per-workspace budget (HTTP 429 if over).
+    # The count is also clamped to REPROCESS_MAX_MESSAGES so an enormous mailbox
+    # cannot translate into an unbounded single-task fan-out.
+    count_result = await db.execute(
+        select(func.count()).select_from(Message).where(Message.workspace_id == workspace_id)
+    )
+    message_count = int(count_result.scalar_one() or 0)
+    effective_count = min(message_count, settings.REPROCESS_MAX_MESSAGES)
+    estimated_tokens = await estimate_reprocess_tokens(effective_count)
+    await check_and_reserve(workspace_id, estimated_tokens)
 
     from app.workers.ingest import reprocess_workspace_messages
     from app.routers.agents import _mark_job_dispatched
 
-    task = reprocess_workspace_messages.delay(str(workspace_id))
+    # Route to the isolated long-jobs queue (see workers/celery_app.py task_routes).
+    task = reprocess_workspace_messages.apply_async(args=[str(workspace_id)], queue="long")
     _mark_job_dispatched(task.id, str(workspace_id))
     return ReprocessResponse(job_id=task.id)
