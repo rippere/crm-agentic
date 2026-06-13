@@ -20,7 +20,9 @@ not just asserted), and **status**. "DEPLOYED" = live on Railway; "VERIFIED" = r
 - **Exit test.** Re-run the authorized probe: a no-`?secret=` POST to `/webhooks/gmail/push` returns
   **403**, not 204; a correctly-signed push still returns 204. Confirm the env var is present in
   prod. Confirm startup logs the guard.
-- **Status.** OPEN → **this is the immediate next task after Phase 4.**
+- **Status.** MERGED (`76839ee`, PR #2) — `_verify_pubsub_secret` now fails closed when the secret is
+  unset. **Residual (ops):** `GMAIL_WEBHOOK_SECRET` + `GMAIL_PUBSUB_TOPIC` still unset in Railway, so
+  the webhook rejects everything (Gmail push ingest inert in prod until set). MERGED → DEPLOYED pending.
 
 ### 2. F2 — Workspace rebind closed *(finish the staged fix)*
 - **Fix.** Complete `fix/ws-b`: stop trusting `user_metadata.workspace_id`. Remove the `/auth/verify`
@@ -33,7 +35,9 @@ not just asserted), and **status**. "DEPLOYED" = live on Railway; "VERIFIED" = r
   pair of test users: after self-writing a foreign `workspace_id`, `/auth/verify` + `/me` must **not**
   rebind, and the cross-tenant `GET /workspaces/{B}/contacts` must return **403**. Tear down test
   users.
-- **Status.** FIX-STAGED (`fix/ws-b`, 5252714).
+- **Status.** MERGED — `dependencies.py` binds workspace only from server-only `app_metadata` via
+  `_read_bound_workspace_id`; user-writable metadata is no longer trusted. **Residual (ops):**
+  `app_metadata` backfill for existing users + cutover confirmation. MERGED → DEPLOYED pending.
 
 ### 3. CLAIM — Substantiate-or-soften the landing page *(parallel, no engineering)*
 - **Fix.** From `REMEDIATION_REPORT.md` §5: remove "SOC 2 Type II", "99.9% uptime"/"99.99% SLA",
@@ -43,7 +47,11 @@ not just asserted), and **status**. "DEPLOYED" = live on Railway; "VERIFIED" = r
   `fix/honest-marketing-claims` branch was never written.
 - **Exit test.** `grep` the rendered `page.tsx` for each removed string → zero hits; every remaining
   performance/model claim maps to a real code path.
-- **Status.** OPEN. Runs in parallel with 1–2 because it is copy, not code.
+- **Status.** PARTIALLY FIXED — the compliance badges (SOC 2 / 99.9% uptime / GDPR) were removed
+  earlier, but the fabricated ML lineup (94.7% "Accuracy", `XGBoost v2`, `F1: 0.947`,
+  `GPT-4o Fine-tuned`, `RoBERTa Fine-tuned`, `LightGBM`, the `f1:0.947→0.951` log line) is
+  **still live** on `apps/web/src/app/page.tsx`. Fix in progress today (lane `claims`). Runs in
+  parallel because it is copy, not code.
 
 ### 4. F6 — Scheduled agents actually run *(finish in-progress fix)*
 - **Fix.** Complete `fix/ws-d-agent-execution`: replace the two `args: []` per-workspace beat entries
@@ -54,7 +62,10 @@ not just asserted), and **status**. "DEPLOYED" = live on Railway; "VERIFIED" = r
   without TypeError; at least one deal's `health_score` is recomputed off the default 100; the
   `health_score <= 40` follow-up sweep now selects the intended deals. Check Celery result states are
   SUCCESS, not FAILURE.
-- **Status.** IN PROGRESS (`fix/ws-d-agent-execution`).
+- **Status.** MERGED — `workers/celery_app.py` `beat_schedule` now points at the no-arg fan-out
+  dispatchers `optimize_pipeline_all` / `compute_deal_health_all`. **Residual:** verify a scheduled
+  cycle runs SUCCESS and recomputes a `health_score` off the default 100 in prod. MERGED → VERIFIED
+  pending.
 
 ---
 
@@ -77,7 +88,11 @@ not just asserted), and **status**. "DEPLOYED" = live on Railway; "VERIFIED" = r
   API role → it returns **0 rows / is denied** (RLS now applies), proving the backstop is live. Re-run
   the `../poc_jobs_idom.py`-style check → a Workspace-B caller gets **404**, not Workspace-A's result.
   Confirm the app still functions end-to-end under the new role (existing pytest suite + a smoke pass).
-- **Status.** OPEN (both).
+- **Status.** **F4 MERGED** — `routers/agents.py:get_job_status` reads the owning workspace from the
+  dispatch marker (`_job_owner_workspace`) and returns 404 on mismatch (`76839ee`, PR #2). **F3 OPEN**
+  — `013_force_rls.sql` shipped but **INERT**: the API still connects as a shared `BYPASSRLS` role, so
+  FORCE RLS does not constrain it and `call_summaries` is still effectively policy-free at runtime.
+  Code prep in progress today (lane `rls-dos`), gated behind a flag until the ops role-swap cutover.
 
 ### 6. F7 — Real contact erasure *(also satisfies the GDPR claim's substance)*
 - **Fix.** In `delete_contact`, before `db.delete(contact)`, explicitly delete or scrub PII on the
@@ -86,7 +101,9 @@ not just asserted), and **status**. "DEPLOYED" = live on Railway; "VERIFIED" = r
 - **Exit test.** Reproduce `../phase2/evidence-delete-contact.md`: after deleting a contact with linked
   children, the child rows carrying PII (`messages.sender_email`/`body_plain`,
   `call_summaries.transcript`/`summary`) are **gone or scrubbed**, not orphaned with `contact_id` NULL.
-- **Status.** OPEN.
+- **Status.** OPEN — `delete_contact` still only does `db.delete(contact)` and its docstring falsely
+  claims it removes "all cascade-linked records"; linked PII is orphaned. Fix in progress today (lane
+  `delete-cascade`).
 
 ---
 
@@ -104,7 +121,9 @@ not just asserted), and **status**. "DEPLOYED" = live on Railway; "VERIFIED" = r
 - **Exit test.** Two test tenants on the same proxy get **independent** rate buckets (one being
   throttled does not throttle the other). A tenant exceeding its budget is blocked before the model
   call. A long reprocess job no longer blocks a second tenant's short jobs.
-- **Status.** OPEN.
+- **Status.** OPEN — `limiter.py` keys on IP because `request.state.user` is never set, so it degrades
+  to one global bucket; no per-tenant spend cap; `reprocess` unbounded. Code prep in progress today
+  (lane `rls-dos`).
 
 ### 8. Posture hardening (carry-over from the claims/security registers)
 - Add a **public status page + real uptime monitoring** before re-introducing any uptime language.

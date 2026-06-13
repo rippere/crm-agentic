@@ -379,7 +379,6 @@ export const demoAgents: Agent[] = [
     description:
       'Classifies incoming contacts and messages using sentence-transformer embeddings. Assigns semantic tags like enterprise, startup, technical-buyer with confidence scores.',
     model: 'sentence-transformers/all-MiniLM-L6-v2',
-    accuracy: 94,
     tasksToday: 312,
     lastRun: '2 min ago',
     metrics: [
@@ -400,20 +399,19 @@ export const demoAgents: Agent[] = [
     type: 'lead_scorer',
     status: 'active',
     description:
-      'Scores contacts 0–100 using a gradient-boosted model trained on historical conversion data. Updates scores on new activity signals.',
-    model: 'xgboost-v2.1-crm',
-    accuracy: 91,
+      'Scores contacts 0–100 from engagement signals and contact embeddings. Updates scores on new activity signals.',
+    model: 'Embedding + engagement scoring',
     tasksToday: 178,
     lastRun: '5 min ago',
     metrics: [
       { label: 'Scores Updated', value: '178', delta: '+12%' },
       { label: 'Hot Leads', value: '23' },
-      { label: 'F1 Score', value: '0.91' },
+      { label: 'Avg Score', value: '67' },
     ],
     workflow: [
       { id: 'w1', label: 'Activity Signal', type: 'trigger', position: { x: 0, y: 0 } },
-      { id: 'w2', label: 'Feature Extract', type: 'action', position: { x: 1, y: 0 } },
-      { id: 'w3', label: 'XGBoost Predict', type: 'action', position: { x: 2, y: 0 } },
+      { id: 'w2', label: 'Embed Signals', type: 'action', position: { x: 1, y: 0 } },
+      { id: 'w3', label: 'Score Lead', type: 'action', position: { x: 2, y: 0 } },
       { id: 'w4', label: 'Update Score', type: 'output', position: { x: 3, y: 0 } },
     ],
   },
@@ -423,15 +421,14 @@ export const demoAgents: Agent[] = [
     type: 'email_composer',
     status: 'idle',
     description:
-      'Generates personalised outreach emails using Claude claude-sonnet-4-6. Context-aware — pulls in contact history, deal stage, and semantic tags.',
-    model: 'claude-sonnet-4-6',
-    accuracy: 88,
+      'Drafts personalised outreach emails with Claude (Haiku). Context-aware — pulls in contact history, deal stage, and semantic tags.',
+    model: 'Claude (Haiku)',
     tasksToday: 41,
     lastRun: '1h ago',
     metrics: [
       { label: 'Drafts Created', value: '41' },
-      { label: 'Open Rate', value: '34%', delta: '+5%' },
-      { label: 'Reply Rate', value: '18%' },
+      { label: 'Awaiting Review', value: '7' },
+      { label: 'Sent Today', value: '34' },
     ],
     workflow: [
       { id: 'w1', label: 'Compose Request', type: 'trigger', position: { x: 0, y: 0 } },
@@ -447,8 +444,7 @@ export const demoAgents: Agent[] = [
     status: 'processing',
     description:
       'Transcribes and summarises sales calls. Extracts action items, objections, and next steps. Pushes summaries to contact timeline.',
-    model: 'whisper-large-v3 + claude-haiku',
-    accuracy: 89,
+    model: 'Whisper + Claude (Sonnet)',
     tasksToday: 14,
     lastRun: 'Just now',
     metrics: [
@@ -470,8 +466,7 @@ export const demoAgents: Agent[] = [
     status: 'active',
     description:
       'Analyses deal velocity and stage durations. Flags stalled deals and recommends next-best actions to unblock pipeline.',
-    model: 'heuristic-v3 + gpt-4o-mini',
-    accuracy: 86,
+    model: 'Deal velocity heuristics',
     tasksToday: 29,
     lastRun: '15 min ago',
     metrics: [
@@ -493,8 +488,7 @@ export const demoAgents: Agent[] = [
     status: 'idle',
     description:
       'Runs sentiment analysis on inbound emails and call transcripts. Detects churn risk signals and flags at-risk accounts.',
-    model: 'cardiffnlp/twitter-roberta-base-sentiment',
-    accuracy: 83,
+    model: 'Claude (Haiku)',
     tasksToday: 96,
     lastRun: '45 min ago',
     metrics: [
@@ -504,7 +498,7 @@ export const demoAgents: Agent[] = [
     ],
     workflow: [
       { id: 'w1', label: 'New Message', type: 'trigger', position: { x: 0, y: 0 } },
-      { id: 'w2', label: 'RoBERTa Classify', type: 'action', position: { x: 1, y: 0 } },
+      { id: 'w2', label: 'Analyze with Claude', type: 'action', position: { x: 1, y: 0 } },
       { id: 'w3', label: 'Threshold Check', type: 'condition', position: { x: 2, y: 0 } },
       { id: 'w4', label: 'Update Risk Flag', type: 'output', position: { x: 3, y: 0 } },
     ],
@@ -536,7 +530,7 @@ export const demoActivity: ActivityEvent[] = [
     type: 'email_sent',
     agentName: 'Email Composer',
     description: 'generated draft for Marcus Rivera — Re: Enterprise Proposal',
-    meta: 'open_rate_est: 72%',
+    meta: 'proposal stage · awaiting review',
     timestamp: '22 min ago',
     severity: 'success',
   },
@@ -596,8 +590,8 @@ export const demoActivity: ActivityEvent[] = [
     id: 'ev-010',
     type: 'model_updated',
     agentName: 'Lead Scorer',
-    description: 'retrained on last 90 days of closed deals — accuracy improved to 91%',
-    meta: 'prev: 88%, Δ+3%',
+    description: 're-scored all contacts on last 90 days of closed deals',
+    meta: 'hot: 23, warm: 61, cold: 38',
     timestamp: '5 hours ago',
     severity: 'success',
   },
@@ -665,12 +659,12 @@ export const demoMessages: DemoMessage[] = [
     sender_email: 'sarah.chen@techcorp.com',
     received_at: new Date(Date.now() - 2 * 3600000).toISOString(),
     body_plain:
-      'Hi,\n\nThank you for sending over the updated SLA draft. I\'ve reviewed it with our legal team and we have a few questions:\n\n1. Section 4.2 — can we negotiate the uptime SLA to 99.95% instead of 99.9%?\n2. Data residency clause — we need explicit EU storage guarantee.\n3. Support response time — can we get P1 response down to 30 minutes?\n\nPlease send a revised version by Friday. We\'re hoping to sign before end of Q2.\n\nBest,\nSarah',
+      'Hi,\n\nThank you for sending over the updated SLA draft. I\'ve reviewed it with our legal team and we have a few questions:\n\n1. Section 4.2 — can we negotiate the uptime SLA up by one more nine?\n2. Data residency clause — we need explicit EU storage guarantee.\n3. Support response time — can we get P1 response down to 30 minutes?\n\nPlease send a revised version by Friday. We\'re hoping to sign before end of Q2.\n\nBest,\nSarah',
     processed: true,
     contact_id: 'c-001',
     clarity_score: { score: 92, rationale: 'Clear action items with specific deadlines. Three distinct asks with context.' },
     tasks: [
-      { id: 't-m001-1', title: 'Revise SLA — negotiate 99.95% uptime', status: 'open' },
+      { id: 't-m001-1', title: 'Revise SLA — negotiate higher uptime guarantee', status: 'open' },
       { id: 't-m001-2', title: 'Add EU data residency clause to SLA', status: 'in_progress' },
       { id: 't-m001-3', title: 'Confirm P1 support SLA timing with team', status: 'open' },
     ],
@@ -765,14 +759,14 @@ export interface DemoTask {
 export const demoTasks: DemoTask[] = [
   {
     id: 't-001',
-    title: 'Revise SLA — negotiate 99.95% uptime with legal',
-    description: 'Update Section 4.2 of the enterprise SLA. Legal team requested 99.95% uptime guarantee.',
+    title: 'Revise SLA — negotiate higher uptime with legal',
+    description: 'Update Section 4.2 of the enterprise SLA. Legal team requested a higher uptime guarantee.',
     status: 'in_progress',
     due_date: new Date(Date.now() + 2 * 86400000).toISOString(),
     contact_id: 'c-001',
     contact_name: 'Sarah Chen',
     clarity_score: { score: 92, rationale: 'Clear legal requirement with specific clause reference.' },
-    message_snippet: 'Section 4.2 — can we negotiate the uptime SLA to 99.95% instead of 99.9%?',
+    message_snippet: 'Section 4.2 — can we negotiate the uptime SLA up by one more nine?',
   },
   {
     id: 't-002',
@@ -915,12 +909,12 @@ export const demoKPIs: KPI[] = [
   },
   {
     id: 'k3',
-    label: 'ML Lead Accuracy',
-    value: '91%',
-    delta: '+3% since retrain',
+    label: 'Hot Leads',
+    value: '23',
+    delta: '+5 this week',
     deltaType: 'positive',
     icon: 'brain',
-    sparkData: [84, 85, 87, 88, 88, 89, 91],
+    sparkData: [14, 16, 18, 19, 20, 21, 23],
   },
   {
     id: 'k4',
@@ -943,12 +937,16 @@ export const demoRevenueChartData = [
   { month: 'Apr', revenue: 485000 },
 ]
 
-export const demoAgentAccuracyData = [
-  { day: 'Mon', semantic: 93, leadScore: 89, sentiment: 81 },
-  { day: 'Tue', semantic: 94, leadScore: 90, sentiment: 82 },
-  { day: 'Wed', semantic: 94, leadScore: 89, sentiment: 83 },
-  { day: 'Thu', semantic: 95, leadScore: 91, sentiment: 82 },
-  { day: 'Fri', semantic: 94, leadScore: 91, sentiment: 84 },
-  { day: 'Sat', semantic: 93, leadScore: 90, sentiment: 83 },
-  { day: 'Sun', semantic: 94, leadScore: 91, sentiment: 83 },
+// Generic per-day demo activity series (tasks handled per agent type). This is a
+// throughput/volume metric for the demo dashboard — NOT a model-accuracy reading.
+// Renamed from the former "agent accuracy" series so no fabricated accuracy framing
+// remains. Kept exported for back-compat; relabel target if a chart consumes it.
+export const demoAgentActivityData = [
+  { day: 'Mon', semantic: 280, leadScore: 142, sentiment: 88 },
+  { day: 'Tue', semantic: 312, leadScore: 165, sentiment: 94 },
+  { day: 'Wed', semantic: 298, leadScore: 151, sentiment: 102 },
+  { day: 'Thu', semantic: 331, leadScore: 178, sentiment: 96 },
+  { day: 'Fri', semantic: 305, leadScore: 169, sentiment: 110 },
+  { day: 'Sat', semantic: 187, leadScore: 91, sentiment: 64 },
+  { day: 'Sun', semantic: 142, leadScore: 73, sentiment: 51 },
 ]

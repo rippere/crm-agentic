@@ -10,5 +10,5 @@ export {
   demoActivity as mockActivity,
   demoKPIs as mockKPIs,
   demoRevenueChartData as revenueChartData,
-  demoAgentAccuracyData as agentAccuracyData,
+  demoAgentActivityData as agentActivityData,
 } from './demo-data'
