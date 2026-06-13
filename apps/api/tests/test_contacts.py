@@ -1104,12 +1104,16 @@ async def test_merge_contacts_reassigns_and_deletes_duplicate(app_client):
     primary   = _fake_contact(workspace_id, name="Alice Smith")
     duplicate = _fake_contact(workspace_id, name="Alice S.")
 
-    # First execute: fetch both contacts
+    # First execute: fetch both contacts; then one UPDATE per reassigned child
+    # table (tasks, messages, deals, call_summaries, contact_notes, projects).
     mock_db.execute = AsyncMock(side_effect=[
         _make_scalars_result([primary, duplicate]),  # select contacts
         MagicMock(rowcount=2),   # update tasks
         MagicMock(rowcount=1),   # update messages
         MagicMock(rowcount=1),   # update deals
+        MagicMock(rowcount=1),   # update call_summaries
+        MagicMock(rowcount=1),   # update contact_notes
+        MagicMock(rowcount=1),   # update projects
     ])
 
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
@@ -1125,6 +1129,9 @@ async def test_merge_contacts_reassigns_and_deletes_duplicate(app_client):
     assert data["tasks_reassigned"] == 2
     assert data["messages_reassigned"] == 1
     assert data["deals_reassigned"] == 1
+    assert data["call_summaries_reassigned"] == 1
+    assert data["contact_notes_reassigned"] == 1
+    assert data["projects_reassigned"] == 1
     mock_db.commit.assert_awaited()
 
 
@@ -1154,6 +1161,172 @@ async def test_merge_contacts_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# PII-erasure coverage for the sibling deletion paths (bulk delete + merge).
+# Mirrors test_delete_contact_erases_linked_pii: the DB is mocked, so we assert
+# the *statements the handler emits* against each child table.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_erases_linked_pii_per_contact(app_client):
+    """Bulk delete must erase EACH contact's PII children, not orphan them.
+
+    For every contact in the batch the handler must, scoped by
+    workspace_id + that contact_id, HARD-DELETE messages (sender_email +
+    body_plain) and call_summaries (transcript + summary), and scrub/unlink
+    deals + tasks — the same erasure semantics as single delete. We introspect
+    the emitted DELETE/UPDATE statements and confirm one of each per contact,
+    each correctly scoped, and that both contacts are deleted in one txn.
+    """
+    from sqlalchemy.sql import Delete, Update
+
+    fastapi_app, mock_db, workspace_id = app_client
+    c1 = _fake_contact(workspace_id, name="Alice", email="alice@example.com")
+    c2 = _fake_contact(workspace_id, name="Bob", email="bob@example.com")
+
+    executed: list = []
+
+    async def _capture_execute(stmt, *args, **kwargs):
+        executed.append(stmt)
+        # First call is the bulk contact SELECT → yield both contacts; the rest
+        # are the per-contact erasure DELETE/UPDATE statements.
+        if len(executed) == 1:
+            return _make_scalars_result([c1, c2])
+        return MagicMock(rowcount=1)
+
+    mock_db.execute = AsyncMock(side_effect=_capture_execute)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/contacts/bulk",
+            json={"action": "delete", "contact_ids": [str(c1.id), str(c2.id)]},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] == 2
+
+    # Collect erasure statements per target table, with their compiled SQL so we
+    # can check both contact ids were targeted.
+    def _sql(stmt) -> str:
+        return str(stmt.compile(compile_kwargs={"literal_binds": True}))
+
+    msg_deletes = [s for s in executed if isinstance(s, Delete) and s.table.name == "messages"]
+    call_deletes = [s for s in executed if isinstance(s, Delete) and s.table.name == "call_summaries"]
+    deal_updates = [s for s in executed if isinstance(s, Update) and s.table.name == "deals"]
+    task_updates = [s for s in executed if isinstance(s, Update) and s.table.name == "tasks"]
+
+    # One erasure statement per contact, per PII table.
+    assert len(msg_deletes) == 2, "messages must be hard-deleted once per contact"
+    assert len(call_deletes) == 2, "call_summaries must be hard-deleted once per contact"
+    assert len(deal_updates) == 2, "deals must be scrubbed once per contact"
+    assert len(task_updates) == 2, "tasks must be unlinked once per contact"
+
+    # Every erasure scoped by workspace_id, and across the batch BOTH contact
+    # ids are covered (no contact left with orphaned PII). The PG UUID literal
+    # binds render without dashes, so match on the bare hex form.
+    for stmt in msg_deletes + call_deletes + deal_updates + task_updates:
+        sql = _sql(stmt)
+        assert workspace_id.hex in sql, "erasure not scoped by workspace_id"
+
+    for table_stmts, label in (
+        (msg_deletes, "messages"),
+        (call_deletes, "call_summaries"),
+    ):
+        covered = " ".join(_sql(s) for s in table_stmts)
+        assert c1.id.hex in covered, f"{label} for contact 1 not erased"
+        assert c2.id.hex in covered, f"{label} for contact 2 not erased"
+
+    # Deal scrub nulls the personal fields; task scrub nulls the link.
+    assert {"contact_id", "contact_name", "company"} <= {c.name for c in deal_updates[0]._values}
+    assert "contact_id" in {c.name for c in task_updates[0]._values}
+
+    # No DELETE against the messages/call_summaries tables should be UNscoped,
+    # and both contacts themselves are deleted in a single committed txn.
+    assert mock_db.delete.await_count == 2
+    deleted_objs = {call.args[0] for call in mock_db.delete.await_args_list}
+    assert deleted_objs == {c1, c2}
+    mock_db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_merge_reassigns_call_summaries_and_notes_no_pii_loss(app_client):
+    """Merge is COMBINE, not erase: the duplicate's PII children must be MOVED
+    to the primary, never deleted/orphaned.
+
+    Regression guard for the call_summaries gap — previously merge reassigned
+    tasks/messages/deals but NOT call_summaries, so a duplicate's transcripts
+    were orphaned (FK SET NULL) when the duplicate row was deleted. Here we
+    assert the handler emits an UPDATE ... SET contact_id=<primary> WHERE
+    contact_id=<duplicate> for call_summaries (and contact_notes, which CASCADE
+    and would otherwise be destroyed, and projects), emits NO DELETE against any
+    PII table, and deletes only the duplicate contact row.
+    """
+    from sqlalchemy.sql import Delete, Update
+
+    fastapi_app, mock_db, workspace_id = app_client
+    primary = _fake_contact(workspace_id, name="Alice Smith")
+    duplicate = _fake_contact(workspace_id, name="Alice S.")
+
+    executed: list = []
+
+    async def _capture_execute(stmt, *args, **kwargs):
+        executed.append(stmt)
+        if len(executed) == 1:
+            return _make_scalars_result([primary, duplicate])
+        return MagicMock(rowcount=1)
+
+    mock_db.execute = AsyncMock(side_effect=_capture_execute)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{workspace_id}/contacts/merge",
+            json={"primary_id": str(primary.id), "duplicate_id": str(duplicate.id)},
+        )
+
+    assert resp.status_code == 200
+
+    updates = {s.table.name: s for s in executed if isinstance(s, Update)}
+
+    # Every PII-bearing / linked child table is reassigned via UPDATE.
+    for table in ("tasks", "messages", "deals", "call_summaries", "contact_notes", "projects"):
+        assert table in updates, f"{table} was not reassigned on merge"
+
+    # The transcript-bearing call_summaries reassignment moves the link to the
+    # primary and is scoped to the duplicate (so we move exactly its rows).
+    call_stmt = updates["call_summaries"]
+    assert "contact_id" in {c.name for c in call_stmt._values}, "call_summaries contact_id not reassigned"
+    # The PG UUID literal binds render without dashes → match on bare hex. The
+    # SET target is the primary id; the WHERE scope is the duplicate id +
+    # workspace — i.e. UPDATE ... SET contact_id=<primary> WHERE contact_id=<dup>.
+    call_sql = str(call_stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert primary.id.hex in call_sql, "call_summaries not reassigned TO the primary"
+    assert duplicate.id.hex in call_sql, "call_summaries reassignment not scoped to the duplicate"
+    assert workspace_id.hex in call_sql, "call_summaries reassignment not scoped by workspace_id"
+
+    # contact_notes CASCADE on the contacts FK — they MUST be moved, not left to
+    # be destroyed when the duplicate is deleted.
+    note_sql = str(updates["contact_notes"].compile(compile_kwargs={"literal_binds": True}))
+    assert duplicate.id.hex in note_sql
+
+    # NOTHING is erased: no DELETE statement targets any PII-bearing child.
+    deleted_tables = {s.table.name for s in executed if isinstance(s, Delete)}
+    assert not ({"messages", "call_summaries", "contact_notes"} & deleted_tables), (
+        f"merge must not DELETE PII children, but deleted: {deleted_tables}"
+    )
+
+    # Only the duplicate CONTACT row itself is deleted (the children survive,
+    # reassigned to the primary).
+    mock_db.delete.assert_awaited_once_with(duplicate)
+    mock_db.commit.assert_awaited_once()
+
+    # Response surfaces the reassignment counts (proof nothing was silently lost).
+    data = resp.json()
+    assert data["call_summaries_reassigned"] == 1
+    assert data["contact_notes_reassigned"] == 1
+    assert data["projects_reassigned"] == 1
 
 
 # ---------------------------------------------------------------------------

@@ -505,20 +505,18 @@ async def update_contact_tags(
     return ContactResponse.model_validate(contact)
 
 
-@router.delete("/workspaces/{workspace_id}/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_contact(
+async def _erase_contact_pii(
+    db: AsyncSession,
     workspace_id: uuid.UUID,
     contact_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ) -> None:
-    """Delete a contact and erase the personal data carried in its linked records.
+    """Erase the personal data carried in a contact's linked child records.
 
-    GDPR right-to-erasure: within a single transaction, before removing the
-    contact row, this explicitly destroys the PII-bearing child rows for this
-    ``contact_id`` (scoped by ``workspace_id``) at the application level rather
-    than relying on the database FK ``ON DELETE SET NULL`` rule (which would
-    merely orphan the rows and leave their personal data behind):
+    GDPR right-to-erasure helper. Given a ``contact_id`` (scoped by
+    ``workspace_id``), this explicitly destroys/scrubs the PII-bearing child
+    rows at the application level rather than relying on the database FK
+    ``ON DELETE SET NULL`` rule (which would merely orphan the rows and leave
+    their personal data behind):
 
     - ``messages``        — hard-deleted (carries ``sender_email`` + ``body_plain``).
     - ``call_summaries``  — hard-deleted (carries ``transcript`` + ``summary``).
@@ -527,20 +525,14 @@ async def delete_contact(
     - ``tasks``           — retained, but the contact link is cleared.
 
     After this no email address, message body, call transcript, or call summary
-    tied to the deleted contact survives.
+    tied to the contact survives. The caller is responsible for deleting the
+    contact row itself and committing the surrounding transaction.
+
+    NOTE on ``deal.notes``: deal notes are free-text that legitimately mix a
+    person's data with business notes, so this helper does NOT blanket-null
+    ``deal.notes`` (that would destroy retained business records). It remains a
+    known residual — see the module-level erasure docs.
     """
-    if current_user.workspace_id != workspace_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
-    result = await db.execute(
-        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
-    )
-    contact = result.scalar_one_or_none()
-    if contact is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-
-    contact_name = contact.name or str(contact_id)
-
     # Local imports to avoid circular-import at module load time.
     from app.models.message import Message
     from app.models.call_summary import CallSummary
@@ -577,6 +569,36 @@ async def delete_contact(
         .where(Task.workspace_id == workspace_id, Task.contact_id == contact_id)
         .values(contact_id=None)
     )
+
+
+@router.delete("/workspaces/{workspace_id}/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_contact(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """Delete a contact and erase the personal data carried in its linked records.
+
+    The PII erasure (messages + call_summaries hard-deleted; deals scrubbed and
+    unlinked; tasks unlinked) runs in the same transaction as the contact
+    delete via :func:`_erase_contact_pii`. After this no email address, message
+    body, call transcript, or call summary tied to the deleted contact survives.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    contact_name = contact.name or str(contact_id)
+
+    # Erase the PII-bearing child rows before removing the contact itself.
+    await _erase_contact_pii(db, workspace_id, contact_id)
 
     await db.delete(contact)
     event = ActivityEvent(
@@ -920,6 +942,10 @@ async def bulk_contact_action(
     names = [c.name or str(c.id) for c in contacts]
 
     for contact in contacts:
+        # Erase each contact's PII-bearing children (same semantics as single
+        # delete) before removing the contact — otherwise the children would be
+        # orphaned with their personal data intact.
+        await _erase_contact_pii(db, workspace_id, contact.id)
         await db.delete(contact)
 
     event = ActivityEvent(
@@ -948,6 +974,9 @@ class MergeContactResponse(BaseModel):
     tasks_reassigned: int
     messages_reassigned: int
     deals_reassigned: int
+    call_summaries_reassigned: int
+    contact_notes_reassigned: int
+    projects_reassigned: int
 
 
 @router.post("/workspaces/{workspace_id}/contacts/merge", response_model=MergeContactResponse)
@@ -957,7 +986,24 @@ async def merge_contacts(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> MergeContactResponse:
-    """Merge duplicate into primary: reassign tasks/messages/deals, then delete duplicate."""
+    """Merge duplicate into primary.
+
+    Merge is COMBINE, not erase: EVERY child row that carries the duplicate's
+    ``contact_id`` is REASSIGNED to the primary (no PII is destroyed), then the
+    now-childless duplicate contact is deleted. Reassigned children:
+
+    - ``tasks``          — link moved to primary.
+    - ``messages``       — PII (sender_email/body_plain) moved to primary.
+    - ``deals``          — pipeline records moved to primary.
+    - ``call_summaries`` — PII (transcript/summary) moved to primary. (Previously
+      missed, which orphaned transcripts when the duplicate was deleted.)
+    - ``contact_notes``  — per-contact notes moved to primary. These FK
+      ``ON DELETE CASCADE``, so leaving any behind would silently destroy them
+      when the duplicate is deleted — they MUST be reassigned to survive.
+    - ``projects``       — link moved to primary.
+
+    After reassignment the duplicate has no remaining children and is deleted.
+    """
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
@@ -980,6 +1026,9 @@ async def merge_contacts(
     from app.models.task import Task
     from app.models.message import Message
     from app.models.deal import Deal
+    from app.models.call_summary import CallSummary
+    from app.models.contact_note import ContactNote
+    from app.models.project import Project
 
     # Reassign tasks
     task_result = await db.execute(
@@ -1005,7 +1054,34 @@ async def merge_contacts(
     )
     deals_updated: int = deal_result.rowcount or 0
 
-    # Delete the duplicate
+    # Reassign call summaries — carries transcript + summary PII. If these are
+    # not moved they would be orphaned (FK SET NULL) when the duplicate is
+    # deleted, losing the transcripts.
+    call_result = await db.execute(
+        update(CallSummary)
+        .where(CallSummary.workspace_id == workspace_id, CallSummary.contact_id == body.duplicate_id)
+        .values(contact_id=body.primary_id)
+    )
+    calls_updated: int = call_result.rowcount or 0
+
+    # Reassign contact notes — these FK ON DELETE CASCADE, so any left behind
+    # would be destroyed (PII loss) when the duplicate contact is deleted.
+    note_result = await db.execute(
+        update(ContactNote)
+        .where(ContactNote.workspace_id == workspace_id, ContactNote.contact_id == body.duplicate_id)
+        .values(contact_id=body.primary_id)
+    )
+    notes_updated: int = note_result.rowcount or 0
+
+    # Reassign projects — preserve the link rather than orphaning it on delete.
+    project_result = await db.execute(
+        update(Project)
+        .where(Project.workspace_id == workspace_id, Project.contact_id == body.duplicate_id)
+        .values(contact_id=body.primary_id)
+    )
+    projects_updated: int = project_result.rowcount or 0
+
+    # Delete the duplicate (now childless — all PII-bearing children moved).
     duplicate = contacts[body.duplicate_id]
     duplicate_name = duplicate.name or str(body.duplicate_id)
     primary_name   = contacts[body.primary_id].name or str(body.primary_id)
@@ -1018,7 +1094,8 @@ async def merge_contacts(
         description=(
             f"Merged '{duplicate_name}' into '{primary_name}' — "
             f"{tasks_updated} task(s), {messages_updated} message(s), "
-            f"{deals_updated} deal(s) reassigned"
+            f"{deals_updated} deal(s), {calls_updated} call(s), "
+            f"{notes_updated} note(s), {projects_updated} project(s) reassigned"
         ),
         severity="info",
     )
@@ -1031,6 +1108,9 @@ async def merge_contacts(
         tasks_reassigned=tasks_updated,
         messages_reassigned=messages_updated,
         deals_reassigned=deals_updated,
+        call_summaries_reassigned=calls_updated,
+        contact_notes_reassigned=notes_updated,
+        projects_reassigned=projects_updated,
     )
 
 
