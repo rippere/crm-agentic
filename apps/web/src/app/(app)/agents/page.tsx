@@ -268,26 +268,37 @@ function AgentCard({ agent, onSelect, token, workspaceId, onRun }: AgentCardProp
       {/* Description */}
       <p className="text-xs text-zinc-400 leading-relaxed line-clamp-2">{agent.description}</p>
 
-      {/* Accuracy bar + sparkline */}
+      {/* Accuracy bar (only when measured) + sparkline */}
       <div className="flex items-end gap-3">
         <div className="flex-1">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] text-zinc-500 font-mono">Model Accuracy</span>
-            <span className="text-xs font-mono text-emerald-400 font-semibold">{agent.accuracy}%</span>
-          </div>
-          <div
-            className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden"
-            role="progressbar"
-            aria-valuenow={agent.accuracy}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-label={`${agent.name} accuracy: ${agent.accuracy}%`}
-          >
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-400"
-              style={{ width: `${agent.accuracy}%` }}
-            />
-          </div>
+          {typeof agent.accuracy === "number" ? (
+            <>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] text-zinc-500 font-mono">Model Accuracy</span>
+                <span className="text-xs font-mono text-emerald-400 font-semibold">{agent.accuracy}%</span>
+              </div>
+              <div
+                className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden"
+                role="progressbar"
+                aria-valuenow={agent.accuracy}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label={`${agent.name} accuracy: ${agent.accuracy}%`}
+              >
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-400"
+                  style={{ width: `${agent.accuracy}%` }}
+                />
+              </div>
+            </>
+          ) : (
+            /* No measured accuracy (demo mode) — show a neutral placeholder rather
+               than a fabricated percentage. */
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] text-zinc-500 font-mono">Model Accuracy</span>
+              <span className="text-xs font-mono text-zinc-600">—</span>
+            </div>
+          )}
         </div>
         {/* Sparkline — honest recent-run outcomes (success/failure). Empty until
             real runs exist, rather than a fabricated trend. */}
@@ -477,28 +488,36 @@ function AgentDetailPanel({
           <p className="text-sm text-zinc-300 leading-relaxed">{agent.description}</p>
         </div>
 
-        {/* Accuracy */}
+        {/* Model performance */}
         <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Brain className="h-4 w-4 text-indigo-400" aria-hidden="true" />
               <p className="text-xs font-semibold text-zinc-300">Model Performance</p>
             </div>
-            <span className="text-lg font-bold font-mono text-emerald-400">{agent.accuracy}%</span>
+            {typeof agent.accuracy === "number" ? (
+              <span className="text-lg font-bold font-mono text-emerald-400">{agent.accuracy}%</span>
+            ) : (
+              <span className="text-xs font-mono text-zinc-500" title="Accuracy not measured in demo mode">
+                Accuracy not measured
+              </span>
+            )}
           </div>
-          <div
-            className="h-2 w-full rounded-full bg-zinc-800 overflow-hidden"
-            role="progressbar"
-            aria-valuenow={agent.accuracy}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-label={`Model accuracy: ${agent.accuracy}%`}
-          >
+          {typeof agent.accuracy === "number" && (
             <div
-              className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-400"
-              style={{ width: `${agent.accuracy}%` }}
-            />
-          </div>
+              className="h-2 w-full rounded-full bg-zinc-800 overflow-hidden"
+              role="progressbar"
+              aria-valuenow={agent.accuracy}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`Model accuracy: ${agent.accuracy}%`}
+            >
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-400"
+                style={{ width: `${agent.accuracy}%` }}
+              />
+            </div>
+          )}
           <div className="mt-3 grid grid-cols-3 gap-3">
             {agent.metrics.map((m) => (
               <div key={m.label} className="text-center">
@@ -693,9 +712,15 @@ export default function AgentsPage() {
 
   const activeCount = agents.filter((a) => a.status === "active").length;
   const processingCount = agents.filter((a) => a.status === "processing").length;
-  const avgAccuracy = agents.length > 0
-    ? (agents.reduce((sum, a) => sum + a.accuracy, 0) / agents.length).toFixed(1)
-    : "0.0";
+  // Only average agents that actually report a measured accuracy — never coerce a
+  // missing value to 0, which would fabricate a (lower) number.
+  const scoredAgents = agents.filter(
+    (a): a is typeof a & { accuracy: number } => typeof a.accuracy === "number"
+  );
+  const avgAccuracy =
+    scoredAgents.length > 0
+      ? (scoredAgents.reduce((sum, a) => sum + a.accuracy, 0) / scoredAgents.length).toFixed(1)
+      : null;
 
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
@@ -719,7 +744,10 @@ export default function AgentsPage() {
 
       <Header
         title="Agents"
-        subtitle={`${activeCount} active · ${processingCount} processing · avg accuracy ${avgAccuracy}%`}
+        subtitle={
+          `${activeCount} active · ${processingCount} processing` +
+          (avgAccuracy !== null ? ` · avg accuracy ${avgAccuracy}%` : "")
+        }
       />
 
       {/* Summary */}
@@ -749,7 +777,9 @@ export default function AgentsPage() {
             <Target className="h-4 w-4 text-amber-400" aria-hidden="true" />
           </div>
           <div>
-            <p className="text-xl font-bold font-mono text-emerald-400">{avgAccuracy}%</p>
+            <p className="text-xl font-bold font-mono text-emerald-400">
+              {avgAccuracy !== null ? `${avgAccuracy}%` : "—"}
+            </p>
             <p className="text-xs text-zinc-500">Avg Accuracy</p>
           </div>
         </Card>

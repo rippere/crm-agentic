@@ -734,10 +734,13 @@ export default function DashboardPage() {
                   <p className="text-[10px] text-zinc-500 font-mono truncate">{agent.model}</p>
                 </div>
                 <div className="text-right flex-shrink-0">
-                  <p className="text-xs font-mono text-emerald-400">{agent.accuracy}%</p>
-                  {/* Per-agent daily task counts aren't tracked yet — don't show a
-                      seeded/fabricated number. The live Activity feed below is the
-                      honest signal of what agents are doing. */}
+                  {/* Model accuracy isn't measured in demo mode — only show it when a
+                      real value is present, never a fabricated number. Per-agent daily
+                      task counts aren't tracked yet either; the live Activity feed below
+                      is the honest signal of what agents are doing. */}
+                  {typeof agent.accuracy === "number" && (
+                    <p className="text-xs font-mono text-emerald-400">{agent.accuracy}%</p>
+                  )}
                   <p className="text-[10px] text-zinc-600 capitalize">{agent.status}</p>
                 </div>
               </div>
