@@ -185,7 +185,11 @@ async def reprocess_messages(
     from app.workers.ingest import reprocess_workspace_messages
     from app.routers.agents import _mark_job_dispatched
 
-    # Route to the isolated long-jobs queue (see workers/celery_app.py task_routes).
-    task = reprocess_workspace_messages.apply_async(args=[str(workspace_id)], queue="long")
+    # Route to the isolated long-jobs queue only when queue isolation is enabled
+    # (LONG_QUEUE_ENABLED; see workers/celery_app.py). Off by default so this is
+    # deploy-safe without the coordinated `-Q default,long` worker change: the task
+    # then takes the default queue, which the existing worker already consumes.
+    _enqueue_opts = {"queue": "long"} if settings.LONG_QUEUE_ENABLED else {}
+    task = reprocess_workspace_messages.apply_async(args=[str(workspace_id)], **_enqueue_opts)
     _mark_job_dispatched(task.id, str(workspace_id))
     return ReprocessResponse(job_id=task.id)

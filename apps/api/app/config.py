@@ -64,5 +64,15 @@ class Settings(BaseSettings):
     # previously un-decorated).
     REPROCESS_RATE_LIMIT: str = "3/minute"
 
+    # ── F5: long-job queue isolation (opt-in, deploy-safe) ───────────────────
+    # When True, heavy/long-running tasks (reprocess + transcribe) are routed to a
+    # dedicated low-concurrency `long` Celery queue so they cannot pin the 2-slot
+    # pool that serves short enrich/scoring jobs. DEFAULT False so this is safe to
+    # DEPLOY ALONE: with it off, those tasks stay on the `default` queue and the
+    # existing worker keeps consuming them. Flip to True ONLY once a `long`-queue
+    # consumer exists (worker started with `-Q default,long`); see
+    # workers/celery_app.py.
+    LONG_QUEUE_ENABLED: bool = False
+
 
 settings = Settings()

@@ -17,27 +17,36 @@ celery_app = Celery(
     include=["app.workers.ingest", "app.workers.score_contact", "app.workers.pipeline", "app.workers.slack_ingest", "app.workers.embed_contacts", "app.workers.deal_health_worker", "app.workers.transcribe", "app.workers.enrich_contact", "app.workers.followup_sequences", "app.workers.pm_agent"],
 )
 
-# ── F5: queue isolation ──────────────────────────────────────────────────────
+# ── F5: queue isolation (opt-in via LONG_QUEUE_ENABLED, deploy-safe) ──────────
 # The worker pool is hard-pinned to --concurrency=2 (railway-worker.toml). With a
 # single undifferentiated queue, one long job (full-workspace reprocess or a
 # long-audio Whisper transcription) pins a slot for its entire duration and two
 # such jobs starve every other tenant's short async work (enrich/scoring/health).
 #
-# We split traffic into two queues:
+# When ENABLED we split traffic into two queues:
 #   * "long"    — heavy, long-running, high-fan-out jobs: reprocess + transcribe.
 #   * "default" — everything else (short enrich/scoring/embeds/health/PM/dispatchers).
 #
-# OPS FOLLOW-UP (not a code change): run a dedicated low-concurrency consumer for
-# the long queue so it cannot pin the short-job pool, e.g.
+# GATING (LONG_QUEUE_ENABLED, default False): routing is OFF by default so this is
+# safe to DEPLOY ALONE. With it off, reprocess/transcribe take the "default" queue
+# and the existing worker (started without -Q) keeps consuming them — no regression.
+# A default worker started WITHOUT -Q consumes only task_default_queue, so the
+# `long` queue would otherwise queue-but-never-run.
+#
+# TO ENABLE ISOLATION (coordinated, same deploy): set LONG_QUEUE_ENABLED=true AND
+# start a consumer for the long queue, e.g. run the worker with
+#     -Q default,long           (single worker consumes both), or split:
 #     celery -A app.workers.celery_app.celery_app worker -Q long --concurrency=1
 #     celery -A app.workers.celery_app.celery_app worker -Q default --concurrency=2
-# Until a -Q long consumer exists, a default worker started WITHOUT -Q will only
-# consume the "default" queue (Celery consumes task_default_queue when -Q is
-# omitted), so reprocess/transcribe would queue but not run; the current single
-# worker should be started with `-Q default,long` (or a separate long worker
-# added) at cutover. This is documented for ops; it does not change app behavior.
 _LONG_QUEUE = "long"
 _DEFAULT_QUEUE = "default"
+# Read the gate from the env directly (Celery boots outside the FastAPI lifespan);
+# the same env var backs settings.LONG_QUEUE_ENABLED that the API reads.
+_LONG_QUEUE_ENABLED = os.getenv("LONG_QUEUE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+_task_routes = {
+    "app.workers.ingest.reprocess_workspace_messages": {"queue": _LONG_QUEUE},
+    "app.workers.transcribe.transcribe_call": {"queue": _LONG_QUEUE},
+} if _LONG_QUEUE_ENABLED else {}
 
 celery_app.conf.update(
     task_serializer="json",
@@ -50,10 +59,7 @@ celery_app.conf.update(
     # prefetch=1 so a worker holding a long job doesn't also reserve queued short
     # jobs it can't start, which would amplify the starvation it's meant to avoid.
     worker_prefetch_multiplier=1,
-    task_routes={
-        "app.workers.ingest.reprocess_workspace_messages": {"queue": _LONG_QUEUE},
-        "app.workers.transcribe.transcribe_call": {"queue": _LONG_QUEUE},
-    },
+    task_routes=_task_routes,
     beat_schedule={
         "nightly-pipeline-optimize": {
             # Dispatcher fans out per-workspace; the bare optimize_pipeline task
