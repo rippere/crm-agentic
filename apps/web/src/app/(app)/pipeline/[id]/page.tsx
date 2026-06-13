@@ -289,6 +289,8 @@ export default function DealDetailPage() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [probTrend, setProbTrend] = useState<{ date: string; probability: number }[]>([]);
   const [probLoading, setProbLoading] = useState(false);
+  const [timelineSummary, setTimelineSummary] = useState<{ week: string; events: number }[]>([]);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   const [moveSaving, setMoveSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -349,6 +351,13 @@ export default function DealDetailPage() {
       .then((data) => setProbTrend(Array.isArray(data) ? data : []))
       .catch(() => setProbTrend([]))
       .finally(() => setProbLoading(false));
+
+    setSummaryLoading(true);
+    apiClient
+      .getDealTimelineSummary(workspaceId, dealId, token)
+      .then((data) => setTimelineSummary(Array.isArray(data) ? data : []))
+      .catch(() => setTimelineSummary([]))
+      .finally(() => setSummaryLoading(false));
 
     if (deal.contact_id) {
       apiClient
@@ -788,6 +797,54 @@ export default function DealDetailPage() {
               )}
             </Card>
           )}
+
+          {/* Activity sparkline — 12-week event intensity */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-indigo-400" />
+              <p className="text-sm font-semibold text-zinc-200">Activity (12 wks)</p>
+              <span className="ml-auto text-[10px] font-mono text-zinc-500">Events / week</span>
+            </div>
+            {summaryLoading ? (
+              <div className="h-16 rounded-xl bg-zinc-800/50 animate-pulse" />
+            ) : timelineSummary.length > 0 ? (
+              <div className="h-16">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={timelineSummary} margin={{ top: 2, right: 2, bottom: 0, left: -32 }}>
+                    <defs>
+                      <linearGradient id="activityGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#6366F1" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#6366F1" stopOpacity={0}   />
+                      </linearGradient>
+                    </defs>
+                    <XAxis
+                      dataKey="week"
+                      tick={{ fill: "#71717A", fontSize: 8 }}
+                      axisLine={false}
+                      tickLine={false}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis hide domain={[0, "auto"]} />
+                    <RechartTooltip
+                      formatter={(v) => [`${v ?? 0}`, "Events"]}
+                      contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="events"
+                      stroke="#6366F1"
+                      strokeWidth={1.5}
+                      fill="url(#activityGrad)"
+                      dot={false}
+                      activeDot={{ r: 3, fill: "#6366F1" }}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-500 text-center py-3">No activity data yet.</p>
+            )}
+          </Card>
 
           {/* Tasks */}
           <Card className="p-4 space-y-3">

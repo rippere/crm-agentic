@@ -900,3 +900,57 @@ async def deal_probability_trend(
         trend.append({"date": dt.strftime("%b %d"), "probability": prob})
 
     return trend
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/timeline-summary")
+async def deal_timeline_summary(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Weekly activity event counts for the last 12 weeks (oldest-first, for sparkline)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(weeks=12)
+
+    q = select(ActivityEvent).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.created_at >= cutoff,
+    )
+    if deal.title:
+        from sqlalchemy import or_
+        q = q.where(
+            or_(
+                ActivityEvent.description.ilike(f"%{deal.title}%"),
+                ActivityEvent.type == "deal_moved",
+            )
+        )
+    result = await db.execute(q)
+    events = result.scalars().all()
+
+    # Build 12 weekly buckets oldest→newest
+    buckets: list[dict] = []
+    for week_i in range(12):
+        week_start = cutoff + timedelta(weeks=week_i)
+        week_end = week_start + timedelta(weeks=1)
+        label = week_start.strftime("%b %d")
+        count = 0
+        for e in events:
+            if e.created_at is None:
+                continue
+            ts = e.created_at if e.created_at.tzinfo else e.created_at.replace(tzinfo=timezone.utc)
+            if week_start <= ts < week_end:
+                count += 1
+        buckets.append({"week": label, "events": count})
+
+    return buckets

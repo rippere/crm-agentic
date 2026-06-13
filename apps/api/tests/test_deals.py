@@ -639,6 +639,57 @@ async def test_export_deals_csv_wrong_workspace_returns_403(app_client):
 
 
 # ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{id}/timeline-summary — weekly sparkline
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_timeline_summary_returns_12_weeks(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Sparkline Deal")
+
+    # One activity event created 2 weeks ago (falls in week 10 of 12)
+    evt = _fake_activity(
+        workspace_id,
+        description="Deal 'Sparkline Deal' updated → proposal",
+        type="deal_moved",
+        created_at=datetime.now(timezone.utc) - timedelta(weeks=2),
+    )
+
+    call_count = 0
+
+    async def _execute_side_effect(q):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_scalar_result(deal)
+        return _make_scalars_result([evt])
+
+    mock_db.execute = AsyncMock(side_effect=_execute_side_effect)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/timeline-summary")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 12
+    assert all("week" in b and "events" in b for b in data)
+    assert sum(b["events"] for b in data) == 1
+
+
+@pytest.mark.asyncio
+async def test_deal_timeline_summary_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/timeline-summary")
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
 # Bulk deal operations
 # ---------------------------------------------------------------------------
 
