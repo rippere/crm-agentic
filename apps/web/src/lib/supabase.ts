@@ -78,7 +78,7 @@ export type AgentRow = {
   status: "active" | "processing" | "idle" | "error";
   description: string;
   model: string;
-  accuracy: number;
+  accuracy?: number;
   tasks_today: number;
   last_run: string;
   workflow: Array<{

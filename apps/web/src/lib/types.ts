@@ -72,7 +72,7 @@ export interface Agent {
   status: AgentStatus;
   description: string;
   model: string;
-  accuracy: number; // 0-100
+  accuracy?: number; // 0-100 — optional; absent when not measured (demo fixtures omit it)
   tasksToday: number;
   metrics: AgentMetric[];
   lastRun: string;

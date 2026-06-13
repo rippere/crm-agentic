@@ -379,7 +379,6 @@ export const demoAgents: Agent[] = [
     description:
       'Classifies incoming contacts and messages using sentence-transformer embeddings. Assigns semantic tags like enterprise, startup, technical-buyer with confidence scores.',
     model: 'sentence-transformers/all-MiniLM-L6-v2',
-    accuracy: 94,
     tasksToday: 312,
     lastRun: '2 min ago',
     metrics: [
@@ -402,7 +401,6 @@ export const demoAgents: Agent[] = [
     description:
       'Scores contacts 0–100 from engagement signals and contact embeddings. Updates scores on new activity signals.',
     model: 'Embedding + engagement scoring',
-    accuracy: 91,
     tasksToday: 178,
     lastRun: '5 min ago',
     metrics: [
@@ -425,7 +423,6 @@ export const demoAgents: Agent[] = [
     description:
       'Drafts personalised outreach emails with Claude (Haiku). Context-aware — pulls in contact history, deal stage, and semantic tags.',
     model: 'Claude (Haiku)',
-    accuracy: 88,
     tasksToday: 41,
     lastRun: '1h ago',
     metrics: [
@@ -448,7 +445,6 @@ export const demoAgents: Agent[] = [
     description:
       'Transcribes and summarises sales calls. Extracts action items, objections, and next steps. Pushes summaries to contact timeline.',
     model: 'Whisper + Claude (Sonnet)',
-    accuracy: 89,
     tasksToday: 14,
     lastRun: 'Just now',
     metrics: [
@@ -471,7 +467,6 @@ export const demoAgents: Agent[] = [
     description:
       'Analyses deal velocity and stage durations. Flags stalled deals and recommends next-best actions to unblock pipeline.',
     model: 'Deal velocity heuristics',
-    accuracy: 86,
     tasksToday: 29,
     lastRun: '15 min ago',
     metrics: [
@@ -494,7 +489,6 @@ export const demoAgents: Agent[] = [
     description:
       'Runs sentiment analysis on inbound emails and call transcripts. Detects churn risk signals and flags at-risk accounts.',
     model: 'Claude (Haiku)',
-    accuracy: 83,
     tasksToday: 96,
     lastRun: '45 min ago',
     metrics: [
@@ -943,12 +937,16 @@ export const demoRevenueChartData = [
   { month: 'Apr', revenue: 485000 },
 ]
 
-export const demoAgentAccuracyData = [
-  { day: 'Mon', semantic: 93, leadScore: 89, sentiment: 81 },
-  { day: 'Tue', semantic: 94, leadScore: 90, sentiment: 82 },
-  { day: 'Wed', semantic: 94, leadScore: 89, sentiment: 83 },
-  { day: 'Thu', semantic: 95, leadScore: 91, sentiment: 82 },
-  { day: 'Fri', semantic: 94, leadScore: 91, sentiment: 84 },
-  { day: 'Sat', semantic: 93, leadScore: 90, sentiment: 83 },
-  { day: 'Sun', semantic: 94, leadScore: 91, sentiment: 83 },
+// Generic per-day demo activity series (tasks handled per agent type). This is a
+// throughput/volume metric for the demo dashboard — NOT a model-accuracy reading.
+// Renamed from the former "agent accuracy" series so no fabricated accuracy framing
+// remains. Kept exported for back-compat; relabel target if a chart consumes it.
+export const demoAgentActivityData = [
+  { day: 'Mon', semantic: 280, leadScore: 142, sentiment: 88 },
+  { day: 'Tue', semantic: 312, leadScore: 165, sentiment: 94 },
+  { day: 'Wed', semantic: 298, leadScore: 151, sentiment: 102 },
+  { day: 'Thu', semantic: 331, leadScore: 178, sentiment: 96 },
+  { day: 'Fri', semantic: 305, leadScore: 169, sentiment: 110 },
+  { day: 'Sat', semantic: 187, leadScore: 91, sentiment: 64 },
+  { day: 'Sun', semantic: 142, leadScore: 73, sentiment: 51 },
 ]
