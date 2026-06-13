@@ -1,5 +1,7 @@
+import json
 from uuid import uuid4
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -38,6 +40,51 @@ AsyncSessionFactory = async_sessionmaker(
 
 class Base(DeclarativeBase):
     pass
+
+
+async def set_tenant_context(session: AsyncSession, workspace_id, supabase_uid=None) -> None:
+    """F3 RLS backstop: bind the tenant identity to the current DB transaction.
+
+    Emits ``SET LOCAL`` statements so the workspace RLS policies from migration
+    013 resolve when (and only when) the API connects as a non-BYPASSRLS role:
+
+      * ``SET LOCAL <DB_RLS_GUC_KEY> = '<workspace_id>'`` — a direct GUC alias a
+        future policy can read with ``current_setting(...)``.
+      * ``SET LOCAL request.jwt.claims = '{"sub": "<uid>"}'`` — what the existing
+        013 policies actually read via ``auth.uid()`` (Supabase maps auth.uid()
+        to ``request.jwt.claim.sub`` / the ``sub`` of ``request.jwt.claims``).
+
+    Gating + pooler safety:
+      * No-op unless ``settings.DB_RLS_CONTEXT_ENABLED`` is True (default False),
+        so this is INERT in prod until the ops role-swap cutover.
+      * ``SET LOCAL`` is transaction-scoped, so it MUST run inside the same
+        transaction as the queries it should constrain. Under Supabase's
+        transaction-mode pooler a fresh server connection is leased per
+        transaction; binding it here (before the request's queries, within the
+        request session's transaction) is exactly the supported pattern.
+
+    Idempotent and side-effect-free when the flag is off; callers may invoke it
+    unconditionally.
+    """
+    if not settings.DB_RLS_CONTEXT_ENABLED:
+        return
+    if workspace_id is None:
+        return
+
+    ws = str(workspace_id)
+    # GUC keys cannot be bound as parameters; the key is from trusted config and
+    # the value is a parameter, so this is not injectable.
+    await session.execute(
+        text(f"SET LOCAL {settings.DB_RLS_GUC_KEY} = :ws"), {"ws": ws}
+    )
+    # request.jwt.claims must be valid JSON for auth.uid() (->> 'sub') to resolve.
+    claims = {"sub": str(supabase_uid)} if supabase_uid is not None else {}
+    # Mirror workspace into the claims too (harmless, aids debugging / future policies).
+    claims["workspace_id"] = ws
+    await session.execute(
+        text("SET LOCAL request.jwt.claims = :claims"),
+        {"claims": json.dumps(claims)},
+    )
 
 
 async def get_db() -> AsyncSession:  # type: ignore[misc]

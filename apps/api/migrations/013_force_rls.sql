@@ -57,6 +57,48 @@
 -- policy is (re)created with DROP POLICY IF EXISTS + CREATE POLICY. Every table
 -- is guarded with to_regclass(...) so the migration is safe even if a given
 -- environment is missing one of these tables.
+--
+-- ══════════════════════════════════════════════════════════════════════════════
+--  CUTOVER RUNBOOK (ops) — make the backstop ENFORCING and prove it
+-- ══════════════════════════════════════════════════════════════════════════════
+-- The app-side per-request tenant context is implemented in app/database.py
+-- (set_tenant_context) + app/dependencies.py and is GATED behind the config flag
+-- DB_RLS_CONTEXT_ENABLED (default False = INERT). Coordinated cutover:
+--
+--   1. Create a least-privilege login role that is NON-superuser, NON-BYPASSRLS,
+--      and NOT the owner of these tables:
+--        CREATE ROLE app_authenticated LOGIN PASSWORD '<secret>'
+--          NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+--        GRANT USAGE ON SCHEMA public TO app_authenticated;
+--        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public
+--          TO app_authenticated;
+--        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_authenticated;
+--        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+--          GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_authenticated;
+--        -- app_authenticated must NOT own the tables and must NOT have BYPASSRLS.
+--      The policies read auth.uid() = (request.jwt.claims ->> 'sub'); the app sets
+--      request.jwt.claims per transaction (SET LOCAL) so auth.uid() resolves.
+--      Ensure the auth schema / auth.uid() helper is visible to the role (Supabase
+--      ships it; if absent, define auth.uid() as a SQL function reading the GUC).
+--   2. Apply THIS migration (013) to prod.
+--   3. Repoint the API DATABASE_URL user to app_authenticated (USER=app_authenticated).
+--      ── ENV/OPS change; not performed by this SQL.
+--   4. Set DB_RLS_CONTEXT_ENABLED=true in the api service env and redeploy.
+--   5. DECISIVE TEST (must return ZERO rows / be denied) — run AS THE NEW ROLE
+--      with a tenant context bound, exactly as the app does per request:
+--        BEGIN;
+--          SET LOCAL request.jwt.claims = '{"sub":"<a real users.supabase_uid>"}';
+--          -- unfiltered cross-tenant probe: must now return only that user's ws
+--          SELECT count(*) AS visible, count(distinct workspace_id) AS workspaces
+--            FROM contacts;          -- expect workspaces = 1 (was 2 in evidence-rls.md)
+--          SELECT count(*) FROM call_summaries;  -- now policy-bound (was 0 policies)
+--        COMMIT;
+--      Pre-cutover (privileged role) the same SELECT returns rows spanning 2
+--      workspaces (see ../audit/.../evidence-rls.md §5). Post-cutover it must be
+--      scoped to a single workspace, proving the DB-level backstop is live.
+--   ROLLBACK: set DB_RLS_CONTEXT_ENABLED=false and/or repoint DATABASE_URL back to
+--      the privileged role. FORCE RLS + policies are harmless to a BYPASSRLS role,
+--      so leaving 013 applied does not break the privileged connection.
 -- ──────────────────────────────────────────────────────────────────────────────
 
 DO $$
