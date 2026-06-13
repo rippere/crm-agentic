@@ -176,6 +176,77 @@ async def test_delete_contact_wrong_workspace_returns_403(app_client):
     assert resp.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_delete_contact_erases_linked_pii(app_client):
+    """GDPR right-to-erasure (finding F7): deleting a contact must destroy the
+    PII carried in its linked rows — messages (sender_email + body_plain) and
+    call summaries (transcript + summary) hard-deleted, deals/tasks scrubbed of
+    the contact link — NOT leave them orphaned with PII intact.
+
+    The DB is mocked, so we assert the *erasure operations* the handler emits in
+    the same transaction: a DELETE against ``messages`` and ``call_summaries``
+    (each scoped by workspace_id + contact_id), a scrubbing UPDATE against
+    ``deals`` (nulling contact_id/contact_name/company) and ``tasks`` (nulling
+    contact_id), the contact itself deleted, and a single commit.
+    """
+    from sqlalchemy.sql import Delete, Update
+
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id, name="Erase Me", email="erase@example.com")
+
+    # Capture every statement passed to db.execute so we can introspect them.
+    executed: list = []
+
+    async def _capture_execute(stmt, *args, **kwargs):
+        executed.append(stmt)
+        # First call is the contact SELECT → must yield the contact; the rest
+        # are DELETE/UPDATE statements whose result the handler does not read.
+        if len(executed) == 1:
+            return _make_scalar_result(contact)
+        return MagicMock(rowcount=1)
+
+    mock_db.execute = AsyncMock(side_effect=_capture_execute)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.delete(f"/workspaces/{workspace_id}/contacts/{contact.id}")
+
+    assert resp.status_code == 204
+
+    # --- Index the emitted DELETE / UPDATE statements by target table. -------
+    deletes = {
+        s.table.name: s for s in executed if isinstance(s, Delete)
+    }
+    updates = {
+        s.table.name: s for s in executed if isinstance(s, Update)
+    }
+
+    # 1. PII-bearing children are HARD-DELETED, not orphaned.
+    assert "messages" in deletes, "messages (sender_email/body_plain) not deleted"
+    assert "call_summaries" in deletes, "call_summaries (transcript/summary) not deleted"
+
+    # 2. Each erasure is scoped by BOTH workspace_id and contact_id (no
+    #    cross-tenant / unscoped wipe). Verify via the compiled WHERE clause.
+    for table, stmt in list(deletes.items()) + list(updates.items()):
+        sql = str(stmt.compile(compile_kwargs={"literal_binds": False}))
+        assert f"{table}.workspace_id" in sql, f"{table} erasure not scoped by workspace_id"
+        assert f"{table}.contact_id" in sql, f"{table} erasure not scoped by contact_id"
+
+    # 3. Deals survive but are scrubbed of personal data + the contact link.
+    assert "deals" in updates, "deals not scrubbed"
+    deal_set_cols = {c.name for c in updates["deals"]._values}
+    assert {"contact_id", "contact_name", "company"} <= deal_set_cols, (
+        f"deal scrub must null contact_id/contact_name/company, got {deal_set_cols}"
+    )
+
+    # 4. Tasks survive but lose the contact link.
+    assert "tasks" in updates, "tasks not unlinked"
+    assert "contact_id" in {c.name for c in updates["tasks"]._values}
+
+    # 5. The contact row itself is deleted, exactly once, in one committed txn.
+    mock_db.delete.assert_awaited_once_with(contact)
+    mock_db.commit.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # POST /workspaces/{wid}/contacts — create
 # ---------------------------------------------------------------------------

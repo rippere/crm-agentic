@@ -10,7 +10,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import or_, select, insert, update
+from sqlalchemy import delete, or_, select, insert, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -512,7 +512,23 @@ async def delete_contact(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    """Delete a contact and all cascade-linked records."""
+    """Delete a contact and erase the personal data carried in its linked records.
+
+    GDPR right-to-erasure: within a single transaction, before removing the
+    contact row, this explicitly destroys the PII-bearing child rows for this
+    ``contact_id`` (scoped by ``workspace_id``) at the application level rather
+    than relying on the database FK ``ON DELETE SET NULL`` rule (which would
+    merely orphan the rows and leave their personal data behind):
+
+    - ``messages``        — hard-deleted (carries ``sender_email`` + ``body_plain``).
+    - ``call_summaries``  — hard-deleted (carries ``transcript`` + ``summary``).
+    - ``deals``           — retained as pipeline records, but the contact link is
+      cleared and the personal fields (``contact_name``, ``company``) are nulled.
+    - ``tasks``           — retained, but the contact link is cleared.
+
+    After this no email address, message body, call transcript, or call summary
+    tied to the deleted contact survives.
+    """
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
@@ -524,6 +540,44 @@ async def delete_contact(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
     contact_name = contact.name or str(contact_id)
+
+    # Local imports to avoid circular-import at module load time.
+    from app.models.message import Message
+    from app.models.call_summary import CallSummary
+    from app.models.deal import Deal
+    from app.models.task import Task
+
+    # 1. Hard-delete PII-bearing messages (sender_email, body_plain).
+    await db.execute(
+        delete(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+        )
+    )
+
+    # 2. Hard-delete PII-bearing call summaries (transcript, summary).
+    await db.execute(
+        delete(CallSummary).where(
+            CallSummary.workspace_id == workspace_id,
+            CallSummary.contact_id == contact_id,
+        )
+    )
+
+    # 3. Deals survive as pipeline records, but scrub the personal data and
+    #    sever the contact link.
+    await db.execute(
+        update(Deal)
+        .where(Deal.workspace_id == workspace_id, Deal.contact_id == contact_id)
+        .values(contact_id=None, contact_name=None, company=None)
+    )
+
+    # 4. Tasks survive (no email/body/transcript PII) but lose the contact link.
+    await db.execute(
+        update(Task)
+        .where(Task.workspace_id == workspace_id, Task.contact_id == contact_id)
+        .values(contact_id=None)
+    )
+
     await db.delete(contact)
     event = ActivityEvent(
         workspace_id=workspace_id,
