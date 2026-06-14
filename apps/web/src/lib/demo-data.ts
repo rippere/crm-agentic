@@ -400,20 +400,20 @@ export const demoAgents: Agent[] = [
     type: 'lead_scorer',
     status: 'active',
     description:
-      'Scores contacts 0–100 using a gradient-boosted model trained on historical conversion data. Updates scores on new activity signals.',
-    model: 'xgboost-v2.1-crm',
+      'Scores contacts 0–100 from engagement signals, firmographic data, and deal history. Updates scores on new activity.',
+    model: 'heuristic + signals',
     accuracy: 91,
     tasksToday: 178,
     lastRun: '5 min ago',
     metrics: [
       { label: 'Scores Updated', value: '178', delta: '+12%' },
       { label: 'Hot Leads', value: '23' },
-      { label: 'F1 Score', value: '0.91' },
+      { label: 'Avg Score', value: '64' },
     ],
     workflow: [
       { id: 'w1', label: 'Activity Signal', type: 'trigger', position: { x: 0, y: 0 } },
       { id: 'w2', label: 'Feature Extract', type: 'action', position: { x: 1, y: 0 } },
-      { id: 'w3', label: 'XGBoost Predict', type: 'action', position: { x: 2, y: 0 } },
+      { id: 'w3', label: 'Score Signals', type: 'action', position: { x: 2, y: 0 } },
       { id: 'w4', label: 'Update Score', type: 'output', position: { x: 3, y: 0 } },
     ],
   },
@@ -447,7 +447,7 @@ export const demoAgents: Agent[] = [
     status: 'processing',
     description:
       'Transcribes and summarises sales calls. Extracts action items, objections, and next steps. Pushes summaries to contact timeline.',
-    model: 'whisper-large-v3 + claude-haiku',
+    model: 'whisper-base + claude-haiku',
     accuracy: 89,
     tasksToday: 14,
     lastRun: 'Just now',
@@ -470,7 +470,7 @@ export const demoAgents: Agent[] = [
     status: 'active',
     description:
       'Analyses deal velocity and stage durations. Flags stalled deals and recommends next-best actions to unblock pipeline.',
-    model: 'heuristic-v3 + gpt-4o-mini',
+    model: 'heuristic',
     accuracy: 86,
     tasksToday: 29,
     lastRun: '15 min ago',
@@ -493,7 +493,7 @@ export const demoAgents: Agent[] = [
     status: 'idle',
     description:
       'Runs sentiment analysis on inbound emails and call transcripts. Detects churn risk signals and flags at-risk accounts.',
-    model: 'cardiffnlp/twitter-roberta-base-sentiment',
+    model: 'claude-haiku-4-5',
     accuracy: 83,
     tasksToday: 96,
     lastRun: '45 min ago',
@@ -504,7 +504,7 @@ export const demoAgents: Agent[] = [
     ],
     workflow: [
       { id: 'w1', label: 'New Message', type: 'trigger', position: { x: 0, y: 0 } },
-      { id: 'w2', label: 'RoBERTa Classify', type: 'action', position: { x: 1, y: 0 } },
+      { id: 'w2', label: 'Claude Sentiment', type: 'action', position: { x: 1, y: 0 } },
       { id: 'w3', label: 'Threshold Check', type: 'condition', position: { x: 2, y: 0 } },
       { id: 'w4', label: 'Update Risk Flag', type: 'output', position: { x: 3, y: 0 } },
     ],

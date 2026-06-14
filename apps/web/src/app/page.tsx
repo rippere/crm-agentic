@@ -140,7 +140,7 @@ function Hero() {
 
       <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-4 py-1.5 text-xs font-medium text-indigo-300">
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 agent-pulse" aria-hidden="true" />
-        6 AI Agents Running · 94.7% Accuracy
+        6 AI Agents · Claude + semantic search
       </div>
 
       <h1
@@ -154,9 +154,9 @@ function Hero() {
       </h1>
 
       <p className="mx-auto mt-6 max-w-2xl text-lg text-zinc-400 leading-relaxed">
-        NovaCRM uses semantic AI to classify leads, ML models to score deals,
-        and autonomous agents to compose emails, summarize calls, and move
-        your pipeline — all without lifting a finger.
+        NovaCRM uses semantic search to classify leads, AI to score and
+        prioritize deals, and autonomous agents to compose emails, summarize
+        calls, and move your pipeline — all without lifting a finger.
       </p>
 
       <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
@@ -191,14 +191,14 @@ function Hero() {
             {[
               { val: "$2.4M", label: "Revenue" },
               { val: "148", label: "Deals" },
-              { val: "94.7%", label: "Accuracy" },
+              { val: "12", label: "Hot Leads" },
               { val: "6 / 8", label: "Agents" },
             ].map(({ val, label }, i) => (
               <div key={label} className="rounded-xl border border-zinc-800 bg-zinc-950 p-3">
                 <p className="text-lg font-bold font-mono text-zinc-100">{val}</p>
                 <p className="text-xs text-zinc-500 mt-0.5">{label}</p>
                 <div className="mt-2 h-1 rounded-full bg-zinc-800" aria-hidden="true">
-                  <div className="h-full rounded-full bg-indigo-500" style={{ width: `${[72, 58, 94, 75][i]}%` }} />
+                  <div className="h-full rounded-full bg-indigo-500" style={{ width: `${[72, 58, 64, 75][i]}%` }} />
                 </div>
               </div>
             ))}
@@ -242,37 +242,37 @@ const features = [
   },
   {
     icon: <Brain className="h-5 w-5" />,
-    title: "ML Lead Scoring",
-    description: "An XGBoost model trained on your historical deal outcomes scores every lead 0–100 using behavioral signals and firmographic data.",
-    tags: ["XGBoost v2", "Feature Store", "F1: 0.947"],
+    title: "Lead Scoring",
+    description: "Scores every lead 0–100 from engagement signals, firmographic data, and deal history — so your team works the hottest leads first.",
+    tags: ["Lead Scoring", "Engagement Signals", "0–100"],
     color: "emerald",
   },
   {
     icon: <TrendingUp className="h-5 w-5" />,
     title: "Pipeline Intelligence",
-    description: "Detects deal stalls with reinforcement learning, predicts win probability in real time, and recommends your next best action.",
-    tags: ["RL Policy", "LightGBM", "Win Prediction"],
+    description: "Surfaces stalled deals, flags aging opportunities, and recommends your next best action to keep the pipeline moving.",
+    tags: ["Stall Detection", "Next Best Action", "Pipeline Health"],
     color: "indigo",
   },
   {
     icon: <Mail className="h-5 w-5" />,
     title: "Autonomous Email Composer",
-    description: "GPT-4o drafts hyper-personalized outreach using semantic tags, deal stage, and contact history. Review or send automatically.",
-    tags: ["GPT-4o Fine-tuned", "48% Open Rate", "22% Reply Rate"],
+    description: "Claude drafts hyper-personalized outreach using semantic tags, deal stage, and contact history. Review or send automatically.",
+    tags: ["Claude Sonnet", "Personalized", "One-click Send"],
     color: "amber",
   },
   {
     icon: <Mic className="h-5 w-5" />,
     title: "Call Summarization",
-    description: "Whisper transcribes your sales calls. Claude extracts action items, objections, and sentiment — updating your CRM in 23 seconds.",
-    tags: ["Whisper Large v3", "Claude 3.5", "Action Item Extraction"],
+    description: "Whisper transcribes your sales calls. Claude extracts action items, objections, and sentiment — and updates your CRM automatically.",
+    tags: ["Whisper", "Claude", "Action Items"],
     color: "emerald",
   },
   {
     icon: <Heart className="h-5 w-5" />,
-    title: "Churn Prediction",
-    description: "RoBERTa analyzes every email, ticket, and call transcript. Flags at-risk accounts before sentiment drops below your threshold.",
-    tags: ["RoBERTa Fine-tuned", "Sentiment Score", "Early Warning"],
+    title: "Churn Risk",
+    description: "Claude analyzes every email, ticket, and call transcript to flag at-risk accounts before sentiment drops below your threshold.",
+    tags: ["Sentiment Analysis", "Risk Alerts", "Early Warning"],
     color: "rose",
   },
 ];
@@ -292,7 +292,7 @@ function FeaturesSection() {
           <p className="text-xs font-mono text-indigo-400 uppercase tracking-widest mb-3">Intelligence Stack</p>
           <h2 id="features-heading" className="text-3xl font-bold text-zinc-100 sm:text-4xl">Six agents. One unified CRM.</h2>
           <p className="mx-auto mt-4 max-w-xl text-zinc-400">
-            Each agent is a specialized ML model trained for a specific CRM task — working together in a single, seamless workflow.
+            Each agent is a specialized AI workflow built for a specific CRM task — working together in a single, seamless flow.
           </p>
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -328,7 +328,7 @@ function AgentsSection() {
         <p className="text-xs font-mono text-emerald-400 uppercase tracking-widest mb-3">Live Automation</p>
         <h2 id="agents-heading" className="text-3xl font-bold text-zinc-100 sm:text-4xl">Agents that never sleep</h2>
         <p className="mt-4 text-zinc-400 max-w-xl mx-auto">
-          Every agent runs on a live feedback loop — retraining on your data, updating scores in real-time, and triggering actions when conditions are met.
+          Every agent runs continuously — updating scores, watching your pipeline, and triggering actions the moment conditions are met.
         </p>
         <div className="mt-12 rounded-2xl border border-zinc-800 bg-zinc-950 text-left overflow-hidden">
           <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3 bg-zinc-900">
@@ -342,11 +342,11 @@ function AgentsSection() {
           <div className="p-4 space-y-2 font-mono text-xs" role="log" aria-live="polite" aria-label="Agent activity log">
             {[
               { time: "14:32:01", agent: "LeadScorer", msg: "contact:c6 score updated 88→95 · signals:[upsell,champion,power_user]", color: "text-emerald-400" },
-              { time: "14:31:58", agent: "SemanticSorter", msg: "batch:48 contacts tagged · avg_confidence:0.941", color: "text-indigo-400" },
+              { time: "14:31:58", agent: "SemanticSorter", msg: "batch:48 contacts tagged · top_tag:enterprise_buyer", color: "text-indigo-400" },
               { time: "14:31:44", agent: "EmailComposer", msg: "draft:email_0092 queued · contact:marcus_webb · stage:proposal", color: "text-amber-400" },
-              { time: "14:31:32", agent: "PipelineOptimizer", msg: "deal:d1 moved discovery→negotiation · win_prob:87%", color: "text-indigo-300" },
+              { time: "14:31:32", agent: "PipelineOptimizer", msg: "deal:d1 moved discovery→negotiation · flagged:high_value", color: "text-indigo-300" },
               { time: "14:31:19", agent: "SentimentAnalyzer", msg: "⚠ at_risk:lena_kovacs · sentiment:0.31 · re_engagement:triggered", color: "text-rose-400" },
-              { time: "14:31:05", agent: "LeadScorer", msg: "model_retrain complete · samples:1204 · f1:0.947→0.951", color: "text-emerald-400" },
+              { time: "14:31:05", agent: "LeadScorer", msg: "rescored 1,204 contacts · 38 newly hot", color: "text-emerald-400" },
             ].map(({ time, agent, msg, color }) => (
               <div key={time + agent} className="flex items-start gap-3">
                 <span className="text-zinc-700 flex-shrink-0">{time}</span>
@@ -377,13 +377,13 @@ const plans = [
   {
     name: "Pro", price: "$149", per: "/mo",
     description: "Full agent suite for growing sales teams.",
-    features: ["All 6 AI Agents", "Unlimited contacts", "Custom ML models", "Call summarization", "Pipeline optimizer", "Priority support"],
+    features: ["All 6 AI Agents", "Unlimited contacts", "Advanced analytics", "Call summarization", "Pipeline optimizer", "Priority support"],
     cta: "Start Free Trial", highlight: true,
   },
   {
     name: "Enterprise", price: "Custom", per: "",
-    description: "Dedicated infrastructure, custom training, and SLAs.",
-    features: ["Custom agent development", "On-premise deployment", "SSO + SCIM", "Dedicated ML engineer", "Custom SLA"],
+    description: "Dedicated infrastructure, custom onboarding, and SLAs.",
+    features: ["Custom agent development", "On-premise deployment", "SSO + SCIM", "Dedicated success engineer", "Custom SLA"],
     cta: "Contact Sales", highlight: false,
   },
 ];
