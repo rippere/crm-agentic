@@ -85,6 +85,15 @@ type HeatmapWeek = {
   total: number;
 };
 
+type EngagementScore = {
+  score: number;
+  message_count: number;
+  note_count: number;
+  tasks_total: number;
+  tasks_done: number;
+  components: { messages: number; notes: number; tasks: number };
+};
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatusDot({ status }: { status: string }) {
@@ -318,6 +327,8 @@ export default function ContactDetailPage() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [heatmap, setHeatmap] = useState<HeatmapWeek[]>([]);
   const [heatmapLoading, setHeatmapLoading] = useState(false);
+  const [engagementScore, setEngagementScore] = useState<EngagementScore | null>(null);
+  const [engagementLoading, setEngagementLoading] = useState(false);
 
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -413,6 +424,7 @@ export default function ContactDetailPage() {
     setDealsLoading(true);
     setTasksLoading(true);
     setHeatmapLoading(true);
+    setEngagementLoading(true);
 
     apiClient
       .getContactTimeline(workspaceId, contactId, token)
@@ -437,6 +449,12 @@ export default function ContactDetailPage() {
       .then((data: HeatmapWeek[]) => setHeatmap(Array.isArray(data) ? data : []))
       .catch(() => setHeatmap([]))
       .finally(() => setHeatmapLoading(false));
+
+    apiClient
+      .getContactEngagementScore(workspaceId, contactId, token)
+      .then((data: EngagementScore) => setEngagementScore(data))
+      .catch(() => setEngagementScore(null))
+      .finally(() => setEngagementLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -681,6 +699,72 @@ export default function ContactDetailPage() {
                 ))}
               </div>
             )}
+          </Card>
+
+          {/* Engagement Score */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Engagement Score</p>
+              <span className="ml-auto text-[10px] text-zinc-500">90 days</span>
+            </div>
+
+            {engagementLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-4 w-4 text-indigo-400 animate-spin" />
+              </div>
+            ) : engagementScore === null ? (
+              <p className="text-xs text-zinc-600 italic py-2">Unable to load engagement data.</p>
+            ) : (() => {
+              const s = engagementScore.score;
+              const circumference = 2 * Math.PI * 36;
+              const dash = (s / 100) * circumference;
+              const scoreColor = s >= 80 ? "#34d399" : s >= 60 ? "#818cf8" : s >= 30 ? "#fbbf24" : "#f87171";
+              const scoreLabel = s >= 80 ? "High" : s >= 60 ? "Good" : s >= 30 ? "Low" : "Minimal";
+              return (
+                <div className="flex items-center gap-4">
+                  {/* SVG ring */}
+                  <div className="relative flex-shrink-0">
+                    <svg width="88" height="88" viewBox="0 0 88 88">
+                      <circle cx="44" cy="44" r="36" fill="none" stroke="#27272a" strokeWidth="8" />
+                      <circle
+                        cx="44" cy="44" r="36" fill="none"
+                        stroke={scoreColor} strokeWidth="8"
+                        strokeLinecap="round"
+                        strokeDasharray={`${dash} ${circumference}`}
+                        transform="rotate(-90 44 44)"
+                        style={{ transition: "stroke-dasharray 0.5s ease" }}
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      <span className="text-lg font-bold font-mono" style={{ color: scoreColor }}>{s}</span>
+                      <span className="text-[9px] text-zinc-500 uppercase tracking-wide">{scoreLabel}</span>
+                    </div>
+                  </div>
+                  {/* Breakdown */}
+                  <div className="flex-1 space-y-1.5">
+                    {[
+                      { label: "Messages", value: engagementScore.components.messages, max: 40, count: engagementScore.message_count },
+                      { label: "Notes", value: engagementScore.components.notes, max: 30, count: engagementScore.note_count },
+                      { label: "Tasks", value: engagementScore.components.tasks, max: 30, count: `${engagementScore.tasks_done}/${engagementScore.tasks_total}` },
+                    ].map(({ label, value, max, count }) => (
+                      <div key={label}>
+                        <div className="flex justify-between text-[10px] text-zinc-500 mb-0.5">
+                          <span>{label}</span>
+                          <span className="font-mono">{count}</span>
+                        </div>
+                        <div className="h-1 rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-indigo-500"
+                            style={{ width: `${(value / max) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </Card>
 
           {/* Semantic tags — inline chip editor */}

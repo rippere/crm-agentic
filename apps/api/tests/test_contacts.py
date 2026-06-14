@@ -1177,3 +1177,51 @@ async def test_activity_heatmap_contact_not_found_returns_404(app_client):
         resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/activity-heatmap")
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/engagement-score
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_engagement_score_returns_score(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    # db.execute called 4 times: contact lookup, messages, notes, tasks
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_scalars_result([]),
+        _make_scalars_result([]),
+        _make_scalars_result([]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact.id}/engagement-score")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "score" in data
+    assert "message_count" in data
+    assert "note_count" in data
+    assert "tasks_total" in data
+    assert "tasks_done" in data
+    assert "components" in data
+    assert 0 <= data["score"] <= 100
+    # With zero activity the score should be 0
+    assert data["score"] == 0
+    assert data["components"]["messages"] == 0
+    assert data["components"]["notes"] == 0
+    assert data["components"]["tasks"] == 0
+
+
+@pytest.mark.asyncio
+async def test_engagement_score_contact_not_found_returns_404(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/engagement-score")
+
+    assert resp.status_code == 404

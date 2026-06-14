@@ -1113,3 +1113,73 @@ async def contact_activity_heatmap(
         })
 
     return output
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/engagement-score")
+async def contact_engagement_score(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Compute a 0–100 engagement score from messages, notes, and task completion (last 90 days)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+    from app.models.task import Task
+
+    cutoff = datetime.utcnow() - timedelta(days=90)
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= cutoff,
+        )
+    )
+    message_count = len(msg_result.scalars().all())
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+            ContactNote.created_at >= cutoff,
+        )
+    )
+    note_count = len(note_result.scalars().all())
+
+    task_result = await db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.created_at >= cutoff,
+        )
+    )
+    tasks = task_result.scalars().all()
+    tasks_total = len(tasks)
+    tasks_done = sum(1 for t in tasks if t.status == "done")
+
+    messages_score = min(40, message_count * 8)
+    notes_score = min(30, note_count * 10)
+    tasks_score = round(30 * tasks_done / tasks_total) if tasks_total > 0 else 0
+    total_score = messages_score + notes_score + tasks_score
+
+    return {
+        "score": total_score,
+        "message_count": message_count,
+        "note_count": note_count,
+        "tasks_total": tasks_total,
+        "tasks_done": tasks_done,
+        "components": {
+            "messages": messages_score,
+            "notes": notes_score,
+            "tasks": tasks_score,
+        },
+    }
