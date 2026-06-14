@@ -1216,4 +1216,38 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/activity-heatmap`, {}, token)
   },
+
+  // Contact engagement score: 0–100 from messages + notes + task completion (last 90 days).
+  getContactEngagementScore: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    score: number;
+    message_count: number;
+    note_count: number;
+    tasks_total: number;
+    tasks_done: number;
+    components: { messages: number; notes: number; tasks: number };
+  }> => {
+    if (isDemoMode) {
+      const seed = contactId.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+      const message_count = (seed % 6)
+      const note_count = ((seed * 7) % 4)
+      const tasks_total = ((seed * 3) % 5)
+      const tasks_done = tasks_total === 0 ? 0 : ((seed * 11) % (tasks_total + 1))
+      const messages_score = Math.min(40, message_count * 8)
+      const notes_score = Math.min(30, note_count * 10)
+      const tasks_score = tasks_total > 0 ? Math.round(30 * tasks_done / tasks_total) : 0
+      return Promise.resolve({
+        score: messages_score + notes_score + tasks_score,
+        message_count,
+        note_count,
+        tasks_total,
+        tasks_done,
+        components: { messages: messages_score, notes: notes_score, tasks: tasks_score },
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/engagement-score`, {}, token)
+  },
 }
