@@ -10,7 +10,7 @@ import type { AgentRow } from "@/lib/supabase";
 import {
   LayoutDashboard, Users, KanbanSquare, Bot, Settings,
   Zap, Inbox, CheckSquare, FolderOpen, Plug, Search,
-  PhoneCall, ChevronsUpDown, LogOut, BarChart2, X, Activity, Target,
+  PhoneCall, ChevronsUpDown, LogOut, BarChart2, X, Activity, Target, HelpCircle,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 
@@ -84,8 +84,9 @@ const navGroups: NavGroup[] = [
     id: "system",
     label: "System",
     items: [
-      { href: "/connectors", label: "Connectors", icon: Plug     },
-      { href: "/settings",   label: "Settings",   icon: Settings },
+      { href: "/connectors", label: "Connectors", icon: Plug       },
+      { href: "/help",       label: "Help",       icon: HelpCircle },
+      { href: "/settings",   label: "Settings",   icon: Settings   },
     ],
   },
 ];

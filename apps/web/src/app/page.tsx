@@ -63,13 +63,18 @@ function Nav() {
       </div>
 
       <div className="hidden md:flex items-center gap-6">
-        {["Features", "Agents", "Pricing", "Docs"].map((item) => (
+        {[
+          { label: "Features", href: "#features" },
+          { label: "Agents", href: "#agents" },
+          { label: "Pricing", href: "#pricing" },
+          { label: "Docs", href: "/help" },
+        ].map((item) => (
           <a
-            key={item}
-            href={`#${item.toLowerCase()}`}
+            key={item.label}
+            href={item.href}
             className="text-sm text-zinc-400 hover:text-zinc-100 transition-colors duration-200 cursor-pointer"
           >
-            {item}
+            {item.label}
           </a>
         ))}
       </div>
@@ -108,14 +113,19 @@ function Nav() {
             transition={{ duration: 0.15, ease: "easeOut" }}
             className="absolute top-full left-0 right-0 mt-2 rounded-2xl border border-zinc-800 bg-zinc-950 p-4 space-y-3 md:hidden"
           >
-            {["Features", "Agents", "Pricing", "Docs"].map((item) => (
+            {[
+              { label: "Features", href: "#features" },
+              { label: "Agents", href: "#agents" },
+              { label: "Pricing", href: "#pricing" },
+              { label: "Docs", href: "/help" },
+            ].map((item) => (
               <a
-                key={item}
-                href={`#${item.toLowerCase()}`}
+                key={item.label}
+                href={item.href}
                 className="block text-sm text-zinc-400 hover:text-zinc-100 py-2 transition-colors"
                 onClick={() => setOpen(false)}
               >
-                {item}
+                {item.label}
               </a>
             ))}
             <Link href="/dashboard" className="block w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-center text-sm font-medium text-white">
@@ -484,8 +494,13 @@ function Footer() {
         </div>
         <p className="text-xs text-zinc-600 font-mono">© 2026 NovaCRM · Agentic Intelligence Platform</p>
         <div className="flex items-center gap-4">
-          {["Privacy", "Terms", "Docs", "Status"].map((item) => (
-            <a key={item} href="#" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer">{item}</a>
+          {[
+            { label: "Privacy", href: "/privacy" },
+            { label: "Terms", href: "/terms" },
+            { label: "Docs", href: "/help" },
+            { label: "Status", href: "/status" },
+          ].map((item) => (
+            <a key={item.label} href={item.href} className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer">{item.label}</a>
           ))}
         </div>
       </div>

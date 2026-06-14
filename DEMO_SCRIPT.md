@@ -1,12 +1,14 @@
-# NovaCRM — Investor Demo Script
-**Duration:** ~8 minutes  
-**URL:** http://localhost:3000  
+# NovaCRM — Product Showcase Script
+**Audience:** Company president (internal showcase)
+**Duration:** ~8 minutes
+**Run in demo mode:** `cd apps/web && NEXT_PUBLIC_DEMO_MODE=true pnpm dev` → open `http://localhost:3000`
+(Demo mode renders rich pre-generated data with no backend dependency — nothing can fail mid-demo.)
 **Persona:** You're the founder of Acme Corp, a 10-person SaaS team. Your CRM has been running for 6 weeks.
 
 ---
 
 ## The pitch in one sentence
-> "NovaCRM replaces the manual work of CRM maintenance — emails, scoring, pipeline health — with autonomous agents that run in the background and surface intelligence when you need it."
+> "NovaCRM replaces the manual work of CRM maintenance — emails, scoring, pipeline health, call notes — with autonomous agents that run in the background and surface intelligence when you need it, while keeping a human in the loop on anything that matters."
 
 ---
 
@@ -14,9 +16,9 @@
 **Navigate to:** `/dashboard`
 
 Point out:
-- **$485K revenue**, 91% ML lead accuracy, 3 agents running right now
-- The **activity feed** on the right — this is the agents' work log. Point to ev-004: *"Pipeline Optimizer flagged TechCorp deal as stalled — 18 days in Negotiation. Recommended: schedule follow-up call."* That happened automatically at 2am.
-- **Stale deal alert** — the system caught it before you did
+- Revenue, active deals, hot leads, and agents running right now — the at-a-glance state of the business.
+- The **activity feed** on the right — this is the agents' work log. Point to the Pipeline Optimizer flagging a stalled deal automatically overnight.
+- **Stale deal alert** — the system caught it before you did.
 
 **Say:** "Most CRMs just store data. NovaCRM acts on it."
 
@@ -26,87 +28,91 @@ Point out:
 **Navigate to:** `/inbox`
 
 Point out:
-- 6 emails ingested from Gmail this morning
-- Open the **Sarah Chen** email (Re: Enterprise Platform — SLA Review)
-- Show the **3 auto-extracted tasks** on the right with clarity scores: *"Revise SLA — 99.95% uptime"*, *"Add EU data residency clause"*, *"Confirm P1 support SLA"*
-- Clarity score 92/100 — the AI ranked this email as highly actionable
+- Emails ingested from Gmail this morning.
+- Open the **Sarah Chen** email (Re: Enterprise Platform — SLA Review).
+- Show the **auto-extracted tasks** on the right with clarity scores: *"Revise SLA"*, *"Add EU data residency clause"*, *"Confirm P1 support SLA"*.
+- The clarity score ranks how actionable an email is.
 
 **Say:** "A rep opens their inbox and tasks are already created. No copy-paste, no manual logging."
-
-- Open the **James Whitfield** email — show clarity score 88, two tasks auto-generated, hard deadline detected
 
 ---
 
 ## Step 3 — Contacts + Pre-Meeting Brief (2.5 min)
 **Navigate to:** `/contacts`
 
-- Click on **Marcus Rivera** (CRO, Global Finance — hot prospect, score 78)
-- Show his lead score signals: *"Demo scheduled, Requested pricing, Decision maker"*
-- Show semantic tags: *enterprise, decision-maker*
-- Click **"Pre-Meeting Brief"** → wait ~2s → show the live AI-generated brief
+- Click on **Marcus Rivera** (CRO, Global Finance — hot prospect).
+- Show his lead-score signals: *"Demo scheduled, Requested pricing, Decision maker"*.
+- Show his semantic tags: *enterprise, decision-maker* (these come from embedding his messages).
+- Click **"Pre-Meeting Brief"** → wait ~2s → show the live AI-generated brief.
 
-**Say:** "Before jumping on a call with Marcus, the rep clicks one button. Claude reads his deal history, email thread, and lead signals — and generates a personalized brief in real time."
+**Say:** "Before a call with Marcus, the rep clicks one button. Claude reads his deal history, email thread, and lead signals — and generates a personalized brief in real time."
 
-- Click **"Compose AI Email"** → show it drafting a personalized email for Marcus
-- Point out it's grounded in his deal stage and last message, not a template
+- Click **"Compose AI Email"** → show it drafting a personalized email grounded in his deal stage and last message — not a template.
 
-**Say:** "The email composer knows he's in the proposal stage with $250K on the line. It writes accordingly."
+**Say:** "The composer knows he's in the proposal stage. It writes accordingly — and nothing sends without a human approving it."
 
 ---
 
-## Step 4 — Pipeline (1.5 min)
+## Step 4 — Pipeline + Reports (1.5 min)
 **Navigate to:** `/pipeline`
 
-- Show the Kanban board — deals across Discovery → Negotiation
-- Point to **Global Finance Enterprise Suite** in Proposal — health score 35, flagged
-- Point to **ScalePath Japan** in Discovery — health 22, stalled
+- Show the Kanban board — deals across Discovery → Negotiation.
+- Point to a deal flagged with a low health score (stalled).
 
-**Say:** "Health scores decay automatically based on inactivity, engagement silence, and stage duration. The Pipeline Optimizer runs every night and fires alerts before deals go cold."
+**Say:** "Health scores decay automatically based on inactivity, engagement silence, and stage duration. The Pipeline Optimizer runs every night and flags deals before they go cold."
 
-- Navigate to `/reports`
-- Show the revenue trend chart (Nov → Apr, trending up) and the 3-month AI forecast
+- Navigate to `/reports` — show the revenue trend chart and the 3-month forecast.
 
 ---
 
 ## Step 5 — Nova AI Query (1 min)
-**Press `Cmd+K`** (or the search bar at the top)
+**Press `⌘K`** (or the search bar)
 
 Type: *"Which deals are at risk this week?"*
-→ Nova responds with specific deal names, health scores, and a suggested action
+→ Nova responds with specific deal names, health scores, and a suggested action.
 
 Type: *"Who are my hottest leads right now?"*
-→ Nova lists them by name with scores
+→ Nova lists them by name with scores.
 
-**Say:** "Any rep or manager can ask the pipeline a natural language question. Nova has full context — every contact, deal, and agent action."
+**Say:** "Any rep or manager can ask the pipeline a natural-language question. Nova has full context — every contact, deal, and agent action."
 
 ---
 
-## Step 6 — Agents (30 sec)
+## Step 6 — Agents + Help (45 sec)
 **Navigate to:** `/agents`
 
-- Show 6 agents — Semantic Sorter, Lead Scorer, Email Composer, Call Summarizer, Pipeline Optimizer, Sentiment Analyzer
-- Click into **Lead Scorer** — show accuracy 91%, retrained on last 90 days, F1 score
-- Click into **Call Summarizer** — show it's processing right now
+- Show the 6 agents — Semantic Sorter, Lead Scorer, Email Composer, Call Summarizer, Pipeline Optimizer, Sentiment Analyzer.
+- Click into **Call Summarizer** — show it processing a call (Whisper transcribes, Claude extracts action items).
+- Click into **Pipeline Optimizer** — show its workflow: scan → velocity analysis → flag → notify.
 
-**Say:** "These agents run on a schedule or are triggered by events. The Lead Scorer just retrained itself overnight and improved 3 points. No human touched it."
+**Say:** "These agents run on a schedule or are triggered by events — tagging contacts, scoring leads, summarizing calls — and they hand anything high-stakes back to a human for approval."
+
+- Optional: open **Help** (`/help`) to show the built-in How-It-Works and FAQ.
 
 ---
 
 ## Closing line
-> "Traditional CRMs are expensive databases. NovaCRM is an active participant in your sales process. We're currently in beta with 3 teams — looking for the right seed partner to accelerate the go-to-market."
+> "Traditional CRMs are expensive databases. NovaCRM is an active participant in the sales process — built on semantic search, Whisper, and Claude, deployed and running today. Here's what we've shipped, and where it goes next."
 
 ---
 
-## Likely investor questions
+## Likely questions
 
 **"How does the AI actually work?"**
-> Lead scoring uses XGBoost trained on your historical conversion data. Semantic tagging uses sentence-transformer embeddings. Email, briefs, and query use Claude — the same model powering Claude.ai. Everything runs on your data, in your workspace.
+> Contact classification and semantic search use sentence-transformer embeddings (all-MiniLM-L6-v2). Call transcription uses Whisper. Email drafts, pre-meeting briefs, call summaries, sentiment, and the Nova query all use Anthropic's Claude. Lead and pipeline scoring use transparent heuristics over your own engagement signals — not a black box. Everything runs on your data, in your workspace.
 
 **"What's the data privacy story?"**
-> All customer data stays in your Postgres instance — we never train on it. The only external calls are to Anthropic's API for generative features, and those are stateless.
+> All customer data stays in the workspace's own database, isolated per tenant and encrypted in transit and at rest. We never train on it. The only external calls are to Anthropic's API for generative features, and those are stateless.
 
 **"How does this compare to Salesforce/HubSpot?"**
-> They're built for data entry. NovaCRM is built for automation. We connect to your existing Gmail/Slack and start extracting value in hours, not months. Our target is teams that are currently *not* using a CRM because setup friction is too high.
+> They're built for data entry. NovaCRM is built for automation. We connect to existing Gmail/Slack and start extracting value in hours, not months. The target is teams that aren't using a CRM today because setup friction is too high.
 
 **"What's the revenue model?"**
-> SaaS, per-seat. $49/user/month for the core platform, $149/user for the AI tier (agents + Nova query). Target ACV: $15K–$80K for SMB/mid-market.
+> SaaS, per-seat. Intended pricing: $49/user/month for the core platform, $149/user for the AI tier (agents + Nova query), Enterprise custom.
+
+**"What's actually live vs. roadmap?"**
+> The product is deployed and running: ingestion, semantic search, scoring, compose, call summarization, pipeline analytics, and the agent framework with human-in-the-loop approval. Next up: deeper analytics, the in-app help/feedback loop, and broadening the connector set. (Real-time Gmail push ingest is built and gated behind a webhook secret that gets set per deployment.)
+
+---
+
+_Note: this script is for the demo-mode build, which uses honest pre-generated sample data. The live landing page and in-app copy were aligned to the real stack on 2026-06-13 — there are no fabricated model or accuracy claims to walk back if asked._
