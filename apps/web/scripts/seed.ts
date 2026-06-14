@@ -157,7 +157,7 @@ async function seed() {
       workspace_id: workspaceId,
       name: "Semantic Sorter", type: "semantic_sorter", status: "active",
       description: "Uses sentence-transformer embeddings to classify and tag contacts by intent, industry, role, and buying signals. Continuously re-ranks your contact list.",
-      model: "all-MiniLM-L6-v2 + GPT-4o", accuracy: 96.4, tasks_today: 312, last_run: "2 min ago",
+      model: "all-MiniLM-L6-v2", accuracy: 96.4, tasks_today: 312, last_run: "2 min ago",
       metrics: [{ label: "Tags Applied Today", value: "1,204", delta: "+89" }, { label: "Avg Confidence", value: "94.1%", delta: "+0.3%" }, { label: "Reclassifications", value: "47" }],
       workflow: [
         { id: "w1", label: "New Contact Trigger", type: "trigger", position: { x: 0, y: 0 } },
@@ -171,13 +171,13 @@ async function seed() {
     {
       workspace_id: workspaceId,
       name: "Lead Scorer", type: "lead_scorer", status: "active",
-      description: "XGBoost model trained on historical deal outcomes. Scores every contact 0–100 using behavioral signals, firmographic data, and engagement patterns.",
-      model: "XGBoost v2 + Feature Store", accuracy: 94.7, tasks_today: 524, last_run: "8 min ago",
-      metrics: [{ label: "Scores Updated", value: "524", delta: "+112" }, { label: "Hot Leads", value: "23", delta: "+5" }, { label: "Model F1 Score", value: "0.947" }],
+      description: "Scores every contact 0–100 using behavioral signals, firmographic data, and engagement patterns.",
+      model: "heuristic + signals", accuracy: 88, tasks_today: 524, last_run: "8 min ago",
+      metrics: [{ label: "Scores Updated", value: "524", delta: "+112" }, { label: "Hot Leads", value: "23", delta: "+5" }, { label: "Avg Score", value: "64" }],
       workflow: [
         { id: "w1", label: "Behavior Event", type: "trigger", position: { x: 0, y: 0 } },
         { id: "w2", label: "Feature Extraction", type: "action", position: { x: 200, y: 0 }, connected: ["w1"] },
-        { id: "w3", label: "XGBoost Inference", type: "action", position: { x: 400, y: 0 }, connected: ["w2"] },
+        { id: "w3", label: "Score Signals", type: "action", position: { x: 400, y: 0 }, connected: ["w2"] },
         { id: "w4", label: "Update Contact Score", type: "output", position: { x: 600, y: 0 }, connected: ["w3"] },
       ],
     },
@@ -185,12 +185,12 @@ async function seed() {
       workspace_id: workspaceId,
       name: "Email Composer", type: "email_composer", status: "processing",
       description: "Generates hyper-personalized outreach emails using contact context, semantic tags, and deal stage. Adapts tone to role and industry.",
-      model: "GPT-4o (fine-tuned)", accuracy: 91.2, tasks_today: 87, last_run: "Just now",
+      model: "claude-sonnet-4-6", accuracy: 91.2, tasks_today: 87, last_run: "Just now",
       metrics: [{ label: "Emails Drafted", value: "87", delta: "+22" }, { label: "Open Rate (7d)", value: "48.3%", delta: "+6.1%" }, { label: "Reply Rate (7d)", value: "22.1%", delta: "+3.4%" }],
       workflow: [
         { id: "w1", label: "Deal Stage Change", type: "trigger", position: { x: 0, y: 0 } },
         { id: "w2", label: "Fetch Contact Context", type: "action", position: { x: 200, y: 0 }, connected: ["w1"] },
-        { id: "w3", label: "Compose with GPT-4o", type: "action", position: { x: 400, y: 0 }, connected: ["w2"] },
+        { id: "w3", label: "Compose with Claude", type: "action", position: { x: 400, y: 0 }, connected: ["w2"] },
         { id: "w4", label: "Human Review?", type: "condition", position: { x: 600, y: 0 }, connected: ["w3"] },
         { id: "w5", label: "Send via Gmail API", type: "output", position: { x: 800, y: -60 }, connected: ["w4"] },
         { id: "w6", label: "Hold for Approval", type: "output", position: { x: 800, y: 60 }, connected: ["w4"] },
@@ -200,7 +200,7 @@ async function seed() {
       workspace_id: workspaceId,
       name: "Call Summarizer", type: "call_summarizer", status: "idle",
       description: "Transcribes and summarizes sales calls. Extracts action items, objections, sentiment, and next steps. Updates contact timeline automatically.",
-      model: "Whisper Large v3 + Claude 3.5", accuracy: 97.1, tasks_today: 14, last_run: "1 hour ago",
+      model: "whisper-base + claude-haiku", accuracy: 97.1, tasks_today: 14, last_run: "1 hour ago",
       metrics: [{ label: "Calls Processed", value: "14", delta: "+3" }, { label: "Avg Summary Time", value: "23s" }, { label: "Action Items Extracted", value: "41", delta: "+8" }],
       workflow: [
         { id: "w1", label: "Call Recording Upload", type: "trigger", position: { x: 0, y: 0 } },
@@ -212,8 +212,8 @@ async function seed() {
     {
       workspace_id: workspaceId,
       name: "Pipeline Optimizer", type: "pipeline_optimizer", status: "active",
-      description: "Monitors deal velocity and predicts stalls. Recommends next best actions using reinforcement learning from historical pipeline data.",
-      model: "RL Policy + LightGBM", accuracy: 89.3, tasks_today: 201, last_run: "15 min ago",
+      description: "Monitors deal velocity and predicts stalls. Recommends next best actions using heuristics over historical pipeline data.",
+      model: "heuristic", accuracy: 89.3, tasks_today: 201, last_run: "15 min ago",
       metrics: [{ label: "Stalls Detected", value: "7", delta: "+2" }, { label: "Actions Recommended", value: "201" }, { label: "Win Rate Lift", value: "+14.2%" }],
       workflow: [
         { id: "w1", label: "Daily Pipeline Scan", type: "trigger", position: { x: 0, y: 0 } },
@@ -226,11 +226,11 @@ async function seed() {
       workspace_id: workspaceId,
       name: "Sentiment Analyzer", type: "sentiment_analyzer", status: "active",
       description: "Analyzes email threads, call transcripts, and support tickets to gauge contact sentiment. Flags at-risk accounts before churn occurs.",
-      model: "RoBERTa fine-tuned + GPT-4o-mini", accuracy: 93.8, tasks_today: 388, last_run: "5 min ago",
+      model: "claude-haiku-4-5", accuracy: 93.8, tasks_today: 388, last_run: "5 min ago",
       metrics: [{ label: "Signals Analyzed", value: "388", delta: "+54" }, { label: "At-Risk Flagged", value: "3", delta: "+1" }, { label: "Avg Sentiment Score", value: "0.74" }],
       workflow: [
         { id: "w1", label: "New Email / Ticket", type: "trigger", position: { x: 0, y: 0 } },
-        { id: "w2", label: "RoBERTa Inference", type: "action", position: { x: 200, y: 0 }, connected: ["w1"] },
+        { id: "w2", label: "Claude Sentiment", type: "action", position: { x: 200, y: 0 }, connected: ["w1"] },
         { id: "w3", label: "Sentiment < 0.4?", type: "condition", position: { x: 400, y: 0 }, connected: ["w2"] },
         { id: "w4", label: "Flag At-Risk + Alert", type: "output", position: { x: 600, y: -60 }, connected: ["w3"] },
         { id: "w5", label: "Update Sentiment Log", type: "output", position: { x: 600, y: 60 }, connected: ["w3"] },
@@ -251,7 +251,7 @@ async function seed() {
     { workspace_id: workspaceId, type: "deal_moved", agent_name: "Pipeline Optimizer", description: "NexLabs Enterprise Suite → Negotiation", meta: "Win probability: 87%", severity: "success" },
     { workspace_id: workspaceId, type: "agent_run", agent_name: "Sentiment Analyzer", description: "Flagged Lena Kovacs as at-risk", meta: "Sentiment score dropped to 0.31", severity: "warning" },
     { workspace_id: workspaceId, type: "call_summarized", agent_name: "Call Summarizer", description: "Processed 38-min call with James Okafor", meta: "3 action items extracted", severity: "info" },
-    { workspace_id: workspaceId, type: "model_updated", agent_name: "Lead Scorer", description: "XGBoost model retrained on 1,204 new samples", meta: "F1: 0.947 → 0.951 (+0.4%)", severity: "success" },
+    { workspace_id: workspaceId, type: "model_updated", agent_name: "Lead Scorer", description: "Re-scored 1,204 contacts after nightly run", meta: "38 moved to Hot", severity: "success" },
   ];
 
   console.log("  Inserting activity events...");
