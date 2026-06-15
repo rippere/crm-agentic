@@ -18,7 +18,7 @@ import {
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send,
+  FileText, Send, BarChart2,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -291,6 +291,8 @@ export default function DealDetailPage() {
   const [probLoading, setProbLoading] = useState(false);
   const [timelineSummary, setTimelineSummary] = useState<{ week: string; events: number }[]>([]);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [dealHeatmap, setDealHeatmap] = useState<{ week_start: string; events: number; messages: number; notes: number; total: number }[]>([]);
+  const [heatmapLoading, setHeatmapLoading] = useState(false);
 
   const [moveSaving, setMoveSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -358,6 +360,13 @@ export default function DealDetailPage() {
       .then((data) => setTimelineSummary(Array.isArray(data) ? data : []))
       .catch(() => setTimelineSummary([]))
       .finally(() => setSummaryLoading(false));
+
+    setHeatmapLoading(true);
+    apiClient
+      .getDealActivityHeatmap(workspaceId, dealId, token)
+      .then((data) => setDealHeatmap(Array.isArray(data) ? data : []))
+      .catch(() => setDealHeatmap([]))
+      .finally(() => setHeatmapLoading(false));
 
     if (deal.contact_id) {
       apiClient
@@ -843,6 +852,56 @@ export default function DealDetailPage() {
               </div>
             ) : (
               <p className="text-xs text-zinc-500 text-center py-3">No activity data yet.</p>
+            )}
+          </Card>
+
+          {/* 12-Week Activity Heatmap */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-indigo-400" />
+              <p className="text-sm font-semibold text-zinc-200">12-Week Heatmap</p>
+            </div>
+            {heatmapLoading ? (
+              <div className="flex gap-1">
+                {Array.from({ length: 12 }).map((_, i) => (
+                  <div key={i} className="flex-1 h-8 rounded bg-zinc-800 animate-pulse" />
+                ))}
+              </div>
+            ) : dealHeatmap.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-4 text-center">
+                <BarChart2 className="h-6 w-6 text-zinc-700" />
+                <p className="text-xs text-zinc-500">No activity data.</p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="flex gap-1">
+                  {dealHeatmap.map((w) => {
+                    const bg =
+                      w.total === 0 ? "bg-zinc-800" :
+                      w.total === 1 ? "bg-indigo-900" :
+                      w.total <= 3 ? "bg-indigo-700" :
+                      w.total <= 5 ? "bg-indigo-500" : "bg-indigo-400";
+                    return (
+                      <div
+                        key={w.week_start}
+                        title={`${w.week_start}: ${w.total} event${w.total !== 1 ? "s" : ""} (${w.events} activity, ${w.messages} msg, ${w.notes} note${w.notes !== 1 ? "s" : ""})`}
+                        className={cn("flex-1 h-8 rounded cursor-default transition-opacity hover:opacity-75", bg)}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[10px] text-zinc-600">{dealHeatmap[0]?.week_start}</span>
+                  <span className="text-[10px] text-zinc-600">This week</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-zinc-500">Less</span>
+                  {(["bg-zinc-800", "bg-indigo-900", "bg-indigo-700", "bg-indigo-500", "bg-indigo-400"] as const).map((c, i) => (
+                    <span key={i} className={cn("h-3 w-3 rounded-sm", c)} />
+                  ))}
+                  <span className="text-[10px] text-zinc-500">More</span>
+                </div>
+              </div>
             )}
           </Card>
 

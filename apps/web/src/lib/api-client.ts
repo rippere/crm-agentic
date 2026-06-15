@@ -1250,4 +1250,38 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/engagement-score`, {}, token)
   },
+
+  // Deal activity heatmap: weekly activity_events + messages + deal_notes counts (last 12 weeks).
+  getDealActivityHeatmap: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<Array<{ week_start: string; events: number; messages: number; notes: number; total: number }>> => {
+    if (isDemoMode) {
+      const seed = dealId.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+      const now = new Date()
+      const dayOfWeek = now.getDay()
+      const monday = new Date(now)
+      monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7))
+      return Promise.resolve(
+        Array.from({ length: 12 }, (_, idx) => {
+          const i = 11 - idx
+          const ws = new Date(monday)
+          ws.setDate(monday.getDate() - i * 7)
+          const s = (seed + i * 41) % 100
+          const events = s < 30 ? 0 : s < 55 ? 1 : s < 75 ? 2 : s < 90 ? 3 : 4
+          const messages = (seed + i * 17) % 3
+          const notes = (seed + i * 7) % 2
+          return {
+            week_start: ws.toISOString().slice(0, 10),
+            events,
+            messages,
+            notes,
+            total: events + messages + notes,
+          }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/activity-heatmap`, {}, token)
+  },
 }

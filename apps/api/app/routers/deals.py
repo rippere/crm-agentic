@@ -954,3 +954,91 @@ async def deal_timeline_summary(
         buckets.append({"week": label, "events": count})
 
     return buckets
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/activity-heatmap")
+async def deal_activity_heatmap(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Weekly activity_events + messages + deal_notes counts for the last 12 weeks."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    from app.models.message import Message
+
+    today = datetime.now(timezone.utc).date()
+    this_monday = today - timedelta(days=today.weekday())
+    week_starts = [this_monday - timedelta(weeks=i) for i in range(11, -1, -1)]
+    cutoff = datetime.combine(week_starts[0], datetime.min.time()).replace(tzinfo=timezone.utc)
+
+    # Activity events referencing this deal
+    event_q = select(ActivityEvent).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.created_at >= cutoff,
+    )
+    if deal.title:
+        from sqlalchemy import or_
+        event_q = event_q.where(
+            or_(
+                ActivityEvent.description.ilike(f"%{deal.title}%"),
+                ActivityEvent.type == "deal_moved",
+            )
+        )
+    events_result = await db.execute(event_q)
+    events = events_result.scalars().all()
+
+    # Messages linked to the deal's contact
+    messages: list = []
+    if deal.contact_id:
+        msg_result = await db.execute(
+            select(Message).where(
+                Message.workspace_id == workspace_id,
+                Message.contact_id == deal.contact_id,
+                Message.received_at >= cutoff,
+            )
+        )
+        messages = msg_result.scalars().all()
+
+    # Deal notes
+    notes_result = await db.execute(
+        select(DealNote).where(
+            DealNote.workspace_id == workspace_id,
+            DealNote.deal_id == deal_id,
+            DealNote.created_at >= cutoff,
+        )
+    )
+    deal_notes = notes_result.scalars().all()
+
+    def _tz(t):
+        if t is None:
+            return None
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+    output = []
+    for ws in week_starts:
+        we = ws + timedelta(weeks=1)
+        ws_dt = datetime.combine(ws, datetime.min.time()).replace(tzinfo=timezone.utc)
+        we_dt = datetime.combine(we, datetime.min.time()).replace(tzinfo=timezone.utc)
+
+        evts = sum(1 for e in events if (t := _tz(e.created_at)) and ws_dt <= t < we_dt)
+        msgs = sum(1 for m in messages if (t := _tz(m.received_at)) and ws_dt <= t < we_dt)
+        nts = sum(1 for n in deal_notes if (t := _tz(n.created_at)) and ws_dt <= t < we_dt)
+        output.append({
+            "week_start": ws.isoformat(),
+            "events": evts,
+            "messages": msgs,
+            "notes": nts,
+            "total": evts + msgs + nts,
+        })
+
+    return output
