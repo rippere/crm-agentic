@@ -1,0 +1,11 @@
+{
+  "_comment": "Single source of truth for external health monitoring (crm-self-healer). For NovaCRM, prefer the live discovery endpoint https://www.riphere.com/api/health-targets; this file is the committed fallback and the cross-project registry. Update a URL here only if it ever changes.",
+  "novacrm": {
+    "web": "https://www.riphere.com",
+    "api_health": "https://api-production-c080.up.railway.app/health"
+  },
+  "tribe": {
+    "web": "https://web-production-1c9b4.up.railway.app",
+    "api_health": "https://api-production-0509a.up.railway.app/health"
+  }
+}
