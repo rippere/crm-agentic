@@ -312,14 +312,22 @@ interface NewDealForm {
 function NewDealModal({ defaultStage, onClose, onCreate }: { defaultStage: DealStage; onClose: () => void; onCreate: (f: NewDealForm) => Promise<void> }) {
   const [form, setForm] = useState<NewDealForm>({ title: "", company: "", value: "", stage: defaultStage, expectedClose: "" });
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.title.trim()) return;
     setSaving(true);
-    await onCreate(form);
-    setSaving(false);
-    onClose();
+    setError(null);
+    try {
+      await onCreate(form);
+      onClose();
+    } catch (err) {
+      // Surface the failure instead of hanging on "Creating…" forever.
+      setError(err instanceof Error && err.message ? err.message : "Couldn't create the deal. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -359,6 +367,11 @@ function NewDealModal({ defaultStage, onClose, onCreate }: { defaultStage: DealS
               ))}
             </select>
           </div>
+          {error && (
+            <p role="alert" className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+              {error}
+            </p>
+          )}
           <div className="flex gap-2 pt-1">
             <Button type="button" variant="secondary" className="flex-1 justify-center" onClick={onClose}>Cancel</Button>
             <Button type="submit" variant="primary" className="flex-1 justify-center" disabled={saving || !form.title.trim()}>
