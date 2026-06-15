@@ -52,9 +52,16 @@ async def _sync_workspace_metadata(supabase_uid: str, workspace_id: str) -> None
     """
     from app.config import settings as _s
 
+    import logging
+    _log = logging.getLogger(__name__)
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.patch(
+            # Supabase GoTrue's admin user-update endpoint is PUT, not PATCH.
+            # PATCH returns 405, and because the response status was never checked,
+            # the failure was swallowed — so app_metadata.workspace_id was never set
+            # and every freshly-onboarded user got stuck in an /onboarding redirect loop.
+            resp = await client.put(
                 f"{_s.SUPABASE_URL.rstrip('/')}/auth/v1/admin/users/{supabase_uid}",
                 headers={
                     "apikey": _s.SUPABASE_SERVICE_ROLE_KEY,
@@ -63,8 +70,15 @@ async def _sync_workspace_metadata(supabase_uid: str, workspace_id: str) -> None
                 },
                 json={"app_metadata": {"workspace_id": workspace_id}},
             )
+        if resp.status_code >= 400:
+            _log.error(
+                "workspace app_metadata sync failed: %s %s",
+                resp.status_code,
+                resp.text[:300],
+            )
     except Exception:
-        pass  # metadata sync is best-effort; never block the auth response
+        # best-effort; never block the auth response, but no longer silent
+        _log.exception("workspace app_metadata sync raised")
 
 
 class VerifyResponse(BaseModel):
