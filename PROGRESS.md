@@ -62,12 +62,13 @@
 - [2026-06-13] Phase 12e: Deal timeline sparkline — GET /workspaces/{id}/deals/{id}/timeline-summary (12 weekly event-count buckets, oldest→newest, same ilike+deal_moved filter as existing timeline endpoint); compact h-16 AreaChart card on deal detail page between probability trend and tasks; getDealTimelineSummary() in api-client with deterministic demo stub; 2 new tests (12-week structure + event bucketing, 403); 425 tests pass
 - [2026-06-14] Phase 12f: Contact engagement score — GET /workspaces/{id}/contacts/{id}/engagement-score computing 0–100 from messages (0–40 pts), notes (0–30 pts), task completion rate (0–30 pts) over last 90 days; SVG progress ring on contact detail sidebar with color-coded score + per-component mini bar chart (Messages, Notes, Tasks); getContactEngagementScore() in api-client with seeded deterministic demo stub; 2 new tests (zero-activity → score=0, 404); 427 tests pass
 - [2026-06-15] Phase 12g: Deal activity heatmap — GET /workspaces/{id}/deals/{id}/activity-heatmap (aggregates activity_events + messages via contact_id + deal_notes into 12 Mon–Sun weekly buckets with events/messages/notes/total); 5-level indigo heatmap card on /pipeline/[id] below Activity sparkline (tooltip breakdown per type); getDealActivityHeatmap() in api-client with deterministic demo stub seeded by deal ID; 2 new tests (12-week zero-activity structure, 404); 429 tests pass
+- [2026-06-16] Phase 12h: Agent run success rate chart — GET /workspaces/{id}/agents/run-stats (groups last-30-day activity_events by agent_name, severity=error→failure, info/warning→success); grouped BarChart (emerald=success, rose=failure) on /reports page with per-agent tooltip totals; getAgentRunStats() in api-client with 6-agent demo stub; 2 new tests (groups-by-agent-name, 403); 433 tests pass
 
 ## Current Phase
 Phase 12 — Analytics & Reporting
 
 ## Next Task
-Phase 12h: Reports page — Agent run success rate chart — GET /workspaces/{id}/agents/run-stats (per-agent success/failure counts from activity_events over last 30 days); grouped bar chart (emerald=success, rose=failure) on /reports page; getAgentRunStats() in api-client with demo stub; 2 new tests.
+Phase 12i: Contact timeline export — GET /workspaces/{id}/contacts/{id}/timeline/export (StreamingResponse CSV with date, type, description, severity columns from activity_events + contact notes + messages); "Export Timeline" button on contact detail page; exportContactTimeline() in api-client with demo stub; 2 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
