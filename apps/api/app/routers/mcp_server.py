@@ -77,6 +77,17 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "ask_crm",
+        "description": "Ask a free-text question answered by Nova (Claude) over the live CRM workspace — pipeline, deals, contacts, tasks, recent activity.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The natural-language question to answer over CRM data"},
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
@@ -194,11 +205,21 @@ async def _pipeline_summary(args: dict, workspace_id: UUID, db: AsyncSession) ->
     )
 
 
+async def _ask_crm(args: dict, workspace_id: UUID, db: AsyncSession) -> str:
+    from app.routers.ai import answer_crm_query
+
+    query = (args.get("query") or "").strip()
+    if not query:
+        return "Provide a 'query' to ask the CRM."
+    return await answer_crm_query(query, workspace_id, db)
+
+
 TOOL_HANDLERS = {
     "list_contacts": _list_contacts,
     "list_deals": _list_deals,
     "stale_deals": _stale_deals,
     "pipeline_summary": _pipeline_summary,
+    "ask_crm": _ask_crm,
 }
 
 
