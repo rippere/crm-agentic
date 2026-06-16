@@ -494,6 +494,83 @@ async def test_link_contact_empty_sender_returns_none_without_query():
     db.execute.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_link_contact_auto_create_unknown_human_creates_lead():
+    """auto_create=True + an unknown *human* sender -> a new lead Contact is created
+    and its id returned (the inbound-pipeline unlock)."""
+    from app.workers.ingest import _link_contact
+    from app.models.contact import Contact
+
+    new_id = uuid_mod.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    added: list = []
+
+    async def _flush():
+        added[0].id = new_id  # mimic the DB assigning the PK default on flush
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_result(None))  # no existing contact
+    db.add = MagicMock(side_effect=added.append)
+    db.flush = AsyncMock(side_effect=_flush)
+
+    result = await _link_contact(db, _WS_ID, "Jane Buyer <Jane@Acme.com>", auto_create=True)
+
+    db.add.assert_called_once()
+    created = added[0]
+    assert isinstance(created, Contact)
+    assert created.email == "jane@acme.com"   # parseaddr + lowercased
+    assert created.name == "Jane Buyer"        # display name preserved
+    assert created.workspace_id == _WS_ID
+    db.flush.assert_awaited_once()
+    assert result == new_id
+
+
+@pytest.mark.asyncio
+async def test_link_contact_auto_create_skips_automated_sender():
+    """auto_create=True but a noreply@-style sender -> never created, returns None."""
+    from app.workers.ingest import _link_contact
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_result(None))
+    db.add = MagicMock()
+    db.flush = AsyncMock()
+
+    result = await _link_contact(db, _WS_ID, "noreply@bigcorp.com", auto_create=True)
+    assert result is None
+    db.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_link_contact_auto_create_existing_contact_links_not_creates():
+    """auto_create=True but the contact already exists -> link to it, create nothing."""
+    from app.workers.ingest import _link_contact
+
+    contact = MagicMock()
+    contact.id = uuid_mod.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_result(contact))
+    db.add = MagicMock()
+    db.flush = AsyncMock()
+
+    result = await _link_contact(db, _WS_ID, "alice@example.com", auto_create=True)
+    assert result == contact.id
+    db.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_link_contact_default_stays_link_only():
+    """Default (auto_create=False — the backfill path) never creates: unchanged behavior."""
+    from app.workers.ingest import _link_contact
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_result(None))
+    db.add = MagicMock()
+    db.flush = AsyncMock()
+
+    result = await _link_contact(db, _WS_ID, "stranger@nowhere.com")
+    assert result is None
+    db.add.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # ingest._run_backfill_contacts — retroactive link-only backfill
 # ---------------------------------------------------------------------------
