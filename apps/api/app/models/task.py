@@ -17,6 +17,7 @@ class Task(Base):
     external_id: Mapped[str | None] = mapped_column(String, nullable=True)
     message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
     contact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True)
+    deal_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("deals.id", ondelete="SET NULL"), nullable=True)
     project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str] = mapped_column(String, nullable=False, default="")
@@ -30,4 +31,5 @@ class Task(Base):
     workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="tasks")  # noqa: F821
     message: Mapped["Message"] = relationship("Message", back_populates="tasks")  # noqa: F821
     contact: Mapped["Contact"] = relationship("Contact", back_populates="tasks")  # noqa: F821
+    deal: Mapped["Deal | None"] = relationship("Deal")  # noqa: F821
     project: Mapped["Project | None"] = relationship("Project")  # noqa: F821

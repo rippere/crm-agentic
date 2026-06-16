@@ -1,7 +1,7 @@
 import csv
 import io
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from calendar import month_abbr
 from typing import Literal
 
@@ -39,6 +39,8 @@ class DealResponse(BaseModel):
     notes: str | None
     health_score: int = 100
     win_loss_reason: str | None = None
+    next_action: str | None = None
+    next_action_date: date | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -281,6 +283,8 @@ class UpdateDealRequest(BaseModel):
     ml_win_probability: int | None = None
     expected_close: str | None = None
     notes: str | None = None
+    next_action: str | None = None
+    next_action_date: date | None = None
 
 
 class CreateDealRequest(BaseModel):
@@ -611,7 +615,7 @@ async def update_deal(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
     old_stage = deal.stage
-    for field in ("title", "company", "value", "stage", "ml_win_probability", "expected_close", "notes"):
+    for field in ("title", "company", "value", "stage", "ml_win_probability", "expected_close", "notes", "next_action", "next_action_date"):
         value = getattr(body, field)
         if value is not None:
             setattr(deal, field, value)
