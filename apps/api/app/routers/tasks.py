@@ -69,7 +69,7 @@ async def list_tasks(
     workspace_id: uuid.UUID,
     project_id: uuid.UUID | None = Query(default=None),
     contact_id: uuid.UUID | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=500, ge=1, le=5000),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
