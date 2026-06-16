@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import anthropic as _anthropic
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_, select, insert, update
@@ -277,12 +277,18 @@ class EmailDraftResponse(BaseModel):
     body: str
 
 
+class ComposeEmailRequest(BaseModel):
+    tone: str | None = None
+    deal_id: uuid.UUID | None = None
+
+
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/compose", response_model=EmailDraftResponse)
 @limiter.limit("10/minute")
 async def compose_email(
     request: Request,
     workspace_id: uuid.UUID,
     contact_id: uuid.UUID,
+    body: ComposeEmailRequest = Body(default=ComposeEmailRequest()),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> EmailDraftResponse:
@@ -317,10 +323,30 @@ async def compose_email(
         contact_tags = contact_orm.semantic_tags or []
         contact_revenue = contact_orm.revenue
 
+    # Optionally ground the draft in a specific deal
+    deal_context = ""
+    if body.deal_id is not None:
+        from app.models.deal import Deal
+
+        deal_result = await db.execute(
+            select(Deal).where(Deal.id == body.deal_id, Deal.workspace_id == workspace_id)
+        )
+        deal = deal_result.scalar_one_or_none()
+        if deal is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+        deal_context = (
+            f"Related deal: {deal.title or 'Untitled'}\n"
+            f"Deal stage: {deal.stage}\n"
+            f"Deal value: ${float(deal.value or 0):,.0f}\n"
+            f"Win probability: {deal.ml_win_probability}%\n"
+        )
+
     system_prompt = (
         "You are a sales professional. Write a personalized outreach email for the following contact. "
         'Return JSON only: {"subject": "<subject line>", "body": "<email body>"}'
     )
+    if body.tone:
+        system_prompt += f" Write the email in a {body.tone} tone."
     user_content = (
         f"Contact name: {contact_name}\n"
         f"Company: {contact_company}\n"
@@ -328,6 +354,7 @@ async def compose_email(
         f"Status: {contact_status}\n"
         f"Semantic tags: {json.dumps(contact_tags)}\n"
         f"Revenue: {contact_revenue}\n"
+        f"{deal_context}"
     )
 
     client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
