@@ -197,7 +197,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 received_at = datetime.fromtimestamp(float(ts), tz=timezone.utc)
                 subject = f"Slack {'DM' if is_dm else f'#{channel_name}'}"
 
-                contact_id = await _link_contact(db, workspace_id, sender_email)
+                contact_id = await _link_contact(db, workspace_id, sender_email, auto_create=True)
 
                 message = Message(
                     workspace_id=workspace_id,

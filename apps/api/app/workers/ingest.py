@@ -67,10 +67,22 @@ def _is_automated_sender(sender: str) -> bool:
     return any(pattern in lower for pattern in _SKIP_SENDER_PATTERNS)
 
 
-async def _link_contact(db: AsyncSession, workspace_id: uuid.UUID, sender_email: str | None) -> uuid.UUID | None:
+async def _link_contact(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    sender_email: str | None,
+    *,
+    auto_create: bool = False,
+) -> uuid.UUID | None:
     """Parse the bare address out of a (possibly RFC2822) sender header, then
-    SELECT a workspace-scoped Contact by case-insensitive email. Link-only — never
-    auto-creates a Contact. Returns the contact id, or None if no match.
+    SELECT a workspace-scoped Contact by case-insensitive email.
+
+    With ``auto_create=True`` (the live inbound ingest path) an unknown *human*
+    sender is created as a new ``lead`` contact, so inbound email/Slack becomes a
+    real pipeline instead of dropping on the floor. Automated senders (noreply@,
+    newsletters, bounces, …) are never auto-created. With ``auto_create=False``
+    (the link-only backfill) behavior is unchanged: returns an existing contact id
+    or None, never creating. Returns the contact id, or None.
     """
     from email.utils import parseaddr
     from sqlalchemy import func as sa_func
@@ -79,7 +91,7 @@ async def _link_contact(db: AsyncSession, workspace_id: uuid.UUID, sender_email:
 
     if not sender_email:
         return None
-    _, addr = parseaddr(sender_email)
+    display_name, addr = parseaddr(sender_email)
     addr = addr.strip().lower()
     if not addr:
         return None
@@ -91,7 +103,25 @@ async def _link_contact(db: AsyncSession, workspace_id: uuid.UUID, sender_email:
         )
     )
     contact = result.scalar_one_or_none()
-    return contact.id if contact is not None else None
+    if contact is not None:
+        return contact.id
+
+    if not auto_create or _is_automated_sender(addr):
+        return None
+
+    # Unknown human sender -> auto-create a lead so inbound becomes real pipeline.
+    # Model defaults fill the rest (status="lead", ml_score warm/50, …).
+    contact = Contact(
+        workspace_id=workspace_id,
+        email=addr,
+        name=(display_name.strip() or None),
+    )
+    db.add(contact)
+    await db.flush()  # assign id + make this lead visible to later lookups in the batch
+    logger.info(
+        "ingest auto-created lead contact workspace=%s email=%s", workspace_id, addr
+    )
+    return contact.id
 
 
 async def _run_backfill_contacts(workspace_id: str) -> dict[str, Any]:
@@ -333,7 +363,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 )
                 continue
 
-            contact_id = await _link_contact(db, workspace_id, cand["sender_email"])
+            contact_id = await _link_contact(db, workspace_id, cand["sender_email"], auto_create=True)
 
             message = Message(
                 workspace_id=workspace_id,
