@@ -20,6 +20,7 @@ class TaskResponse(BaseModel):
     external_id: str | None = None
     message_id: uuid.UUID | None
     contact_id: uuid.UUID | None
+    deal_id: uuid.UUID | None = None
     project_id: uuid.UUID | None
     title: str
     description: str
@@ -55,6 +56,7 @@ def _to_response(t: Task) -> TaskResponse:
         external_id=t.external_id,
         message_id=t.message_id,
         contact_id=t.contact_id,
+        deal_id=t.deal_id,
         project_id=t.project_id,
         title=t.title,
         description=t.description,
@@ -120,6 +122,7 @@ class TaskUpsert(BaseModel):
     due_date: date | None = None
     project_id: uuid.UUID | None = None
     contact_id: uuid.UUID | None = None
+    deal_id: uuid.UUID | None = None
 
 
 @router.put("/workspaces/{workspace_id}/tasks/by-external/{external_id}", response_model=TaskResponse)
@@ -152,6 +155,7 @@ async def upsert_task_by_external(
             due_date=body.due_date,
             project_id=body.project_id,
             contact_id=body.contact_id,
+            deal_id=body.deal_id,
         )
         db.add(task)
     else:
@@ -161,6 +165,7 @@ async def upsert_task_by_external(
         task.due_date = body.due_date  # type: ignore[assignment]
         task.project_id = body.project_id  # type: ignore[assignment]
         task.contact_id = body.contact_id  # type: ignore[assignment]
+        task.deal_id = body.deal_id  # type: ignore[assignment]
 
     await db.commit()
     await db.refresh(task)

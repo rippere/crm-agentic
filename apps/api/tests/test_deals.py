@@ -30,6 +30,8 @@ def _fake_deal(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
     deal.health_score = kwargs.get("health_score", 100)
     deal.notes = kwargs.get("notes", None)
     deal.win_loss_reason = kwargs.get("win_loss_reason", None)
+    deal.next_action = kwargs.get("next_action", None)
+    deal.next_action_date = kwargs.get("next_action_date", None)
     deal.created_at = kwargs.get("created_at", _NOW - timedelta(days=5))
     deal.updated_at = kwargs.get("updated_at", _NOW - timedelta(days=5))
     deal.stage_changed_at = kwargs.get("stage_changed_at", _NOW - timedelta(days=5))
