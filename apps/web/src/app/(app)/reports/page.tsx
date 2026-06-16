@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
 } from "recharts";
 import {
-  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter,
+  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -59,6 +59,7 @@ export default function ReportsPage() {
   const [velocityData, setVelocityData] = useState<{ stage: string; avg_days: number; deal_count: number; label: string }[]>([]);
   const [funnelData, setFunnelData] = useState<FunnelRow[]>([]);
   const [outcomeReasons, setOutcomeReasons] = useState<OutcomeReasonRow[]>([]);
+  const [agentRunStats, setAgentRunStats] = useState<{ agent_name: string; success: number; failure: number }[]>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -69,6 +70,7 @@ export default function ReportsPage() {
         setFunnelData(data.map((r) => ({ ...r, label: stageConfig[r.stage as keyof typeof stageConfig]?.label ?? r.stage })));
       }).catch(() => {});
       apiClient.getDealOutcomeReasons("demo-workspace-1", "demo-token").then(setOutcomeReasons).catch(() => {});
+      apiClient.getAgentRunStats("demo-workspace-1", "demo-token").then(setAgentRunStats).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -83,6 +85,7 @@ export default function ReportsPage() {
         setFunnelData(data.map((r) => ({ ...r, label: stageConfig[r.stage as keyof typeof stageConfig]?.label ?? r.stage })));
       }).catch(() => {});
       apiClient.getDealOutcomeReasons(workspaceId, session.access_token).then(setOutcomeReasons).catch(() => {});
+      apiClient.getAgentRunStats(workspaceId, session.access_token).then(setAgentRunStats).catch(() => {});
     });
   }, []);
 
@@ -554,6 +557,70 @@ export default function ReportsPage() {
               />
               <Bar dataKey="won" name="won" fill="#00C896" radius={[4, 4, 0, 0]} maxBarSize={28} />
               <Bar dataKey="lost" name="lost" fill="#F43F5E" radius={[4, 4, 0, 0]} maxBarSize={28} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Agent run success/failure chart */}
+      {agentRunStats.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Agent Run Success Rate</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Last 30 days · runs per agent</p>
+            </div>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="flex items-center gap-1.5 text-emerald-400">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500" /> Success
+              </span>
+              <span className="flex items-center gap-1.5 text-rose-400">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm bg-rose-500" /> Failure
+              </span>
+              <Bot className="h-3.5 w-3.5 text-zinc-500" />
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart
+              data={agentRunStats.map((r) => ({
+                ...r,
+                label: r.agent_name.replace(" ", "\n"),
+              }))}
+              margin={{ top: 0, right: 8, left: -24, bottom: 0 }}
+              barCategoryGap="30%"
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis
+                dataKey="agent_name"
+                tick={{ fill: "#71717A", fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(v: string) => v.split(" ").slice(0, 2).join(" ")}
+              />
+              <YAxis tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-2">{label}</p>
+                      {payload.map((p) => (
+                        <div key={p.name} className="flex items-center gap-2" style={{ color: p.color }}>
+                          <span className="capitalize">{p.name}:</span>
+                          <span className="font-mono font-bold">{p.value}</span>
+                        </div>
+                      ))}
+                      {payload.length === 2 && (
+                        <div className="mt-1.5 pt-1.5 border-t border-zinc-700 text-zinc-500">
+                          Total: {(payload[0].value as number) + (payload[1].value as number)} runs
+                        </div>
+                      )}
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="success" name="success" fill="#10B981" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              <Bar dataKey="failure" name="failure" fill="#F43F5E" radius={[4, 4, 0, 0]} maxBarSize={28} />
             </BarChart>
           </ResponsiveContainer>
         </Card>

@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -282,3 +282,41 @@ async def get_job_status(
             error = "No such job — it was never dispatched or has expired."
 
     return JobStatusResponse(job_id=job_id, state=state, result=result, error=error)
+
+
+@router.get("/workspaces/{workspace_id}/agents/run-stats")
+async def agent_run_stats(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Per-agent success/failure counts from activity_events over the last 30 days.
+
+    severity='error' → failure; anything else (info, warning) → success.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    result = await db.execute(
+        select(ActivityEvent).where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.agent_name.isnot(None),
+            ActivityEvent.created_at >= cutoff,
+        )
+    )
+    events = result.scalars().all()
+
+    stats: dict[str, dict[str, int]] = {}
+    for event in events:
+        name = event.agent_name or "Unknown"
+        stats.setdefault(name, {"success": 0, "failure": 0})
+        if event.severity == "error":
+            stats[name]["failure"] += 1
+        else:
+            stats[name]["success"] += 1
+
+    return [
+        {"agent_name": name, "success": s["success"], "failure": s["failure"]}
+        for name, s in sorted(stats.items())
+    ]

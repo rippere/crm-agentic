@@ -1252,6 +1252,21 @@ export const apiClient = {
   },
 
   // Deal activity heatmap: weekly activity_events + messages + deal_notes counts (last 12 weeks).
+  // Agent run success/failure stats (last 30 days, grouped by agent name)
+  getAgentRunStats: (workspaceId: string, token: string): Promise<Array<{ agent_name: string; success: number; failure: number }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { agent_name: 'Call Summarizer',   success: 18, failure: 1 },
+        { agent_name: 'Email Composer',    success: 34, failure: 3 },
+        { agent_name: 'Lead Scorer',       success: 27, failure: 2 },
+        { agent_name: 'Pipeline Optimizer', success: 12, failure: 0 },
+        { agent_name: 'Semantic Sorter',   success: 41, failure: 4 },
+        { agent_name: 'Sentiment Analyzer', success: 22, failure: 1 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/agents/run-stats`, {}, token)
+  },
+
   getDealActivityHeatmap: (
     workspaceId: string,
     dealId: string,

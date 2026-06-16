@@ -359,6 +359,52 @@ async def test_get_job_status_unknown_owner_preserves_behavior(app_client):
     assert resp.json()["result"] == {"output": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# GET /workspaces/{workspace_id}/agents/run-stats
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_agent_run_stats_groups_by_agent_name(app_client):
+    """Groups last-30-day events by agent_name, counting success vs failure."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _fake_event(name: str, severity: str) -> MagicMock:
+        e = MagicMock()
+        e.agent_name = name
+        e.severity = severity
+        return e
+
+    events = [
+        _fake_event("Lead Scorer", "info"),
+        _fake_event("Lead Scorer", "info"),
+        _fake_event("Lead Scorer", "error"),
+        _fake_event("Email Composer", "info"),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result(events))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/agents/run-stats")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    email = next(r for r in data if r["agent_name"] == "Email Composer")
+    scorer = next(r for r in data if r["agent_name"] == "Lead Scorer")
+    assert email == {"agent_name": "Email Composer", "success": 1, "failure": 0}
+    assert scorer == {"agent_name": "Lead Scorer", "success": 2, "failure": 1}
+
+
+@pytest.mark.asyncio
+async def test_agent_run_stats_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    other = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{other}/agents/run-stats")
+
+    assert resp.status_code == 403
+
+
 def test_mark_job_dispatched_stores_workspace_not_constant():
     """The dispatch marker stores the owning workspace id (so ownership can be
     enforced), never the legacy constant '1'."""
