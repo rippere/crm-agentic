@@ -408,6 +408,26 @@ export const apiClient = {
     if (!res.ok) throw new Error(`Export failed: ${res.status}`)
     return res.blob()
   },
+  exportContactTimeline: async (workspaceId: string, contactId: string, token: string): Promise<Blob> => {
+    if (isDemoMode) {
+      const rows = [
+        ['date', 'type', 'title', 'description', 'severity'],
+        [new Date(Date.now() - 86400000 * 2).toISOString(), 'message', 'Follow-up on proposal', 'Hi, just checking in on the proposal we sent over...', ''],
+        [new Date(Date.now() - 86400000 * 5).toISOString(), 'call', 'Discovery call', 'Discussed current pain points and roadmap priorities.', ''],
+        [new Date(Date.now() - 86400000 * 10).toISOString(), 'deal_stage', 'Deal: Enterprise License', 'Stage: proposal | Value: $24,000', ''],
+        [new Date(Date.now() - 86400000 * 14).toISOString(), 'note', 'Contact Note', 'Very interested in the analytics dashboard feature.', ''],
+        [new Date(Date.now() - 86400000 * 20).toISOString(), 'activity', 'contact_enriched', 'Contact enriched via LinkedIn', 'info'],
+      ]
+      const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+      return new Blob([csv], { type: 'text/csv' })
+    }
+    const res = await fetch(`${FASTAPI_URL}/workspaces/${workspaceId}/contacts/${contactId}/timeline/export`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error(`Export failed: ${res.status}`)
+    return res.blob()
+  },
+
   exportDealsCsv: async (workspaceId: string, token: string): Promise<Blob> => {
     if (isDemoMode) {
       const { demoDeals } = require('./demo-data')

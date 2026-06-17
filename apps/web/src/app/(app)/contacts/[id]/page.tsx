@@ -16,7 +16,7 @@ import {
   ArrowLeft, Mail, Brain, Zap, TrendingUp, TrendingDown, Minus,
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
-  Star, Calendar, X, Plus, Send, BarChart2,
+  Star, Calendar, X, Plus, Send, BarChart2, Download,
 } from "lucide-react";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -339,6 +339,7 @@ export default function ContactDetailPage() {
 
   const scorePoller = useJobPoller();
   const enrichPoller = useJobPoller();
+  const [exportLoading, setExportLoading] = useState(false);
 
   // Tag editor state
   const [addingTag, setAddingTag] = useState(false);
@@ -504,6 +505,22 @@ export default function ContactDetailPage() {
     } catch { /* ignore */ }
   };
 
+  const handleExportTimeline = async () => {
+    if (!token || !workspaceId) return;
+    setExportLoading(true);
+    try {
+      const blob = await apiClient.exportContactTimeline(workspaceId, contactId, token);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `timeline_${contactId}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { /* ignore */ } finally {
+      setExportLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -609,6 +626,16 @@ export default function ContactDetailPage() {
             <Zap className="h-3.5 w-3.5" />
           )}
           Enrich
+        </Button>
+
+        <Button
+          variant="secondary"
+          onClick={handleExportTimeline}
+          disabled={exportLoading}
+          className="gap-1.5"
+        >
+          {exportLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+          Export Timeline
         </Button>
       </div>
 

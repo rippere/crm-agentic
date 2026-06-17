@@ -1210,3 +1210,121 @@ async def contact_engagement_score(
             "tasks": tasks_score,
         },
     }
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/timeline/export")
+async def export_contact_timeline(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Export a contact's full timeline as a CSV file."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+    from app.models.call_summary import CallSummary
+    from app.models.deal import Deal
+
+    rows: list[dict] = []
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+        )
+    )
+    for m in msg_result.scalars().all():
+        ts = m.received_at or m.created_at
+        rows.append({
+            "date": ts.isoformat() if ts else "",
+            "type": "message",
+            "title": m.subject or "(No subject)",
+            "description": (m.body_plain or "")[:300],
+            "severity": "",
+        })
+
+    call_result = await db.execute(
+        select(CallSummary).where(
+            CallSummary.workspace_id == workspace_id,
+            CallSummary.contact_id == contact_id,
+        )
+    )
+    for c in call_result.scalars().all():
+        rows.append({
+            "date": c.call_date.isoformat() if c.call_date else "",
+            "type": "call",
+            "title": c.title or "(No title)",
+            "description": (c.summary or "")[:300],
+            "severity": "",
+        })
+
+    deal_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+        )
+    )
+    for d in deal_result.scalars().all():
+        ts = d.stage_changed_at or d.created_at
+        rows.append({
+            "date": ts.isoformat() if ts else "",
+            "type": "deal_stage",
+            "title": f"Deal: {d.title or 'Untitled'}",
+            "description": f"Stage: {d.stage} | Value: ${d.value:,.0f}",
+            "severity": "",
+        })
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+        )
+    )
+    for n in note_result.scalars().all():
+        rows.append({
+            "date": n.created_at.isoformat() if n.created_at else "",
+            "type": "note",
+            "title": "Contact Note",
+            "description": (n.body or "")[:300],
+            "severity": "",
+        })
+
+    contact_meta = f"contact:{contact_id}"
+    evt_result = await db.execute(
+        select(ActivityEvent).where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.meta.like(f"%{contact_meta}%"),
+        )
+    )
+    for e in evt_result.scalars().all():
+        rows.append({
+            "date": e.created_at.isoformat() if e.created_at else "",
+            "type": "activity",
+            "title": e.type or "Activity",
+            "description": e.description or "",
+            "severity": e.severity or "",
+        })
+
+    rows.sort(key=lambda x: x["date"], reverse=True)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["date", "type", "title", "description", "severity"])
+    for row in rows:
+        writer.writerow([row["date"], row["type"], row["title"], row["description"], row["severity"]])
+
+    buf.seek(0)
+    filename = f"timeline_{contact_id}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )

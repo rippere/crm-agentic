@@ -1225,3 +1225,47 @@ async def test_engagement_score_contact_not_found_returns_404(app_client):
         resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/engagement-score")
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/timeline/export — CSV download
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_contact_timeline_returns_csv(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id, name="Timeline Bob")
+    contact_id = contact.id
+
+    # First call: contact lookup; subsequent calls return empty scalars for each source table
+    call_count = 0
+
+    def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_scalar_result(contact)
+        return _make_scalars_result([])
+
+    mock_db.execute = AsyncMock(side_effect=side_effect)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact_id}/timeline/export")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    lines = resp.text.strip().splitlines()
+    assert lines[0] == "date,type,title,description,severity"
+    assert f"timeline_{contact_id}.csv" in resp.headers.get("content-disposition", "")
+
+
+@pytest.mark.asyncio
+async def test_export_contact_timeline_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/contacts/{uuid.uuid4()}/timeline/export")
+
+    assert resp.status_code == 403
