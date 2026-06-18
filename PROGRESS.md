@@ -64,12 +64,13 @@
 - [2026-06-15] Phase 12g: Deal activity heatmap — GET /workspaces/{id}/deals/{id}/activity-heatmap (aggregates activity_events + messages via contact_id + deal_notes into 12 Mon–Sun weekly buckets with events/messages/notes/total); 5-level indigo heatmap card on /pipeline/[id] below Activity sparkline (tooltip breakdown per type); getDealActivityHeatmap() in api-client with deterministic demo stub seeded by deal ID; 2 new tests (12-week zero-activity structure, 404); 429 tests pass
 - [2026-06-16] Phase 12h: Agent run success rate chart — GET /workspaces/{id}/agents/run-stats (groups last-30-day activity_events by agent_name, severity=error→failure, info/warning→success); grouped BarChart (emerald=success, rose=failure) on /reports page with per-agent tooltip totals; getAgentRunStats() in api-client with 6-agent demo stub; 2 new tests (groups-by-agent-name, 403); 433 tests pass
 - [2026-06-17] Phase 12i: Contact timeline export — GET /workspaces/{id}/contacts/{id}/timeline/export (StreamingResponse CSV, date/type/title/description/severity columns from messages + calls + deal_stages + contact_notes + activity_events, sorted newest-first); "Export Timeline" button (Download icon) on contact detail page action bar; exportContactTimeline() in api-client with 5-row demo stub (RFC-quoted CSV); 2 new tests (CSV header/filename/200, 403); 434 tests pass (up from 433)
+- [2026-06-18] Phase 12j: Deal stage history — GET /workspaces/{id}/deals/{id}/stage-history (reconstructs progression from deal_moved activity events via regex; infers initial stage from order; returns each stage with entered_at, days_in_stage, is_current); Stage History vertical timeline card on /pipeline/[id] (indigo dot for current, entry date + days-in-stage label per row); getDealStageHistory() in api-client with deterministic demo stub (traverses stages up to current deal stage seeded by deal ID); 2 new tests (no-events returns current stage, 403); 436 tests pass
 
 ## Current Phase
 Phase 12 — Analytics & Reporting
 
 ## Next Task
-Phase 12j: Pipeline stage time analysis — GET /workspaces/{id}/deals/{id}/stage-history (returns each stage the deal has been in with entry date and time spent); stage history timeline card on /pipeline/[id] deal detail page; getDealStageHistory() in api-client with demo stub; 2 new tests.
+Phase 12k: Contact deal value summary — GET /workspaces/{id}/contacts/{id}/deal-summary (total pipeline value, closed-won value, open deal count, win rate, avg deal size); compact KPI strip card on /contacts/[id] page; getContactDealSummary() in api-client with demo stub; 2 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
