@@ -1319,4 +1319,42 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/activity-heatmap`, {}, token)
   },
+
+  getDealStageHistory: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<Array<{ stage: string; label: string; entered_at: string; days_in_stage: number; is_current: boolean }>> => {
+    if (isDemoMode) {
+      const STAGE_ORDER = ['discovery', 'qualified', 'proposal', 'negotiation', 'closed_won', 'closed_lost']
+      const STAGE_LABELS: Record<string, string> = {
+        discovery: 'Discovery', qualified: 'Qualified', proposal: 'Proposal',
+        negotiation: 'Negotiation', closed_won: 'Closed Won', closed_lost: 'Closed Lost',
+      }
+      const deal = demoDeals.find(d => d.id === dealId)
+      const currentStage = deal?.stage ?? 'discovery'
+      const currentIdx = STAGE_ORDER.indexOf(currentStage)
+      const traversed = currentIdx >= 0 ? STAGE_ORDER.slice(0, currentIdx + 1) : [currentStage]
+      const now = Date.now()
+      // Seed total deal age from dealId char codes for determinism
+      const seed = dealId.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+      const totalDays = 30 + (seed % 45)
+      const daysPerStage = Math.max(1, Math.floor(totalDays / traversed.length))
+      return Promise.resolve(
+        traversed.map((stage, i) => {
+          const isLast = i === traversed.length - 1
+          const entered = new Date(now - (traversed.length - i) * daysPerStage * 86400000)
+          const days = isLast ? Math.floor((now - entered.getTime()) / 86400000) : daysPerStage
+          return {
+            stage,
+            label: STAGE_LABELS[stage] ?? stage,
+            entered_at: entered.toISOString(),
+            days_in_stage: Math.max(0, days),
+            is_current: isLast,
+          }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/stage-history`, {}, token)
+  },
 }

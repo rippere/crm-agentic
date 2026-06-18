@@ -1279,3 +1279,45 @@ async def test_deal_activity_heatmap_not_found_returns_404(app_client):
         resp = await ac.get(f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/activity-heatmap")
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/stage-history
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_stage_history_no_events_returns_current_stage(app_client):
+    """GET /deals/{id}/stage-history with no activity events returns a single-entry history."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, stage="proposal")
+
+    # Two execute calls: deal lookup + activity events
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(deal),
+        _make_scalars_result([]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/stage-history")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["stage"] == "proposal"
+    assert data[0]["label"] == "Proposal"
+    assert data[0]["is_current"] is True
+    assert "entered_at" in data[0]
+    assert data[0]["days_in_stage"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_deal_stage_history_wrong_workspace_returns_403(app_client):
+    """GET /deals/{id}/stage-history returns 403 for a different workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/stage-history")
+
+    assert resp.status_code == 403

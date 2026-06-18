@@ -1,5 +1,6 @@
 import csv
 import io
+import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from calendar import month_abbr
@@ -1046,3 +1047,99 @@ async def deal_activity_heatmap(
         })
 
     return output
+
+
+_STAGE_ORDER = ["discovery", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"]
+_STAGE_LABELS = {
+    "discovery": "Discovery", "qualified": "Qualified", "proposal": "Proposal",
+    "negotiation": "Negotiation", "closed_won": "Closed Won", "closed_lost": "Closed Lost",
+}
+_VALID_STAGE_NAMES = set(_STAGE_ORDER)
+_STAGE_RE = re.compile(r"→\s*([a-z_]+)")
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/stage-history")
+async def deal_stage_history(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Stage progression history — each stage with entry date and days spent."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    now = datetime.now(timezone.utc)
+
+    # Query deal_moved events for this deal (oldest-first) to reconstruct stage transitions
+    events_q = select(ActivityEvent).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.type == "deal_moved",
+    )
+    if deal.title:
+        events_q = events_q.where(ActivityEvent.description.ilike(f"%{deal.title}%"))
+    events_q = events_q.order_by(ActivityEvent.created_at.asc())
+    events_result = await db.execute(events_q)
+    events = events_result.scalars().all()
+
+    def _tz(t: datetime | None) -> datetime:
+        if t is None:
+            return now
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+    # Parse destination stage from each event description (e.g., "Deal 'X' → proposal")
+    transitions: list[tuple[str, datetime]] = []
+    for evt in events:
+        m = _STAGE_RE.search(evt.description or "")
+        if m and m.group(1) in _VALID_STAGE_NAMES:
+            ts = _tz(evt.created_at)
+            transitions.append((m.group(1), ts))
+
+    deal_created = _tz(deal.created_at)
+    current_stage = deal.stage or "discovery"
+
+    # No transitions recorded — return single entry for current stage
+    if not transitions:
+        entered = _tz(deal.stage_changed_at or deal.created_at)
+        return [{
+            "stage": current_stage,
+            "label": _STAGE_LABELS.get(current_stage, current_stage),
+            "entered_at": entered.isoformat(),
+            "days_in_stage": max(0, (now - entered).days),
+            "is_current": True,
+        }]
+
+    history: list[dict] = []
+
+    # Prepend stage before first known transition (inferred from stage order)
+    first_stage, first_ts = transitions[0]
+    idx = _STAGE_ORDER.index(first_stage) if first_stage in _STAGE_ORDER else 0
+    if idx > 0:
+        initial_stage = _STAGE_ORDER[idx - 1]
+        history.append({
+            "stage": initial_stage,
+            "label": _STAGE_LABELS.get(initial_stage, initial_stage),
+            "entered_at": deal_created.isoformat(),
+            "days_in_stage": max(0, int((first_ts - deal_created).total_seconds() / 86400)),
+            "is_current": False,
+        })
+
+    for i, (stage, ts) in enumerate(transitions):
+        is_last = i == len(transitions) - 1
+        end_ts = transitions[i + 1][1] if not is_last else now
+        history.append({
+            "stage": stage,
+            "label": _STAGE_LABELS.get(stage, stage),
+            "entered_at": ts.isoformat(),
+            "days_in_stage": max(0, int((end_ts - ts).total_seconds() / 86400)),
+            "is_current": is_last,
+        })
+
+    return history

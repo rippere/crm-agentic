@@ -18,7 +18,7 @@ import {
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send, BarChart2,
+  FileText, Send, BarChart2, History,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -71,6 +71,14 @@ type TaskRow = {
 };
 
 type EmailDraft = { subject: string; body: string };
+
+type StageHistoryEntry = {
+  stage: string;
+  label: string;
+  entered_at: string;
+  days_in_stage: number;
+  is_current: boolean;
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -293,6 +301,8 @@ export default function DealDetailPage() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [dealHeatmap, setDealHeatmap] = useState<{ week_start: string; events: number; messages: number; notes: number; total: number }[]>([]);
   const [heatmapLoading, setHeatmapLoading] = useState(false);
+  const [stageHistory, setStageHistory] = useState<StageHistoryEntry[]>([]);
+  const [stageHistoryLoading, setStageHistoryLoading] = useState(false);
 
   const [moveSaving, setMoveSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -367,6 +377,13 @@ export default function DealDetailPage() {
       .then((data) => setDealHeatmap(Array.isArray(data) ? data : []))
       .catch(() => setDealHeatmap([]))
       .finally(() => setHeatmapLoading(false));
+
+    setStageHistoryLoading(true);
+    apiClient
+      .getDealStageHistory(workspaceId, dealId, token)
+      .then((data) => setStageHistory(Array.isArray(data) ? (data as StageHistoryEntry[]) : []))
+      .catch(() => setStageHistory([]))
+      .finally(() => setStageHistoryLoading(false));
 
     if (deal.contact_id) {
       apiClient
@@ -901,6 +918,76 @@ export default function DealDetailPage() {
                   ))}
                   <span className="text-[10px] text-zinc-500">More</span>
                 </div>
+              </div>
+            )}
+          </Card>
+
+          {/* Stage History */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4 text-indigo-400" />
+              <p className="text-sm font-semibold text-zinc-200">Stage History</p>
+              {stageHistory.length > 0 && (
+                <span className="ml-auto text-[10px] font-mono text-zinc-500">
+                  {stageHistory.length} stage{stageHistory.length !== 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+            {stageHistoryLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-10 rounded-xl bg-zinc-800/50 animate-pulse" />
+                ))}
+              </div>
+            ) : stageHistory.length === 0 ? (
+              <p className="text-xs text-zinc-500 text-center py-3">No stage history available.</p>
+            ) : (
+              <div className="relative">
+                {stageHistory.map((entry, i) => {
+                  const cfg = stageConfig[entry.stage as DealStage] ?? {
+                    label: entry.label, color: "text-zinc-400", bg: "bg-zinc-700/50",
+                  };
+                  return (
+                    <div key={i} className="flex gap-3">
+                      <div className="flex flex-col items-center flex-shrink-0">
+                        <span className={cn(
+                          "mt-1 h-2.5 w-2.5 rounded-full border-2 flex-shrink-0",
+                          entry.is_current
+                            ? "border-indigo-400 bg-indigo-400"
+                            : "border-zinc-600 bg-zinc-800"
+                        )} />
+                        {i < stageHistory.length - 1 && (
+                          <span className="flex-1 w-px bg-zinc-800 mt-1" />
+                        )}
+                      </div>
+                      <div className="pb-3 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={cn(
+                            "text-xs font-medium",
+                            entry.is_current ? cfg.color : "text-zinc-400"
+                          )}>
+                            {entry.label}
+                          </span>
+                          {entry.is_current && (
+                            <span className="text-[10px] font-mono bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded">
+                              current
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 mt-0.5">
+                          <span className="text-[11px] text-zinc-500">
+                            {new Date(entry.entered_at).toLocaleDateString("en-US", {
+                              month: "short", day: "numeric", year: "numeric",
+                            })}
+                          </span>
+                          <span className="text-[11px] font-mono text-zinc-600">
+                            {entry.days_in_stage === 0 ? "< 1d" : `${entry.days_in_stage}d`}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </Card>
