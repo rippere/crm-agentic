@@ -1269,3 +1269,60 @@ async def test_export_contact_timeline_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/{uuid.uuid4()}/timeline/export")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/deal-summary
+# ---------------------------------------------------------------------------
+
+
+def _fake_deal(workspace_id: uuid.UUID, contact_id: uuid.UUID, stage: str, value: float) -> MagicMock:
+    d = MagicMock()
+    d.workspace_id = workspace_id
+    d.contact_id = contact_id
+    d.stage = stage
+    d.value = value
+    return d
+
+
+@pytest.mark.asyncio
+async def test_contact_deal_summary_returns_aggregates(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+    contact_id = contact.id
+
+    deals = [
+        _fake_deal(workspace_id, contact_id, "proposal", 50000),
+        _fake_deal(workspace_id, contact_id, "negotiation", 80000),
+        _fake_deal(workspace_id, contact_id, "closed_won", 60000),
+        _fake_deal(workspace_id, contact_id, "closed_lost", 40000),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_scalars_result(deals),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact_id}/deal-summary")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_pipeline_value"] == 130000.0   # 50k + 80k (non-closed)
+    assert data["closed_won_value"] == 60000.0
+    assert data["open_deal_count"] == 2
+    # won=1, lost=1, total_closed=2 → win_rate = round(1/2*100) = 50
+    assert data["win_rate"] == 50
+    assert data["total_deals"] == 4
+    assert data["avg_deal_size"] == round((50000 + 80000 + 60000 + 40000) / 4)
+
+
+@pytest.mark.asyncio
+async def test_contact_deal_summary_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/contacts/{uuid.uuid4()}/deal-summary")
+
+    assert resp.status_code == 403

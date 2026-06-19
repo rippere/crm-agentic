@@ -94,6 +94,15 @@ type EngagementScore = {
   components: { messages: number; notes: number; tasks: number };
 };
 
+type DealSummary = {
+  total_pipeline_value: number;
+  closed_won_value: number;
+  open_deal_count: number;
+  win_rate: number | null;
+  avg_deal_size: number | null;
+  total_deals: number;
+};
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatusDot({ status }: { status: string }) {
@@ -329,6 +338,7 @@ export default function ContactDetailPage() {
   const [heatmapLoading, setHeatmapLoading] = useState(false);
   const [engagementScore, setEngagementScore] = useState<EngagementScore | null>(null);
   const [engagementLoading, setEngagementLoading] = useState(false);
+  const [dealSummary, setDealSummary] = useState<DealSummary | null>(null);
 
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -456,6 +466,11 @@ export default function ContactDetailPage() {
       .then((data: EngagementScore) => setEngagementScore(data))
       .catch(() => setEngagementScore(null))
       .finally(() => setEngagementLoading(false));
+
+    apiClient
+      .getContactDealSummary(workspaceId, contactId, token)
+      .then((data: DealSummary) => setDealSummary(data))
+      .catch(() => setDealSummary(null));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -859,6 +874,39 @@ export default function ContactDetailPage() {
               <span className="text-sm font-mono text-zinc-300">{contact.deals}</span>
             </div>
           </Card>
+
+          {/* Deal value summary */}
+          {dealSummary && dealSummary.total_deals > 0 && (
+            <Card className="p-4 space-y-3">
+              <p className="text-xs font-semibold text-zinc-400">Deal Value Summary</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                <div>
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Pipeline</p>
+                  <p className="text-sm font-mono font-semibold text-zinc-100">{formatCurrency(dealSummary.total_pipeline_value)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Closed Won</p>
+                  <p className="text-sm font-mono font-semibold text-emerald-400">{formatCurrency(dealSummary.closed_won_value)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Win Rate</p>
+                  <p className="text-sm font-mono font-semibold text-zinc-100">
+                    {dealSummary.win_rate != null ? `${dealSummary.win_rate}%` : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Avg Deal</p>
+                  <p className="text-sm font-mono font-semibold text-zinc-100">
+                    {dealSummary.avg_deal_size != null ? formatCurrency(dealSummary.avg_deal_size) : "—"}
+                  </p>
+                </div>
+              </div>
+              <div className="border-t border-zinc-800 pt-2 flex items-center justify-between">
+                <p className="text-[10px] text-zinc-600">{dealSummary.total_deals} deal{dealSummary.total_deals !== 1 ? "s" : ""} total</p>
+                <p className="text-[10px] text-zinc-600">{dealSummary.open_deal_count} open</p>
+              </div>
+            </Card>
+          )}
         </div>
 
         {/* ── Right: Timeline, Deals, Tasks ── */}

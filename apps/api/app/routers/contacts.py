@@ -1212,6 +1212,50 @@ async def contact_engagement_score(
     }
 
 
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/deal-summary")
+async def contact_deal_summary(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Aggregate deal value metrics for a contact: pipeline value, closed-won, win rate, avg size."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from app.models.deal import Deal
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.workspace_id == workspace_id, Deal.contact_id == contact_id)
+    )
+    deals = deal_result.scalars().all()
+
+    CLOSED = {"closed_won", "closed_lost"}
+    pipeline_value = sum(float(d.value or 0) for d in deals if d.stage not in CLOSED)
+    closed_won_value = sum(float(d.value or 0) for d in deals if d.stage == "closed_won")
+    open_deal_count = sum(1 for d in deals if d.stage not in CLOSED)
+    won_count = sum(1 for d in deals if d.stage == "closed_won")
+    lost_count = sum(1 for d in deals if d.stage == "closed_lost")
+    total_closed = won_count + lost_count
+    win_rate = round(won_count / total_closed * 100) if total_closed > 0 else None
+    avg_deal_size = round(sum(float(d.value or 0) for d in deals) / len(deals)) if deals else None
+
+    return {
+        "total_pipeline_value": pipeline_value,
+        "closed_won_value": closed_won_value,
+        "open_deal_count": open_deal_count,
+        "win_rate": win_rate,
+        "avg_deal_size": avg_deal_size,
+        "total_deals": len(deals),
+    }
+
+
 @router.get("/workspaces/{workspace_id}/contacts/{contact_id}/timeline/export")
 async def export_contact_timeline(
     workspace_id: uuid.UUID,

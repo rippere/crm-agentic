@@ -1357,4 +1357,27 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/stage-history`, {}, token)
   },
+
+  getContactDealSummary: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    total_pipeline_value: number;
+    closed_won_value: number;
+    open_deal_count: number;
+    win_rate: number | null;
+    avg_deal_size: number | null;
+    total_deals: number;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { total_pipeline_value: number; closed_won_value: number; open_deal_count: number; win_rate: number | null; avg_deal_size: number | null; total_deals: number }> = {
+        'c-001': { total_pipeline_value: 145000, closed_won_value: 95000, open_deal_count: 2, win_rate: 67, avg_deal_size: 80000, total_deals: 3 },
+        'c-002': { total_pipeline_value: 220000, closed_won_value: 0,     open_deal_count: 2, win_rate: null, avg_deal_size: 110000, total_deals: 2 },
+        'c-003': { total_pipeline_value: 0,       closed_won_value: 60000, open_deal_count: 0, win_rate: 100, avg_deal_size: 60000,  total_deals: 1 },
+      }
+      return Promise.resolve(stubs[contactId] ?? { total_pipeline_value: 0, closed_won_value: 0, open_deal_count: 0, win_rate: null, avg_deal_size: null, total_deals: 0 })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/deal-summary`, {}, token)
+  },
 }
