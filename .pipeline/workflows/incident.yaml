@@ -1,0 +1,51 @@
+name: incident
+description: Expedited diagnose→hotfix→review→test→release path for a production incident.
+version: 1
+
+trigger:
+  on: [manual, schedule]
+  cron: "*/15 * * * *"   # periodic detection sweep; manual fires immediately
+
+inputs:
+  - name: task_brief
+    required: true
+    description: Incident summary / alert payload.
+
+defaults:
+  max_retries: 0
+  budget_usd: 20
+
+steps:
+  - id: diagnose
+    agent: architect
+    produces: [plan]
+
+  - id: hotfix-backend
+    agent: backend
+    depends_on: [diagnose]
+    when: "backend in plan.touches"
+    produces: [diff]
+
+  - id: hotfix-frontend
+    agent: frontend
+    depends_on: [diagnose]
+    when: "frontend in plan.touches"
+    produces: [diff]
+
+  - id: review
+    agent: reviewer
+    depends_on: [hotfix-backend, hotfix-frontend]
+    produces: [verdict]
+    gate: blocking
+
+  - id: qa
+    agent: qa
+    depends_on: [review]
+    produces: [verdict]
+    gate: blocking
+
+  - id: release
+    agent: release
+    depends_on: [qa]
+    produces: [release_note]
+    gate: human   # expedited, but a human still confirms anything leaving the repo

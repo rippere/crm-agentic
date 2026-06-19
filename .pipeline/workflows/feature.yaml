@@ -1,0 +1,59 @@
+name: feature
+description: Plan→build→review→secure→test→release for a new feature. The flagship pipeline.
+version: 1
+
+trigger:
+  on: [issue_labeled, manual]
+  labels: [agent:feature]
+
+inputs:
+  - name: task_brief
+    required: true
+    description: What to build.
+
+defaults:
+  max_retries: 1
+  budget_usd: 25
+
+steps:
+  - id: plan
+    agent: architect
+    produces: [plan]
+
+  # Build steps run in parallel; each gated by what the plan touches.
+  - id: build-backend
+    agent: backend
+    depends_on: [plan]
+    when: "backend in plan.touches"
+    produces: [diff]
+
+  - id: build-frontend
+    agent: frontend
+    depends_on: [plan]
+    when: "frontend in plan.touches"
+    produces: [diff]
+
+  - id: review
+    agent: reviewer
+    depends_on: [build-backend, build-frontend]   # waits for whichever ran
+    produces: [verdict]
+    gate: blocking
+
+  # Security + QA fan out in parallel off the review.
+  - id: security
+    agent: security
+    depends_on: [review]
+    produces: [verdict]
+    gate: blocking
+
+  - id: qa
+    agent: qa
+    depends_on: [review]
+    produces: [verdict]
+    gate: blocking
+
+  - id: release
+    agent: release
+    depends_on: [security, qa]
+    produces: [release_note]
+    gate: human

@@ -1,0 +1,32 @@
+name: pr-review
+description: Review-only pipeline on an open PR — reviewer, security, and QA assess the existing diff in parallel. No build, no release.
+version: 1
+
+trigger:
+  on: [pull_request]
+
+inputs:
+  - name: task_brief
+    required: false
+    description: Optional context for the PR under review.
+
+defaults:
+  max_retries: 0
+  budget_usd: 10
+
+steps:
+  # No build steps: the diff already exists on the PR.
+  - id: review
+    agent: reviewer
+    produces: [verdict]
+    gate: blocking
+
+  - id: security
+    agent: security
+    produces: [verdict]
+    gate: blocking
+
+  - id: qa
+    agent: qa
+    produces: [verdict]
+    gate: advisory

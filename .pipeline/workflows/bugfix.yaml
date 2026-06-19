@@ -1,0 +1,60 @@
+name: bugfix
+description: Leaner triage→build→review→test→release path for a single-area bug fix.
+version: 1
+
+trigger:
+  on: [issue_labeled, manual]
+  labels: [agent:bugfix]
+
+inputs:
+  - name: task_brief
+    required: true
+    description: The bug to fix.
+
+defaults:
+  max_retries: 1
+  budget_usd: 15
+
+steps:
+  - id: triage
+    agent: architect
+    produces: [plan]
+
+  # Single build step per touched area (the plan sets exactly one).
+  - id: build-backend
+    agent: backend
+    depends_on: [triage]
+    when: "backend in plan.touches"
+    produces: [diff]
+
+  - id: build-frontend
+    agent: frontend
+    depends_on: [triage]
+    when: "frontend in plan.touches"
+    produces: [diff]
+
+  - id: review
+    agent: reviewer
+    depends_on: [build-backend, build-frontend]
+    produces: [verdict]
+    gate: blocking
+
+  # Optional security pass only when the fix touches a sensitive area.
+  - id: security
+    agent: security
+    depends_on: [review]
+    when: "security in plan.touches"
+    produces: [verdict]
+    gate: blocking
+
+  - id: qa
+    agent: qa
+    depends_on: [review]
+    produces: [verdict]
+    gate: blocking
+
+  - id: release
+    agent: release
+    depends_on: [qa, security]
+    produces: [release_note]
+    gate: human
