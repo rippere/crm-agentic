@@ -1,0 +1,202 @@
+name: Agentic Pipeline
+
+# Substrate: GitHub Actions (ARCHITECTURE.md §9).
+# The same agent defs + workflow specs that drive `python -m orchestrator`
+# locally drive real CI/CD here. The orchestrator builds the plan; each agent
+# step would be dispatched to Claude Code via anthropic/claude-code-action.
+
+on:
+  # An issue labeled `agent:feature` (etc.) kicks off the matching workflow.
+  issues:
+    types: [labeled]
+  # PRs run the review-only pipeline against the existing diff.
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # Manual dispatch: choose a workflow + provide a brief.
+  workflow_dispatch:
+    inputs:
+      workflow:
+        description: "Workflow name (feature | bugfix | pr-review | incident)"
+        required: true
+        default: feature
+        type: string
+      task_brief:
+        description: "Short brief / context for the run"
+        required: false
+        type: string
+  # Every push validates all specs by planning + dry-running them.
+  push:
+    branches: [master, main]
+    paths:
+      - ".pipeline/**"
+      - ".github/workflows/agentic-pipeline.yml"
+
+# Least privilege by default; the dispatch job requests more only where needed.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: .pipeline
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # 1. Self-validation: the pipeline validates itself on every push.
+  #    Runs the orchestrator's own test suite, then `plan` + `dryrun` for every
+  #    workflow spec. No secrets, no model calls — pure spec validation.
+  # ──────────────────────────────────────────────────────────────────────────
+  validate:
+    name: Validate specs (tests + plan + dryrun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install "pyyaml==6.0.1" pytest
+
+      - name: Run orchestrator test suite
+        run: python -m pytest orchestrator -q
+
+      - name: Plan + dry-run every workflow
+        run: |
+          set -euo pipefail
+          for wf in workflows/*.yaml workflows/*.yml; do
+            [ -e "$wf" ] || continue
+            name="$(basename "${wf%.*}")"
+            echo "::group::plan $name"
+            python -m orchestrator plan --workflow "$name"
+            echo "::endgroup::"
+            echo "::group::dryrun $name"
+            python -m orchestrator run --workflow "$name" \
+              --executor dryrun \
+              --input task_brief="CI dry run for $name"
+            echo "::endgroup::"
+          done
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dryrun-runs
+          path: .pipeline/runs/
+          if-no-files-exist: ignore
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 2. Plan the selected workflow for real triggers (issue label / PR / manual).
+  #    Resolves which workflow to run, validates it, and prints the plan. This
+  #    plan is the input to the agent-dispatch step below.
+  # ──────────────────────────────────────────────────────────────────────────
+  plan:
+    name: Build execution plan
+    runs-on: ubuntu-latest
+    # Only on the real triggers, not the self-validation push.
+    if: github.event_name != 'push'
+    outputs:
+      workflow: ${{ steps.select.outputs.workflow }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install "pyyaml==6.0.1"
+
+      - name: Select workflow from trigger
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # For issue_labeled: map the `agent:<name>` label to a workflow.
+          ISSUE_LABEL: ${{ github.event.label.name }}
+          DISPATCH_WORKFLOW: ${{ github.event.inputs.workflow }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              wf="$DISPATCH_WORKFLOW" ;;
+            pull_request)
+              wf="pr-review" ;;
+            issues)
+              # `agent:feature` -> feature, `agent:bugfix` -> bugfix, etc.
+              case "$ISSUE_LABEL" in
+                agent:*) wf="${ISSUE_LABEL#agent:}" ;;
+                *) echo "label '$ISSUE_LABEL' is not an agent label; skipping"; wf="" ;;
+              esac ;;
+            *) wf="" ;;
+          esac
+          echo "workflow=$wf" >> "$GITHUB_OUTPUT"
+          echo "Selected workflow: '$wf'"
+
+      - name: Validate + print plan
+        if: steps.select.outputs.workflow != ''
+        run: python -m orchestrator plan --workflow "${{ steps.select.outputs.workflow }}"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 3. Agent dispatch (live).
+  #    For each agent step the orchestrator planned, this is where the step's
+  #    agent runs as a real Claude Code job. Guarded on ANTHROPIC_API_KEY so the
+  #    job degrades gracefully (and CI stays green) when the secret is absent.
+  #
+  #    A production version generates one matrix entry per planned step and runs
+  #    them wave-by-wave; below is the canonical shape of a single step. Each
+  #    invocation uses the agent's resolved model, system prompt (agent body),
+  #    and tool allowlist — exactly the values models.py / executors.py expose:
+  #        model  = AgentDef.model.model_id   (opus->claude-opus-4-8, ...)
+  #        prompt = executors.resolve_prompt(agent, artifacts)
+  #        tools  = AgentDef.tools            (least-privilege allowlist, §8.4)
+  #    Verdicts post back to the PR/issue; release stays human-gated (§8.1).
+  # ──────────────────────────────────────────────────────────────────────────
+  dispatch:
+    name: Dispatch agents (Claude Code)
+    runs-on: ubuntu-latest
+    needs: plan
+    if: needs.plan.outputs.workflow != ''
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for ANTHROPIC_API_KEY
+        id: secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ANTHROPIC_API_KEY not set — skipping live agent dispatch."
+          fi
+
+      # --- EXAMPLE: one agent step. In production the orchestrator emits the
+      # --- model/prompt/tools for each planned step; this shows the contract.
+      # --- Guarded so the workflow never fails just because the secret is unset.
+      - name: Run agent step (example — architect)
+        if: steps.secret.outputs.present == 'true'
+        uses: anthropic/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # model: resolved from the agent def (architect -> opus -> claude-opus-4-8)
+          model: claude-opus-4-8
+          # prompt: the agent's system prompt (the body of agents/architect.md)
+          #         plus the run's available artifacts, as resolve_prompt() builds.
+          prompt_file: .pipeline/agents/architect.md
+          # allowed_tools: the agent's tool allowlist (capability boundary, §8.4).
+          allowed_tools: "Read,Grep,Glob,Write"
+          # max_turns: the agent's soft budget guardrail.
+          max_turns: "40"
+
+      - name: Note skipped dispatch
+        if: steps.secret.outputs.present != 'true'
+        run: |
+          echo "Live agent dispatch skipped (no ANTHROPIC_API_KEY)."
+          echo "Plan was built and validated; use the standalone substrate with"
+          echo "  python -m orchestrator run --workflow <name> --executor dryrun"
+          echo "to exercise the full run offline."
