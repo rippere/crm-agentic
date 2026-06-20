@@ -1358,6 +1358,37 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/stage-history`, {}, token)
   },
 
+  getDealCompetitors: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{ competitors: string[] }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, string[]> = {
+        'd-001': ['Salesforce', 'HubSpot'],
+        'd-002': ['Pipedrive'],
+        'd-003': [],
+      }
+      return Promise.resolve({ competitors: stubs[dealId] ?? [] })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/competitors`, {}, token)
+  },
+
+  updateDealCompetitors: (
+    workspaceId: string,
+    dealId: string,
+    competitors: string[],
+    token: string,
+  ): Promise<{ competitors: string[] }> => {
+    if (isDemoMode) {
+      return Promise.resolve({ competitors })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/competitors`, {
+      method: 'PUT',
+      body: JSON.stringify({ competitors }),
+    }, token)
+  },
+
   getContactDealSummary: (
     workspaceId: string,
     contactId: string,

@@ -18,7 +18,7 @@ import {
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send, BarChart2, History,
+  FileText, Send, BarChart2, History, Swords, Plus, X,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -304,6 +304,11 @@ export default function DealDetailPage() {
   const [stageHistory, setStageHistory] = useState<StageHistoryEntry[]>([]);
   const [stageHistoryLoading, setStageHistoryLoading] = useState(false);
 
+  const [competitors, setCompetitors] = useState<string[]>([]);
+  const [competitorsLoading, setCompetitorsLoading] = useState(false);
+  const [competitorInput, setCompetitorInput] = useState("");
+  const [competitorSaving, setCompetitorSaving] = useState(false);
+
   const [moveSaving, setMoveSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleteText, setDeleteText] = useState("");
@@ -385,6 +390,13 @@ export default function DealDetailPage() {
       .catch(() => setStageHistory([]))
       .finally(() => setStageHistoryLoading(false));
 
+    setCompetitorsLoading(true);
+    apiClient
+      .getDealCompetitors(workspaceId, dealId, token)
+      .then((data) => setCompetitors(data.competitors ?? []))
+      .catch(() => setCompetitors([]))
+      .finally(() => setCompetitorsLoading(false));
+
     if (deal.contact_id) {
       apiClient
         .getTasks(workspaceId, token, { contactId: deal.contact_id })
@@ -443,6 +455,31 @@ export default function DealDetailPage() {
       setOutcomePickerOpen(false);
     } catch { /* ignore */ }
     finally { setOutcomeSaving(false); }
+  };
+
+  const handleAddCompetitor = async (name: string) => {
+    const label = name.trim();
+    if (!label || !token || !workspaceId || competitorSaving) return;
+    if (competitors.includes(label)) { setCompetitorInput(""); return; }
+    const next = [...competitors, label];
+    setCompetitorSaving(true);
+    try {
+      const data = await apiClient.updateDealCompetitors(workspaceId, dealId, next, token);
+      setCompetitors(data.competitors ?? next);
+      setCompetitorInput("");
+    } catch { /* revert silently */ }
+    finally { setCompetitorSaving(false); }
+  };
+
+  const handleRemoveCompetitor = async (name: string) => {
+    if (!token || !workspaceId || competitorSaving) return;
+    const next = competitors.filter((c) => c !== name);
+    setCompetitorSaving(true);
+    try {
+      const data = await apiClient.updateDealCompetitors(workspaceId, dealId, next, token);
+      setCompetitors(data.competitors ?? next);
+    } catch { /* revert silently */ }
+    finally { setCompetitorSaving(false); }
   };
 
   const handleDelete = async () => {
@@ -720,6 +757,69 @@ export default function DealDetailPage() {
               </div>
             </Card>
           )}
+
+          {/* Competitors */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Swords className="h-4 w-4 text-rose-400" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-200">Competitors</p>
+              {competitors.length > 0 && (
+                <span className="ml-auto text-xs font-mono text-zinc-500">{competitors.length}</span>
+              )}
+            </div>
+
+            {competitorsLoading ? (
+              <div className="h-7 rounded-lg bg-zinc-800/50 animate-pulse" />
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {competitors.map((c) => (
+                  <span
+                    key={c}
+                    className="flex items-center gap-1 rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-0.5 text-[11px] font-medium text-rose-300"
+                  >
+                    {c}
+                    <button
+                      onClick={() => handleRemoveCompetitor(c)}
+                      disabled={competitorSaving}
+                      aria-label={`Remove ${c}`}
+                      className="ml-0.5 text-rose-400 hover:text-rose-200 disabled:opacity-40 cursor-pointer transition-colors"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+
+                {/* Inline add */}
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={competitorInput}
+                    onChange={(e) => setCompetitorInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === ",") {
+                        e.preventDefault();
+                        handleAddCompetitor(competitorInput);
+                      }
+                    }}
+                    placeholder="+ Add competitor"
+                    className="h-6 rounded-full border border-dashed border-zinc-600 bg-transparent px-2.5 text-[11px] text-zinc-400 placeholder:text-zinc-600 outline-none focus:border-rose-500/50 focus:text-zinc-200 transition-colors w-32"
+                  />
+                  {competitorInput.trim() && (
+                    <button
+                      onClick={() => handleAddCompetitor(competitorInput)}
+                      disabled={competitorSaving}
+                      className="flex-shrink-0 text-zinc-500 hover:text-rose-300 disabled:opacity-40 cursor-pointer transition-colors"
+                      aria-label="Add competitor"
+                    >
+                      {competitorSaving
+                        ? <Loader2 className="h-3 w-3 animate-spin" />
+                        : <Plus className="h-3 w-3" />}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </Card>
 
           {/* Notes thread */}
           {token && workspaceId && (

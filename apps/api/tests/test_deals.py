@@ -32,6 +32,7 @@ def _fake_deal(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
     deal.win_loss_reason = kwargs.get("win_loss_reason", None)
     deal.next_action = kwargs.get("next_action", None)
     deal.next_action_date = kwargs.get("next_action_date", None)
+    deal.competitors = kwargs.get("competitors", [])
     deal.created_at = kwargs.get("created_at", _NOW - timedelta(days=5))
     deal.updated_at = kwargs.get("updated_at", _NOW - timedelta(days=5))
     deal.stage_changed_at = kwargs.get("stage_changed_at", _NOW - timedelta(days=5))
@@ -94,7 +95,7 @@ async def test_create_deal_returns_201(app_client):
         for attr in ("id", "workspace_id", "title", "company", "contact_name",
                      "contact_id", "value", "stage", "ml_win_probability",
                      "expected_close", "assigned_agent", "health_score",
-                     "created_at"):
+                     "competitors", "created_at"):
             setattr(obj, attr, getattr(deal, attr))
 
     mock_db.refresh.side_effect = fake_refresh
@@ -1319,5 +1320,41 @@ async def test_deal_stage_history_wrong_workspace_returns_403(app_client):
 
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/stage-history")
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/competitors
+# PUT /workspaces/{wid}/deals/{did}/competitors
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_deal_competitors_returns_list(app_client):
+    """GET /deals/{id}/competitors returns the stored competitor list."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Comp Deal")
+    deal.competitors = ["Salesforce", "HubSpot"]
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(deal))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/competitors")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"competitors": ["Salesforce", "HubSpot"]}
+
+
+@pytest.mark.asyncio
+async def test_update_deal_competitors_wrong_workspace_returns_403(app_client):
+    """PUT /deals/{id}/competitors returns 403 for a different workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/competitors",
+            json={"competitors": ["Rival Inc"]},
+        )
 
     assert resp.status_code == 403

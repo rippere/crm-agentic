@@ -42,6 +42,7 @@ class DealResponse(BaseModel):
     win_loss_reason: str | None = None
     next_action: str | None = None
     next_action_date: date | None = None
+    competitors: list[str] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -755,6 +756,59 @@ async def create_deal_note(
     await db.commit()
     await db.refresh(note)
     return DealNoteResponse.model_validate(note)
+
+
+class CompetitorUpdateRequest(BaseModel):
+    competitors: list[str]
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/competitors")
+async def get_deal_competitors(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return the competitor tags for a deal."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    return {"competitors": deal.competitors or []}
+
+
+@router.put("/workspaces/{workspace_id}/deals/{deal_id}/competitors")
+async def update_deal_competitors(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    body: CompetitorUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Replace the competitor tag list for a deal (full replace, max 20 entries)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    cleaned = [c.strip() for c in body.competitors if c.strip()][:20]
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    deal.competitors = cleaned
+    db.add(deal)
+    await db.commit()
+    await db.refresh(deal)
+    return {"competitors": deal.competitors or []}
 
 
 @router.delete("/workspaces/{workspace_id}/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
