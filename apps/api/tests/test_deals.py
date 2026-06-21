@@ -1358,3 +1358,60 @@ async def test_update_deal_competitors_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/overdue-actions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_overdue_actions_returns_overdue_deals(app_client):
+    """Returns deals whose next_action_date is today or past, ordered most-overdue first."""
+    from datetime import date
+
+    fastapi_app, mock_db, workspace_id = app_client
+    yesterday = date.today() - timedelta(days=1)
+    two_days_ago = date.today() - timedelta(days=2)
+
+    d1 = _fake_deal(workspace_id, title="Follow Up", stage="proposal",
+                    next_action="Send revised proposal", next_action_date=yesterday)
+    d2 = _fake_deal(workspace_id, title="Old Action", stage="qualified",
+                    next_action="Call back", next_action_date=two_days_ago)
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([d2, d1]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/overdue-actions")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["title"] == "Old Action"
+    assert data[0]["days_overdue"] == 2
+    assert data[0]["next_action"] == "Call back"
+    assert data[1]["days_overdue"] == 1
+
+
+@pytest.mark.asyncio
+async def test_overdue_actions_empty_workspace(app_client):
+    """Returns empty list when no overdue next actions exist."""
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/overdue-actions")
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_overdue_actions_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's overdue actions."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/overdue-actions")
+
+    assert resp.status_code == 403

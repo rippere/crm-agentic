@@ -18,7 +18,7 @@ import Link from "next/link";
 import {
   DollarSign, Briefcase, Brain, Bot, TrendingUp, TrendingDown,
   Minus, Activity, CheckCircle, AlertTriangle, Info,
-  ListTodo, Mail, BarChart2, CheckSquare, ExternalLink,
+  ListTodo, Mail, BarChart2, CheckSquare, ExternalLink, Bell,
 } from "lucide-react";
 import { cn, SIGNAL } from "@/lib/utils";
 import type { KPI, ActivityEvent, Deal } from "@/lib/types";
@@ -38,6 +38,17 @@ interface StaleDeal {
   value: number;
   health_score: number;
   signals: string[];
+}
+
+interface OverdueAction {
+  id: string;
+  title: string | null;
+  company: string | null;
+  stage: string;
+  value: number;
+  next_action: string | null;
+  next_action_date: string;
+  days_overdue: number;
 }
 
 const kpiIcons: Record<string, React.ReactNode> = {
@@ -232,6 +243,7 @@ export default function DashboardPage() {
   const [pmError, setPmError] = useState(false);
   const [workspaceMode, setWorkspaceMode] = useState<"sales" | "pm" | "both">("sales");
   const [staleDeals, setStaleDeals] = useState<StaleDeal[]>([]);
+  const [overdueActions, setOverdueActions] = useState<OverdueAction[]>([]);
   const [liveActivity, setLiveActivity] = useState<ActivityEvent[]>([]);
   const [revenueHistory, setRevenueHistory] = useState<{ month: string; revenue: number }[]>([]);
   const [forecastData, setForecastData] = useState<{ month: string; value: number; deal_count: number }[]>([]);
@@ -251,6 +263,9 @@ export default function DashboardPage() {
       });
       apiClient.getStaleDeals("demo-workspace-1", "demo-token").then((data) => {
         setStaleDeals(Array.isArray(data) ? data : []);
+      }).catch(() => {});
+      apiClient.getOverdueActions("demo-workspace-1", "demo-token").then((data) => {
+        setOverdueActions(Array.isArray(data) ? data : []);
       }).catch(() => {});
       apiClient.getDealHistory("demo-workspace-1", "demo-token", 6).then((data) => {
         if (Array.isArray(data)) setRevenueHistory(data);
@@ -344,10 +359,11 @@ export default function DashboardPage() {
       // failing endpoint surfaces a "some metrics unavailable" notice instead of
       // silently zeroing the affected KPI.
       try {
-        const [tasksResult, messagesResult, staleResult] = await Promise.allSettled([
+        const [tasksResult, messagesResult, staleResult, overdueResult] = await Promise.allSettled([
           apiClient.getTasks(workspaceId, session.access_token),
           apiClient.getMessages(workspaceId, session.access_token),
           apiClient.getStaleDeals(workspaceId, session.access_token),
+          apiClient.getOverdueActions(workspaceId, session.access_token),
         ]);
 
         const anyFailed =
@@ -385,6 +401,9 @@ export default function DashboardPage() {
           messagesIngested: messages.length,
         });
         setStaleDeals(Array.isArray(staleData) ? staleData : []);
+
+        const overdueData = overdueResult.status === "fulfilled" ? overdueResult.value : [];
+        setOverdueActions(Array.isArray(overdueData) ? overdueData : []);
       } catch {
         // Total failure of the PM block — still render sales KPIs, but flag it.
         setPmError(true);
@@ -549,6 +568,60 @@ export default function DashboardPage() {
               <div className="border-t border-zinc-800 px-4 py-2.5 text-center">
                 <Link href="/pipeline" className="text-xs text-zinc-500 hover:text-indigo-400 transition-colors font-mono">
                   +{staleDeals.length - 3} more at-risk deals · View all in Pipeline →
+                </Link>
+              </div>
+            )}
+          </Card>
+        </section>
+      )}
+
+      {/* Overdue Next Actions Widget */}
+      {overdueActions.length > 0 && (
+        <section aria-labelledby="overdue-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="overdue-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Overdue Actions
+            </h2>
+            <Badge variant="amber" size="sm" dot>{overdueActions.length} overdue</Badge>
+          </div>
+          <Card className="border-amber-500/10 overflow-hidden p-0">
+            <div className="divide-y divide-zinc-800">
+              {overdueActions.slice(0, 5).map((item) => (
+                <div key={item.id} className="flex items-center gap-4 px-4 py-3 hover:bg-zinc-800/40 transition-colors">
+                  <Bell className="h-3.5 w-3.5 text-amber-400 flex-shrink-0" aria-hidden />
+
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-zinc-100 truncate">{item.title}</p>
+                    {item.next_action && (
+                      <p className="text-xs text-amber-200/60 truncate">{item.next_action}</p>
+                    )}
+                  </div>
+
+                  <div className="text-right flex-shrink-0 hidden sm:block">
+                    <p className={cn(
+                      "text-xs font-mono font-semibold",
+                      item.days_overdue >= 3 ? "text-rose-400" : "text-amber-400"
+                    )}>
+                      {item.days_overdue === 0 ? "Due today" : `${item.days_overdue}d overdue`}
+                    </p>
+                    <p className="text-[11px] text-zinc-500 capitalize">{item.stage.replace("_", " ")}</p>
+                  </div>
+
+                  <Link
+                    href={`/pipeline/${item.id}`}
+                    className="flex-shrink-0 flex items-center gap-1 text-[11px] text-zinc-500 hover:text-amber-400 transition-colors font-mono"
+                    title="Open deal"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    View
+                  </Link>
+                </div>
+              ))}
+            </div>
+            {overdueActions.length > 5 && (
+              <div className="border-t border-zinc-800 px-4 py-2.5 text-center">
+                <Link href="/pipeline" className="text-xs text-zinc-500 hover:text-amber-400 transition-colors font-mono">
+                  +{overdueActions.length - 5} more overdue · View all in Pipeline →
                 </Link>
               </div>
             )}

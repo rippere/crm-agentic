@@ -599,7 +599,7 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/timeline`, {}, token)
   },
-  updateDeal: (workspaceId: string, dealId: string, data: { title?: string; company?: string; value?: number; stage?: string; ml_win_probability?: number; expected_close?: string; notes?: string }, token: string) => {
+  updateDeal: (workspaceId: string, dealId: string, data: { title?: string; company?: string; value?: number; stage?: string; ml_win_probability?: number; expected_close?: string; notes?: string; next_action?: string | null; next_action_date?: string | null }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: dealId, ...data })
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
   },
@@ -685,6 +685,14 @@ export const apiClient = {
       )
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/stale?threshold=${threshold}`, {}, token)
+  },
+
+  getOverdueActions: (workspaceId: string, token: string): Promise<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; next_action: string | null; next_action_date: string; days_overdue: number }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'demo-deal-1', title: 'Acme Corp Expansion', company: 'Acme Corp', stage: 'negotiation', value: 48000, next_action: 'Send revised proposal to legal', next_action_date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), days_overdue: 1 },
+      { id: 'demo-deal-3', title: 'GlobalTech Platform', company: 'GlobalTech', stage: 'proposal', value: 120000, next_action: 'Schedule follow-up call', next_action_date: new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10), days_overdue: 3 },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/deals/overdue-actions`, {}, token)
   },
 
   getPipelineSuggestions: (workspaceId: string, token: string) => {

@@ -579,6 +579,45 @@ async def outcome_reasons(
     ]
 
 
+@router.get("/workspaces/{workspace_id}/deals/overdue-actions")
+async def overdue_actions(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return open deals whose next_action_date is today or in the past, ordered by most overdue first.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    today = date.today()
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.next_action_date.is_not(None),
+            Deal.next_action_date <= today,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        ).order_by(Deal.next_action_date.asc())
+    )
+    deals = result.scalars().all()
+
+    return [
+        {
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "stage": d.stage,
+            "value": float(d.value or 0),
+            "next_action": d.next_action,
+            "next_action_date": d.next_action_date.isoformat() if d.next_action_date else None,
+            "days_overdue": (today - d.next_action_date).days if d.next_action_date else 0,
+        }
+        for d in deals
+    ]
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,

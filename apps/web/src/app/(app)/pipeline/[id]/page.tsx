@@ -18,7 +18,7 @@ import {
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send, BarChart2, History, Swords, Plus, X,
+  FileText, Send, BarChart2, History, Swords, Plus, X, Bell,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -42,6 +42,8 @@ type DealDetail = {
   assigned_agent: string | null;
   notes: string | null;
   win_loss_reason: string | null;
+  next_action: string | null;
+  next_action_date: string | null;
   created_at: string | null;
 };
 
@@ -309,6 +311,11 @@ export default function DealDetailPage() {
   const [competitorInput, setCompetitorInput] = useState("");
   const [competitorSaving, setCompetitorSaving] = useState(false);
 
+  const [nextActionText, setNextActionText] = useState("");
+  const [nextActionDate, setNextActionDate] = useState("");
+  const [nextActionSaving, setNextActionSaving] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+
   const [moveSaving, setMoveSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleteText, setDeleteText] = useState("");
@@ -344,7 +351,19 @@ export default function DealDetailPage() {
     setLoading(true);
     apiClient
       .getDeal(workspaceId, dealId, token)
-      .then((data) => setDeal((data as DealDetail) ?? null))
+      .then((data) => {
+        const d = (data as DealDetail) ?? null;
+        setDeal(d);
+        if (d) {
+          setNextActionText(d.next_action ?? "");
+          setNextActionDate(d.next_action_date ?? "");
+          setBannerDismissed(
+            typeof sessionStorage !== "undefined"
+              ? sessionStorage.getItem(`na_dismissed_${dealId}`) === "1"
+              : false
+          );
+        }
+      })
       .catch(() => setDeal(null))
       .finally(() => setLoading(false));
   }, [token, workspaceId, dealId]);
@@ -492,6 +511,33 @@ export default function DealDetailPage() {
     finally { setDeleting(false); }
   };
 
+  const handleSaveNextAction = async () => {
+    if (!token || !workspaceId || !deal || nextActionSaving) return;
+    setNextActionSaving(true);
+    try {
+      const updated = (await apiClient.updateDeal(workspaceId, deal.id, {
+        next_action: nextActionText.trim() || null,
+        next_action_date: nextActionDate || null,
+      }, token)) as DealDetail;
+      setDeal((prev) => prev ? { ...prev, next_action: updated.next_action ?? null, next_action_date: updated.next_action_date ?? null } : null);
+      if (nextActionDate) setBannerDismissed(false);
+    } catch { /* ignore */ }
+    finally { setNextActionSaving(false); }
+  };
+
+  const handleClearNextAction = async () => {
+    if (!token || !workspaceId || !deal || nextActionSaving) return;
+    setNextActionSaving(true);
+    try {
+      await apiClient.updateDeal(workspaceId, deal.id, { next_action: null, next_action_date: null }, token);
+      setDeal((prev) => prev ? { ...prev, next_action: null, next_action_date: null } : null);
+      setNextActionText("");
+      setNextActionDate("");
+      setBannerDismissed(false);
+    } catch { /* ignore */ }
+    finally { setNextActionSaving(false); }
+  };
+
   // ── Render guards ──────────────────────────────────────────────────────────
 
   if (loading) {
@@ -589,6 +635,46 @@ export default function DealDetailPage() {
           <Trash2 className="h-3.5 w-3.5" /> Delete
         </Button>
       </div>
+
+      {/* ── Overdue next-action banner ── */}
+      {!isClosedStage && deal.next_action_date && !bannerDismissed && (() => {
+        const dueDate = new Date(deal.next_action_date + "T00:00:00");
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / 86400000);
+        if (daysOverdue < 0) return null;
+        return (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3">
+            <Bell className="h-4 w-4 text-amber-400 flex-shrink-0 mt-0.5" aria-hidden />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-300">
+                {daysOverdue === 0 ? "Action due today" : `Action overdue by ${daysOverdue} day${daysOverdue !== 1 ? "s" : ""}`}
+              </p>
+              {deal.next_action && (
+                <p className="text-xs text-amber-200/70 mt-0.5 truncate">{deal.next_action}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={handleClearNextAction}
+                disabled={nextActionSaving}
+                className="text-[11px] font-medium text-amber-400 hover:text-amber-200 underline underline-offset-2 transition-colors disabled:opacity-50"
+              >
+                {nextActionSaving ? <Loader2 className="h-3 w-3 animate-spin inline" /> : "Clear"}
+              </button>
+              <button
+                onClick={() => {
+                  setBannerDismissed(true);
+                  if (typeof sessionStorage !== "undefined") sessionStorage.setItem(`na_dismissed_${dealId}`, "1");
+                }}
+                aria-label="Dismiss"
+                className="text-amber-500 hover:text-amber-300 transition-colors"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Main grid ── */}
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-6">
@@ -820,6 +906,55 @@ export default function DealDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* Next Action */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Bell className="h-4 w-4 text-amber-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Next Action</p>
+              </div>
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={nextActionText}
+                  onChange={(e) => setNextActionText(e.target.value)}
+                  placeholder="What needs to happen next?"
+                  className="w-full rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-amber-500/50 transition-colors"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={nextActionDate}
+                    onChange={(e) => setNextActionDate(e.target.value)}
+                    className="flex-1 rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-xs text-zinc-200 outline-none focus:border-amber-500/50 transition-colors [color-scheme:dark]"
+                  />
+                  <button
+                    onClick={handleSaveNextAction}
+                    disabled={nextActionSaving}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all flex-shrink-0",
+                      nextActionSaving
+                        ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+                        : "bg-amber-600 hover:bg-amber-500 text-white cursor-pointer"
+                    )}
+                  >
+                    {nextActionSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                    Save
+                  </button>
+                </div>
+                {deal.next_action && (
+                  <button
+                    onClick={handleClearNextAction}
+                    disabled={nextActionSaving}
+                    className="text-[11px] text-zinc-500 hover:text-rose-400 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  >
+                    <XCircle className="h-3 w-3" /> Clear next action
+                  </button>
+                )}
+              </div>
+            </Card>
+          )}
 
           {/* Notes thread */}
           {token && workspaceId && (
