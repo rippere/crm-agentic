@@ -125,6 +125,55 @@ class TaskUpsert(BaseModel):
     deal_id: uuid.UUID | None = None
 
 
+async def upsert_task_record(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    external_id: str,
+    *,
+    title: str,
+    description: str = "",
+    status: str = "open",
+    due_date: date | None = None,
+    project_id: uuid.UUID | None = None,
+    contact_id: uuid.UUID | None = None,
+    deal_id: uuid.UUID | None = None,
+) -> Task:
+    """Idempotent create-or-update of a task keyed on (workspace_id, external_id).
+
+    Shared by the REST by-external endpoint and the MCP ``upsert_task`` tool so the
+    two stay in lock-step. Caller is responsible for workspace authorization.
+    """
+    result = await db.execute(
+        select(Task).where(Task.workspace_id == workspace_id, Task.external_id == external_id)
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        task = Task(
+            workspace_id=workspace_id,
+            external_id=external_id,
+            title=title,
+            description=description,
+            status=status,
+            due_date=due_date,
+            project_id=project_id,
+            contact_id=contact_id,
+            deal_id=deal_id,
+        )
+        db.add(task)
+    else:
+        task.title = title  # type: ignore[assignment]
+        task.description = description  # type: ignore[assignment]
+        task.status = status  # type: ignore[assignment]
+        task.due_date = due_date  # type: ignore[assignment]
+        task.project_id = project_id  # type: ignore[assignment]
+        task.contact_id = contact_id  # type: ignore[assignment]
+        task.deal_id = deal_id  # type: ignore[assignment]
+
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
 @router.put("/workspaces/{workspace_id}/tasks/by-external/{external_id}", response_model=TaskResponse)
 async def upsert_task_by_external(
     workspace_id: uuid.UUID,
@@ -141,34 +190,18 @@ async def upsert_task_by_external(
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    result = await db.execute(
-        select(Task).where(Task.workspace_id == workspace_id, Task.external_id == external_id)
+    task = await upsert_task_record(
+        db,
+        workspace_id,
+        external_id,
+        title=body.title,
+        description=body.description,
+        status=body.status,
+        due_date=body.due_date,
+        project_id=body.project_id,
+        contact_id=body.contact_id,
+        deal_id=body.deal_id,
     )
-    task = result.scalar_one_or_none()
-    if task is None:
-        task = Task(
-            workspace_id=workspace_id,
-            external_id=external_id,
-            title=body.title,
-            description=body.description,
-            status=body.status,
-            due_date=body.due_date,
-            project_id=body.project_id,
-            contact_id=body.contact_id,
-            deal_id=body.deal_id,
-        )
-        db.add(task)
-    else:
-        task.title = body.title  # type: ignore[assignment]
-        task.description = body.description  # type: ignore[assignment]
-        task.status = body.status  # type: ignore[assignment]
-        task.due_date = body.due_date  # type: ignore[assignment]
-        task.project_id = body.project_id  # type: ignore[assignment]
-        task.contact_id = body.contact_id  # type: ignore[assignment]
-        task.deal_id = body.deal_id  # type: ignore[assignment]
-
-    await db.commit()
-    await db.refresh(task)
     return _to_response(task)
 
 

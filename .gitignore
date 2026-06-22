@@ -58,3 +58,4 @@ apps/api/__pycache__/
 apps/api/**/__pycache__/
 apps/api/.pytest_cache/
 *.pyc
+openscad_mcp.log

@@ -19,6 +19,23 @@ from app.models.user import User
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _disable_rate_limit():
+    """Disable the slowapi limiter during tests.
+
+    Limits are keyed per-IP and shared across the whole test run, so a suite with
+    more than N calls to a rate-limited endpoint (e.g. /mcp at 20/min) would start
+    returning 429 purely as a function of test count/order. No test asserts
+    rate-limiting behavior, so turn it off for deterministic isolation.
+    """
+    from app.limiter import limiter
+
+    previous = limiter.enabled
+    limiter.enabled = False
+    yield
+    limiter.enabled = previous
+
+
 @pytest.fixture
 def workspace_id() -> uuid.UUID:
     return uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
