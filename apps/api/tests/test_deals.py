@@ -838,7 +838,10 @@ async def test_deal_forecast_returns_monthly_buckets(app_client):
     fastapi_app, mock_db, workspace_id = app_client
 
     d1 = _fake_deal(workspace_id, stage="discovery", value=50000)
-    d1.expected_close = (date.today() + timedelta(days=15)).isoformat()
+    # Close today so d1 always lands in the current-month bucket (data[0]),
+    # independent of the run date. A +15d offset crosses into next month when
+    # the suite runs in the back half of a month, emptying data[0].
+    d1.expected_close = date.today().isoformat()
     d2 = _fake_deal(workspace_id, stage="proposal", value=80000)
     d2.expected_close = (date.today() + timedelta(days=45)).isoformat()
     mock_db.execute = AsyncMock(return_value=_make_scalars_result([d1, d2]))

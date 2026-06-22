@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import AsyncClient, ASGITransport
 
-from tests.conftest import _make_scalars_result
+from tests.conftest import _make_scalar_result, _make_scalars_result
 
 
 # ---------------------------------------------------------------------------
@@ -396,3 +398,142 @@ async def test_mcp_pipeline_summary_empty_pipeline(app_client):
     content = resp.json()["result"]["content"][0]["text"]
     assert "Win rate: 0%" in content
     assert "Total deals: 0" in content
+
+
+# ---------------------------------------------------------------------------
+# Task work-queue tools (list_tasks / upsert_task / update_task_status)
+# ---------------------------------------------------------------------------
+
+
+def _fake_task(**kwargs) -> MagicMock:
+    t = MagicMock()
+    t.id = kwargs.get("id", uuid.uuid4())
+    t.external_id = kwargs.get("external_id", "cc:abc123")
+    t.title = kwargs.get("title", "Fix typo in README")
+    t.status = kwargs.get("status", "open")
+    t.project_id = kwargs.get("project_id", None)
+    t.description = kwargs.get("description", "")
+    t.due_date = kwargs.get("due_date", None)
+    return t
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_list_includes_task_tools(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post("/mcp", json={"jsonrpc": "2.0", "id": 20, "method": "tools/list", "params": {}})
+
+    tool_names = {t["name"] for t in resp.json()["result"]["tools"]}
+    assert {"list_tasks", "upsert_task", "update_task_status"}.issubset(tool_names)
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_tasks_returns_json(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([
+        _fake_task(external_id="cc:abc123", status="open", title="Fix typo"),
+    ]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 21, "method": "tools/call",
+            "params": {"name": "list_tasks", "arguments": {"status": "open"}},
+        })
+
+    assert resp.status_code == 200
+    data = json.loads(resp.json()["result"]["content"][0]["text"])
+    assert isinstance(data, list) and len(data) == 1
+    assert data[0]["external_id"] == "cc:abc123"
+    assert data[0]["status"] == "open"
+    assert data[0]["title"] == "Fix typo"
+
+
+@pytest.mark.asyncio
+async def test_mcp_upsert_task_create_path(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    # scalar_one_or_none() -> None means "not found" -> create branch
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+    mock_db.add = MagicMock()  # add() is sync in SQLAlchemy
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 22, "method": "tools/call",
+            "params": {"name": "upsert_task", "arguments": {
+                "external_id": "cc:new1", "title": "Add a test", "status": "open",
+            }},
+        })
+
+    assert resp.status_code == 200
+    data = json.loads(resp.json()["result"]["content"][0]["text"])
+    assert data["external_id"] == "cc:new1"
+    assert data["title"] == "Add a test"
+    assert data["status"] == "open"
+    mock_db.add.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_mcp_upsert_task_rejects_missing_fields(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 23, "method": "tools/call",
+            "params": {"name": "upsert_task", "arguments": {"external_id": "cc:x"}},
+        })
+
+    data = json.loads(resp.json()["result"]["content"][0]["text"])
+    assert "error" in data
+
+
+@pytest.mark.asyncio
+async def test_mcp_update_task_status_found(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    task = _fake_task(external_id="cc:abc123", status="open")
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(task))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 24, "method": "tools/call",
+            "params": {"name": "update_task_status", "arguments": {
+                "external_id": "cc:abc123", "status": "in_progress",
+            }},
+        })
+
+    assert resp.status_code == 200
+    data = json.loads(resp.json()["result"]["content"][0]["text"])
+    assert data["external_id"] == "cc:abc123"
+    assert data["status"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_mcp_update_task_status_not_found(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 25, "method": "tools/call",
+            "params": {"name": "update_task_status", "arguments": {
+                "external_id": "cc:missing", "status": "done",
+            }},
+        })
+
+    data = json.loads(resp.json()["result"]["content"][0]["text"])
+    assert "error" in data
+
+
+@pytest.mark.asyncio
+async def test_mcp_update_task_status_rejects_invalid_status(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 26, "method": "tools/call",
+            "params": {"name": "update_task_status", "arguments": {
+                "external_id": "cc:abc123", "status": "bogus",
+            }},
+        })
+
+    data = json.loads(resp.json()["result"]["content"][0]["text"])
+    assert "error" in data
