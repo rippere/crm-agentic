@@ -1419,4 +1419,36 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/deal-summary`, {}, token)
   },
+
+  getSuggestedMerges: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    pairs: Array<{
+      contact_a: { id: string; name: string; email: string | null; company: string; status: string };
+      contact_b: { id: string; name: string; email: string | null; company: string; status: string };
+      similarity_score: number;
+      reason: string;
+    }>;
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        pairs: [
+          {
+            contact_a: { id: 'c-001', name: 'Sarah Chen', email: 'sarah.chen@techcorp.com', company: 'TechCorp Solutions', status: 'customer' },
+            contact_b: { id: 'c-dup-1', name: 'Sarah C. Chen', email: 's.chen@techcorp.com', company: 'TechCorp Solutions', status: 'lead' },
+            similarity_score: 0.91,
+            reason: 'similar name + same email domain',
+          },
+          {
+            contact_a: { id: 'c-006', name: 'Lena Kowalski', email: 'lena.k@mediahub.eu', company: 'MediaHub Europe', status: 'customer' },
+            contact_b: { id: 'c-dup-2', name: 'Lena Kowalczyk', email: 'lena@mediahub.eu', company: 'MediaHub Europe', status: 'prospect' },
+            similarity_score: 0.78,
+            reason: 'similar name + same email domain',
+          },
+        ],
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/duplicate-candidates`, {}, token)
+  },
 }

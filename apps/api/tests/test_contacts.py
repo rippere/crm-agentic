@@ -1326,3 +1326,46 @@ async def test_contact_deal_summary_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/{uuid.uuid4()}/deal-summary")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/duplicate-candidates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_duplicate_candidates_returns_pairs(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Two contacts with similar names and the same email domain should form a pair
+    c1 = _fake_contact(workspace_id, name="John Smith", email="john.smith@acme.com")
+    c2 = _fake_contact(workspace_id, name="Jon Smith", email="jon@acme.com")
+    # A third contact whose name is completely different should not pair with c1
+    c3 = _fake_contact(workspace_id, name="Alice Zhang", email="alice@acme.com")
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([c1, c2, c3]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/duplicate-candidates")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "pairs" in data
+    # john/jon + same domain → should score >= 0.65
+    assert len(data["pairs"]) >= 1
+    pair = data["pairs"][0]
+    assert pair["similarity_score"] >= 0.65
+    assert "reason" in pair
+    names_in_pair = {pair["contact_a"]["name"], pair["contact_b"]["name"]}
+    assert "John Smith" in names_in_pair or "Jon Smith" in names_in_pair
+
+
+@pytest.mark.asyncio
+async def test_duplicate_candidates_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/contacts/duplicate-candidates")
+
+    assert resp.status_code == 403

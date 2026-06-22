@@ -1,4 +1,5 @@
 import csv
+import difflib
 import io
 import json
 import uuid
@@ -243,6 +244,68 @@ async def import_contacts_csv(
 
     await db.commit()
     return {"imported": imported, "skipped": skipped, "errors": errors}
+
+
+# ─── Duplicate-candidate detection ─────────────────────────────────────────────
+
+class DuplicateCandidatePair(BaseModel):
+    contact_a: ContactResponse
+    contact_b: ContactResponse
+    similarity_score: float
+    reason: str
+
+
+@router.get("/workspaces/{workspace_id}/contacts/duplicate-candidates")
+async def get_duplicate_candidates(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return pairs of contacts that are likely duplicates based on name similarity and email domain."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact)
+        .where(Contact.workspace_id == workspace_id)
+        .limit(300)
+    )
+    contacts = result.scalars().all()
+
+    pairs: list[dict] = []
+    for i in range(len(contacts)):
+        for j in range(i + 1, len(contacts)):
+            a, b = contacts[i], contacts[j]
+            name_a = (a.name or "").lower().strip()
+            name_b = (b.name or "").lower().strip()
+            if not name_a or not name_b:
+                continue
+
+            name_sim = difflib.SequenceMatcher(None, name_a, name_b).ratio()
+
+            domain_a = a.email.split("@")[1].lower() if a.email and "@" in a.email else ""
+            domain_b = b.email.split("@")[1].lower() if b.email and "@" in b.email else ""
+            same_domain = bool(domain_a and domain_a == domain_b)
+
+            score = round(name_sim * 0.7 + (0.3 if same_domain else 0.0), 3)
+            if score < 0.65:
+                continue
+
+            reasons: list[str] = []
+            if name_sim >= 0.8:
+                reasons.append("similar name")
+            if same_domain:
+                reasons.append("same email domain")
+
+            pairs.append({
+                "contact_a": ContactResponse.model_validate(a),
+                "contact_b": ContactResponse.model_validate(b),
+                "similarity_score": score,
+                "reason": " + ".join(reasons) if reasons else "similar profile",
+            })
+
+    pairs.sort(key=lambda x: x["similarity_score"], reverse=True)
+    return {"pairs": pairs[:20]}
 
 
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/score", status_code=status.HTTP_200_OK)

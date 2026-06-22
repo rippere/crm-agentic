@@ -19,6 +19,7 @@ import {
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
   Copy, X, Loader2, Zap, ClipboardList, CheckSquare, Square, Tag,
   ExternalLink, Download, Upload, CheckCircle2, AlertCircle, Trash2,
+  GitMerge,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -44,6 +45,13 @@ interface IngestedMessage {
   received_at: string | null;
   clarity_score?: { score: number } | null;
   contact_id: string | null;
+}
+
+interface SuggestedMergePair {
+  contact_a: { id: string; name: string; email: string | null; company: string; status: string };
+  contact_b: { id: string; name: string; email: string | null; company: string; status: string };
+  similarity_score: number;
+  reason: string;
 }
 
 function formatRelative(dateStr: string | null): string {
@@ -994,6 +1002,10 @@ export default function ContactsPage() {
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [suggestedMerges, setSuggestedMerges] = useState<SuggestedMergePair[]>([]);
+  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
+  const [mergeSuggestion, setMergeSuggestion] = useState<SuggestedMergePair | null>(null);
+  const [mergeSugBusy, setMergeSugBusy] = useState(false);
 
   const { contacts, createContact } = useContacts();
 
@@ -1018,6 +1030,25 @@ export default function ContactsPage() {
       setHasGmailConnector(connectors.some((c) => c.provider === 'gmail'));
     }).catch(() => {});
   }, [token, workspaceId]);
+
+  useEffect(() => {
+    if (!token || !workspaceId) return;
+    apiClient.getSuggestedMerges(workspaceId, token)
+      .then(({ pairs }) => setSuggestedMerges(pairs.slice(0, 4)))
+      .catch(() => {});
+  }, [token, workspaceId]);
+
+  const handleMergeSuggestion = useCallback(async (pair: SuggestedMergePair) => {
+    if (!workspaceId || !token || mergeSugBusy) return;
+    setMergeSugBusy(true);
+    try {
+      await apiClient.mergeContacts(workspaceId, { primary_id: pair.contact_a.id, duplicate_id: pair.contact_b.id }, token);
+      setSuggestedMerges((prev) => prev.filter((p) => p.contact_a.id !== pair.contact_a.id || p.contact_b.id !== pair.contact_b.id));
+      setMergeSuggestion(null);
+      setMergeResult({ tasks: 0, messages: 0, deals: 0 });
+    } catch { /* silent */ }
+    finally { setMergeSugBusy(false); }
+  }, [workspaceId, token, mergeSugBusy]);
 
   const handleSelect = useCallback((id: string, checked: boolean) => {
     setSelectedIds((prev) => {
@@ -1192,6 +1223,63 @@ export default function ContactsPage() {
           );
         })}
       </div>
+
+      {/* Deduplication suggestions */}
+      {suggestedMerges.length > 0 && !suggestionsDismissed && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <GitMerge className="h-4 w-4 text-amber-400" aria-hidden="true" />
+              <span className="text-sm font-medium text-amber-300">
+                {suggestedMerges.length} possible duplicate{suggestedMerges.length > 1 ? "s" : ""} detected
+              </span>
+            </div>
+            <button
+              onClick={() => setSuggestionsDismissed(true)}
+              className="text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer"
+              title="Dismiss suggestions"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="space-y-2">
+            {suggestedMerges.map((pair, idx) => (
+              <div
+                key={idx}
+                className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2"
+              >
+                <div className="flex-1 min-w-0 grid grid-cols-2 gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-zinc-200 truncate">{pair.contact_a.name}</p>
+                    <p className="text-[11px] text-zinc-500 truncate">{pair.contact_a.email ?? pair.contact_a.company}</p>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-zinc-200 truncate">{pair.contact_b.name}</p>
+                    <p className="text-[11px] text-zinc-500 truncate">{pair.contact_b.email ?? pair.contact_b.company}</p>
+                  </div>
+                </div>
+                <span className="shrink-0 text-[11px] font-mono text-amber-400/80 tabular-nums">
+                  {Math.round(pair.similarity_score * 100)}%
+                </span>
+                <button
+                  onClick={() => setMergeSuggestion(pair)}
+                  className="shrink-0 flex items-center gap-1 rounded-lg border border-indigo-500/40 bg-indigo-600/10 px-2.5 py-1 text-xs font-medium text-indigo-400 hover:bg-indigo-600/20 transition cursor-pointer"
+                >
+                  <GitMerge className="h-3 w-3" />
+                  Merge
+                </button>
+                <button
+                  onClick={() => setSuggestedMerges((prev) => prev.filter((_, i) => i !== idx))}
+                  className="shrink-0 text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer"
+                  title="Dismiss this suggestion"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
@@ -1582,6 +1670,58 @@ export default function ContactsPage() {
           </div>
         );
       })()}
+
+      {/* Merge suggestion confirmation modal */}
+      {mergeSuggestion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <GitMerge className="h-4 w-4 text-indigo-400" aria-hidden="true" />
+              <h3 className="text-base font-semibold text-zinc-100">Merge suggested duplicates</h3>
+            </div>
+            <p className="text-sm text-zinc-400">
+              All data from{" "}
+              <span className="font-medium text-zinc-200">{mergeSuggestion.contact_b.name}</span>{" "}
+              will be moved to{" "}
+              <span className="font-medium text-zinc-200">{mergeSuggestion.contact_a.name}</span>, then{" "}
+              <span className="font-medium text-rose-400">{mergeSuggestion.contact_b.name}</span> will be permanently deleted.
+            </p>
+            <div className="flex gap-3 rounded-xl border border-zinc-700/60 bg-zinc-800/40 p-3">
+              <div className="flex-1 space-y-0.5">
+                <p className="text-[10px] font-mono text-emerald-500 uppercase tracking-widest">Keep (primary)</p>
+                <p className="text-sm font-medium text-zinc-200">{mergeSuggestion.contact_a.name}</p>
+                <p className="text-xs text-zinc-500">{mergeSuggestion.contact_a.email ?? mergeSuggestion.contact_a.company}</p>
+              </div>
+              <div className="w-px bg-zinc-700" />
+              <div className="flex-1 space-y-0.5">
+                <p className="text-[10px] font-mono text-rose-500 uppercase tracking-widest">Delete (duplicate)</p>
+                <p className="text-sm font-medium text-zinc-200">{mergeSuggestion.contact_b.name}</p>
+                <p className="text-xs text-zinc-500">{mergeSuggestion.contact_b.email ?? mergeSuggestion.contact_b.company}</p>
+              </div>
+            </div>
+            <p className="text-xs text-zinc-600">
+              Match reason: <span className="text-zinc-500">{mergeSuggestion.reason}</span> · {Math.round(mergeSuggestion.similarity_score * 100)}% similarity
+            </p>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => handleMergeSuggestion(mergeSuggestion)}
+                disabled={mergeSugBusy}
+                className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium py-2.5 transition disabled:opacity-50 cursor-pointer"
+              >
+                {mergeSugBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitMerge className="h-4 w-4" />}
+                Merge contacts
+              </button>
+              <button
+                onClick={() => setMergeSuggestion(null)}
+                disabled={mergeSugBusy}
+                className="flex-1 rounded-xl border border-zinc-700 text-zinc-300 hover:text-zinc-100 text-sm font-medium py-2.5 transition disabled:opacity-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Merge success toast */}
       {mergeResult && (
