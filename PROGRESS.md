@@ -70,11 +70,13 @@
 - [2026-06-21] Phase 12m: Next-action reminder banner — GET /workspaces/{id}/deals/overdue-actions endpoint (open deals where next_action_date <= today, ordered most-overdue first); dismissible amber banner on /pipeline/[id] when action is due/overdue (sessionStorage dismiss per deal, Clear button to remove action); inline "Next Action" card on deal detail (text + date picker + Save, pre-seeded from deal data); "Overdue Actions" dashboard widget (up to 5 rows, days-overdue label, links to deal detail); api-client updateDeal updated with next_action/next_action_date fields; getOverdueActions() with demo stub; DealDetail type updated; 3 new tests; 443 tests pass
 - [2026-06-22] Phase 12n: Contact merge deduplication suggestions — GET /workspaces/{id}/contacts/duplicate-candidates endpoint (difflib.SequenceMatcher name similarity × 0.7 + same-email-domain bonus × 0.3, threshold 0.65, capped at 20 pairs, route placed before /{contact_id} to avoid 422); amber suggestions widget on /contacts page (dismissed per session, per-pair X dismiss, similarity % badge); dedicated merge confirmation modal (reuses mergeContacts() api-client call); getSuggestedMerges() in api-client with 2-pair demo stub; SuggestedMergePair interface; GitMerge icon import; 2 new tests (returns-pairs, 403); 446 tests pass
 
+- [2026-06-23] Phase 12o: Deal at-risk early warning — GET /workspaces/{id}/deals/at-risk (health_score < 50 OR ml_win_probability < 30, ordered worst-first, at_risk_reason string); dismissible amber banner on /pipeline board (shows up to 3 deals with reason + value); getAtRiskDeals() in api-client with demo stubs (2 at-risk deals); 2 new tests (returns_unhealthy_deals, wrong_workspace_403); 448 tests pass (1 pre-existing time-dependent failure unchanged)
+
 ## Current Phase
 Phase 12 — Analytics & Reporting
 
 ## Next Task
-Phase 12o: Deal "at risk" early warning — GET /workspaces/{id}/deals/at-risk endpoint (deals with low ml_win_probability + no activity in 14+ days + next_action_date in the past); amber banner card on /pipeline board page; getAtRiskDeals() in api-client with demo stubs; 2 new tests.
+Phase 12p: Contact "no recent activity" nudge — GET /workspaces/{id}/contacts/inactive endpoint (contacts with no messages or notes in 30+ days, ordered by last activity asc); amber nudge widget on /contacts page (up to 5 rows, days-since-last-contact label, dismissible per session); getInactiveContacts() in api-client with demo stubs; 2 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.

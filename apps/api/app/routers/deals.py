@@ -618,6 +618,51 @@ async def overdue_actions(
     ]
 
 
+@router.get("/workspaces/{workspace_id}/deals/at-risk")
+async def at_risk_deals(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return open deals at risk: health_score < 50 or ml_win_probability < 30, ordered worst first.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            (Deal.health_score < 50) | (Deal.ml_win_probability < 30),
+        ).order_by(Deal.health_score.asc(), Deal.ml_win_probability.asc())
+    )
+    deals = result.scalars().all()
+
+    def _reason(d: Deal) -> str:
+        parts = []
+        if d.health_score < 50:
+            parts.append(f"Health score low ({d.health_score})")
+        if d.ml_win_probability < 30:
+            parts.append(f"Win probability critical ({d.ml_win_probability}%)")
+        return " · ".join(parts)
+
+    return [
+        {
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "stage": d.stage,
+            "value": float(d.value or 0),
+            "health_score": d.health_score,
+            "ml_win_probability": d.ml_win_probability,
+            "at_risk_reason": _reason(d),
+        }
+        for d in deals
+    ]
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
