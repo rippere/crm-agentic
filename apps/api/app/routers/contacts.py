@@ -308,6 +308,76 @@ async def get_duplicate_candidates(
     return {"pairs": pairs[:20]}
 
 
+@router.get("/workspaces/{workspace_id}/contacts/inactive")
+async def inactive_contacts(
+    workspace_id: uuid.UUID,
+    days: int = 30,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return contacts with no messages or notes in the last `days` days, ordered most-idle first.
+
+    NOTE: registered before /{contact_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from datetime import timezone as _tz
+    cutoff = datetime.now(_tz.utc) - timedelta(days=days)
+
+    result = await db.execute(
+        select(Contact)
+        .where(Contact.workspace_id == workspace_id, Contact.status != "churned")
+        .order_by(Contact.updated_at.asc())
+    )
+    contacts = result.scalars().all()
+    if not contacts:
+        return []
+
+    from app.models.message import Message
+    msg_result = await db.execute(
+        select(Message)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id.is_not(None),
+            Message.created_at >= cutoff,
+        )
+    )
+    recent_msg_contact_ids = {m.contact_id for m in msg_result.scalars().all()}
+
+    note_result = await db.execute(
+        select(ContactNote)
+        .where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.created_at >= cutoff,
+        )
+    )
+    recent_note_contact_ids = {n.contact_id for n in note_result.scalars().all()}
+
+    active_ids = recent_msg_contact_ids | recent_note_contact_ids
+    now = datetime.now(_tz.utc)
+    inactive = []
+    for c in contacts:
+        if c.id in active_ids:
+            continue
+        last_dt = c.updated_at or c.created_at
+        if last_dt and last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=_tz.utc)
+        days_since = (now - last_dt).days if last_dt else None
+        inactive.append({
+            "id": str(c.id),
+            "name": c.name,
+            "email": c.email,
+            "company": c.company,
+            "status": c.status,
+            "last_activity": last_dt.isoformat() if last_dt else None,
+            "days_since_last_contact": days_since,
+        })
+
+    inactive.sort(key=lambda x: -(x["days_since_last_contact"] or 0))
+    return inactive
+
+
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/score", status_code=status.HTTP_200_OK)
 async def score_contact(
     workspace_id: uuid.UUID,
