@@ -1369,3 +1369,46 @@ async def test_duplicate_candidates_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/duplicate-candidates")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/inactive
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_inactive_contacts_returns_idle_contacts(app_client):
+    """Returns contacts with no recent messages or notes with days_since_last_contact."""
+    from datetime import datetime, timedelta, timezone
+
+    fastapi_app, mock_db, workspace_id = app_client
+    c1 = _fake_contact(workspace_id, name="Alice", status="customer")
+    c1.updated_at = datetime.now(timezone.utc) - timedelta(days=45)
+    c1.created_at = datetime.now(timezone.utc) - timedelta(days=90)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalars_result([c1]),  # contacts query
+        _make_scalars_result([]),    # messages query (no recent)
+        _make_scalars_result([]),    # notes query (no recent)
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/inactive")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "Alice"
+    assert "days_since_last_contact" in data[0]
+    assert data[0]["days_since_last_contact"] >= 45
+
+
+@pytest.mark.asyncio
+async def test_inactive_contacts_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's inactive contacts."""
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/contacts/inactive")
+
+    assert resp.status_code == 403
