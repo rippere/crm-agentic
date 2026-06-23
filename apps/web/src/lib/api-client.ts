@@ -695,6 +695,15 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/overdue-actions`, {}, token)
   },
 
+  getInactiveContacts: (workspaceId: string, token: string, days = 30): Promise<Array<{ id: string; name: string; email: string | null; company: string | null; status: string; last_activity: string | null; days_since_last_contact: number | null }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'c-011', name: 'Patricia Lane', email: 'patricia@oldcorp.com', company: 'OldCorp', status: 'customer', last_activity: '2026-04-10T08:00:00Z', days_since_last_contact: 74 },
+      { id: 'c-022', name: 'Samuel Voss', email: 'svoss@legacytech.io', company: 'LegacyTech', status: 'lead', last_activity: '2026-04-28T14:30:00Z', days_since_last_contact: 56 },
+      { id: 'c-033', name: 'Donna Marsh', email: 'donna@quietco.net', company: 'QuietCo', status: 'customer', last_activity: '2026-05-09T11:00:00Z', days_since_last_contact: 45 },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/contacts/inactive?days=${days}`, {}, token)
+  },
+
   getPipelineSuggestions: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve([
       { deal_id: 'demo-1', title: 'Acme Corp Expansion', company: 'Acme Corp', stage: 'proposal', value: 48000, action: 'follow_up', reason: 'No stage change in 24 days', priority: 'high' },
