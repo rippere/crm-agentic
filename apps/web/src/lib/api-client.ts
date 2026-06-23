@@ -695,6 +695,14 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/overdue-actions`, {}, token)
   },
 
+  getAtRiskDeals: (workspaceId: string, token: string): Promise<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; health_score: number; ml_win_probability: number; at_risk_reason: string }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'd-002', title: 'Global Finance Enterprise Suite', company: 'Global Finance', stage: 'proposal', value: 250000, health_score: 35, ml_win_probability: 25, at_risk_reason: 'Health score low (35) · Win probability critical (25%)' },
+      { id: 'd-004', title: 'NovaTech Infrastructure', company: 'NovaTech', stage: 'negotiation', value: 89000, health_score: 42, ml_win_probability: 45, at_risk_reason: 'Health score low (42)' },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/deals/at-risk`, {}, token)
+  },
+
   getPipelineSuggestions: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve([
       { deal_id: 'demo-1', title: 'Acme Corp Expansion', company: 'Acme Corp', stage: 'proposal', value: 48000, action: 'follow_up', reason: 'No stage change in 24 days', priority: 'high' },
