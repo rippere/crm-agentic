@@ -1415,3 +1415,43 @@ async def test_overdue_actions_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/overdue-actions")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/at-risk
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_at_risk_deals_returns_unhealthy_deals(app_client):
+    """Returns deals with low health_score or low ml_win_probability with reason strings."""
+    fastapi_app, mock_db, workspace_id = app_client
+    d1 = _fake_deal(workspace_id, title="Low Health", stage="proposal", health_score=35, ml_win_probability=50)
+    d2 = _fake_deal(workspace_id, title="Low Prob", stage="negotiation", health_score=80, ml_win_probability=20)
+    d3 = _fake_deal(workspace_id, title="Both Bad", stage="qualified", health_score=40, ml_win_probability=25)
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([d1, d2, d3]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/at-risk")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 3
+    assert all("id" in d and "at_risk_reason" in d and "health_score" in d and "ml_win_probability" in d for d in data)
+    titles = [d["title"] for d in data]
+    assert "Low Health" in titles and "Low Prob" in titles and "Both Bad" in titles
+    both_bad = next(d for d in data if d["title"] == "Both Bad")
+    assert "Health score low" in both_bad["at_risk_reason"]
+    assert "Win probability critical" in both_bad["at_risk_reason"]
+
+
+@pytest.mark.asyncio
+async def test_at_risk_deals_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's at-risk deals."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/at-risk")
+
+    assert resp.status_code == 403
