@@ -618,6 +618,70 @@ async def overdue_actions(
     ]
 
 
+@router.get("/workspaces/{workspace_id}/deals/at-risk")
+async def at_risk_deals(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return open deals with at least one early-warning risk signal.
+
+    Signals: low ml_win_probability (<35%), no activity in 14+ days, overdue next action.
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    today = date.today()
+    now = datetime.now(timezone.utc)
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = result.scalars().all()
+
+    output = []
+    for deal in deals:
+        risk_reasons: list[str] = []
+
+        if (deal.ml_win_probability or 0) < 35:
+            risk_reasons.append("low_win_probability")
+
+        updated = deal.updated_at or deal.created_at
+        if updated:
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            days_since = (now - updated).days
+        else:
+            days_since = 0
+
+        if days_since >= 14:
+            risk_reasons.append("no_recent_activity")
+
+        if deal.next_action_date and deal.next_action_date <= today:
+            risk_reasons.append("overdue_action")
+
+        if not risk_reasons:
+            continue
+
+        output.append({
+            "id": str(deal.id),
+            "title": deal.title,
+            "company": deal.company,
+            "stage": deal.stage,
+            "value": float(deal.value or 0),
+            "ml_win_probability": deal.ml_win_probability or 0,
+            "days_since_activity": days_since,
+            "risk_reasons": risk_reasons,
+        })
+
+    output.sort(key=lambda d: (-len(d["risk_reasons"]), -d["days_since_activity"]))
+    return output
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
