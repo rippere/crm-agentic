@@ -695,6 +695,14 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/overdue-actions`, {}, token)
   },
 
+  getAtRiskDeals: (workspaceId: string, token: string): Promise<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; ml_win_probability: number; days_since_activity: number; risk_reasons: string[] }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'demo-deal-2', title: 'TechStart Series A', company: 'TechStart', stage: 'discovery', value: 22000, ml_win_probability: 28, days_since_activity: 21, risk_reasons: ['low_win_probability', 'no_recent_activity'] },
+      { id: 'demo-deal-4', title: 'RetailCo POS Upgrade', company: 'RetailCo', stage: 'qualified', value: 35000, ml_win_probability: 31, days_since_activity: 16, risk_reasons: ['low_win_probability', 'no_recent_activity', 'overdue_action'] },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/deals/at-risk`, {}, token)
+  },
+
   getPipelineSuggestions: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve([
       { deal_id: 'demo-1', title: 'Acme Corp Expansion', company: 'Acme Corp', stage: 'proposal', value: 48000, action: 'follow_up', reason: 'No stage change in 24 days', priority: 'high' },
