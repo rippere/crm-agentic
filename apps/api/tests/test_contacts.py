@@ -1369,3 +1369,61 @@ async def test_duplicate_candidates_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/duplicate-candidates")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/relationship-strength
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_relationship_strength_returns_score(app_client):
+    """Returns structured score with components when contact has messages and notes."""
+    from datetime import datetime, timezone, timedelta
+
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    msg = MagicMock()
+    msg.received_at = datetime.now(timezone.utc) - timedelta(days=5)
+
+    note = MagicMock()
+    note.created_at = datetime.now(timezone.utc) - timedelta(days=10)
+
+    task = MagicMock()
+    task.status = "done"
+
+    # db.execute: contact lookup, messages, notes, tasks
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_scalars_result([msg]),
+        _make_scalars_result([note]),
+        _make_scalars_result([task]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact.id}/relationship-strength")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "score" in data
+    assert "label" in data
+    assert "components" in data
+    assert data["components"]["recency"] == 30   # msg within 7 days
+    assert data["components"]["frequency"] == 3  # 1 message × 3 pts
+    assert data["components"]["notes"] == 5      # 1 note × 5 pts
+    assert data["components"]["task_completion"] == 20  # 1/1 done
+    assert data["score"] == 58
+    assert data["label"] == "Good"
+
+
+@pytest.mark.asyncio
+async def test_relationship_strength_wrong_workspace_returns_403(app_client):
+    """Returns 403 when accessing another workspace's contact strength."""
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/contacts/{uuid.uuid4()}/relationship-strength")
+
+    assert resp.status_code == 403
