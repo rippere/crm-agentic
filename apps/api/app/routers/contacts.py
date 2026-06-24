@@ -246,7 +246,7 @@ async def import_contacts_csv(
     return {"imported": imported, "skipped": skipped, "errors": errors}
 
 
-# ─── Duplicate-candidate detection ─────────────────────────────────────────────
+# ─── Duplicate-candidate detection ────────────────────────────────────────────────────────
 
 class DuplicateCandidatePair(BaseModel):
     contact_a: ContactResponse
@@ -971,7 +971,7 @@ async def bulk_contact_action(
     return BulkContactResponse(action="delete", deleted=len(contacts), contact_ids=deleted_ids)
 
 
-# ─── Contact merge ─────────────────────────────────────────────────────────────
+# ─── Contact merge ──────────────────────────────────────────────────────────────────────
 
 class MergeContactRequest(BaseModel):
     primary_id: uuid.UUID
@@ -1316,6 +1316,114 @@ async def contact_deal_summary(
         "win_rate": win_rate,
         "avg_deal_size": avg_deal_size,
         "total_deals": len(deals),
+    }
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/relationship-strength")
+async def contact_relationship_strength(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Composite 0–100 relationship strength score.
+    Components: recency of last message (0–30), message frequency (0–30),
+    note-taking depth (0–20), task completion rate (0–20).
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+    from app.models.task import Task
+
+    from datetime import timezone as _tz
+    now = datetime.now(_tz.utc)
+    cutoff_90 = now - timedelta(days=90)
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+        )
+    )
+    messages = msg_result.scalars().all()
+
+    def _aware(dt: datetime) -> datetime:
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=_tz.utc)
+
+    message_count_90 = sum(
+        1 for m in messages
+        if m.received_at and _aware(m.received_at) >= cutoff_90
+    )
+    last_message_days: int | None = None
+    if messages:
+        most_recent = max((_aware(m.received_at) for m in messages if m.received_at), default=None)
+        if most_recent:
+            last_message_days = (now - most_recent).days
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+        )
+    )
+    note_count = len(note_result.scalars().all())
+
+    task_result = await db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+        )
+    )
+    tasks = task_result.scalars().all()
+    tasks_total = len(tasks)
+    tasks_done = sum(1 for t in tasks if t.status == "done")
+
+    # Recency: 30 pts max
+    if last_message_days is None:
+        recency_score = 0
+    elif last_message_days <= 7:
+        recency_score = 30
+    elif last_message_days <= 30:
+        recency_score = 20
+    elif last_message_days <= 90:
+        recency_score = 10
+    else:
+        recency_score = 0
+
+    # Frequency: 30 pts max (3 pts per message in last 90 days, cap 10 messages)
+    frequency_score = min(30, message_count_90 * 3)
+
+    # Notes: 20 pts max (5 pts per note, cap 4 notes)
+    notes_score = min(20, note_count * 5)
+
+    # Task completion: 20 pts max
+    tasks_score = round(20 * tasks_done / tasks_total) if tasks_total > 0 else 0
+
+    total = recency_score + frequency_score + notes_score + tasks_score
+
+    label = "Strong" if total >= 70 else "Good" if total >= 45 else "Weak" if total >= 20 else "Cold"
+
+    return {
+        "score": total,
+        "label": label,
+        "last_message_days": last_message_days,
+        "message_count_90d": message_count_90,
+        "note_count": note_count,
+        "tasks_total": tasks_total,
+        "tasks_done": tasks_done,
+        "components": {
+            "recency": recency_score,
+            "frequency": frequency_score,
+            "notes": notes_score,
+            "task_completion": tasks_score,
+        },
     }
 
 
