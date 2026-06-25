@@ -10,7 +10,7 @@ import type { AgentRow } from "@/lib/supabase";
 import {
   LayoutDashboard, Users, KanbanSquare, Bot, Settings,
   Zap, Inbox, CheckSquare, FolderOpen, Plug, Search,
-  PhoneCall, ChevronsUpDown, LogOut, BarChart2, X,
+  PhoneCall, ChevronsUpDown, LogOut, BarChart2, X, Activity, Target, HelpCircle,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 
@@ -46,6 +46,8 @@ interface NavItem {
   icon: React.ElementType;
   hideModes?: WorkspaceMode[];
   badge?: string;
+  /** Owner-private: only shown when the workspace is on the Life allowlist. */
+  requiresLife?: boolean;
 }
 
 interface NavGroup {
@@ -63,6 +65,8 @@ const navGroups: NavGroup[] = [
       { href: "/contacts",  label: "Contacts",  icon: Users            },
       { href: "/pipeline",  label: "Pipeline",  icon: KanbanSquare,  hideModes: ["pm"] },
       { href: "/reports",   label: "Reports",   icon: BarChart2,     hideModes: ["pm"] },
+      { href: "/activity",  label: "Activity",  icon: Activity         },
+      { href: "/life",      label: "Life",      icon: Target, requiresLife: true },
     ],
   },
   {
@@ -80,8 +84,9 @@ const navGroups: NavGroup[] = [
     id: "system",
     label: "System",
     items: [
-      { href: "/connectors", label: "Connectors", icon: Plug     },
-      { href: "/settings",   label: "Settings",   icon: Settings },
+      { href: "/connectors", label: "Connectors", icon: Plug       },
+      { href: "/help",       label: "Help",       icon: HelpCircle },
+      { href: "/settings",   label: "Settings",   icon: Settings   },
     ],
   },
 ];
@@ -97,6 +102,8 @@ interface SidebarProps {
   mode?: WorkspaceMode;
   userEmail?: string;
   userName?: string;
+  /** Owner-private: gates the Life nav item. Resolved server-side from the allowlist. */
+  lifeEnabled?: boolean;
   onSearchClick?: () => void;
   isCollapsed: boolean;
   onExpand: () => void;
@@ -110,6 +117,7 @@ export default function Sidebar({
   mode = "sales",
   userEmail = "",
   userName = "User",
+  lifeEnabled = false,
   onSearchClick,
   isCollapsed,
   onExpand,
@@ -234,7 +242,9 @@ export default function Sidebar({
       <nav className="flex-1 px-2 py-2 overflow-y-auto overflow-x-hidden" aria-label="Main navigation">
         <div className="space-y-4">
           {navGroups.map(({ id, label, items }) => {
-            const visible = items.filter((item) => !item.hideModes?.includes(mode));
+            const visible = items.filter(
+              (item) => !item.hideModes?.includes(mode) && (!item.requiresLife || lifeEnabled),
+            );
             if (visible.length === 0) return null;
 
             return (

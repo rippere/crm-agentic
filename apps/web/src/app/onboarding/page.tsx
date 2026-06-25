@@ -78,9 +78,10 @@ export default function OnboardingPage() {
         { name: workspaceName.trim(), slug, mode },
         session.access_token,
       ) as { id: string };
-      // Write workspace_id into JWT user_metadata so get_current_user picks it up on next call
-      await supabase.auth.updateUser({ data: { workspace_id: workspace.id } });
-      // Force a session refresh so the new JWT carries the updated metadata
+      // The server binds workspace_id server-side (DB row + server-only app_metadata) in
+      // POST /workspaces. We must NOT write it from the client — user_metadata is
+      // user-writable and would reopen the cross-tenant binding hole. Just refresh the
+      // session so the new JWT carries the server-set app_metadata.workspace_id.
       const { data: { session: refreshed } } = await supabase.auth.refreshSession();
       setWorkspaceId(workspace.id);
       setToken(refreshed?.access_token ?? null);

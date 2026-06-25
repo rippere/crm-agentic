@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type KeyboardEvent } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Header from "@/components/layout/Header";
@@ -18,6 +18,7 @@ import {
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
+  FileText, Send, BarChart2, History, Swords, Plus, X, Bell,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -40,8 +41,20 @@ type DealDetail = {
   expected_close: string | null;
   assigned_agent: string | null;
   notes: string | null;
+  win_loss_reason: string | null;
+  next_action: string | null;
+  next_action_date: string | null;
   created_at: string | null;
 };
+
+const OUTCOME_REASONS = [
+  { value: "price",         label: "Price" },
+  { value: "competition",   label: "Competition" },
+  { value: "timing",        label: "Timing" },
+  { value: "fit",           label: "Product Fit" },
+  { value: "champion_left", label: "Champion Left" },
+  { value: "other",         label: "Other" },
+];
 
 type TimelineEvent = {
   id: string;
@@ -60,6 +73,14 @@ type TaskRow = {
 };
 
 type EmailDraft = { subject: string; body: string };
+
+type StageHistoryEntry = {
+  stage: string;
+  label: string;
+  entered_at: string;
+  days_in_stage: number;
+  is_current: boolean;
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -126,6 +147,140 @@ function StageBadge({ stage }: { stage: string }) {
   return <Badge variant={variant} size="sm">{cfg.label}</Badge>;
 }
 
+// ─── Deal Notes Thread ─────────────────────────────────────────────────────────
+
+type DealNote = {
+  id: string;
+  workspace_id: string;
+  deal_id: string;
+  body: string;
+  author: string | null;
+  created_at: string;
+};
+
+interface DealNotesThreadProps {
+  dealId: string;
+  workspaceId: string;
+  token: string;
+}
+
+function authorInitials(author: string | null): string {
+  if (!author) return "?";
+  const parts = author.replace(/@.*/, "").replace(/[._-]+/g, " ").trim().split(/\s+/);
+  return parts.map((p) => p[0]).join("").slice(0, 2).toUpperCase() || "?";
+}
+
+function DealNotesThread({ dealId, workspaceId, token }: DealNotesThreadProps) {
+  const [notes, setNotes]     = useState<DealNote[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [draft, setDraft]     = useState("");
+  const [saving, setSaving]   = useState(false);
+  const [error, setError]     = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    apiClient
+      .getDealNotes(workspaceId, dealId, token)
+      .then((data) => { if (!cancelled) setNotes(Array.isArray(data) ? (data as DealNote[]) : []); })
+      .catch(() => { if (!cancelled) setNotes([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [workspaceId, dealId, token]);
+
+  const handleAdd = async () => {
+    const body = draft.trim();
+    if (!body || saving) return;
+    setSaving(true);
+    setError(false);
+    try {
+      const created = (await apiClient.createDealNote(workspaceId, dealId, body, token)) as DealNote;
+      setNotes((prev) => [...prev, created]);
+      setDraft("");
+    } catch {
+      setError(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      handleAdd();
+    }
+  };
+
+  return (
+    <Card className="p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <FileText className="h-4 w-4 text-zinc-500" aria-hidden />
+        <p className="text-sm font-semibold text-zinc-200">Notes</p>
+        {notes.length > 0 && (
+          <span className="ml-auto text-xs font-mono text-zinc-500">{notes.length}</span>
+        )}
+      </div>
+
+      {/* Thread */}
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2].map((i) => (
+            <div key={i} className="h-14 rounded-xl border border-zinc-800 bg-zinc-900 animate-pulse" />
+          ))}
+        </div>
+      ) : notes.length === 0 ? (
+        <p className="text-xs text-zinc-600 italic py-1">No notes yet. Add the first one below.</p>
+      ) : (
+        <div className="space-y-2.5">
+          {notes.map((note) => (
+            <div key={note.id} className="flex gap-2.5">
+              <Avatar initials={authorInitials(note.author)} size="sm" />
+              <div className="flex-1 min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-xs font-medium text-zinc-300 truncate">{note.author ?? "Unknown"}</span>
+                  <span className="text-[10px] text-zinc-600 ml-auto flex-shrink-0">{formatRelative(note.created_at)}</span>
+                </div>
+                <div
+                  className="text-xs text-zinc-400 leading-relaxed prose-notes break-words"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(note.body) }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add-note composer */}
+      <div className="space-y-2 pt-1 border-t border-zinc-800">
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          rows={3}
+          placeholder={"Add a note…  Supports **bold**, - lists. ⌘↵ to post."}
+          className="w-full rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none resize-none focus:border-indigo-500/50 transition-colors leading-relaxed font-mono mt-2"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleAdd}
+            disabled={saving || !draft.trim()}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+              saving || !draft.trim()
+                ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+                : "bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer"
+            )}
+          >
+            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+            {saving ? "Posting…" : "Add note"}
+          </button>
+          {error && <span className="text-[11px] text-rose-400">Failed to add note — try again.</span>}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function DealDetailPage() {
@@ -144,6 +299,22 @@ export default function DealDetailPage() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [probTrend, setProbTrend] = useState<{ date: string; probability: number }[]>([]);
   const [probLoading, setProbLoading] = useState(false);
+  const [timelineSummary, setTimelineSummary] = useState<{ week: string; events: number }[]>([]);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [dealHeatmap, setDealHeatmap] = useState<{ week_start: string; events: number; messages: number; notes: number; total: number }[]>([]);
+  const [heatmapLoading, setHeatmapLoading] = useState(false);
+  const [stageHistory, setStageHistory] = useState<StageHistoryEntry[]>([]);
+  const [stageHistoryLoading, setStageHistoryLoading] = useState(false);
+
+  const [competitors, setCompetitors] = useState<string[]>([]);
+  const [competitorsLoading, setCompetitorsLoading] = useState(false);
+  const [competitorInput, setCompetitorInput] = useState("");
+  const [competitorSaving, setCompetitorSaving] = useState(false);
+
+  const [nextActionText, setNextActionText] = useState("");
+  const [nextActionDate, setNextActionDate] = useState("");
+  const [nextActionSaving, setNextActionSaving] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   const [moveSaving, setMoveSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -152,6 +323,9 @@ export default function DealDetailPage() {
 
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [emailLoading, setEmailLoading] = useState(false);
+
+  const [outcomePickerOpen, setOutcomePickerOpen] = useState(false);
+  const [outcomeSaving, setOutcomeSaving] = useState(false);
 
   const optimizePoller = useJobPoller();
 
@@ -166,7 +340,7 @@ export default function DealDetailPage() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         setToken(session.access_token);
-        setWorkspaceId(session.user.user_metadata?.workspace_id ?? null);
+        setWorkspaceId((session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id) ?? null);
       }
     });
   }, []);
@@ -177,7 +351,19 @@ export default function DealDetailPage() {
     setLoading(true);
     apiClient
       .getDeal(workspaceId, dealId, token)
-      .then((data) => setDeal((data as DealDetail) ?? null))
+      .then((data) => {
+        const d = (data as DealDetail) ?? null;
+        setDeal(d);
+        if (d) {
+          setNextActionText(d.next_action ?? "");
+          setNextActionDate(d.next_action_date ?? "");
+          setBannerDismissed(
+            typeof sessionStorage !== "undefined"
+              ? sessionStorage.getItem(`na_dismissed_${dealId}`) === "1"
+              : false
+          );
+        }
+      })
       .catch(() => setDeal(null))
       .finally(() => setLoading(false));
   }, [token, workspaceId, dealId]);
@@ -201,6 +387,34 @@ export default function DealDetailPage() {
       .then((data) => setProbTrend(Array.isArray(data) ? data : []))
       .catch(() => setProbTrend([]))
       .finally(() => setProbLoading(false));
+
+    setSummaryLoading(true);
+    apiClient
+      .getDealTimelineSummary(workspaceId, dealId, token)
+      .then((data) => setTimelineSummary(Array.isArray(data) ? data : []))
+      .catch(() => setTimelineSummary([]))
+      .finally(() => setSummaryLoading(false));
+
+    setHeatmapLoading(true);
+    apiClient
+      .getDealActivityHeatmap(workspaceId, dealId, token)
+      .then((data) => setDealHeatmap(Array.isArray(data) ? data : []))
+      .catch(() => setDealHeatmap([]))
+      .finally(() => setHeatmapLoading(false));
+
+    setStageHistoryLoading(true);
+    apiClient
+      .getDealStageHistory(workspaceId, dealId, token)
+      .then((data) => setStageHistory(Array.isArray(data) ? (data as StageHistoryEntry[]) : []))
+      .catch(() => setStageHistory([]))
+      .finally(() => setStageHistoryLoading(false));
+
+    setCompetitorsLoading(true);
+    apiClient
+      .getDealCompetitors(workspaceId, dealId, token)
+      .then((data) => setCompetitors(data.competitors ?? []))
+      .catch(() => setCompetitors([]))
+      .finally(() => setCompetitorsLoading(false));
 
     if (deal.contact_id) {
       apiClient
@@ -248,6 +462,45 @@ export default function DealDetailPage() {
     } catch { /* ignore */ }
   };
 
+  const handleSetOutcome = async (reason: string) => {
+    if (!token || !workspaceId || !deal) return;
+    const outcomeStage = deal.stage === "closed_won" || deal.stage === "closed_lost"
+      ? (deal.stage as "closed_won" | "closed_lost")
+      : "closed_lost";
+    setOutcomeSaving(true);
+    try {
+      const updated = (await apiClient.setDealOutcome(workspaceId, deal.id, outcomeStage, reason, token)) as DealDetail;
+      setDeal((prev) => prev ? { ...prev, win_loss_reason: updated.win_loss_reason ?? reason } : null);
+      setOutcomePickerOpen(false);
+    } catch { /* ignore */ }
+    finally { setOutcomeSaving(false); }
+  };
+
+  const handleAddCompetitor = async (name: string) => {
+    const label = name.trim();
+    if (!label || !token || !workspaceId || competitorSaving) return;
+    if (competitors.includes(label)) { setCompetitorInput(""); return; }
+    const next = [...competitors, label];
+    setCompetitorSaving(true);
+    try {
+      const data = await apiClient.updateDealCompetitors(workspaceId, dealId, next, token);
+      setCompetitors(data.competitors ?? next);
+      setCompetitorInput("");
+    } catch { /* revert silently */ }
+    finally { setCompetitorSaving(false); }
+  };
+
+  const handleRemoveCompetitor = async (name: string) => {
+    if (!token || !workspaceId || competitorSaving) return;
+    const next = competitors.filter((c) => c !== name);
+    setCompetitorSaving(true);
+    try {
+      const data = await apiClient.updateDealCompetitors(workspaceId, dealId, next, token);
+      setCompetitors(data.competitors ?? next);
+    } catch { /* revert silently */ }
+    finally { setCompetitorSaving(false); }
+  };
+
   const handleDelete = async () => {
     if (!token || !workspaceId || deleteText !== (deal?.title ?? "")) return;
     setDeleting(true);
@@ -256,6 +509,33 @@ export default function DealDetailPage() {
       router.push("/pipeline");
     } catch { /* ignore */ }
     finally { setDeleting(false); }
+  };
+
+  const handleSaveNextAction = async () => {
+    if (!token || !workspaceId || !deal || nextActionSaving) return;
+    setNextActionSaving(true);
+    try {
+      const updated = (await apiClient.updateDeal(workspaceId, deal.id, {
+        next_action: nextActionText.trim() || null,
+        next_action_date: nextActionDate || null,
+      }, token)) as DealDetail;
+      setDeal((prev) => prev ? { ...prev, next_action: updated.next_action ?? null, next_action_date: updated.next_action_date ?? null } : null);
+      if (nextActionDate) setBannerDismissed(false);
+    } catch { /* ignore */ }
+    finally { setNextActionSaving(false); }
+  };
+
+  const handleClearNextAction = async () => {
+    if (!token || !workspaceId || !deal || nextActionSaving) return;
+    setNextActionSaving(true);
+    try {
+      await apiClient.updateDeal(workspaceId, deal.id, { next_action: null, next_action_date: null }, token);
+      setDeal((prev) => prev ? { ...prev, next_action: null, next_action_date: null } : null);
+      setNextActionText("");
+      setNextActionDate("");
+      setBannerDismissed(false);
+    } catch { /* ignore */ }
+    finally { setNextActionSaving(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -356,6 +636,46 @@ export default function DealDetailPage() {
         </Button>
       </div>
 
+      {/* ── Overdue next-action banner ── */}
+      {!isClosedStage && deal.next_action_date && !bannerDismissed && (() => {
+        const dueDate = new Date(deal.next_action_date + "T00:00:00");
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / 86400000);
+        if (daysOverdue < 0) return null;
+        return (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3">
+            <Bell className="h-4 w-4 text-amber-400 flex-shrink-0 mt-0.5" aria-hidden />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-300">
+                {daysOverdue === 0 ? "Action due today" : `Action overdue by ${daysOverdue} day${daysOverdue !== 1 ? "s" : ""}`}
+              </p>
+              {deal.next_action && (
+                <p className="text-xs text-amber-200/70 mt-0.5 truncate">{deal.next_action}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={handleClearNextAction}
+                disabled={nextActionSaving}
+                className="text-[11px] font-medium text-amber-400 hover:text-amber-200 underline underline-offset-2 transition-colors disabled:opacity-50"
+              >
+                {nextActionSaving ? <Loader2 className="h-3 w-3 animate-spin inline" /> : "Clear"}
+              </button>
+              <button
+                onClick={() => {
+                  setBannerDismissed(true);
+                  if (typeof sessionStorage !== "undefined") sessionStorage.setItem(`na_dismissed_${dealId}`, "1");
+                }}
+                aria-label="Dismiss"
+                className="text-amber-500 hover:text-amber-300 transition-colors"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── Main grid ── */}
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-6">
 
@@ -404,15 +724,70 @@ export default function DealDetailPage() {
             )}
 
             {isClosedStage && (
-              <div className={cn(
-                "rounded-xl border px-4 py-3 text-center",
-                stage === "closed_won"
-                  ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400"
-                  : "border-rose-500/20 bg-rose-500/5 text-rose-400"
-              )}>
-                <span className="text-sm font-semibold">
-                  {stage === "closed_won" ? "🏆 Closed Won" : "✗ Closed Lost"}
-                </span>
+              <div className="space-y-2">
+                <div className={cn(
+                  "rounded-xl border px-4 py-3 text-center",
+                  stage === "closed_won"
+                    ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400"
+                    : "border-rose-500/20 bg-rose-500/5 text-rose-400"
+                )}>
+                  <span className="text-sm font-semibold">
+                    {stage === "closed_won" ? "🏆 Closed Won" : "✗ Closed Lost"}
+                  </span>
+                </div>
+
+                {/* Outcome reason chip */}
+                {deal.win_loss_reason ? (
+                  <div className="flex items-center gap-2">
+                    <span className={cn(
+                      "flex-1 text-center text-xs font-mono font-medium rounded-lg px-3 py-1.5 border",
+                      stage === "closed_won"
+                        ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                        : "border-rose-500/20 bg-rose-500/10 text-rose-300"
+                    )}>
+                      {OUTCOME_REASONS.find((r) => r.value === deal.win_loss_reason)?.label ?? deal.win_loss_reason}
+                    </span>
+                    <button
+                      onClick={() => setOutcomePickerOpen((v) => !v)}
+                      className="text-[10px] text-zinc-500 hover:text-zinc-300 underline transition-colors"
+                    >
+                      change
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setOutcomePickerOpen((v) => !v)}
+                    className="w-full rounded-lg border border-dashed border-zinc-700 px-3 py-2 text-xs text-zinc-500 hover:border-zinc-500 hover:text-zinc-300 transition-all"
+                  >
+                    + Tag reason
+                  </button>
+                )}
+
+                {/* Inline reason picker */}
+                {outcomePickerOpen && (
+                  <div className="grid grid-cols-2 gap-1 pt-1">
+                    {OUTCOME_REASONS.map((r) => (
+                      <button
+                        key={r.value}
+                        onClick={() => handleSetOutcome(r.value)}
+                        disabled={outcomeSaving}
+                        className={cn(
+                          "rounded-lg border px-2 py-1.5 text-[11px] font-medium transition-all",
+                          deal.win_loss_reason === r.value
+                            ? stage === "closed_won"
+                              ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                              : "border-rose-500/40 bg-rose-500/15 text-rose-300"
+                            : "border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200",
+                          outcomeSaving && "opacity-50 cursor-not-allowed"
+                        )}
+                      >
+                        {outcomeSaving && deal.win_loss_reason === r.value
+                          ? <Loader2 className="h-3 w-3 animate-spin mx-auto" />
+                          : r.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </Card>
@@ -469,12 +844,125 @@ export default function DealDetailPage() {
             </Card>
           )}
 
-          {/* Notes */}
-          {deal.notes && (
-            <Card className="p-4 space-y-2">
-              <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Notes</p>
-              <p className="text-xs text-zinc-400 leading-relaxed">{deal.notes}</p>
+          {/* Competitors */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Swords className="h-4 w-4 text-rose-400" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-200">Competitors</p>
+              {competitors.length > 0 && (
+                <span className="ml-auto text-xs font-mono text-zinc-500">{competitors.length}</span>
+              )}
+            </div>
+
+            {competitorsLoading ? (
+              <div className="h-7 rounded-lg bg-zinc-800/50 animate-pulse" />
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {competitors.map((c) => (
+                  <span
+                    key={c}
+                    className="flex items-center gap-1 rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-0.5 text-[11px] font-medium text-rose-300"
+                  >
+                    {c}
+                    <button
+                      onClick={() => handleRemoveCompetitor(c)}
+                      disabled={competitorSaving}
+                      aria-label={`Remove ${c}`}
+                      className="ml-0.5 text-rose-400 hover:text-rose-200 disabled:opacity-40 cursor-pointer transition-colors"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+
+                {/* Inline add */}
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={competitorInput}
+                    onChange={(e) => setCompetitorInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === ",") {
+                        e.preventDefault();
+                        handleAddCompetitor(competitorInput);
+                      }
+                    }}
+                    placeholder="+ Add competitor"
+                    className="h-6 rounded-full border border-dashed border-zinc-600 bg-transparent px-2.5 text-[11px] text-zinc-400 placeholder:text-zinc-600 outline-none focus:border-rose-500/50 focus:text-zinc-200 transition-colors w-32"
+                  />
+                  {competitorInput.trim() && (
+                    <button
+                      onClick={() => handleAddCompetitor(competitorInput)}
+                      disabled={competitorSaving}
+                      className="flex-shrink-0 text-zinc-500 hover:text-rose-300 disabled:opacity-40 cursor-pointer transition-colors"
+                      aria-label="Add competitor"
+                    >
+                      {competitorSaving
+                        ? <Loader2 className="h-3 w-3 animate-spin" />
+                        : <Plus className="h-3 w-3" />}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {/* Next Action */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Bell className="h-4 w-4 text-amber-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Next Action</p>
+              </div>
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={nextActionText}
+                  onChange={(e) => setNextActionText(e.target.value)}
+                  placeholder="What needs to happen next?"
+                  className="w-full rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-amber-500/50 transition-colors"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={nextActionDate}
+                    onChange={(e) => setNextActionDate(e.target.value)}
+                    className="flex-1 rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-xs text-zinc-200 outline-none focus:border-amber-500/50 transition-colors [color-scheme:dark]"
+                  />
+                  <button
+                    onClick={handleSaveNextAction}
+                    disabled={nextActionSaving}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all flex-shrink-0",
+                      nextActionSaving
+                        ? "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+                        : "bg-amber-600 hover:bg-amber-500 text-white cursor-pointer"
+                    )}
+                  >
+                    {nextActionSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                    Save
+                  </button>
+                </div>
+                {deal.next_action && (
+                  <button
+                    onClick={handleClearNextAction}
+                    disabled={nextActionSaving}
+                    className="text-[11px] text-zinc-500 hover:text-rose-400 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  >
+                    <XCircle className="h-3 w-3" /> Clear next action
+                  </button>
+                )}
+              </div>
             </Card>
+          )}
+
+          {/* Notes thread */}
+          {token && workspaceId && (
+            <DealNotesThread
+              dealId={deal.id}
+              workspaceId={workspaceId}
+              token={token}
+            />
           )}
         </div>
 
@@ -550,7 +1038,7 @@ export default function DealDetailPage() {
                         width={36}
                       />
                       <RechartTooltip
-                        formatter={(v: number) => [`${v}%`, "Win Prob"]}
+                        formatter={(v) => [`${v ?? 0}%`, "Win Prob"]}
                         contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }}
                       />
                       <Area
@@ -570,6 +1058,174 @@ export default function DealDetailPage() {
               )}
             </Card>
           )}
+
+          {/* Activity sparkline — 12-week event intensity */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-indigo-400" />
+              <p className="text-sm font-semibold text-zinc-200">Activity (12 wks)</p>
+              <span className="ml-auto text-[10px] font-mono text-zinc-500">Events / week</span>
+            </div>
+            {summaryLoading ? (
+              <div className="h-16 rounded-xl bg-zinc-800/50 animate-pulse" />
+            ) : timelineSummary.length > 0 ? (
+              <div className="h-16">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={timelineSummary} margin={{ top: 2, right: 2, bottom: 0, left: -32 }}>
+                    <defs>
+                      <linearGradient id="activityGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#6366F1" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#6366F1" stopOpacity={0}   />
+                      </linearGradient>
+                    </defs>
+                    <XAxis
+                      dataKey="week"
+                      tick={{ fill: "#71717A", fontSize: 8 }}
+                      axisLine={false}
+                      tickLine={false}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis hide domain={[0, "auto"]} />
+                    <RechartTooltip
+                      formatter={(v) => [`${v ?? 0}`, "Events"]}
+                      contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="events"
+                      stroke="#6366F1"
+                      strokeWidth={1.5}
+                      fill="url(#activityGrad)"
+                      dot={false}
+                      activeDot={{ r: 3, fill: "#6366F1" }}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-500 text-center py-3">No activity data yet.</p>
+            )}
+          </Card>
+
+          {/* 12-Week Activity Heatmap */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-indigo-400" />
+              <p className="text-sm font-semibold text-zinc-200">12-Week Heatmap</p>
+            </div>
+            {heatmapLoading ? (
+              <div className="flex gap-1">
+                {Array.from({ length: 12 }).map((_, i) => (
+                  <div key={i} className="flex-1 h-8 rounded bg-zinc-800 animate-pulse" />
+                ))}
+              </div>
+            ) : dealHeatmap.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-4 text-center">
+                <BarChart2 className="h-6 w-6 text-zinc-700" />
+                <p className="text-xs text-zinc-500">No activity data.</p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="flex gap-1">
+                  {dealHeatmap.map((w) => {
+                    const bg =
+                      w.total === 0 ? "bg-zinc-800" :
+                      w.total === 1 ? "bg-indigo-900" :
+                      w.total <= 3 ? "bg-indigo-700" :
+                      w.total <= 5 ? "bg-indigo-500" : "bg-indigo-400";
+                    return (
+                      <div
+                        key={w.week_start}
+                        title={`${w.week_start}: ${w.total} event${w.total !== 1 ? "s" : ""} (${w.events} activity, ${w.messages} msg, ${w.notes} note${w.notes !== 1 ? "s" : ""})`}
+                        className={cn("flex-1 h-8 rounded cursor-default transition-opacity hover:opacity-75", bg)}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[10px] text-zinc-600">{dealHeatmap[0]?.week_start}</span>
+                  <span className="text-[10px] text-zinc-600">This week</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-zinc-500">Less</span>
+                  {(["bg-zinc-800", "bg-indigo-900", "bg-indigo-700", "bg-indigo-500", "bg-indigo-400"] as const).map((c, i) => (
+                    <span key={i} className={cn("h-3 w-3 rounded-sm", c)} />
+                  ))}
+                  <span className="text-[10px] text-zinc-500">More</span>
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {/* Stage History */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4 text-indigo-400" />
+              <p className="text-sm font-semibold text-zinc-200">Stage History</p>
+              {stageHistory.length > 0 && (
+                <span className="ml-auto text-[10px] font-mono text-zinc-500">
+                  {stageHistory.length} stage{stageHistory.length !== 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+            {stageHistoryLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-10 rounded-xl bg-zinc-800/50 animate-pulse" />
+                ))}
+              </div>
+            ) : stageHistory.length === 0 ? (
+              <p className="text-xs text-zinc-500 text-center py-3">No stage history available.</p>
+            ) : (
+              <div className="relative">
+                {stageHistory.map((entry, i) => {
+                  const cfg = stageConfig[entry.stage as DealStage] ?? {
+                    label: entry.label, color: "text-zinc-400", bg: "bg-zinc-700/50",
+                  };
+                  return (
+                    <div key={i} className="flex gap-3">
+                      <div className="flex flex-col items-center flex-shrink-0">
+                        <span className={cn(
+                          "mt-1 h-2.5 w-2.5 rounded-full border-2 flex-shrink-0",
+                          entry.is_current
+                            ? "border-indigo-400 bg-indigo-400"
+                            : "border-zinc-600 bg-zinc-800"
+                        )} />
+                        {i < stageHistory.length - 1 && (
+                          <span className="flex-1 w-px bg-zinc-800 mt-1" />
+                        )}
+                      </div>
+                      <div className="pb-3 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={cn(
+                            "text-xs font-medium",
+                            entry.is_current ? cfg.color : "text-zinc-400"
+                          )}>
+                            {entry.label}
+                          </span>
+                          {entry.is_current && (
+                            <span className="text-[10px] font-mono bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded">
+                              current
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 mt-0.5">
+                          <span className="text-[11px] text-zinc-500">
+                            {new Date(entry.entered_at).toLocaleDateString("en-US", {
+                              month: "short", day: "numeric", year: "numeric",
+                            })}
+                          </span>
+                          <span className="text-[11px] font-mono text-zinc-600">
+                            {entry.days_in_stage === 0 ? "< 1d" : `${entry.days_in_stage}d`}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
 
           {/* Tasks */}
           <Card className="p-4 space-y-3">

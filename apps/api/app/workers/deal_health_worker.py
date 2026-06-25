@@ -19,6 +19,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
+from app.database import PGBOUNCER_CONNECT_ARGS
+
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,7 @@ def _make_session() -> async_sessionmaker[AsyncSession]:
     if not url:
         url = os.getenv("SUPABASE_URL", "").replace("postgres://", "postgresql+asyncpg://", 1)
     return async_sessionmaker(
-        create_async_engine(url, echo=False),
+        create_async_engine(url, echo=False, connect_args=PGBOUNCER_CONNECT_ARGS),
         class_=AsyncSession,
         expire_on_commit=False,
     )
@@ -41,6 +43,16 @@ _NEXT_BEST_ACTION: dict[str, str] = {
     "proposal": "Follow up on proposal — ask for feedback and objections",
     "negotiation": "Re-engage with a concession or alternative pricing",
 }
+
+
+async def _enumerate_workspace_ids() -> list[str]:
+    """Return every workspace id in the DB as a string (sync-land safe)."""
+    from app.models.workspace import Workspace
+
+    factory = _make_session()
+    async with factory() as db:
+        result = await db.execute(select(Workspace.id))
+        return [str(ws_id) for ws_id in result.scalars().all()]
 
 
 async def _run(workspace_id: str) -> dict[str, Any]:
@@ -112,3 +124,16 @@ async def _run(workspace_id: str) -> dict[str, Any]:
 def compute_deal_health(self: Any, workspace_id: str) -> dict[str, Any]:
     """Compute and persist health scores for all active deals in a workspace."""
     return asyncio.get_event_loop().run_until_complete(_run(workspace_id))
+
+
+@celery_app.task(name="app.workers.deal_health_worker.compute_deal_health_all", bind=True)
+def compute_deal_health_all(self: Any) -> dict[str, Any]:
+    """Beat dispatcher: fan compute_deal_health out across every workspace.
+
+    compute_deal_health requires a workspace_id, which celery beat cannot supply.
+    This no-arg task enumerates all workspaces and enqueues one child task each.
+    """
+    workspace_ids = asyncio.get_event_loop().run_until_complete(_enumerate_workspace_ids())
+    for ws_id in workspace_ids:
+        compute_deal_health.delay(str(ws_id))
+    return {"dispatched": len(workspace_ids), "workspace_ids": workspace_ids}

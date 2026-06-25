@@ -295,3 +295,21 @@ async def test_slack_events_bad_signature_returns_401(app_client):
         )
 
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_slack_events_no_secret_configured_rejects(app_client):
+    """Fail closed: with SLACK_SIGNING_SECRET unset, the events webhook rejects every
+    request. (An unauthenticated event_callback would otherwise trigger a Slack sync
+    for any team_id — a zero-credential amplification vector.)"""
+    fastapi_app, mock_db, _ = app_client
+
+    with patch("app.routers.slack.settings") as mock_settings:
+        mock_settings.SLACK_SIGNING_SECRET = ""
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/webhooks/slack/events",
+                json={"type": "event_callback", "team_id": "T0TESTTEAM", "event": {"type": "message"}},
+            )
+
+    assert resp.status_code == 401

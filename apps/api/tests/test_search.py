@@ -193,3 +193,85 @@ async def test_trigger_embed_all_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/contacts/embed-all")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/search  (global search)
+# ---------------------------------------------------------------------------
+
+
+def _fake_deal(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
+    d = MagicMock()
+    d.id = uuid.uuid4()
+    d.workspace_id = workspace_id
+    d.title = kwargs.get("title", "Acme Deal")
+    d.company = kwargs.get("company", "Acme")
+    d.value = kwargs.get("value", 50000.0)
+    d.stage = kwargs.get("stage", "proposal")
+    return d
+
+
+def _fake_task(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
+    t = MagicMock()
+    t.id = uuid.uuid4()
+    t.workspace_id = workspace_id
+    t.title = kwargs.get("title", "Follow up")
+    t.status = kwargs.get("status", "open")
+    t.due_date = None
+    t.contact_id = None
+    return t
+
+
+@pytest.mark.asyncio
+async def test_global_search_returns_grouped_results(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id, name="Alice Smith")
+    deal = _fake_deal(workspace_id, title="Alice Corp Deal")
+    task = _fake_task(workspace_id, title="Follow up with Alice")
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalars_result([contact]),
+        _make_scalars_result([deal]),
+        _make_scalars_result([task]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/search?q=alice")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["contacts"]) == 1
+    assert body["contacts"][0]["name"] == "Alice Smith"
+    assert len(body["deals"]) == 1
+    assert body["deals"][0]["title"] == "Alice Corp Deal"
+    assert len(body["tasks"]) == 1
+    assert body["tasks"][0]["title"] == "Follow up with Alice"
+
+
+@pytest.mark.asyncio
+async def test_global_search_empty_results(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalars_result([]),
+        _make_scalars_result([]),
+        _make_scalars_result([]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/search?q=zzznomatch")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"contacts": [], "deals": [], "tasks": []}
+
+
+@pytest.mark.asyncio
+async def test_global_search_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/search?q=test")
+
+    assert resp.status_code == 403

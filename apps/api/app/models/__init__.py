@@ -10,6 +10,10 @@ from app.models.task import Task
 from app.models.metric_template import MetricTemplate
 from app.models.clarity_score import ClarityScore
 from app.models.project import Project
+from app.models.kpi_snapshot import KpiSnapshot
+from app.models.commitment import Commitment
+from app.models.deal_note import DealNote
+from app.models.contact_note import ContactNote
 
 __all__ = [
     "Workspace",
@@ -24,4 +28,8 @@ __all__ = [
     "MetricTemplate",
     "ClarityScore",
     "Project",
+    "KpiSnapshot",
+    "Commitment",
+    "DealNote",
+    "ContactNote",
 ]

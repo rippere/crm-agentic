@@ -4,10 +4,11 @@ Streams new activity_events rows as they arrive, polling every 3 seconds.
 """
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, desc
@@ -18,7 +19,14 @@ from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.activity_event import ActivityEvent
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# Tear the SSE stream down after this many *consecutive* poll failures so a wedged
+# DB session (e.g. asyncpg connection killed by PgBouncer) can't loop forever
+# emitting heartbeats while every query silently fails.
+_MAX_CONSECUTIVE_ERRORS = 5
 
 
 class ActivityEventResponse(BaseModel):
@@ -46,18 +54,26 @@ class ActivityEventCreate(BaseModel):
 async def list_activity(
     workspace_id: uuid.UUID,
     limit: int = 50,
+    offset: int = 0,
+    event_type: str | None = Query(default=None),
+    agent_id: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ActivityEventResponse]:
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    result = await db.execute(
+    q = (
         select(ActivityEvent)
         .where(ActivityEvent.workspace_id == workspace_id)
-        .order_by(desc(ActivityEvent.created_at))
-        .limit(limit)
     )
+    if event_type:
+        q = q.where(ActivityEvent.type == event_type)
+    if agent_id:
+        q = q.where(ActivityEvent.meta.like(f"%{agent_id}%"))
+
+    q = q.order_by(desc(ActivityEvent.created_at)).offset(offset).limit(limit)
+    result = await db.execute(q)
     return [ActivityEventResponse.model_validate(e) for e in result.scalars().all()]
 
 
@@ -121,6 +137,7 @@ async def stream_events(
 
     async def generate():
         nonlocal last_ts
+        consecutive_errors = 0
         yield ": connected\n\n"
         while not await request.is_disconnected():
             await asyncio.sleep(3)
@@ -139,7 +156,29 @@ async def stream_events(
                     yield _serialize(ev)
                     if ev.created_at > last_ts:
                         last_ts = ev.created_at
-            except Exception:
+                consecutive_errors = 0
+            except Exception as exc:  # noqa: BLE001
+                # Roll back so a failed statement doesn't leave the session in a
+                # broken "transaction aborted" state where every subsequent poll
+                # also fails. Log it (was previously swallowed silently), and bail
+                # out after N consecutive failures instead of heartbeating forever.
+                consecutive_errors += 1
+                try:
+                    await db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                logger.warning(
+                    "event=sse_poll_failed workspace=%s consecutive_errors=%d error=%s",
+                    workspace_id, consecutive_errors, exc,
+                )
+                if consecutive_errors >= _MAX_CONSECUTIVE_ERRORS:
+                    logger.error(
+                        "event=sse_stream_aborted workspace=%s consecutive_errors=%d "
+                        "detail=closing_stream_after_repeated_poll_failures",
+                        workspace_id, consecutive_errors,
+                    )
+                    yield ": stream-error\n\n"
+                    break
                 yield ": heartbeat\n\n"
 
     return StreamingResponse(

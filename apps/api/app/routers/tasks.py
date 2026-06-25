@@ -20,6 +20,7 @@ class TaskResponse(BaseModel):
     external_id: str | None = None
     message_id: uuid.UUID | None
     contact_id: uuid.UUID | None
+    deal_id: uuid.UUID | None = None
     project_id: uuid.UUID | None
     title: str
     description: str
@@ -55,6 +56,7 @@ def _to_response(t: Task) -> TaskResponse:
         external_id=t.external_id,
         message_id=t.message_id,
         contact_id=t.contact_id,
+        deal_id=t.deal_id,
         project_id=t.project_id,
         title=t.title,
         description=t.description,
@@ -69,6 +71,8 @@ async def list_tasks(
     workspace_id: uuid.UUID,
     project_id: uuid.UUID | None = Query(default=None),
     contact_id: uuid.UUID | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[TaskResponse]:
@@ -80,7 +84,8 @@ async def list_tasks(
         q = q.where(Task.project_id == project_id)
     if contact_id is not None:
         q = q.where(Task.contact_id == contact_id)
-    result = await db.execute(q.order_by(Task.created_at.desc()))
+    q = q.order_by(Task.created_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(q)
     return [_to_response(t) for t in result.scalars().all()]
 
 
@@ -116,6 +121,8 @@ class TaskUpsert(BaseModel):
     status: str = "open"
     due_date: date | None = None
     project_id: uuid.UUID | None = None
+    contact_id: uuid.UUID | None = None
+    deal_id: uuid.UUID | None = None
 
 
 @router.put("/workspaces/{workspace_id}/tasks/by-external/{external_id}", response_model=TaskResponse)
@@ -147,6 +154,8 @@ async def upsert_task_by_external(
             status=body.status,
             due_date=body.due_date,
             project_id=body.project_id,
+            contact_id=body.contact_id,
+            deal_id=body.deal_id,
         )
         db.add(task)
     else:
@@ -155,6 +164,8 @@ async def upsert_task_by_external(
         task.status = body.status  # type: ignore[assignment]
         task.due_date = body.due_date  # type: ignore[assignment]
         task.project_id = body.project_id  # type: ignore[assignment]
+        task.contact_id = body.contact_id  # type: ignore[assignment]
+        task.deal_id = body.deal_id  # type: ignore[assignment]
 
     await db.commit()
     await db.refresh(task)

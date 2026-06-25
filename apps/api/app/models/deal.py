@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 
-from sqlalchemy import String, DateTime, ForeignKey, Numeric, Integer, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String, DateTime, Date, ForeignKey, Numeric, Integer, func
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -24,6 +24,10 @@ class Deal(Base):
     assigned_agent: Mapped[str | None] = mapped_column(String, nullable=True)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
     health_score: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    win_loss_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    next_action: Mapped[str | None] = mapped_column(String, nullable=True)
+    next_action_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    competitors: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     stage_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

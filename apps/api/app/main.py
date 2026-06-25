@@ -14,7 +14,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.limiter import limiter
-from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects
+from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments, webhook_logs
 
 # ── Structured logging (JSON-like key=value to stdout) ───────────────────────
 _LOG_CONFIG: dict = {
@@ -58,6 +58,14 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "event=startup_check check=slack_signing_secret status=missing "
             "detail=POST_/slack/interactions_will_reject_all_requests_until_set"
+        )
+    # Gmail Pub/Sub push verification also fails closed when GMAIL_WEBHOOK_SECRET
+    # is unset (POST /webhooks/gmail/push will 403 every request). Warn loudly so a
+    # missing secret is visible rather than silently disabling Gmail push-sync.
+    if not settings.GMAIL_WEBHOOK_SECRET:
+        logger.warning(
+            "event=startup_check check=gmail_webhook_secret status=missing "
+            "detail=POST_/webhooks/gmail/push_will_reject_all_requests_until_set"
         )
     yield
     logger.info("event=shutdown")
@@ -131,6 +139,9 @@ app.include_router(events.router, tags=["events"])
 app.include_router(slack_interactions.router, tags=["slack"])
 app.include_router(mcp_server.router, tags=["mcp"])
 app.include_router(projects.router, tags=["projects"])
+app.include_router(kpi.router, tags=["kpi"])
+app.include_router(commitments.router, tags=["commitments"])
+app.include_router(webhook_logs.router, tags=["webhooks"])
 
 
 @app.get("/health")

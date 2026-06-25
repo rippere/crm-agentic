@@ -21,6 +21,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
+from app.database import PGBOUNCER_CONNECT_ARGS
+
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -36,7 +38,7 @@ def _get_async_session() -> async_sessionmaker[AsyncSession]:
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    engine = create_async_engine(url, echo=False)
+    engine = create_async_engine(url, echo=False, connect_args=PGBOUNCER_CONNECT_ARGS)
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -195,7 +197,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 received_at = datetime.fromtimestamp(float(ts), tz=timezone.utc)
                 subject = f"Slack {'DM' if is_dm else f'#{channel_name}'}"
 
-                contact_id = await _link_contact(db, workspace_id, sender_email)
+                contact_id = await _link_contact(db, workspace_id, sender_email, auto_create=True)
 
                 message = Message(
                     workspace_id=workspace_id,

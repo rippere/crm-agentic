@@ -1,14 +1,17 @@
 import csv
+import difflib
 import io
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import anthropic as _anthropic
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from typing import Literal
+
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import or_, select, insert
+from sqlalchemy import or_, select, insert, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -17,6 +20,7 @@ from app.dependencies import get_current_user
 from app.limiter import limiter
 from app.models.user import User
 from app.models.contact import Contact
+from app.models.contact_note import ContactNote
 from app.models.activity_event import ActivityEvent
 from app.services.supabase_rest import get_row
 
@@ -38,6 +42,7 @@ class ContactResponse(BaseModel):
     deal_count: int
     last_activity: str
     created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -48,6 +53,22 @@ class CreateContactRequest(BaseModel):
     company: str | None = None
     role: str | None = None
     status: str = "lead"
+
+
+class ContactNoteResponse(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    contact_id: uuid.UUID
+    body: str
+    author: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CreateContactNoteRequest(BaseModel):
+    body: str
+    author: str | None = None
 
 
 @router.post("/workspaces/{workspace_id}/contacts", response_model=ContactResponse, status_code=201)
@@ -98,6 +119,8 @@ async def list_contacts(
     workspace_id: uuid.UUID,
     contact_status: str | None = Query(default=None, alias="status"),
     q: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ContactResponse]:
@@ -114,6 +137,7 @@ async def list_contacts(
             Contact.email.ilike(pattern),
             Contact.company.ilike(pattern),
         ))
+    stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
     contacts = result.scalars().all()
     return [ContactResponse.model_validate(c) for c in contacts]
@@ -222,6 +246,68 @@ async def import_contacts_csv(
     return {"imported": imported, "skipped": skipped, "errors": errors}
 
 
+# ─── Duplicate-candidate detection ─────────────────────────────────────────────
+
+class DuplicateCandidatePair(BaseModel):
+    contact_a: ContactResponse
+    contact_b: ContactResponse
+    similarity_score: float
+    reason: str
+
+
+@router.get("/workspaces/{workspace_id}/contacts/duplicate-candidates")
+async def get_duplicate_candidates(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return pairs of contacts that are likely duplicates based on name similarity and email domain."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact)
+        .where(Contact.workspace_id == workspace_id)
+        .limit(300)
+    )
+    contacts = result.scalars().all()
+
+    pairs: list[dict] = []
+    for i in range(len(contacts)):
+        for j in range(i + 1, len(contacts)):
+            a, b = contacts[i], contacts[j]
+            name_a = (a.name or "").lower().strip()
+            name_b = (b.name or "").lower().strip()
+            if not name_a or not name_b:
+                continue
+
+            name_sim = difflib.SequenceMatcher(None, name_a, name_b).ratio()
+
+            domain_a = a.email.split("@")[1].lower() if a.email and "@" in a.email else ""
+            domain_b = b.email.split("@")[1].lower() if b.email and "@" in b.email else ""
+            same_domain = bool(domain_a and domain_a == domain_b)
+
+            score = round(name_sim * 0.7 + (0.3 if same_domain else 0.0), 3)
+            if score < 0.65:
+                continue
+
+            reasons: list[str] = []
+            if name_sim >= 0.8:
+                reasons.append("similar name")
+            if same_domain:
+                reasons.append("same email domain")
+
+            pairs.append({
+                "contact_a": ContactResponse.model_validate(a),
+                "contact_b": ContactResponse.model_validate(b),
+                "similarity_score": score,
+                "reason": " + ".join(reasons) if reasons else "similar profile",
+            })
+
+    pairs.sort(key=lambda x: x["similarity_score"], reverse=True)
+    return {"pairs": pairs[:20]}
+
+
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/score", status_code=status.HTTP_200_OK)
 async def score_contact(
     workspace_id: uuid.UUID,
@@ -242,7 +328,9 @@ async def score_contact(
 
     # Import here to avoid circular-import at module load time
     from app.workers.score_contact import score_lead  # noqa: PLC0415
+    from app.routers.agents import _mark_job_dispatched
     task = score_lead.delay(str(contact_id), str(workspace_id))
+    _mark_job_dispatched(task.id, str(workspace_id))
 
     return {"status": "queued", "contact_id": str(contact_id), "job_id": task.id}
 
@@ -252,12 +340,18 @@ class EmailDraftResponse(BaseModel):
     body: str
 
 
+class ComposeEmailRequest(BaseModel):
+    tone: str | None = None
+    deal_id: uuid.UUID | None = None
+
+
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/compose", response_model=EmailDraftResponse)
 @limiter.limit("10/minute")
 async def compose_email(
     request: Request,
     workspace_id: uuid.UUID,
     contact_id: uuid.UUID,
+    body: ComposeEmailRequest = Body(default=ComposeEmailRequest()),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> EmailDraftResponse:
@@ -292,10 +386,30 @@ async def compose_email(
         contact_tags = contact_orm.semantic_tags or []
         contact_revenue = contact_orm.revenue
 
+    # Optionally ground the draft in a specific deal
+    deal_context = ""
+    if body.deal_id is not None:
+        from app.models.deal import Deal
+
+        deal_result = await db.execute(
+            select(Deal).where(Deal.id == body.deal_id, Deal.workspace_id == workspace_id)
+        )
+        deal = deal_result.scalar_one_or_none()
+        if deal is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+        deal_context = (
+            f"Related deal: {deal.title or 'Untitled'}\n"
+            f"Deal stage: {deal.stage}\n"
+            f"Deal value: ${float(deal.value or 0):,.0f}\n"
+            f"Win probability: {deal.ml_win_probability}%\n"
+        )
+
     system_prompt = (
         "You are a sales professional. Write a personalized outreach email for the following contact. "
         'Return JSON only: {"subject": "<subject line>", "body": "<email body>"}'
     )
+    if body.tone:
+        system_prompt += f" Write the email in a {body.tone} tone."
     user_content = (
         f"Contact name: {contact_name}\n"
         f"Company: {contact_company}\n"
@@ -303,6 +417,7 @@ async def compose_email(
         f"Status: {contact_status}\n"
         f"Semantic tags: {json.dumps(contact_tags)}\n"
         f"Revenue: {contact_revenue}\n"
+        f"{deal_context}"
     )
 
     client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -353,7 +468,9 @@ async def enrich_contact_endpoint(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
     from app.workers.enrich_contact import enrich_contact
+    from app.routers.agents import _mark_job_dispatched
     task = enrich_contact.delay(str(contact_id))
+    _mark_job_dispatched(task.id, str(workspace_id))
     return {"status": "queued", "contact_id": str(contact_id), "job_id": task.id}
 
 
@@ -423,6 +540,52 @@ async def update_contact(
         type="contact_updated",
         agent_name="System",
         description=f"Contact updated: {contact.name}",
+        severity="info",
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(contact)
+
+    return ContactResponse.model_validate(contact)
+
+
+class UpdateTagsRequest(BaseModel):
+    tags: list[dict]
+
+
+@router.put("/workspaces/{workspace_id}/contacts/{contact_id}/tags", response_model=ContactResponse)
+async def update_contact_tags(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    body: UpdateTagsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ContactResponse:
+    """Replace the semantic_tags list on a contact."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    for tag in body.tags:
+        if "label" not in tag:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Each tag must have a 'label' field",
+            )
+
+    contact.semantic_tags = body.tags
+    db.add(contact)
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="contact_updated",
+        agent_name="System",
+        description=f"Tags updated for contact: {contact.name}",
         severity="info",
     )
     db.add(event)
@@ -748,3 +911,527 @@ async def pre_meeting_brief(
         "contact_name": contact.name,
         "brief": brief_text,
     }
+
+
+class BulkContactRequest(BaseModel):
+    action: Literal["delete"]
+    contact_ids: list[uuid.UUID]
+
+
+class BulkContactResponse(BaseModel):
+    action: str
+    deleted: int
+    contact_ids: list[str]
+
+
+@router.post("/workspaces/{workspace_id}/contacts/bulk", response_model=BulkContactResponse)
+async def bulk_contact_action(
+    workspace_id: uuid.UUID,
+    body: BulkContactRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BulkContactResponse:
+    """Bulk delete contacts (max 100 at a time)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if not body.contact_ids:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="contact_ids must not be empty")
+
+    if len(body.contact_ids) > 100:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Maximum 100 contacts per bulk operation")
+
+    result = await db.execute(
+        select(Contact).where(
+            Contact.workspace_id == workspace_id,
+            Contact.id.in_(body.contact_ids),
+        )
+    )
+    contacts = result.scalars().all()
+
+    if not contacts:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No matching contacts found")
+
+    deleted_ids = [str(c.id) for c in contacts]
+    names = [c.name or str(c.id) for c in contacts]
+
+    for contact in contacts:
+        await db.delete(contact)
+
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="contact_deleted",
+        agent_name="System",
+        description=f"Bulk deleted {len(contacts)} contact(s): {', '.join(names[:3])}" + ("…" if len(names) > 3 else ""),
+        severity="warning",
+    )
+    db.add(event)
+    await db.commit()
+
+    return BulkContactResponse(action="delete", deleted=len(contacts), contact_ids=deleted_ids)
+
+
+# ─── Contact merge ─────────────────────────────────────────────────────────────
+
+class MergeContactRequest(BaseModel):
+    primary_id: uuid.UUID
+    duplicate_id: uuid.UUID
+
+
+class MergeContactResponse(BaseModel):
+    primary_id: str
+    duplicate_id: str
+    tasks_reassigned: int
+    messages_reassigned: int
+    deals_reassigned: int
+
+
+@router.post("/workspaces/{workspace_id}/contacts/merge", response_model=MergeContactResponse)
+async def merge_contacts(
+    workspace_id: uuid.UUID,
+    body: MergeContactRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> MergeContactResponse:
+    """Merge duplicate into primary: reassign tasks/messages/deals, then delete duplicate."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if body.primary_id == body.duplicate_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="primary_id and duplicate_id must differ")
+
+    # Verify both contacts exist in this workspace
+    result = await db.execute(
+        select(Contact).where(
+            Contact.workspace_id == workspace_id,
+            Contact.id.in_([body.primary_id, body.duplicate_id]),
+        )
+    )
+    contacts = {c.id: c for c in result.scalars().all()}
+    if body.primary_id not in contacts:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="primary contact not found")
+    if body.duplicate_id not in contacts:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="duplicate contact not found")
+
+    from app.models.task import Task
+    from app.models.message import Message
+    from app.models.deal import Deal
+
+    # Reassign tasks
+    task_result = await db.execute(
+        update(Task)
+        .where(Task.workspace_id == workspace_id, Task.contact_id == body.duplicate_id)
+        .values(contact_id=body.primary_id)
+    )
+    tasks_updated: int = task_result.rowcount or 0
+
+    # Reassign messages
+    msg_result = await db.execute(
+        update(Message)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == body.duplicate_id)
+        .values(contact_id=body.primary_id)
+    )
+    messages_updated: int = msg_result.rowcount or 0
+
+    # Reassign deals
+    deal_result = await db.execute(
+        update(Deal)
+        .where(Deal.workspace_id == workspace_id, Deal.contact_id == body.duplicate_id)
+        .values(contact_id=body.primary_id)
+    )
+    deals_updated: int = deal_result.rowcount or 0
+
+    # Delete the duplicate
+    duplicate = contacts[body.duplicate_id]
+    duplicate_name = duplicate.name or str(body.duplicate_id)
+    primary_name   = contacts[body.primary_id].name or str(body.primary_id)
+    await db.delete(duplicate)
+
+    event = ActivityEvent(
+        workspace_id=workspace_id,
+        type="contact_deleted",
+        agent_name="System",
+        description=(
+            f"Merged '{duplicate_name}' into '{primary_name}' — "
+            f"{tasks_updated} task(s), {messages_updated} message(s), "
+            f"{deals_updated} deal(s) reassigned"
+        ),
+        severity="info",
+    )
+    db.add(event)
+    await db.commit()
+
+    return MergeContactResponse(
+        primary_id=str(body.primary_id),
+        duplicate_id=str(body.duplicate_id),
+        tasks_reassigned=tasks_updated,
+        messages_reassigned=messages_updated,
+        deals_reassigned=deals_updated,
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/contacts/{contact_id}/notes",
+    response_model=list[ContactNoteResponse],
+)
+async def list_contact_notes(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ContactNoteResponse]:
+    """Return all notes for a contact, oldest-first (chronological thread)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    result = await db.execute(
+        select(ContactNote)
+        .where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+        )
+        .order_by(ContactNote.created_at.asc())
+    )
+    notes = result.scalars().all()
+    return [ContactNoteResponse.model_validate(n) for n in notes]
+
+
+@router.post(
+    "/workspaces/{workspace_id}/contacts/{contact_id}/notes",
+    response_model=ContactNoteResponse,
+    status_code=201,
+)
+async def create_contact_note(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    body: CreateContactNoteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ContactNoteResponse:
+    """Append a note to a contact. Notes are immutable once created."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    text = (body.body or "").strip()
+    if not text:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Note body must not be empty",
+        )
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    note = ContactNote(
+        workspace_id=workspace_id,
+        contact_id=contact_id,
+        body=text,
+        author=body.author or getattr(current_user, "email", None),
+    )
+    db.add(note)
+    await db.commit()
+    await db.refresh(note)
+    return ContactNoteResponse.model_validate(note)
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/activity-heatmap")
+async def contact_activity_heatmap(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return weekly message + note counts for the last 12 weeks (Mon–Sun buckets)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+
+    today = datetime.utcnow().date()
+    this_monday = today - timedelta(days=today.weekday())
+    # Oldest-first list of 12 week-start dates
+    week_starts = [this_monday - timedelta(weeks=i) for i in range(11, -1, -1)]
+    cutoff = datetime.combine(week_starts[0], datetime.min.time())
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= cutoff,
+        )
+    )
+    messages = msg_result.scalars().all()
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+            ContactNote.created_at >= cutoff,
+        )
+    )
+    notes = note_result.scalars().all()
+
+    output = []
+    for ws in week_starts:
+        we = ws + timedelta(weeks=1)
+        ws_dt = datetime.combine(ws, datetime.min.time())
+        we_dt = datetime.combine(we, datetime.min.time())
+        msgs = sum(1 for m in messages if m.received_at and ws_dt <= m.received_at < we_dt)
+        nts = sum(1 for n in notes if n.created_at and ws_dt <= n.created_at < we_dt)
+        output.append({
+            "week_start": ws.isoformat(),
+            "messages": msgs,
+            "notes": nts,
+            "total": msgs + nts,
+        })
+
+    return output
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/engagement-score")
+async def contact_engagement_score(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Compute a 0–100 engagement score from messages, notes, and task completion (last 90 days)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+    from app.models.task import Task
+
+    cutoff = datetime.utcnow() - timedelta(days=90)
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= cutoff,
+        )
+    )
+    message_count = len(msg_result.scalars().all())
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+            ContactNote.created_at >= cutoff,
+        )
+    )
+    note_count = len(note_result.scalars().all())
+
+    task_result = await db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.created_at >= cutoff,
+        )
+    )
+    tasks = task_result.scalars().all()
+    tasks_total = len(tasks)
+    tasks_done = sum(1 for t in tasks if t.status == "done")
+
+    messages_score = min(40, message_count * 8)
+    notes_score = min(30, note_count * 10)
+    tasks_score = round(30 * tasks_done / tasks_total) if tasks_total > 0 else 0
+    total_score = messages_score + notes_score + tasks_score
+
+    return {
+        "score": total_score,
+        "message_count": message_count,
+        "note_count": note_count,
+        "tasks_total": tasks_total,
+        "tasks_done": tasks_done,
+        "components": {
+            "messages": messages_score,
+            "notes": notes_score,
+            "tasks": tasks_score,
+        },
+    }
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/deal-summary")
+async def contact_deal_summary(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Aggregate deal value metrics for a contact: pipeline value, closed-won, win rate, avg size."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from app.models.deal import Deal
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.workspace_id == workspace_id, Deal.contact_id == contact_id)
+    )
+    deals = deal_result.scalars().all()
+
+    CLOSED = {"closed_won", "closed_lost"}
+    pipeline_value = sum(float(d.value or 0) for d in deals if d.stage not in CLOSED)
+    closed_won_value = sum(float(d.value or 0) for d in deals if d.stage == "closed_won")
+    open_deal_count = sum(1 for d in deals if d.stage not in CLOSED)
+    won_count = sum(1 for d in deals if d.stage == "closed_won")
+    lost_count = sum(1 for d in deals if d.stage == "closed_lost")
+    total_closed = won_count + lost_count
+    win_rate = round(won_count / total_closed * 100) if total_closed > 0 else None
+    avg_deal_size = round(sum(float(d.value or 0) for d in deals) / len(deals)) if deals else None
+
+    return {
+        "total_pipeline_value": pipeline_value,
+        "closed_won_value": closed_won_value,
+        "open_deal_count": open_deal_count,
+        "win_rate": win_rate,
+        "avg_deal_size": avg_deal_size,
+        "total_deals": len(deals),
+    }
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/timeline/export")
+async def export_contact_timeline(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Export a contact's full timeline as a CSV file."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+    from app.models.call_summary import CallSummary
+    from app.models.deal import Deal
+
+    rows: list[dict] = []
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+        )
+    )
+    for m in msg_result.scalars().all():
+        ts = m.received_at or m.created_at
+        rows.append({
+            "date": ts.isoformat() if ts else "",
+            "type": "message",
+            "title": m.subject or "(No subject)",
+            "description": (m.body_plain or "")[:300],
+            "severity": "",
+        })
+
+    call_result = await db.execute(
+        select(CallSummary).where(
+            CallSummary.workspace_id == workspace_id,
+            CallSummary.contact_id == contact_id,
+        )
+    )
+    for c in call_result.scalars().all():
+        rows.append({
+            "date": c.call_date.isoformat() if c.call_date else "",
+            "type": "call",
+            "title": c.title or "(No title)",
+            "description": (c.summary or "")[:300],
+            "severity": "",
+        })
+
+    deal_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+        )
+    )
+    for d in deal_result.scalars().all():
+        ts = d.stage_changed_at or d.created_at
+        rows.append({
+            "date": ts.isoformat() if ts else "",
+            "type": "deal_stage",
+            "title": f"Deal: {d.title or 'Untitled'}",
+            "description": f"Stage: {d.stage} | Value: ${d.value:,.0f}",
+            "severity": "",
+        })
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+        )
+    )
+    for n in note_result.scalars().all():
+        rows.append({
+            "date": n.created_at.isoformat() if n.created_at else "",
+            "type": "note",
+            "title": "Contact Note",
+            "description": (n.body or "")[:300],
+            "severity": "",
+        })
+
+    contact_meta = f"contact:{contact_id}"
+    evt_result = await db.execute(
+        select(ActivityEvent).where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.meta.like(f"%{contact_meta}%"),
+        )
+    )
+    for e in evt_result.scalars().all():
+        rows.append({
+            "date": e.created_at.isoformat() if e.created_at else "",
+            "type": "activity",
+            "title": e.type or "Activity",
+            "description": e.description or "",
+            "severity": e.severity or "",
+        })
+
+    rows.sort(key=lambda x: x["date"], reverse=True)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["date", "type", "title", "description", "severity"])
+    for row in rows:
+        writer.writerow([row["date"], row["type"], row["title"], row["description"], row["severity"]])
+
+    buf.seek(0)
+    filename = f"timeline_{contact_id}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )

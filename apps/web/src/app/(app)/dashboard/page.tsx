@@ -11,14 +11,14 @@ import { formatCurrency } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import {
-  AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend,
+  AreaChart, Area, BarChart, Bar, LineChart, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell,
 } from "recharts";
 import Link from "next/link";
 import {
   DollarSign, Briefcase, Brain, Bot, TrendingUp, TrendingDown,
   Minus, Activity, CheckCircle, AlertTriangle, Info,
-  ListTodo, Mail, BarChart2, CheckSquare, ExternalLink,
+  ListTodo, Mail, BarChart2, CheckSquare, ExternalLink, Bell,
 } from "lucide-react";
 import { cn, SIGNAL } from "@/lib/utils";
 import type { KPI, ActivityEvent, Deal } from "@/lib/types";
@@ -38,6 +38,17 @@ interface StaleDeal {
   value: number;
   health_score: number;
   signals: string[];
+}
+
+interface OverdueAction {
+  id: string;
+  title: string | null;
+  company: string | null;
+  stage: string;
+  value: number;
+  next_action: string | null;
+  next_action_date: string;
+  days_overdue: number;
 }
 
 const kpiIcons: Record<string, React.ReactNode> = {
@@ -229,10 +240,13 @@ export default function DashboardPage() {
   const { deals } = useDeals();
   const [activeAgents, setActiveAgents] = useState<typeof mockAgents>([]);
   const [pmKpis, setPmKpis] = useState<PMKpis | null>(null);
+  const [pmError, setPmError] = useState(false);
   const [workspaceMode, setWorkspaceMode] = useState<"sales" | "pm" | "both">("sales");
   const [staleDeals, setStaleDeals] = useState<StaleDeal[]>([]);
+  const [overdueActions, setOverdueActions] = useState<OverdueAction[]>([]);
   const [liveActivity, setLiveActivity] = useState<ActivityEvent[]>([]);
   const [revenueHistory, setRevenueHistory] = useState<{ month: string; revenue: number }[]>([]);
+  const [forecastData, setForecastData] = useState<{ month: string; value: number; deal_count: number }[]>([]);
   const [pollToken, setPollToken] = useState<string | null>(null);
   const [pollWorkspaceId, setPollWorkspaceId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -250,8 +264,14 @@ export default function DashboardPage() {
       apiClient.getStaleDeals("demo-workspace-1", "demo-token").then((data) => {
         setStaleDeals(Array.isArray(data) ? data : []);
       }).catch(() => {});
+      apiClient.getOverdueActions("demo-workspace-1", "demo-token").then((data) => {
+        setOverdueActions(Array.isArray(data) ? data : []);
+      }).catch(() => {});
       apiClient.getDealHistory("demo-workspace-1", "demo-token", 6).then((data) => {
         if (Array.isArray(data)) setRevenueHistory(data);
+      }).catch(() => {});
+      apiClient.getDealForecast("demo-workspace-1", "demo-token", 6).then((data) => {
+        if (Array.isArray(data)) setForecastData(data);
       }).catch(() => {});
       return;
     }
@@ -260,21 +280,21 @@ export default function DashboardPage() {
     let realtimeChannelRef: ReturnType<typeof supabase.channel> | null = null;
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) return;
-      const workspaceId: string | undefined = session.user.user_metadata?.workspace_id;
+      const workspaceId: string | undefined = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id);
       setPollToken(session.access_token);
       if (workspaceId) setPollWorkspaceId(workspaceId);
 
       // Seed activity feed with recent events, then subscribe to Realtime
       if (workspaceId) {
-        apiClient.listActivity(workspaceId, session.access_token, 20)
-          .then((data: Array<{ id: string; type: string; agent_name: string; description: string; meta?: string; severity: string; created_at: string }>) => {
+        apiClient.listActivity(workspaceId, session.access_token, { limit: 20 })
+          .then((data) => {
             if (!Array.isArray(data)) return;
             setLiveActivity(data.map((e) => ({
               id: e.id,
               type: e.type as ActivityEvent["type"],
-              agentName: e.agent_name,
-              description: e.description,
-              meta: e.meta,
+              agentName: e.agent_name ?? "",
+              description: e.description ?? "",
+              meta: e.meta ?? "",
               severity: e.severity as ActivityEvent["severity"],
               timestamp: (() => {
                 const diff = Date.now() - new Date(e.created_at).getTime();
@@ -299,9 +319,12 @@ export default function DashboardPage() {
 
       if (!workspaceId) return;
 
-      // Fetch revenue history
+      // Fetch revenue history + forecast
       apiClient.getDealHistory(workspaceId, session.access_token, 6)
         .then((data) => { if (Array.isArray(data)) setRevenueHistory(data); })
+        .catch(() => {});
+      apiClient.getDealForecast(workspaceId, session.access_token, 6)
+        .then((data) => { if (Array.isArray(data)) setForecastData(data); })
         .catch(() => {});
 
       // Subscribe to Supabase Realtime for live activity feed
@@ -332,13 +355,26 @@ export default function DashboardPage() {
         .subscribe();
       realtimeChannelRef = channel;
 
-      // Fetch PM aggregate KPIs + stale deals in parallel
+      // Fetch PM aggregate KPIs + stale deals in parallel. Use allSettled so one
+      // failing endpoint surfaces a "some metrics unavailable" notice instead of
+      // silently zeroing the affected KPI.
       try {
-        const [tasksData, messagesData, staleData] = await Promise.all([
-          apiClient.getTasks(workspaceId, session.access_token).catch(() => []),
-          apiClient.getMessages(workspaceId, session.access_token).catch(() => []),
-          apiClient.getStaleDeals(workspaceId, session.access_token).catch(() => []),
+        const [tasksResult, messagesResult, staleResult, overdueResult] = await Promise.allSettled([
+          apiClient.getTasks(workspaceId, session.access_token),
+          apiClient.getMessages(workspaceId, session.access_token),
+          apiClient.getStaleDeals(workspaceId, session.access_token),
+          apiClient.getOverdueActions(workspaceId, session.access_token),
         ]);
+
+        const anyFailed =
+          tasksResult.status === "rejected" ||
+          messagesResult.status === "rejected" ||
+          staleResult.status === "rejected";
+        setPmError(anyFailed);
+
+        const tasksData = tasksResult.status === "fulfilled" ? tasksResult.value : [];
+        const messagesData = messagesResult.status === "fulfilled" ? messagesResult.value : [];
+        const staleData = staleResult.status === "fulfilled" ? staleResult.value : [];
 
         const today = new Date().toISOString().slice(0, 10);
         const tasks: Array<{ status: string; created_at?: string; clarity_score?: { score: number } | null }> =
@@ -365,8 +401,12 @@ export default function DashboardPage() {
           messagesIngested: messages.length,
         });
         setStaleDeals(Array.isArray(staleData) ? staleData : []);
+
+        const overdueData = overdueResult.status === "fulfilled" ? overdueResult.value : [];
+        setOverdueActions(Array.isArray(overdueData) ? overdueData : []);
       } catch {
-        // Non-critical — dashboard still renders with sales KPIs
+        // Total failure of the PM block — still render sales KPIs, but flag it.
+        setPmError(true);
       }
     });
     return () => {
@@ -403,14 +443,21 @@ export default function DashboardPage() {
       </section>
 
       {/* PM KPI Cards — only visible in pm or both modes */}
-      {(workspaceMode === "pm" || workspaceMode === "both") && pmKpis && (
+      {(workspaceMode === "pm" || workspaceMode === "both") && (pmKpis || pmError) && (
         <section aria-labelledby="pm-kpi-heading">
           <div className="flex items-center gap-2 mb-3">
             <h2 id="pm-kpi-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
               PM Intelligence
             </h2>
             <Badge variant="indigo" size="sm" dot>Live</Badge>
+            {pmError && (
+              <span className="flex items-center gap-1.5 text-[11px] text-amber-400">
+                <AlertTriangle className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
+                Some metrics unavailable
+              </span>
+            )}
           </div>
+          {pmKpis && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <PMKpiCard
               icon={<ListTodo className="h-4 w-4" />}
@@ -451,6 +498,7 @@ export default function DashboardPage() {
               deltaType="neutral"
             />
           </div>
+          )}
         </section>
       )}
 
@@ -523,6 +571,126 @@ export default function DashboardPage() {
                 </Link>
               </div>
             )}
+          </Card>
+        </section>
+      )}
+
+      {/* Overdue Next Actions Widget */}
+      {overdueActions.length > 0 && (
+        <section aria-labelledby="overdue-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="overdue-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Overdue Actions
+            </h2>
+            <Badge variant="amber" size="sm" dot>{overdueActions.length} overdue</Badge>
+          </div>
+          <Card className="border-amber-500/10 overflow-hidden p-0">
+            <div className="divide-y divide-zinc-800">
+              {overdueActions.slice(0, 5).map((item) => (
+                <div key={item.id} className="flex items-center gap-4 px-4 py-3 hover:bg-zinc-800/40 transition-colors">
+                  <Bell className="h-3.5 w-3.5 text-amber-400 flex-shrink-0" aria-hidden />
+
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-zinc-100 truncate">{item.title}</p>
+                    {item.next_action && (
+                      <p className="text-xs text-amber-200/60 truncate">{item.next_action}</p>
+                    )}
+                  </div>
+
+                  <div className="text-right flex-shrink-0 hidden sm:block">
+                    <p className={cn(
+                      "text-xs font-mono font-semibold",
+                      item.days_overdue >= 3 ? "text-rose-400" : "text-amber-400"
+                    )}>
+                      {item.days_overdue === 0 ? "Due today" : `${item.days_overdue}d overdue`}
+                    </p>
+                    <p className="text-[11px] text-zinc-500 capitalize">{item.stage.replace("_", " ")}</p>
+                  </div>
+
+                  <Link
+                    href={`/pipeline/${item.id}`}
+                    className="flex-shrink-0 flex items-center gap-1 text-[11px] text-zinc-500 hover:text-amber-400 transition-colors font-mono"
+                    title="Open deal"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    View
+                  </Link>
+                </div>
+              ))}
+            </div>
+            {overdueActions.length > 5 && (
+              <div className="border-t border-zinc-800 px-4 py-2.5 text-center">
+                <Link href="/pipeline" className="text-xs text-zinc-500 hover:text-amber-400 transition-colors font-mono">
+                  +{overdueActions.length - 5} more overdue · View all in Pipeline →
+                </Link>
+              </div>
+            )}
+          </Card>
+        </section>
+      )}
+
+      {/* Deal Forecast Widget */}
+      {forecastData.length > 0 && (
+        <section aria-labelledby="forecast-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="forecast-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Pipeline Forecast
+            </h2>
+            <Badge variant="indigo" size="sm">next 6 months</Badge>
+          </div>
+          <Card>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Expected Deal Closings</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">
+                  Grouped by expected_close · {forecastData.reduce((s, d) => s + d.deal_count, 0)} open deals
+                </p>
+              </div>
+              <p className="text-sm font-mono font-bold text-indigo-400">
+                ${(forecastData.reduce((s, d) => s + d.value, 0) / 1000).toFixed(0)}K total
+              </p>
+            </div>
+            <div className="h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={forecastData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }} barSize={28}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                  <XAxis dataKey="month" tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    tick={{ fill: "#71717A", fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v) => v >= 1000 ? `$${(v / 1000).toFixed(0)}K` : `$${v}`}
+                    width={44}
+                  />
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const d = payload[0];
+                      return (
+                        <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs space-y-1">
+                          <p className="font-mono text-zinc-400">{label}</p>
+                          <p className="text-zinc-200">
+                            <span className="text-indigo-400 font-bold">${((d.value as number) / 1000).toFixed(0)}K</span>
+                            {" "}expected
+                          </p>
+                          <p className="text-zinc-500">
+                            {payload[0]?.payload?.deal_count ?? 0} deal{payload[0]?.payload?.deal_count !== 1 ? "s" : ""}
+                          </p>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                    {forecastData.map((entry, i) => (
+                      <Cell
+                        key={entry.month}
+                        fill={entry.deal_count === 0 ? "#27272A" : i === 0 ? "#6366F1" : `rgba(99,102,241,${0.9 - i * 0.12})`}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </Card>
         </section>
       )}
@@ -640,7 +808,10 @@ export default function DashboardPage() {
                 </div>
                 <div className="text-right flex-shrink-0">
                   <p className="text-xs font-mono text-emerald-400">{agent.accuracy}%</p>
-                  <p className="text-[10px] text-zinc-600">{agent.tasksToday} tasks</p>
+                  {/* Per-agent daily task counts aren't tracked yet — don't show a
+                      seeded/fabricated number. The live Activity feed below is the
+                      honest signal of what agents are doing. */}
+                  <p className="text-[10px] text-zinc-600 capitalize">{agent.status}</p>
                 </div>
               </div>
             ))}

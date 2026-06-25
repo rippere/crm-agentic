@@ -1,4 +1,5 @@
 import { demoMessages, demoTasks, demoConnectors, demoDeals, demoContacts } from './demo-data'
+import type { KpiSnapshot, Commitment, CommitmentWeekStats } from './types'
 
 // ─── Contact-aware demo stubs ─────────────────────────────────────────────────
 const DEMO_CONTACT_BRIEFS: Record<string, { contact_name: string; brief: string }> = {
@@ -99,6 +100,42 @@ const DEMO_DEAL_TIMELINES: Record<string, Array<{ id: string; type: string; titl
   ],
 }
 
+// Seed notes for the demo deals, oldest-first. Mirrors the append-only
+// deal_notes thread the real API returns from GET …/deals/{id}/notes.
+const DEMO_DEAL_NOTES: Record<string, Array<{ id: string; workspace_id: string; deal_id: string; body: string; author: string; created_at: string }>> = {
+  'd-001': [
+    { id: 'dn-001-1', workspace_id: 'demo-workspace-1', deal_id: 'd-001', body: 'Champion (Sarah) confirmed budget is approved for this quarter. SLA terms are the last open item.', author: 'Alex', created_at: new Date(Date.now() - 432000000).toISOString() },
+    { id: 'dn-001-2', workspace_id: 'demo-workspace-1', deal_id: 'd-001', body: 'Legal signed off on the indemnification clause. Targeting May 15 for signature.', author: 'Alex', created_at: new Date(Date.now() - 86400000).toISOString() },
+  ],
+  'd-002': [
+    { id: 'dn-002-1', workspace_id: 'demo-workspace-1', deal_id: 'd-002', body: 'Custom proposal sent. Marcus needs board sign-off before next cycle — flagged as a churn risk if silence continues.', author: 'Alex', created_at: new Date(Date.now() - 1814400000).toISOString() },
+  ],
+}
+
+// Runtime overlay so notes added during a demo session persist in-memory.
+const _DEMO_DEAL_NOTES_RUNTIME: Record<string, Array<{ id: string; workspace_id: string; deal_id: string; body: string; author: string; created_at: string }>> = {}
+
+function demoDealNotes(dealId: string) {
+  return _DEMO_DEAL_NOTES_RUNTIME[dealId] ?? DEMO_DEAL_NOTES[dealId] ?? []
+}
+
+// Seed notes for demo contacts, oldest-first.
+const DEMO_CONTACT_NOTES: Record<string, Array<{ id: string; workspace_id: string; contact_id: string; body: string; author: string; created_at: string }>> = {
+  'c-001': [
+    { id: 'cn-001-1', workspace_id: 'demo-workspace-1', contact_id: 'c-001', body: 'Strong champion at Acme Corp. Verified budget authority in Q1 review call.', author: 'Alex', created_at: new Date(Date.now() - 1209600000).toISOString() },
+    { id: 'cn-001-2', workspace_id: 'demo-workspace-1', contact_id: 'c-001', body: 'Prefers async comms — send Loom videos instead of scheduling calls when possible.', author: 'Alex', created_at: new Date(Date.now() - 604800000).toISOString() },
+  ],
+  'c-002': [
+    { id: 'cn-002-1', workspace_id: 'demo-workspace-1', contact_id: 'c-002', body: 'Decision maker for the TechStart deal. Board sign-off required before any contract.', author: 'Alex', created_at: new Date(Date.now() - 2592000000).toISOString() },
+  ],
+}
+
+const _DEMO_CONTACT_NOTES_RUNTIME: Record<string, Array<{ id: string; workspace_id: string; contact_id: string; body: string; author: string; created_at: string }>> = {}
+
+function demoContactNotes(contactId: string) {
+  return _DEMO_CONTACT_NOTES_RUNTIME[contactId] ?? DEMO_CONTACT_NOTES[contactId] ?? []
+}
+
 const FASTAPI_URL = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
 
@@ -128,15 +165,167 @@ async function apiFetch(path: string, options: RequestInit = {}, token?: string,
   return res.json()
 }
 
+// ─── Demo data for the Life / accountability dashboard ───────────────────────
+// Deterministic-ish sample arrays so /life demos nicely without a live ledger.
+// Intentionally leaves gaps (missing days, null kept_rate weeks) to mirror the
+// honest "no zero-fill fabrication" behaviour of the real collector.
+const DEMO_KPI_SPECS: Array<{ domain: string; metric: string; base: number; amp: number; skip: number }> = [
+  { domain: 'engineering', metric: 'git_commits', base: 6, amp: 5, skip: 6 },   // weekends mostly off
+  { domain: 'engineering', metric: 'sessions', base: 3, amp: 2, skip: 6 },
+  { domain: 'knowledge', metric: 'records.main', base: 4, amp: 3, skip: 5 },
+  { domain: 'knowledge', metric: 'records.neuroscience', base: 2, amp: 2, skip: 4 },
+  { domain: 'knowledge', metric: 'records.content', base: 1, amp: 2, skip: 3 },
+  { domain: 'knowledge', metric: 'topics_distilled', base: 3, amp: 3, skip: 5 },
+  { domain: 'knowledge', metric: 'api_cost_usd', base: 8, amp: 6, skip: 6 },
+  { domain: 'product', metric: 'crm_users', base: 42, amp: 4, skip: 6 },
+  { domain: 'product', metric: 'tribe_corpus_videos', base: 120, amp: 8, skip: 5 },
+  { domain: 'product', metric: 'tribe_avg_score', base: 71, amp: 6, skip: 5 },
+  { domain: 'life', metric: 'records.personal', base: 2, amp: 2, skip: 3 },
+  { domain: 'life', metric: 'records.finance', base: 1, amp: 2, skip: 2 },
+]
+
+function demoKpiSnapshots(opts?: { fromDate?: string; toDate?: string; domain?: string; metric?: string }): KpiSnapshot[] {
+  const today = new Date()
+  const from = opts?.fromDate ? new Date(opts.fromDate) : new Date(today.getTime() - 89 * 86400000)
+  const out: KpiSnapshot[] = []
+  const days = Math.max(1, Math.round((today.getTime() - from.getTime()) / 86400000) + 1)
+  for (const spec of DEMO_KPI_SPECS) {
+    if (opts?.domain && spec.domain !== opts.domain) continue
+    if (opts?.metric && spec.metric !== opts.metric) continue
+    for (let i = 0; i < days; i++) {
+      const d = new Date(from.getTime() + i * 86400000)
+      const seed = (d.getDate() + d.getMonth() * 31 + spec.metric.length * 7) % 7
+      // Honest gaps: some days have no snapshot for this metric (no zero-fill).
+      if (seed > spec.skip) continue
+      const dow = d.getDay()
+      const weekendDamp = (dow === 0 || dow === 6) ? 0.4 : 1
+      const raw = spec.base + Math.round(((seed * 9301 + 49297) % (spec.amp + 1)) * weekendDamp)
+      const value = spec.metric === 'api_cost_usd' || spec.metric === 'tribe_avg_score'
+        ? Math.round((raw + (seed % 3) * 0.5) * 100) / 100
+        : Math.max(0, raw)
+      out.push({
+        id: `demo-kpi-${spec.metric}-${i}`,
+        workspace_id: 'demo-workspace-1',
+        date: d.toISOString().slice(0, 10),
+        domain: spec.domain,
+        metric: spec.metric,
+        value,
+        meta: spec.metric === 'git_commits'
+          ? { 'crm-agentic': Math.round(value * 0.5), 'tribe-social': Math.round(value * 0.3), 'alfred-v2': Math.round(value * 0.2) }
+          : {},
+      })
+    }
+  }
+  return out
+}
+
+const DEMO_COMMITMENTS: Commitment[] = [
+  { id: 'dc-1', workspace_id: 'demo-workspace-1', external_id: 'auto-ship-life-page-20260603', title: 'Ship the /life accountability dashboard', kind: 'auto', source: 'sessions/2026-06-03-crm.md', declared_at: new Date(Date.now() - 2 * 86400000).toISOString(), due_date: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10), status: 'open', evidence: null, scored_at: null },
+  { id: 'dc-2', workspace_id: 'demo-workspace-1', external_id: 'auto-rls-ledger-20260531', title: 'Enable RLS on the ledger tables', kind: 'auto', source: 'sessions/2026-05-31-api.md', declared_at: new Date(Date.now() - 5 * 86400000).toISOString(), due_date: null, status: 'kept', evidence: 'Commit b134efc enabled RLS on kpi_snapshots + commitments following the 008 pattern.', scored_at: new Date(Date.now() - 1 * 86400000).toISOString() },
+  { id: 'dc-3', workspace_id: 'demo-workspace-1', external_id: 'explicit-write-retro-tests-20260529', title: 'Write integration tests for the retro scorer', kind: 'explicit', source: null, declared_at: new Date(Date.now() - 7 * 86400000).toISOString(), due_date: new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10), status: 'broken', evidence: 'No test files added under apps/api/tests/ for the scorer by the due date.', scored_at: new Date(Date.now() - 1 * 86400000).toISOString() },
+  { id: 'dc-4', workspace_id: 'demo-workspace-1', external_id: 'auto-tribe-rescore-20260528', title: 'Re-score the tribe-social v2 corpus on RunPod', kind: 'auto', source: 'sessions/2026-05-28-tribe.md', declared_at: new Date(Date.now() - 8 * 86400000).toISOString(), due_date: null, status: 'kept', evidence: 'RunPod job completed; 137 videos rescored, avg 71.4.', scored_at: new Date(Date.now() - 6 * 86400000).toISOString() },
+  { id: 'dc-5', workspace_id: 'demo-workspace-1', external_id: 'auto-distill-neuro-20260527', title: 'Distill the week\'s neuroscience reading into the vault', kind: 'auto', source: 'sessions/2026-05-27-research.md', declared_at: new Date(Date.now() - 9 * 86400000).toISOString(), due_date: null, status: 'dropped', evidence: 'Deprioritised in favour of the ledger API work.', scored_at: new Date(Date.now() - 7 * 86400000).toISOString() },
+  { id: 'dc-6', workspace_id: 'demo-workspace-1', external_id: 'explicit-daily-finance-log-20260526', title: 'Log a daily finance record for the week', kind: 'explicit', source: null, declared_at: new Date(Date.now() - 10 * 86400000).toISOString(), due_date: new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10), status: 'open', evidence: null, scored_at: null },
+]
+
+function demoCommitments(opts?: { status?: string; kind?: string }): Commitment[] {
+  let rows = DEMO_COMMITMENTS
+  if (opts?.status) rows = rows.filter((c) => c.status === opts.status)
+  if (opts?.kind) rows = rows.filter((c) => c.kind === opts.kind)
+  return rows
+}
+
+function demoCommitmentStats(weeks: number): CommitmentWeekStats[] {
+  const today = new Date()
+  const day = today.getUTCDay()
+  const mondayOffset = (day + 6) % 7
+  const thisMonday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - mondayOffset))
+  const out: CommitmentWeekStats[] = []
+  for (let i = weeks - 1; i >= 0; i--) {
+    const wk = new Date(thisMonday.getTime() - i * 7 * 86400000)
+    const seed = (wk.getUTCDate() + wk.getUTCMonth() * 4) % 7
+    // Early weeks have no scored outcomes yet -> declared but kept_rate null (a gap).
+    const noOutcomes = i > weeks - 4
+    const declared = noOutcomes ? seed % 3 : 2 + (seed % 4)
+    const kept = noOutcomes ? 0 : Math.min(declared, 1 + (seed % 3))
+    const broken = noOutcomes ? 0 : Math.max(0, Math.min(declared - kept, seed % 2))
+    const dropped = noOutcomes ? 0 : (seed === 6 ? 1 : 0)
+    const open = Math.max(0, declared - kept - broken - dropped)
+    const denom = kept + broken
+    out.push({
+      week_start: wk.toISOString().slice(0, 10),
+      declared,
+      kept,
+      broken,
+      dropped,
+      open,
+      kept_rate: denom ? Math.round((kept / denom) * 100) / 100 : null,
+    })
+  }
+  return out
+}
+
+// Demo `life_retro` activity event. `meta` is a JSON string to mirror the real
+// API (activity_events.meta is stored as text), so the Life card's defensive
+// parse path is exercised in demo too.
+function demoActivity(opts?: { eventType?: string; limit?: number }): Array<{ id: string; type: string | null; agent_name: string | null; description: string | null; meta: string | null; severity: string; created_at: string }> {
+  if (opts?.eventType && opts.eventType !== 'life_retro') return []
+  const sunday = new Date()
+  sunday.setDate(sunday.getDate() - ((sunday.getDay() + 0) % 7 || 7)) // most recent past Sunday
+  const week = sunday.toISOString().slice(0, 10)
+  const retro = {
+    id: `demo-retro-${week}`,
+    type: 'life_retro',
+    agent_name: 'Retro Agent',
+    description: `Weekly retro for the week of ${week}`,
+    meta: JSON.stringify({
+      week,
+      kept_rate: 0.67,
+      kept: 4,
+      broken: 2,
+      dropped: 1,
+      harvested: 7,
+      open: 3,
+      judgment: [
+        'Shipping outran scoring this week — four commitments kept, but two slipped because the retro tests never landed. The pattern is real: infra work keeps getting deferred behind feature work.',
+        'Attention concentrated hard on crm-agentic (over half of all commits). tribe-social got a single rescore and otherwise went dark — fine for a sprint week, a risk if it holds.',
+        'Three commitments are still open past their declared window. They face judgment Sunday; clear or drop them rather than letting them rot into broken.',
+      ],
+    }),
+    severity: 'info',
+    created_at: sunday.toISOString(),
+  }
+  return [retro].slice(0, opts?.limit ?? 1)
+}
+
 export const apiClient = {
   // Agents
   listAgents: (token: string) => {
     if (isDemoMode) return Promise.resolve([])
     return apiFetch('/agents', {}, token)
   },
-  triggerAgent: (agentId: string, token: string) => {
-    if (isDemoMode) return Promise.resolve({ job_id: `demo-job-${agentId}` })
-    return apiFetch(`/agents/${agentId}/run`, { method: 'POST' }, token)
+  // Returns { job_id } on a real dispatch, or { not_implemented: true, detail }
+  // when the agent type has no on-demand task (HTTP 501) so the caller can skip
+  // starting the job poller instead of polling a job that was never created.
+  triggerAgent: async (
+    agentId: string,
+    token: string,
+  ): Promise<{ job_id?: string; not_implemented?: boolean; detail?: string }> => {
+    if (isDemoMode) return { job_id: `demo-job-${agentId}` }
+    const res = await fetch(`${FASTAPI_URL}/agents/${agentId}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    })
+    if (res.status === 501) {
+      let detail = 'This agent runs via its own flow, not an on-demand job.'
+      try { detail = (await res.json())?.detail ?? detail } catch { /* keep default */ }
+      return { not_implemented: true, detail }
+    }
+    if (!res.ok) {
+      console.error(`[api] POST /agents/${agentId}/run → ${res.status}`)
+      throw new Error(`API error ${res.status}`)
+    }
+    return res.json()
   },
   updateAgent: (agentId: string, data: { status?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: agentId, ...data })
@@ -219,6 +408,26 @@ export const apiClient = {
     if (!res.ok) throw new Error(`Export failed: ${res.status}`)
     return res.blob()
   },
+  exportContactTimeline: async (workspaceId: string, contactId: string, token: string): Promise<Blob> => {
+    if (isDemoMode) {
+      const rows = [
+        ['date', 'type', 'title', 'description', 'severity'],
+        [new Date(Date.now() - 86400000 * 2).toISOString(), 'message', 'Follow-up on proposal', 'Hi, just checking in on the proposal we sent over...', ''],
+        [new Date(Date.now() - 86400000 * 5).toISOString(), 'call', 'Discovery call', 'Discussed current pain points and roadmap priorities.', ''],
+        [new Date(Date.now() - 86400000 * 10).toISOString(), 'deal_stage', 'Deal: Enterprise License', 'Stage: proposal | Value: $24,000', ''],
+        [new Date(Date.now() - 86400000 * 14).toISOString(), 'note', 'Contact Note', 'Very interested in the analytics dashboard feature.', ''],
+        [new Date(Date.now() - 86400000 * 20).toISOString(), 'activity', 'contact_enriched', 'Contact enriched via LinkedIn', 'info'],
+      ]
+      const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+      return new Blob([csv], { type: 'text/csv' })
+    }
+    const res = await fetch(`${FASTAPI_URL}/workspaces/${workspaceId}/contacts/${contactId}/timeline/export`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error(`Export failed: ${res.status}`)
+    return res.blob()
+  },
+
   exportDealsCsv: async (workspaceId: string, token: string): Promise<Blob> => {
     if (isDemoMode) {
       const { demoDeals } = require('./demo-data')
@@ -308,6 +517,10 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ id: contactId, ...data })
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
   },
+  updateContactTags: (workspaceId: string, contactId: string, tags: { label: string; confidence: number; color: string }[], token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: contactId, semantic_tags: tags })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/tags`, { method: 'PUT', body: JSON.stringify({ tags }) }, token)
+  },
   deleteContact: (workspaceId: string, contactId: string, token: string) => {
     if (isDemoMode) return Promise.resolve()
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}`, { method: 'DELETE' }, token)
@@ -386,7 +599,7 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/timeline`, {}, token)
   },
-  updateDeal: (workspaceId: string, dealId: string, data: { title?: string; company?: string; value?: number; stage?: string; ml_win_probability?: number; expected_close?: string; notes?: string }, token: string) => {
+  updateDeal: (workspaceId: string, dealId: string, data: { title?: string; company?: string; value?: number; stage?: string; ml_win_probability?: number; expected_close?: string; notes?: string; next_action?: string | null; next_action_date?: string | null }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: dealId, ...data })
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
   },
@@ -397,6 +610,56 @@ export const apiClient = {
   bulkDealAction: (workspaceId: string, data: { action: 'move_stage' | 'delete'; deal_ids: string[]; stage?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ action: data.action, updated: data.deal_ids.length, deal_ids: data.deal_ids })
     return apiFetch(`/workspaces/${workspaceId}/deals/bulk`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+
+  // Deal notes (append-only, chronological thread)
+  getDealNotes: (workspaceId: string, dealId: string, token: string): Promise<Array<{ id: string; workspace_id: string; deal_id: string; body: string; author: string | null; created_at: string }>> => {
+    if (isDemoMode) return Promise.resolve(demoDealNotes(dealId))
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/notes`, {}, token)
+  },
+  createDealNote: (workspaceId: string, dealId: string, body: string, token: string, author?: string): Promise<{ id: string; workspace_id: string; deal_id: string; body: string; author: string | null; created_at: string }> => {
+    if (isDemoMode) {
+      const note = {
+        id: `demo-note-${Date.now()}`,
+        workspace_id: workspaceId,
+        deal_id: dealId,
+        body,
+        author: author ?? 'You',
+        created_at: new Date().toISOString(),
+      }
+      _DEMO_DEAL_NOTES_RUNTIME[dealId] = [...demoDealNotes(dealId), note]
+      return Promise.resolve(note)
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/notes`,
+      { method: 'POST', body: JSON.stringify({ body, author }) },
+      token,
+    )
+  },
+
+  // Contact notes (append-only, chronological thread)
+  getContactNotes: (workspaceId: string, contactId: string, token: string): Promise<Array<{ id: string; workspace_id: string; contact_id: string; body: string; author: string | null; created_at: string }>> => {
+    if (isDemoMode) return Promise.resolve(demoContactNotes(contactId))
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/notes`, {}, token)
+  },
+  createContactNote: (workspaceId: string, contactId: string, body: string, token: string, author?: string): Promise<{ id: string; workspace_id: string; contact_id: string; body: string; author: string | null; created_at: string }> => {
+    if (isDemoMode) {
+      const note = {
+        id: `demo-cnote-${Date.now()}`,
+        workspace_id: workspaceId,
+        contact_id: contactId,
+        body,
+        author: author ?? 'You',
+        created_at: new Date().toISOString(),
+      }
+      _DEMO_CONTACT_NOTES_RUNTIME[contactId] = [...demoContactNotes(contactId), note]
+      return Promise.resolve(note)
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/contacts/${contactId}/notes`,
+      { method: 'POST', body: JSON.stringify({ body, author }) },
+      token,
+    )
   },
 
   // Deal health
@@ -422,6 +685,22 @@ export const apiClient = {
       )
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/stale?threshold=${threshold}`, {}, token)
+  },
+
+  getOverdueActions: (workspaceId: string, token: string): Promise<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; next_action: string | null; next_action_date: string; days_overdue: number }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'demo-deal-1', title: 'Acme Corp Expansion', company: 'Acme Corp', stage: 'negotiation', value: 48000, next_action: 'Send revised proposal to legal', next_action_date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), days_overdue: 1 },
+      { id: 'demo-deal-3', title: 'GlobalTech Platform', company: 'GlobalTech', stage: 'proposal', value: 120000, next_action: 'Schedule follow-up call', next_action_date: new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10), days_overdue: 3 },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/deals/overdue-actions`, {}, token)
+  },
+
+  getAtRiskDeals: (workspaceId: string, token: string): Promise<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; ml_win_probability: number; days_stale: number; next_action_date: string | null; risk_signals: string[] }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'demo-deal-2', title: 'TechStart Series A', company: 'TechStart', stage: 'negotiation', value: 22000, ml_win_probability: 28, days_stale: 18, next_action_date: new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10), risk_signals: ['Win probability only 28%', 'No stage change in 18 days', 'Action overdue by 2 days'] },
+      { id: 'demo-deal-4', title: 'RetailCo Renewal', company: 'RetailCo', stage: 'proposal', value: 15000, ml_win_probability: 22, days_stale: 21, next_action_date: new Date(Date.now() - 5 * 86400000).toISOString().slice(0, 10), risk_signals: ['Win probability only 22%', 'No stage change in 21 days', 'Action overdue by 5 days'] },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/deals/at-risk`, {}, token)
   },
 
   getPipelineSuggestions: (workspaceId: string, token: string) => {
@@ -548,9 +827,35 @@ export const apiClient = {
   },
 
   // Activity events
-  listActivity: (workspaceId: string, token: string, limit = 50) => {
-    if (isDemoMode) return Promise.resolve([])
-    return apiFetch(`/workspaces/${workspaceId}/activity?limit=${limit}`, {}, token)
+  listActivity: (workspaceId: string, token: string, opts?: { limit?: number; offset?: number; eventType?: string }): Promise<Array<{ id: string; type: string | null; agent_name: string | null; description: string | null; meta: string | null; severity: string; created_at: string }>> => {
+    if (isDemoMode) {
+      const DEMO_ACTIVITIES = [
+        { id: 'act-1', type: 'contact_created', agent_name: 'System', description: 'New contact added: Sarah Chen', meta: '', severity: 'info', created_at: new Date(Date.now() - 600000).toISOString() },
+        { id: 'act-2', type: 'email_sent', agent_name: 'Gmail', description: 'Email sent to sarah.chen@techcorp.com: TechCorp Platform Expansion — SLA Final Terms', meta: '', severity: 'success', created_at: new Date(Date.now() - 1800000).toISOString() },
+        { id: 'act-3', type: 'deal_moved', agent_name: 'System', description: "Deal 'Global Finance Enterprise Suite' updated → proposal", meta: '', severity: 'info', created_at: new Date(Date.now() - 3600000).toISOString() },
+        { id: 'act-4', type: 'contact_created', agent_name: 'System', description: 'New contact added: Marcus Rivera', meta: '', severity: 'info', created_at: new Date(Date.now() - 7200000).toISOString() },
+        { id: 'act-5', type: 'agent_run', agent_name: 'Lead Scorer', description: 'Lead scoring completed for 8 contacts — 3 upgraded to hot', meta: '', severity: 'success', created_at: new Date(Date.now() - 10800000).toISOString() },
+        { id: 'act-6', type: 'deal_moved', agent_name: 'System', description: "Deal 'TechCorp Platform Expansion' updated → negotiation", meta: '', severity: 'info', created_at: new Date(Date.now() - 18000000).toISOString() },
+        { id: 'act-7', type: 'contact_updated', agent_name: 'System', description: 'Contact updated: Priya Nair flagged as prospect', meta: '', severity: 'warning', created_at: new Date(Date.now() - 21600000).toISOString() },
+        { id: 'act-8', type: 'agent_run', agent_name: 'Email Composer', description: 'Draft generated for contact c-002: subject "Global Finance Enterprise Suite — Board Summary"', meta: '', severity: 'success', created_at: new Date(Date.now() - 28800000).toISOString() },
+        { id: 'act-9', type: 'contact_created', agent_name: 'System', description: 'New contact added: James Whitfield', meta: '', severity: 'info', created_at: new Date(Date.now() - 36000000).toISOString() },
+        { id: 'act-10', type: 'deal_moved', agent_name: 'System', description: "Deal 'Accelarate Renewal + Upsell' updated → closed_won", meta: '', severity: 'success', created_at: new Date(Date.now() - 43200000).toISOString() },
+        { id: 'act-11', type: 'agent_run', agent_name: 'Pipeline Optimizer', description: 'Deal health flagged: 21 days without stage change on Global Finance deal', meta: '', severity: 'warning', created_at: new Date(Date.now() - 86400000).toISOString() },
+        { id: 'act-12', type: 'contact_deleted', agent_name: 'System', description: 'Contact removed: Old Lead', meta: '', severity: 'warning', created_at: new Date(Date.now() - 129600000).toISOString() },
+        { id: 'act-13', type: 'email_sent', agent_name: 'Gmail', description: 'Email sent to james.whitfield@accelarate.com: Renewal — Upsell Proposal', meta: '', severity: 'success', created_at: new Date(Date.now() - 172800000).toISOString() },
+        { id: 'act-14', type: 'agent_run', agent_name: 'Sentiment Analyzer', description: 'Sentiment analysis completed: 12 messages scored (avg positive 0.72)', meta: '', severity: 'info', created_at: new Date(Date.now() - 216000000).toISOString() },
+        { id: 'act-15', type: 'contact_created', agent_name: 'System', description: 'New contact added: Devon Park', meta: '', severity: 'info', created_at: new Date(Date.now() - 259200000).toISOString() },
+      ]
+      const { offset = 0, limit = 50, eventType } = opts ?? {}
+      let data = eventType ? DEMO_ACTIVITIES.filter(a => a.type === eventType) : DEMO_ACTIVITIES
+      data = data.slice(offset, offset + limit)
+      return Promise.resolve(data)
+    }
+    const params = new URLSearchParams()
+    params.set('limit', String(opts?.limit ?? 50))
+    if (opts?.offset) params.set('offset', String(opts.offset))
+    if (opts?.eventType) params.set('event_type', opts.eventType)
+    return apiFetch(`/workspaces/${workspaceId}/activity?${params}`, {}, token)
   },
   createActivity: (workspaceId: string, data: { type: string; agent_name: string; description: string; meta?: string; severity?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: `demo-activity-${Date.now()}`, ...data })
@@ -587,6 +892,83 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/contacts/import`, { method: 'POST', body: form }, token, true)
   },
 
+  // Contact merge
+  mergeContacts: (workspaceId: string, data: { primary_id: string; duplicate_id: string }, token: string): Promise<{ primary_id: string; duplicate_id: string; tasks_reassigned: number; messages_reassigned: number; deals_reassigned: number }> => {
+    if (isDemoMode) return Promise.resolve({ primary_id: data.primary_id, duplicate_id: data.duplicate_id, tasks_reassigned: 0, messages_reassigned: 0, deals_reassigned: 1 })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/merge`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+
+  // Bulk contact delete
+  bulkContactAction: (workspaceId: string, data: { action: 'delete'; contact_ids: string[] }, token: string): Promise<{ action: string; deleted: number; contact_ids: string[] }> => {
+    if (isDemoMode) return Promise.resolve({ action: data.action, deleted: data.contact_ids.length, contact_ids: data.contact_ids })
+    return apiFetch(`/workspaces/${workspaceId}/contacts/bulk`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+
+  // Deal forecast
+  getDealForecast: (workspaceId: string, token: string, monthsAhead = 6): Promise<{ month: string; value: number; deal_count: number }[]> => {
+    if (isDemoMode) {
+      const now = new Date()
+      return Promise.resolve(
+        Array.from({ length: monthsAhead }, (_, i) => {
+          const d = new Date(now.getFullYear(), now.getMonth() + i, 1)
+          const label = d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+          const seed = d.getMonth() + d.getFullYear()
+          const value = [145000, 95000, 210000, 68000, 175000, 130000][i % 6]
+          const deal_count = [2, 1, 3, 1, 2, 2][i % 6]
+          return { month: label, value: Math.round(value + ((seed * 7919) % 30000) - 15000), deal_count }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/forecast?months_ahead=${monthsAhead}`, {}, token)
+  },
+
+  // Pipeline velocity — avg days each deal has spent in its current stage, by stage
+  getDealVelocity: (workspaceId: string, token: string): Promise<{ stage: string; avg_days: number; deal_count: number }[]> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { stage: 'discovery',   avg_days: 14.2, deal_count: 3 },
+        { stage: 'qualified',   avg_days: 9.5,  deal_count: 4 },
+        { stage: 'proposal',    avg_days: 18.7, deal_count: 3 },
+        { stage: 'negotiation', avg_days: 11.3, deal_count: 2 },
+        { stage: 'closed_won',  avg_days: 42.1, deal_count: 3 },
+        { stage: 'closed_lost', avg_days: 28.4, deal_count: 2 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/velocity`, {}, token)
+  },
+
+  // Stage conversion funnel — deal count per stage + conversion rate between consecutive stages
+  getDealFunnel: (workspaceId: string, token: string): Promise<{ stage: string; deal_count: number; conversion_rate: number | null }[]> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { stage: 'discovery',   deal_count: 12, conversion_rate: null },
+        { stage: 'qualified',   deal_count: 8,  conversion_rate: 66.7 },
+        { stage: 'proposal',    deal_count: 5,  conversion_rate: 62.5 },
+        { stage: 'negotiation', deal_count: 3,  conversion_rate: 60.0 },
+        { stage: 'closed_won',  deal_count: 2,  conversion_rate: 66.7 },
+        { stage: 'closed_lost', deal_count: 1,  conversion_rate: 33.3 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/funnel`, {}, token)
+  },
+
+  // Deal activity timeline summary (weekly buckets, last 12 weeks)
+  getDealTimelineSummary: (workspaceId: string, dealId: string, token: string): Promise<{ week: string; events: number }[]> => {
+    if (isDemoMode) {
+      const now = Date.now()
+      return Promise.resolve(
+        Array.from({ length: 12 }, (_, i) => {
+          const dt = new Date(now - (11 - i) * 7 * 86400000)
+          const label = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          // Seed deterministic event counts from dealId + week index
+          const seed = (dealId.charCodeAt(dealId.length - 1) * (i + 1)) % 5
+          return { week: label, events: seed }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/timeline-summary`, {}, token)
+  },
+
   // Deal probability trend
   getDealProbabilityTrend: (workspaceId: string, dealId: string, token: string): Promise<{ date: string; probability: number }[]> => {
     if (isDemoMode) {
@@ -606,11 +988,475 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/probability-trend`, {}, token)
   },
 
+  // Global search across contacts, deals, and tasks
+  globalSearch: (workspaceId: string, q: string, token: string): Promise<{
+    contacts: Array<{ id: string; name: string; email: string; company: string; role: string; status: string }>;
+    deals: Array<{ id: string; title: string; company: string; value: number; stage: string }>;
+    tasks: Array<{ id: string; title: string; status: string; due_date: string | null; contact_id: string | null }>;
+  }> => {
+    if (isDemoMode) {
+      const lq = q.toLowerCase()
+      const contacts = demoContacts
+        .filter(c =>
+          c.name.toLowerCase().includes(lq) ||
+          (c.company ?? '').toLowerCase().includes(lq) ||
+          (c.email ?? '').toLowerCase().includes(lq)
+        )
+        .slice(0, 5)
+        .map(c => ({ id: c.id, name: c.name, email: c.email ?? '', company: c.company ?? '', role: c.role ?? '', status: c.status }))
+      const deals = (demoDeals as unknown as Array<Record<string, unknown>>)
+        .filter(d => ((d.title as string) ?? '').toLowerCase().includes(lq) || ((d.company as string) ?? '').toLowerCase().includes(lq))
+        .slice(0, 5)
+        .map(d => ({ id: d.id as string, title: (d.title as string) ?? '', company: (d.company as string) ?? '', value: (d.value as number) ?? 0, stage: (d.stage as string) ?? '' }))
+      const tasks = (demoTasks as unknown as Array<Record<string, unknown>>)
+        .filter(t => ((t.title as string) ?? '').toLowerCase().includes(lq))
+        .slice(0, 5)
+        .map(t => ({ id: t.id as string, title: (t.title as string) ?? '', status: (t.status as string) ?? 'open', due_date: (t.due_date as string) ?? null, contact_id: (t.contact_id as string) ?? null }))
+      return Promise.resolve({ contacts, deals, tasks })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/search?q=${encodeURIComponent(q)}&limit=5`, {}, token)
+  },
+
   // AI query
   aiQuery: (workspaceId: string, query: string, token: string) => {
     if (isDemoMode) return Promise.resolve({
-      answer: `Nova here. Your pipeline looks healthy — 6 active deals, $1.2M in value. The TechCorp deal in Negotiation has a health score of 32, meaning it hasn't moved in a while. I'd suggest reaching out to James Whitfield to re-engage. You can use the AI Search on /contacts to find similar prospects, or check the Deal Health Alerts on /dashboard for a full stale-deal view.`
+      answer: `Nova here. Across your 5 open deals ($517K in pipeline), two need attention this week. The Global Finance Enterprise Suite deal ($250K, Proposal) is your biggest risk — health score 35, stalled 21 days with no reply to the last two follow-ups. ScalePath Japan Starter ($18K, Discovery) is lower at 22 but earlier-stage. I'd prioritize re-engaging Marcus Rivera at Global Finance — open his Pre-Meeting Brief for a ready-made re-engagement plan. You can also check the full Deal Health Alerts on /dashboard.`
     })
     return apiFetch(`/workspaces/${workspaceId}/ai/query`, { method: 'POST', body: JSON.stringify({ query }) }, token)
+  },
+
+  // ─── Life / Accountability ledger ───────────────────────────────────────────
+  // Daily KPI snapshots pushed by the local collector. Optional date-range /
+  // domain / metric filters map straight to query params.
+  getKpi: (
+    workspaceId: string,
+    token: string,
+    opts?: { fromDate?: string; toDate?: string; domain?: string; metric?: string },
+  ): Promise<KpiSnapshot[]> => {
+    if (isDemoMode) return Promise.resolve(demoKpiSnapshots(opts))
+    const params = new URLSearchParams()
+    if (opts?.fromDate) params.set('from_date', opts.fromDate)
+    if (opts?.toDate) params.set('to_date', opts.toDate)
+    if (opts?.domain) params.set('domain', opts.domain)
+    if (opts?.metric) params.set('metric', opts.metric)
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/kpi${qs ? `?${qs}` : ''}`, {}, token)
+  },
+
+  // Latest activity events, newest first. Used by the Life retro card to pull the
+  // most recent `life_retro` event. The API returns `meta` as a JSON string (or
+  // null); callers parse it defensively. Mirrors the `/activity` shape, narrowed
+  // to the fields the ledger needs.
+  getActivity: (
+    workspaceId: string,
+    token: string,
+    opts?: { eventType?: string; limit?: number },
+  ): Promise<Array<{ id: string; type: string | null; agent_name: string | null; description: string | null; meta: string | null; severity: string; created_at: string }>> => {
+    if (isDemoMode) return Promise.resolve(demoActivity(opts))
+    const params = new URLSearchParams()
+    if (opts?.eventType) params.set('event_type', opts.eventType)
+    params.set('limit', String(opts?.limit ?? 1))
+    return apiFetch(`/workspaces/${workspaceId}/activity?${params}`, {}, token)
+  },
+
+  // Commitments list, newest first. Optional status / kind / declared_at window.
+  getCommitments: (
+    workspaceId: string,
+    token: string,
+    opts?: { status?: string; kind?: string; since?: string; until?: string },
+  ): Promise<Commitment[]> => {
+    if (isDemoMode) return Promise.resolve(demoCommitments(opts))
+    const params = new URLSearchParams()
+    if (opts?.status) params.set('status', opts.status)
+    if (opts?.kind) params.set('kind', opts.kind)
+    if (opts?.since) params.set('since', opts.since)
+    if (opts?.until) params.set('until', opts.until)
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/commitments${qs ? `?${qs}` : ''}`, {}, token)
+  },
+
+  // Per ISO-week kept/broken rollup over the last `weeks` weeks (one row per week,
+  // zero-filled by the API; kept_rate is null on weeks with no scored outcomes).
+  getCommitmentStats: (
+    workspaceId: string,
+    token: string,
+    weeks = 12,
+  ): Promise<CommitmentWeekStats[]> => {
+    if (isDemoMode) return Promise.resolve(demoCommitmentStats(weeks))
+    return apiFetch(`/workspaces/${workspaceId}/commitments/stats?weeks=${weeks}`, {}, token)
+  },
+
+  // Idempotent create-or-update keyed on external_id. Used by the "declare a
+  // commitment" form (kind 'explicit') and by the retro harvest (kind 'auto').
+  upsertCommitmentByExternal: (
+    workspaceId: string,
+    externalId: string,
+    data: {
+      title: string
+      kind?: string
+      source?: string | null
+      declared_at: string
+      due_date?: string | null
+      status?: string | null
+      evidence?: string | null
+      scored_at?: string | null
+    },
+    token: string,
+  ): Promise<{ commitment: Commitment; created: boolean }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        commitment: {
+          id: `demo-commitment-${Date.now()}`,
+          workspace_id: workspaceId,
+          external_id: externalId,
+          title: data.title,
+          kind: data.kind ?? 'auto',
+          source: data.source ?? null,
+          declared_at: data.declared_at,
+          due_date: data.due_date ?? null,
+          status: data.status ?? 'open',
+          evidence: data.evidence ?? null,
+          scored_at: data.scored_at ?? null,
+        },
+        created: true,
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/commitments/by-external/${encodeURIComponent(externalId)}`,
+      { method: 'PUT', body: JSON.stringify(data) },
+      token,
+    )
+  },
+
+  // ─── Webhook delivery log ────────────────────────────────────────────────────
+  // Returns the most recent webhook_logs rows for the workspace. Useful for
+  // auditing Gmail Pub/Sub and Slack Events API delivery and Celery job dispatch.
+  getWebhookLogs: (
+    workspaceId: string,
+    token: string,
+    opts?: { source?: 'gmail' | 'slack'; status?: 'received' | 'queued' | 'error'; limit?: number; offset?: number },
+  ): Promise<Array<{
+    id: string
+    workspace_id: string | null
+    source: string
+    event_type: string
+    status: string
+    payload_summary: string | null
+    job_id: string | null
+    error_detail: string | null
+    created_at: string
+  }>> => {
+    if (isDemoMode) {
+      const DEMO_LOGS = [
+        { id: 'whl-001', workspace_id: workspaceId, source: 'gmail', event_type: 'pubsub_push', status: 'queued', payload_summary: 'email=sarah.chen@techcorp.com', job_id: 'celery-a1b2c3', error_detail: null, created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
+        { id: 'whl-002', workspace_id: workspaceId, source: 'gmail', event_type: 'pubsub_push', status: 'queued', payload_summary: 'email=mrivera@globalfinance.io', job_id: 'celery-d4e5f6', error_detail: null, created_at: new Date(Date.now() - 18 * 60 * 1000).toISOString() },
+        { id: 'whl-003', workspace_id: workspaceId, source: 'slack', event_type: 'url_verification', status: 'received', payload_summary: 'Slack URL verification challenge', job_id: null, error_detail: null, created_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString() },
+        { id: 'whl-004', workspace_id: workspaceId, source: 'slack', event_type: 'event_callback', status: 'queued', payload_summary: 'team=T-ABC123', job_id: 'celery-g7h8i9', error_detail: null, created_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString() },
+        { id: 'whl-005', workspace_id: workspaceId, source: 'gmail', event_type: 'pubsub_push', status: 'received', payload_summary: 'email=unknown@external.com connector=not_found', job_id: null, error_detail: null, created_at: new Date(Date.now() - 6 * 3600 * 1000).toISOString() },
+        { id: 'whl-006', workspace_id: workspaceId, source: 'gmail', event_type: 'pubsub_push', status: 'queued', payload_summary: 'email=sarah.chen@techcorp.com', job_id: 'celery-j1k2l3', error_detail: null, created_at: new Date(Date.now() - 25 * 3600 * 1000).toISOString() },
+        { id: 'whl-007', workspace_id: workspaceId, source: 'slack', event_type: 'event_callback', status: 'error', payload_summary: 'team=T-XYZ987', job_id: null, error_detail: 'Signature verification failed', created_at: new Date(Date.now() - 48 * 3600 * 1000).toISOString() },
+      ]
+      let logs = DEMO_LOGS
+      if (opts?.source) logs = logs.filter((l) => l.source === opts.source)
+      if (opts?.status) logs = logs.filter((l) => l.status === opts.status)
+      const offset = opts?.offset ?? 0
+      const limit = opts?.limit ?? 50
+      return Promise.resolve(logs.slice(offset, offset + limit))
+    }
+    const params = new URLSearchParams()
+    if (opts?.source) params.set('source', opts.source)
+    if (opts?.status) params.set('status', opts.status)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.offset) params.set('offset', String(opts.offset))
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/webhook-logs${qs ? `?${qs}` : ''}`, {}, token)
+  },
+
+  // Partial update of a single commitment (e.g. status='dropped').
+  patchCommitment: (
+    workspaceId: string,
+    commitmentId: string,
+    data: { title?: string; status?: string; evidence?: string; scored_at?: string; due_date?: string },
+    token: string,
+  ): Promise<Commitment> => {
+    if (isDemoMode) return Promise.resolve({ id: commitmentId, ...data } as unknown as Commitment)
+    return apiFetch(
+      `/workspaces/${workspaceId}/commitments/${commitmentId}`,
+      { method: 'PATCH', body: JSON.stringify(data) },
+      token,
+    )
+  },
+
+  // Set a deal's outcome stage (closed_won|closed_lost) and attach a reason tag.
+  setDealOutcome: (
+    workspaceId: string,
+    dealId: string,
+    stage: 'closed_won' | 'closed_lost',
+    reason: string,
+    token: string,
+  ): Promise<Record<string, unknown>> => {
+    if (isDemoMode) return Promise.resolve({ id: dealId, stage, win_loss_reason: reason })
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/outcome`,
+      { method: 'PUT', body: JSON.stringify({ stage, reason }) },
+      token,
+    )
+  },
+
+  // Win/loss reason breakdown: [{reason, label, won, lost}] for all closed deals with a tag.
+  getDealOutcomeReasons: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ reason: string; label: string; won: number; lost: number }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { reason: 'price',        label: 'Price',         won: 2, lost: 5 },
+        { reason: 'competition',  label: 'Competition',   won: 1, lost: 3 },
+        { reason: 'timing',       label: 'Timing',        won: 3, lost: 2 },
+        { reason: 'fit',          label: 'Product Fit',   won: 4, lost: 1 },
+        { reason: 'champion_left',label: 'Champion Left', won: 0, lost: 2 },
+        { reason: 'other',        label: 'Other',         won: 1, lost: 1 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/outcome-reasons`, {}, token)
+  },
+
+  // Contact activity heatmap: 12-week weekly message + note counts (oldest → newest).
+  getContactActivityHeatmap: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<Array<{ week_start: string; messages: number; notes: number; total: number }>> => {
+    if (isDemoMode) {
+      const seed = contactId.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+      const now = new Date()
+      const dayOfWeek = now.getDay()
+      const monday = new Date(now)
+      monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7))
+      return Promise.resolve(
+        Array.from({ length: 12 }, (_, idx) => {
+          const i = 11 - idx
+          const ws = new Date(monday)
+          ws.setDate(monday.getDate() - i * 7)
+          const s = (seed + i * 37) % 100
+          const messages = s < 20 ? 0 : s < 50 ? 1 : s < 70 ? 2 : s < 85 ? 3 : s < 95 ? 4 : 5
+          const notes = (seed + i * 13) % 3
+          return {
+            week_start: ws.toISOString().slice(0, 10),
+            messages,
+            notes,
+            total: messages + notes,
+          }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/activity-heatmap`, {}, token)
+  },
+
+  // Contact engagement score: 0–100 from messages + notes + task completion (last 90 days).
+  getContactEngagementScore: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    score: number;
+    message_count: number;
+    note_count: number;
+    tasks_total: number;
+    tasks_done: number;
+    components: { messages: number; notes: number; tasks: number };
+  }> => {
+    if (isDemoMode) {
+      const seed = contactId.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+      const message_count = (seed % 6)
+      const note_count = ((seed * 7) % 4)
+      const tasks_total = ((seed * 3) % 5)
+      const tasks_done = tasks_total === 0 ? 0 : ((seed * 11) % (tasks_total + 1))
+      const messages_score = Math.min(40, message_count * 8)
+      const notes_score = Math.min(30, note_count * 10)
+      const tasks_score = tasks_total > 0 ? Math.round(30 * tasks_done / tasks_total) : 0
+      return Promise.resolve({
+        score: messages_score + notes_score + tasks_score,
+        message_count,
+        note_count,
+        tasks_total,
+        tasks_done,
+        components: { messages: messages_score, notes: notes_score, tasks: tasks_score },
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/engagement-score`, {}, token)
+  },
+
+  // Deal activity heatmap: weekly activity_events + messages + deal_notes counts (last 12 weeks).
+  // Agent run success/failure stats (last 30 days, grouped by agent name)
+  getAgentRunStats: (workspaceId: string, token: string): Promise<Array<{ agent_name: string; success: number; failure: number }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { agent_name: 'Call Summarizer',   success: 18, failure: 1 },
+        { agent_name: 'Email Composer',    success: 34, failure: 3 },
+        { agent_name: 'Lead Scorer',       success: 27, failure: 2 },
+        { agent_name: 'Pipeline Optimizer', success: 12, failure: 0 },
+        { agent_name: 'Semantic Sorter',   success: 41, failure: 4 },
+        { agent_name: 'Sentiment Analyzer', success: 22, failure: 1 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/agents/run-stats`, {}, token)
+  },
+
+  getDealActivityHeatmap: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<Array<{ week_start: string; events: number; messages: number; notes: number; total: number }>> => {
+    if (isDemoMode) {
+      const seed = dealId.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+      const now = new Date()
+      const dayOfWeek = now.getDay()
+      const monday = new Date(now)
+      monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7))
+      return Promise.resolve(
+        Array.from({ length: 12 }, (_, idx) => {
+          const i = 11 - idx
+          const ws = new Date(monday)
+          ws.setDate(monday.getDate() - i * 7)
+          const s = (seed + i * 41) % 100
+          const events = s < 30 ? 0 : s < 55 ? 1 : s < 75 ? 2 : s < 90 ? 3 : 4
+          const messages = (seed + i * 17) % 3
+          const notes = (seed + i * 7) % 2
+          return {
+            week_start: ws.toISOString().slice(0, 10),
+            events,
+            messages,
+            notes,
+            total: events + messages + notes,
+          }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/activity-heatmap`, {}, token)
+  },
+
+  getDealStageHistory: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<Array<{ stage: string; label: string; entered_at: string; days_in_stage: number; is_current: boolean }>> => {
+    if (isDemoMode) {
+      const STAGE_ORDER = ['discovery', 'qualified', 'proposal', 'negotiation', 'closed_won', 'closed_lost']
+      const STAGE_LABELS: Record<string, string> = {
+        discovery: 'Discovery', qualified: 'Qualified', proposal: 'Proposal',
+        negotiation: 'Negotiation', closed_won: 'Closed Won', closed_lost: 'Closed Lost',
+      }
+      const deal = demoDeals.find(d => d.id === dealId)
+      const currentStage = deal?.stage ?? 'discovery'
+      const currentIdx = STAGE_ORDER.indexOf(currentStage)
+      const traversed = currentIdx >= 0 ? STAGE_ORDER.slice(0, currentIdx + 1) : [currentStage]
+      const now = Date.now()
+      // Seed total deal age from dealId char codes for determinism
+      const seed = dealId.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+      const totalDays = 30 + (seed % 45)
+      const daysPerStage = Math.max(1, Math.floor(totalDays / traversed.length))
+      return Promise.resolve(
+        traversed.map((stage, i) => {
+          const isLast = i === traversed.length - 1
+          const entered = new Date(now - (traversed.length - i) * daysPerStage * 86400000)
+          const days = isLast ? Math.floor((now - entered.getTime()) / 86400000) : daysPerStage
+          return {
+            stage,
+            label: STAGE_LABELS[stage] ?? stage,
+            entered_at: entered.toISOString(),
+            days_in_stage: Math.max(0, days),
+            is_current: isLast,
+          }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/stage-history`, {}, token)
+  },
+
+  getDealCompetitors: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{ competitors: string[] }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, string[]> = {
+        'd-001': ['Salesforce', 'HubSpot'],
+        'd-002': ['Pipedrive'],
+        'd-003': [],
+      }
+      return Promise.resolve({ competitors: stubs[dealId] ?? [] })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/competitors`, {}, token)
+  },
+
+  updateDealCompetitors: (
+    workspaceId: string,
+    dealId: string,
+    competitors: string[],
+    token: string,
+  ): Promise<{ competitors: string[] }> => {
+    if (isDemoMode) {
+      return Promise.resolve({ competitors })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/competitors`, {
+      method: 'PUT',
+      body: JSON.stringify({ competitors }),
+    }, token)
+  },
+
+  getContactDealSummary: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    total_pipeline_value: number;
+    closed_won_value: number;
+    open_deal_count: number;
+    win_rate: number | null;
+    avg_deal_size: number | null;
+    total_deals: number;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { total_pipeline_value: number; closed_won_value: number; open_deal_count: number; win_rate: number | null; avg_deal_size: number | null; total_deals: number }> = {
+        'c-001': { total_pipeline_value: 145000, closed_won_value: 95000, open_deal_count: 2, win_rate: 67, avg_deal_size: 80000, total_deals: 3 },
+        'c-002': { total_pipeline_value: 220000, closed_won_value: 0,     open_deal_count: 2, win_rate: null, avg_deal_size: 110000, total_deals: 2 },
+        'c-003': { total_pipeline_value: 0,       closed_won_value: 60000, open_deal_count: 0, win_rate: 100, avg_deal_size: 60000,  total_deals: 1 },
+      }
+      return Promise.resolve(stubs[contactId] ?? { total_pipeline_value: 0, closed_won_value: 0, open_deal_count: 0, win_rate: null, avg_deal_size: null, total_deals: 0 })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/deal-summary`, {}, token)
+  },
+
+  getSuggestedMerges: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    pairs: Array<{
+      contact_a: { id: string; name: string; email: string | null; company: string; status: string };
+      contact_b: { id: string; name: string; email: string | null; company: string; status: string };
+      similarity_score: number;
+      reason: string;
+    }>;
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        pairs: [
+          {
+            contact_a: { id: 'c-001', name: 'Sarah Chen', email: 'sarah.chen@techcorp.com', company: 'TechCorp Solutions', status: 'customer' },
+            contact_b: { id: 'c-dup-1', name: 'Sarah C. Chen', email: 's.chen@techcorp.com', company: 'TechCorp Solutions', status: 'lead' },
+            similarity_score: 0.91,
+            reason: 'similar name + same email domain',
+          },
+          {
+            contact_a: { id: 'c-006', name: 'Lena Kowalski', email: 'lena.k@mediahub.eu', company: 'MediaHub Europe', status: 'customer' },
+            contact_b: { id: 'c-dup-2', name: 'Lena Kowalczyk', email: 'lena@mediahub.eu', company: 'MediaHub Europe', status: 'prospect' },
+            similarity_score: 0.78,
+            reason: 'similar name + same email domain',
+          },
+        ],
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/duplicate-candidates`, {}, token)
   },
 }

@@ -39,22 +39,12 @@ class AIQueryResponse(BaseModel):
     answer: str
 
 
-@router.post("/workspaces/{workspace_id}/ai/query", response_model=AIQueryResponse)
-@limiter.limit("20/minute")
-async def ai_query(
-    request: Request,
-    workspace_id: uuid.UUID,
-    body: AIQueryRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> AIQueryResponse:
-    """Freeform CRM question answered by Claude with live workspace context."""
-    if current_user.workspace_id != workspace_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+async def answer_crm_query(query: str, workspace_id: uuid.UUID, db: AsyncSession) -> str:
+    """Answer a freeform CRM question with live workspace context.
 
-    if not body.query.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Query cannot be empty")
-
+    Shared by the POST /ai/query route and the /mcp `ask_crm` tool so both speak to
+    the same Nova system prompt + workspace snapshot. Raises on AI failure.
+    """
     # Build workspace snapshot for context
     contact_count = await db.scalar(
         select(func.count()).where(Contact.workspace_id == workspace_id)
@@ -102,15 +92,34 @@ async def ai_query(
         )
         context += f"- Recent activity:\n{event_lines}\n"
 
+    client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=512,
+        system=_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": f"{context}\n\nUser question: {query}"}],
+    )
+    return msg.content[0].text.strip() if msg.content else "I couldn't generate a response."
+
+
+@router.post("/workspaces/{workspace_id}/ai/query", response_model=AIQueryResponse)
+@limiter.limit("20/minute")
+async def ai_query(
+    request: Request,
+    workspace_id: uuid.UUID,
+    body: AIQueryRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AIQueryResponse:
+    """Freeform CRM question answered by Claude with live workspace context."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if not body.query.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Query cannot be empty")
+
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=512,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": f"{context}\n\nUser question: {body.query}"}],
-        )
-        answer = msg.content[0].text.strip() if msg.content else "I couldn't generate a response."
+        answer = await answer_crm_query(body.query, workspace_id, db)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

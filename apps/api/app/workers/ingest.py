@@ -24,6 +24,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
+from app.database import PGBOUNCER_CONNECT_ARGS
+
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -38,7 +40,7 @@ _SKIP_SENDER_PATTERNS = [
 
 def _get_async_session() -> async_sessionmaker[AsyncSession]:
     url = os.getenv("DATABASE_URL", "")
-    engine = create_async_engine(url, echo=False)
+    engine = create_async_engine(url, echo=False, connect_args=PGBOUNCER_CONNECT_ARGS)
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -65,10 +67,22 @@ def _is_automated_sender(sender: str) -> bool:
     return any(pattern in lower for pattern in _SKIP_SENDER_PATTERNS)
 
 
-async def _link_contact(db: AsyncSession, workspace_id: uuid.UUID, sender_email: str | None) -> uuid.UUID | None:
+async def _link_contact(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    sender_email: str | None,
+    *,
+    auto_create: bool = False,
+) -> uuid.UUID | None:
     """Parse the bare address out of a (possibly RFC2822) sender header, then
-    SELECT a workspace-scoped Contact by case-insensitive email. Link-only — never
-    auto-creates a Contact. Returns the contact id, or None if no match.
+    SELECT a workspace-scoped Contact by case-insensitive email.
+
+    With ``auto_create=True`` (the live inbound ingest path) an unknown *human*
+    sender is created as a new ``lead`` contact, so inbound email/Slack becomes a
+    real pipeline instead of dropping on the floor. Automated senders (noreply@,
+    newsletters, bounces, …) are never auto-created. With ``auto_create=False``
+    (the link-only backfill) behavior is unchanged: returns an existing contact id
+    or None, never creating. Returns the contact id, or None.
     """
     from email.utils import parseaddr
     from sqlalchemy import func as sa_func
@@ -77,7 +91,7 @@ async def _link_contact(db: AsyncSession, workspace_id: uuid.UUID, sender_email:
 
     if not sender_email:
         return None
-    _, addr = parseaddr(sender_email)
+    display_name, addr = parseaddr(sender_email)
     addr = addr.strip().lower()
     if not addr:
         return None
@@ -89,7 +103,72 @@ async def _link_contact(db: AsyncSession, workspace_id: uuid.UUID, sender_email:
         )
     )
     contact = result.scalar_one_or_none()
-    return contact.id if contact is not None else None
+    if contact is not None:
+        return contact.id
+
+    if not auto_create or _is_automated_sender(addr):
+        return None
+
+    # Unknown human sender -> auto-create a lead so inbound becomes real pipeline.
+    # Model defaults fill the rest (status="lead", ml_score warm/50, …).
+    contact = Contact(
+        workspace_id=workspace_id,
+        email=addr,
+        name=(display_name.strip() or None),
+    )
+    db.add(contact)
+    await db.flush()  # assign id + make this lead visible to later lookups in the batch
+    logger.info(
+        "ingest auto-created lead contact workspace=%s email=%s", workspace_id, addr
+    )
+    return contact.id
+
+
+async def _run_backfill_contacts(workspace_id: str) -> dict[str, Any]:
+    """Link existing messages whose contact_id IS NULL to a workspace contact.
+
+    Uses the exact same parse+case-insensitive-match logic as the live ingest
+    path (via _link_contact), so a contact added after a message was ingested
+    retroactively picks up its history. Link-only — never auto-creates a Contact,
+    never overwrites an existing link, never deletes anything.
+    """
+    from app.models.message import Message
+
+    ws_uuid = uuid.UUID(workspace_id)
+    SessionFactory = _get_async_session()
+    scanned = 0
+    linked = 0
+
+    async with SessionFactory() as db:
+        result = await db.execute(
+            select(Message).where(
+                Message.workspace_id == ws_uuid,
+                Message.contact_id.is_(None),
+            )
+        )
+        messages = list(result.scalars().all())
+
+        for message in messages:
+            scanned += 1
+            contact_id = await _link_contact(db, ws_uuid, message.sender_email)
+            if contact_id is not None:
+                message.contact_id = contact_id  # type: ignore[assignment]
+                db.add(message)
+                linked += 1
+
+        await db.commit()
+
+    logger.info(
+        "backfill_contacts complete workspace=%s scanned=%d linked=%d",
+        workspace_id, scanned, linked,
+    )
+    return {"workspace_id": workspace_id, "scanned": scanned, "linked": linked}
+
+
+@celery_app.task(name="app.workers.ingest.backfill_message_contact_ids", bind=True)
+def backfill_message_contact_ids(self: Any, workspace_id: str) -> dict[str, Any]:
+    """Celery task: link existing unlinked messages to workspace contacts (link-only)."""
+    return asyncio.get_event_loop().run_until_complete(_run_backfill_contacts(workspace_id))
 
 
 def _build_relevance_prompt(subject: str, sender: str, snippet: str) -> str:
@@ -284,7 +363,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 )
                 continue
 
-            contact_id = await _link_contact(db, workspace_id, cand["sender_email"])
+            contact_id = await _link_contact(db, workspace_id, cand["sender_email"], auto_create=True)
 
             message = Message(
                 workspace_id=workspace_id,

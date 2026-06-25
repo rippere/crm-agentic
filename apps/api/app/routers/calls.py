@@ -94,7 +94,9 @@ async def upload_call(
     await db.refresh(call)
 
     from app.workers.transcribe import transcribe_call
+    from app.routers.agents import _mark_job_dispatched
     task = transcribe_call.delay(str(call.id), tmp.name)
+    _mark_job_dispatched(task.id, str(workspace_id))
 
     return {"call_summary_id": str(call.id), "job_id": task.id, "status": "processing"}
 

@@ -1,18 +1,22 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import { useDeals } from "@/hooks/useDeals";
 import { cn, formatCurrency, stageConfig, dealStageOrder } from "@/lib/utils";
+import { apiClient } from "@/lib/api-client";
+import { createBrowserClient } from "@/lib/supabase";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
 } from "recharts";
 import {
-  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock,
+  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot,
 } from "lucide-react";
+
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
 const STAGE_COLORS: Record<string, string> = {
   discovery:   "#52525B",
@@ -35,8 +39,55 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
   );
 };
 
+const VelocityTooltip = ({ active, payload, label }: { active?: boolean; payload?: { value: number; payload: { deal_count: number } }[]; label?: string }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+      <p className="font-mono text-zinc-400 mb-1">{label}</p>
+      <p className="text-zinc-200">Avg: <span className="font-mono text-indigo-300">{payload[0].value}d</span></p>
+      <p className="text-zinc-500">{payload[0].payload.deal_count} deal{payload[0].payload.deal_count !== 1 ? "s" : ""}</p>
+    </div>
+  );
+};
+
+type FunnelRow = { stage: string; deal_count: number; conversion_rate: number | null; label: string };
+
+type OutcomeReasonRow = { reason: string; label: string; won: number; lost: number };
+
 export default function ReportsPage() {
   const { deals, loading } = useDeals();
+  const [velocityData, setVelocityData] = useState<{ stage: string; avg_days: number; deal_count: number; label: string }[]>([]);
+  const [funnelData, setFunnelData] = useState<FunnelRow[]>([]);
+  const [outcomeReasons, setOutcomeReasons] = useState<OutcomeReasonRow[]>([]);
+  const [agentRunStats, setAgentRunStats] = useState<{ agent_name: string; success: number; failure: number }[]>([]);
+
+  useEffect(() => {
+    if (DEMO_MODE) {
+      apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
+        setVelocityData(data.map((v) => ({ ...v, label: stageConfig[v.stage as keyof typeof stageConfig]?.label ?? v.stage })));
+      }).catch(() => {});
+      apiClient.getDealFunnel("demo-workspace-1", "demo-token").then((data) => {
+        setFunnelData(data.map((r) => ({ ...r, label: stageConfig[r.stage as keyof typeof stageConfig]?.label ?? r.stage })));
+      }).catch(() => {});
+      apiClient.getDealOutcomeReasons("demo-workspace-1", "demo-token").then(setOutcomeReasons).catch(() => {});
+      apiClient.getAgentRunStats("demo-workspace-1", "demo-token").then(setAgentRunStats).catch(() => {});
+      return;
+    }
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) return;
+      const workspaceId: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+      if (!workspaceId) return;
+      apiClient.getDealVelocity(workspaceId, session.access_token).then((data) => {
+        setVelocityData(data.map((v) => ({ ...v, label: stageConfig[v.stage as keyof typeof stageConfig]?.label ?? v.stage })));
+      }).catch(() => {});
+      apiClient.getDealFunnel(workspaceId, session.access_token).then((data) => {
+        setFunnelData(data.map((r) => ({ ...r, label: stageConfig[r.stage as keyof typeof stageConfig]?.label ?? r.stage })));
+      }).catch(() => {});
+      apiClient.getDealOutcomeReasons(workspaceId, session.access_token).then(setOutcomeReasons).catch(() => {});
+      apiClient.getAgentRunStats(workspaceId, session.access_token).then(setAgentRunStats).catch(() => {});
+    });
+  }, []);
 
   const stats = useMemo(() => {
     const won = deals.filter((d) => d.stage === "closed_won");
@@ -363,6 +414,217 @@ export default function ReportsPage() {
           </ResponsiveContainer>
         </div>
       </Card>
+
+      {/* Pipeline velocity — avg days in stage */}
+      {velocityData.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Pipeline Velocity</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Avg days each deal has spent in current stage</p>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+              <Timer className="h-3.5 w-3.5" />
+              <span>{velocityData.reduce((s, v) => s + v.deal_count, 0)} deals measured</span>
+            </div>
+          </div>
+          <div className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={velocityData} layout="vertical" margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272A" horizontal={false} />
+                <XAxis
+                  type="number"
+                  tick={{ fill: "#71717A", fontSize: 10 }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(v) => `${v}d`}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="label"
+                  tick={{ fill: "#71717A", fontSize: 10 }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={80}
+                />
+                <Tooltip content={<VelocityTooltip />} />
+                <Bar dataKey="avg_days" name="Avg days" radius={[0, 4, 4, 0]} maxBarSize={18} label={{ position: "right", fill: "#71717A", fontSize: 10, formatter: (v: number) => `${v}d` }}>
+                  {velocityData.map((entry) => (
+                    <Cell key={entry.stage} fill={STAGE_COLORS[entry.stage] ?? "#52525B"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      {/* Stage conversion funnel */}
+      {funnelData.length > 0 && (() => {
+        const maxCount = Math.max(...funnelData.map((r) => r.deal_count), 1);
+        return (
+          <Card>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Stage Conversion Funnel</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">Deal count per stage · % converted from previous</p>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                <Filter className="h-3.5 w-3.5" />
+                <span>{funnelData.reduce((s, r) => s + r.deal_count, 0)} total deals</span>
+              </div>
+            </div>
+            <div className="space-y-0.5">
+              {funnelData.map((row, i) => (
+                <div key={row.stage}>
+                  {i > 0 && (
+                    <div className="flex items-center gap-2 pl-28 py-1">
+                      <span className="text-[10px] font-mono text-zinc-600">
+                        {row.conversion_rate !== null && row.conversion_rate > 0
+                          ? `↓ ${row.conversion_rate.toFixed(1)}% converted`
+                          : "↓ 0% converted"}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3">
+                    <div className="w-24 flex-shrink-0 text-right">
+                      <span className="text-[11px] text-zinc-400">{row.label}</span>
+                    </div>
+                    <div className="flex-1 h-7 bg-zinc-800/40 rounded-md overflow-hidden">
+                      <div
+                        className="h-full rounded-md flex items-center pl-2 transition-all duration-500"
+                        style={{
+                          width: row.deal_count > 0 ? `${Math.max(4, (row.deal_count / maxCount) * 100)}%` : "3px",
+                          background: STAGE_COLORS[row.stage] ?? "#52525B",
+                          opacity: row.deal_count === 0 ? 0.25 : 1,
+                        }}
+                      >
+                        {row.deal_count > 0 && (
+                          <span className="text-[10px] font-mono font-bold text-white/80 select-none">
+                            {row.deal_count}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="w-8 flex-shrink-0">
+                      <span className="text-xs font-mono text-zinc-500">{row.deal_count}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        );
+      })()}
+
+      {/* Win/Loss Reason Breakdown */}
+      {outcomeReasons.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Win / Loss Reasons</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Closed deal count by tagged outcome reason</p>
+            </div>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="flex items-center gap-1.5 text-[#00C896]">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm bg-[#00C896]" /> Won
+              </span>
+              <span className="flex items-center gap-1.5 text-[#F43F5E]">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm bg-[#F43F5E]" /> Lost
+              </span>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={outcomeReasons} margin={{ top: 0, right: 8, left: -24, bottom: 0 }} barCategoryGap="30%">
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis dataKey="label" tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-2">{label}</p>
+                      {payload.map((p) => (
+                        <div key={p.name} className="flex items-center gap-2" style={{ color: p.color }}>
+                          <span>{p.name === "won" ? "Won" : "Lost"}:</span>
+                          <span className="font-mono font-bold">{p.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="won" name="won" fill="#00C896" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              <Bar dataKey="lost" name="lost" fill="#F43F5E" radius={[4, 4, 0, 0]} maxBarSize={28} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Agent run success/failure chart */}
+      {agentRunStats.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Agent Run Success Rate</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Last 30 days · runs per agent</p>
+            </div>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="flex items-center gap-1.5 text-emerald-400">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500" /> Success
+              </span>
+              <span className="flex items-center gap-1.5 text-rose-400">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm bg-rose-500" /> Failure
+              </span>
+              <Bot className="h-3.5 w-3.5 text-zinc-500" />
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart
+              data={agentRunStats.map((r) => ({
+                ...r,
+                label: r.agent_name.replace(" ", "\n"),
+              }))}
+              margin={{ top: 0, right: 8, left: -24, bottom: 0 }}
+              barCategoryGap="30%"
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis
+                dataKey="agent_name"
+                tick={{ fill: "#71717A", fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(v: string) => v.split(" ").slice(0, 2).join(" ")}
+              />
+              <YAxis tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-2">{label}</p>
+                      {payload.map((p) => (
+                        <div key={p.name} className="flex items-center gap-2" style={{ color: p.color }}>
+                          <span className="capitalize">{p.name}:</span>
+                          <span className="font-mono font-bold">{p.value}</span>
+                        </div>
+                      ))}
+                      {payload.length === 2 && (
+                        <div className="mt-1.5 pt-1.5 border-t border-zinc-700 text-zinc-500">
+                          Total: {(payload[0].value as number) + (payload[1].value as number)} runs
+                        </div>
+                      )}
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="success" name="success" fill="#10B981" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              <Bar dataKey="failure" name="failure" fill="#F43F5E" radius={[4, 4, 0, 0]} maxBarSize={28} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
 
       {/* Stale alert */}
       {stats.stale > 0 && (

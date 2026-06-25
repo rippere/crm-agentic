@@ -9,7 +9,7 @@ import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import { cn, formatCurrency, stageConfig, dealStageOrder, SIGNAL } from "@/lib/utils";
 import Link from "next/link";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight } from "lucide-react";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight, Search } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
 interface PipelineSuggestion {
@@ -21,6 +21,18 @@ interface PipelineSuggestion {
   action: string;
   reason: string;
   priority: "high" | "medium";
+}
+
+interface AtRiskDeal {
+  id: string;
+  title: string | null;
+  company: string | null;
+  stage: string;
+  value: number;
+  ml_win_probability: number;
+  days_stale: number;
+  next_action_date: string | null;
+  risk_signals: string[];
 }
 
 function WinProbabilityBar({ value }: { value: number }) {
@@ -312,14 +324,22 @@ interface NewDealForm {
 function NewDealModal({ defaultStage, onClose, onCreate }: { defaultStage: DealStage; onClose: () => void; onCreate: (f: NewDealForm) => Promise<void> }) {
   const [form, setForm] = useState<NewDealForm>({ title: "", company: "", value: "", stage: defaultStage, expectedClose: "" });
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.title.trim()) return;
     setSaving(true);
-    await onCreate(form);
-    setSaving(false);
-    onClose();
+    setError(null);
+    try {
+      await onCreate(form);
+      onClose();
+    } catch (err) {
+      // Surface the failure instead of hanging on "Creating…" forever.
+      setError(err instanceof Error && err.message ? err.message : "Couldn't create the deal. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -359,6 +379,11 @@ function NewDealModal({ defaultStage, onClose, onCreate }: { defaultStage: DealS
               ))}
             </select>
           </div>
+          {error && (
+            <p role="alert" className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+              {error}
+            </p>
+          )}
           <div className="flex gap-2 pt-1">
             <Button type="button" variant="secondary" className="flex-1 justify-center" onClick={onClose}>Cancel</Button>
             <Button type="submit" variant="primary" className="flex-1 justify-center" disabled={saving || !form.title.trim()}>
@@ -371,12 +396,20 @@ function NewDealModal({ defaultStage, onClose, onCreate }: { defaultStage: DealS
   );
 }
 
+const LS_PIPELINE_SEARCH_KEY = "pipeline_search";
+
 export default function PipelinePage() {
   const { deals, loading, createDeal, updateDeal, refetch } = useDeals();
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [newDealStage, setNewDealStage] = useState<DealStage | null>(null);
+  const [dealSearch, setDealSearch] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem(LS_PIPELINE_SEARCH_KEY) ?? "";
+  });
   const [suggestions, setSuggestions] = useState<PipelineSuggestion[]>([]);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
+  const [atRiskDeals, setAtRiskDeals] = useState<AtRiskDeal[]>([]);
+  const [atRiskDismissed, setAtRiskDismissed] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkStageTarget, setBulkStageTarget] = useState<DealStage | null>(null);
@@ -399,13 +432,45 @@ export default function PipelinePage() {
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) return;
-      const workspaceId: string | undefined = session.user.user_metadata?.workspace_id;
+      const workspaceId: string | undefined = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id);
       if (!workspaceId) return;
       apiClient.getPipelineSuggestions(workspaceId, session.access_token)
         .then((data) => { if (Array.isArray(data)) setSuggestions(data as PipelineSuggestion[]); })
         .catch(() => {});
     });
   }, []);
+
+  useEffect(() => {
+    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+    if (isDemoMode) {
+      apiClient.getAtRiskDeals("demo-workspace-1", "demo-token")
+        .then((data) => { if (Array.isArray(data)) setAtRiskDeals(data); })
+        .catch(() => {});
+      return;
+    }
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) return;
+      const workspaceId: string | undefined = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id);
+      if (!workspaceId) return;
+      apiClient.getAtRiskDeals(workspaceId, session.access_token)
+        .then((data) => { if (Array.isArray(data)) setAtRiskDeals(data); })
+        .catch(() => {});
+    });
+  }, []);
+
+  // Persist search to localStorage
+  useEffect(() => { localStorage.setItem(LS_PIPELINE_SEARCH_KEY, dealSearch); }, [dealSearch]);
+
+  const filteredDeals = dealSearch.trim()
+    ? deals.filter((d) => {
+        const q = dealSearch.toLowerCase();
+        return (
+          (d.title ?? "").toLowerCase().includes(q) ||
+          (d.company ?? "").toLowerCase().includes(q)
+        );
+      })
+    : deals;
 
   const totalPipelineValue = deals.filter((d) => d.stage !== "closed_lost").reduce((s, d) => s + d.value, 0);
   const wonValue = deals.filter((d) => d.stage === "closed_won").reduce((s, d) => s + d.value, 0);
@@ -448,7 +513,7 @@ export default function PipelinePage() {
       if (!isDemoMode) {
         const supabase = createBrowserClient();
         const { data: { session } } = await supabase.auth.getSession();
-        const workspaceId = session?.user?.user_metadata?.workspace_id ?? "";
+        const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
         const token = session?.access_token ?? "";
         if (workspaceId && token) {
           await apiClient.bulkDealAction(workspaceId, { action: "delete", deal_ids: Array.from(selectedIds) }, token);
@@ -468,7 +533,7 @@ export default function PipelinePage() {
       if (!isDemoMode) {
         const supabase = createBrowserClient();
         const { data: { session } } = await supabase.auth.getSession();
-        const workspaceId = session?.user?.user_metadata?.workspace_id ?? "";
+        const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
         const token = session?.access_token ?? "";
         if (workspaceId && token) {
           await apiClient.bulkDealAction(workspaceId, { action: "move_stage", deal_ids: Array.from(selectedIds), stage }, token);
@@ -491,7 +556,7 @@ export default function PipelinePage() {
       if (!isDemoMode) {
         const supabase = createBrowserClient();
         const { data: { session } } = await supabase.auth.getSession();
-        workspaceId = session?.user?.user_metadata?.workspace_id ?? "";
+        workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
         token = session?.access_token ?? "";
       }
       if (!workspaceId || !token) return;
@@ -543,6 +608,51 @@ export default function PipelinePage() {
                     </div>
                     <span className="text-[10px] font-mono text-zinc-500 flex-shrink-0">{formatCurrency(s.value)}</span>
                   </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* At-Risk Deals Banner */}
+      {atRiskDeals.length > 0 && !atRiskDismissed && (
+        <Card className="border-amber-500/20 bg-amber-500/5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <AlertTriangle className="h-4 w-4 text-amber-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold text-zinc-100">
+                  At-Risk Deals —{" "}
+                  <span className="text-amber-400">{atRiskDeals.length} deal{atRiskDeals.length !== 1 ? "s" : ""} need attention</span>
+                </p>
+                <button
+                  onClick={() => setAtRiskDismissed(true)}
+                  className="text-zinc-600 hover:text-zinc-400 transition-colors"
+                  aria-label="Dismiss at-risk banner"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-2">
+                {atRiskDeals.slice(0, 4).map((d) => (
+                  <Link key={d.id} href={`/pipeline/${d.id}`} className="flex items-center gap-3 rounded-lg bg-zinc-900/60 px-3 py-2 hover:bg-zinc-800/60 transition-colors group">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-xs font-medium text-zinc-200">{d.title ?? "Untitled"}</span>
+                      {d.company && <span className="text-xs text-zinc-500 ml-1">· {d.company}</span>}
+                      {d.risk_signals.length > 0 && (
+                        <span className="text-xs text-amber-500/80 ml-2">· {d.risk_signals[0]}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-[10px] font-mono text-rose-400">{d.ml_win_probability}% win</span>
+                      <span className="text-[10px] font-mono text-zinc-500">{formatCurrency(d.value)}</span>
+                      <ChevronRight className="h-3 w-3 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+                    </div>
+                  </Link>
                 ))}
               </div>
             </div>
@@ -603,10 +713,26 @@ export default function PipelinePage() {
 
       {/* Pipeline Board */}
       <div className="flex-1">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Brain className="h-4 w-4 text-indigo-400" />
-            <span className="text-xs text-zinc-400 font-mono">ML win probability · Deal health (stage staleness + engagement)</span>
+        <div className="flex flex-wrap items-center gap-3 mb-4">
+          <div className="flex items-center gap-2 flex-1 min-w-48 max-w-xs">
+            <Search className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
+            <input
+              type="search"
+              placeholder="Filter deals by title or company…"
+              value={dealSearch}
+              onChange={(e) => setDealSearch(e.target.value)}
+              className="w-full rounded-lg border border-zinc-800 bg-zinc-900 py-1.5 px-2.5 text-xs text-zinc-300 placeholder-zinc-600 outline-none focus:border-indigo-500/50 transition"
+              aria-label="Filter deals"
+            />
+            {dealSearch && (
+              <button onClick={() => setDealSearch("")} className="text-zinc-600 hover:text-zinc-300 flex-shrink-0">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2 text-xs text-zinc-500 ml-auto">
+            <Brain className="h-3.5 w-3.5 text-indigo-400 flex-shrink-0" />
+            <span className="font-mono hidden sm:inline">ML win probability · Deal health</span>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -639,7 +765,7 @@ export default function PipelinePage() {
               <StageColumn
                 key={stage}
                 stage={stage}
-                deals={deals.filter((d) => d.stage === stage)}
+                deals={filteredDeals.filter((d) => d.stage === stage)}
                 onSelect={(d) => { if (!selectedIds.size) setSelectedDeal(d); }}
                 onAddDeal={setNewDealStage}
                 selectedIds={selectedIds}

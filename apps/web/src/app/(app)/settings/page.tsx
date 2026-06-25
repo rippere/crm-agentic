@@ -10,10 +10,11 @@ import { apiClient } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import {
   Settings, Layers, TrendingUp, CheckSquare,
-  Plug, User, LogOut, Save, AlertTriangle, Users, Mail,
+  Plug, User, LogOut, Save, AlertTriangle, Users, Mail, Webhook, ChevronRight,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useRole } from "@/hooks/useRole";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 
@@ -52,7 +53,7 @@ export default function SettingsPage() {
       setToken(session.access_token);
       const user = session.user;
       setUserEmail(user.email ?? null);
-      const wsId = user.user_metadata?.workspace_id as string | undefined;
+      const wsId = (user.app_metadata?.workspace_id ?? user.user_metadata?.workspace_id) as string | undefined;
       if (!wsId) return;
       setWorkspaceId(wsId);
 
@@ -219,6 +220,26 @@ export default function SettingsPage() {
           </form>
         </Card>
       )}
+
+      {/* Developer */}
+      <Card>
+        <div className="flex items-center gap-2 mb-4">
+          <Webhook className="h-4 w-4 text-indigo-400" />
+          <p className="text-sm font-semibold text-zinc-100">Developer</p>
+        </div>
+        <p className="text-xs text-zinc-500 mb-4">
+          Inspect incoming webhook events from Gmail Pub/Sub and Slack Events API.
+        </p>
+        <Link href="/settings/webhooks">
+          <Button variant="secondary" className="w-full justify-between">
+            <div className="flex items-center gap-2">
+              <Webhook className="h-3.5 w-3.5" />
+              Webhook Logs
+            </div>
+            <ChevronRight className="h-3.5 w-3.5 text-zinc-500" />
+          </Button>
+        </Link>
+      </Card>
 
       {/* Account */}
       <Card>

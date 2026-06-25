@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -115,6 +115,8 @@ async def score_message_clarity(
 @router.get("/workspaces/{workspace_id}/messages", response_model=list[MessageResponse])
 async def list_messages(
     workspace_id: uuid.UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[MessageResponse]:
@@ -129,6 +131,8 @@ async def list_messages(
             selectinload(Message.tasks),
         )
         .order_by(Message.received_at.desc().nulls_last())
+        .limit(limit)
+        .offset(offset)
     )
     messages = result.scalars().all()
     return [MessageResponse.model_validate(m) for m in messages]
@@ -154,6 +158,8 @@ async def reprocess_messages(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     from app.workers.ingest import reprocess_workspace_messages
+    from app.routers.agents import _mark_job_dispatched
 
     task = reprocess_workspace_messages.delay(str(workspace_id))
+    _mark_job_dispatched(task.id, str(workspace_id))
     return ReprocessResponse(job_id=task.id)

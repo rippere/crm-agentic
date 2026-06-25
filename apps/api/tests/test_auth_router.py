@@ -209,11 +209,14 @@ async def test_verify_new_user_auto_provisions(app_client):
 
 
 @pytest.mark.asyncio
-async def test_verify_reconciles_workspace_id(app_client):
+async def test_verify_ignores_client_writable_workspace_id(app_client):
+    """WS-B: an existing user's workspace binding must NOT move when the JWT
+    carries a different workspace_id in user-writable metadata (the old
+    reconciliation branch was a cross-tenant IDOR)."""
     fastapi_app, mock_db, workspace_id = app_client
 
     old_ws_id = workspace_id
-    new_ws_id = uuid.uuid4()
+    forged_ws_id = uuid.uuid4()
 
     existing_user = MagicMock()
     existing_user.id = uuid.uuid4()
@@ -221,16 +224,11 @@ async def test_verify_reconciles_workspace_id(app_client):
 
     mock_db.execute = AsyncMock(return_value=_make_scalar_result(existing_user))
 
-    async def fake_refresh(obj):
-        obj.workspace_id = new_ws_id
-
-    mock_db.refresh.side_effect = fake_refresh
-
     supabase_uid = str(uuid.uuid4())
     payload = {
         "sub": supabase_uid,
         "email": "user@example.com",
-        "user_metadata": {"workspace_id": str(new_ws_id)},
+        "user_metadata": {"workspace_id": str(forged_ws_id)},
     }
 
     with patch("app.routers.auth.verify_supabase_jwt", return_value=payload):
@@ -239,7 +237,10 @@ async def test_verify_reconciles_workspace_id(app_client):
                 resp = await ac.post("/auth/verify", headers={"Authorization": "Bearer token"})
 
     assert resp.status_code == 200
-    mock_db.commit.assert_awaited()
+    # Binding stays on the DB row's workspace; the forged claim is ignored.
+    assert resp.json()["workspace_id"] == str(old_ws_id)
+    # No write happens for an existing user — reconciliation is gone.
+    mock_db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

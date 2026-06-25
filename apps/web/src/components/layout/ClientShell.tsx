@@ -18,9 +18,11 @@ interface ClientShellProps {
   mode: WorkspaceMode;
   userEmail?: string;
   userName?: string;
+  /** Owner-private: gates the Life nav item. Resolved server-side from the allowlist. */
+  lifeEnabled?: boolean;
 }
 
-export default function ClientShell({ children, mode, userEmail = "", userName = "User" }: ClientShellProps) {
+export default function ClientShell({ children, mode, userEmail = "", userName = "User", lifeEnabled = false }: ClientShellProps) {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
@@ -88,6 +90,7 @@ export default function ClientShell({ children, mode, userEmail = "", userName =
         mode={mode}
         userEmail={userEmail}
         userName={userName}
+        lifeEnabled={lifeEnabled}
         onSearchClick={openPalette}
         isCollapsed={sidebarCollapsed}
         onExpand={() => setSidebarCollapsed(false)}

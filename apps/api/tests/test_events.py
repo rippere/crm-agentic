@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient, ASGITransport
@@ -131,3 +131,157 @@ async def test_stream_events_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/events")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/activity with type filter + offset
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_activity_type_filter_passes_query_param(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    from app.models.activity_event import ActivityEvent
+    import uuid as _uuid
+    from datetime import datetime, timezone
+    ev = MagicMock(spec=ActivityEvent)
+    ev.id = _uuid.uuid4()
+    ev.workspace_id = workspace_id
+    ev.type = "contact_created"
+    ev.agent_name = "System"
+    ev.description = "New contact"
+    ev.meta = ""
+    ev.severity = "info"
+    ev.created_at = datetime.now(timezone.utc)
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([ev]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/activity?event_type=contact_created&limit=10"
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 1
+    assert data[0]["type"] == "contact_created"
+
+
+# ---------------------------------------------------------------------------
+# SSE generator (stream_events) — error handling: rollback + log + bounded break
+# ---------------------------------------------------------------------------
+#
+# These drive the closure generator directly (not via AsyncClient) because the
+# real handler sleeps 3s/poll and loops until disconnect; we patch the module's
+# asyncio.sleep to a no-op and script request.is_disconnected() to bound the loop.
+
+
+def _disconnect_after(n_polls: int):
+    """is_disconnected() returns False for n_polls connection checks, then True.
+
+    The generator yields ': connected' then checks is_disconnected() at the top of
+    every loop iteration, so n_polls=2 allows two poll attempts before teardown.
+    """
+    calls = {"i": 0}
+
+    async def _is_disconnected() -> bool:
+        calls["i"] += 1
+        return calls["i"] > n_polls
+
+    return _is_disconnected
+
+
+async def _drain(streaming_response) -> list[str]:
+    return [
+        chunk.decode() if isinstance(chunk, (bytes, bytearray)) else chunk
+        async for chunk in streaming_response.body_iterator
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_events_poll_failure_rolls_back_and_heartbeats(workspace_id):
+    """A failing poll rolls the session back (so a poisoned txn can't wedge every
+    subsequent poll) and emits a heartbeat instead of silently swallowing."""
+    from app.routers import events as events_mod
+
+    user = MagicMock()
+    user.workspace_id = workspace_id
+
+    request = MagicMock()
+    request.is_disconnected = _disconnect_after(1)  # one poll, then disconnect
+
+    mock_db = AsyncMock()
+    # Seed cursor query (scalar_one_or_none) returns None; first poll raises.
+    mock_db.execute = AsyncMock(side_effect=[_make_scalar_result(None), RuntimeError("conn reset")])
+    mock_db.rollback = AsyncMock()
+
+    with patch.object(events_mod.asyncio, "sleep", new=AsyncMock(return_value=None)):
+        resp = await events_mod.stream_events(workspace_id, request, db=mock_db, current_user=user)
+        chunks = await _drain(resp)
+
+    mock_db.rollback.assert_awaited_once()
+    assert ": connected\n\n" in chunks
+    assert ": heartbeat\n\n" in chunks
+    # Did NOT abort — only one failure, below the ceiling.
+    assert not any("stream-error" in c for c in chunks)
+
+
+@pytest.mark.asyncio
+async def test_stream_events_aborts_after_max_consecutive_errors(workspace_id):
+    """After _MAX_CONSECUTIVE_ERRORS consecutive poll failures the generator breaks
+    out instead of looping forever heartbeating on a wedged session."""
+    from app.routers import events as events_mod
+
+    user = MagicMock()
+    user.workspace_id = workspace_id
+
+    # Never disconnect on our own — the break MUST come from the error ceiling.
+    request = MagicMock()
+    request.is_disconnected = AsyncMock(return_value=False)
+
+    n = events_mod._MAX_CONSECUTIVE_ERRORS
+    side_effects = [_make_scalar_result(None)] + [RuntimeError("boom")] * (n + 3)
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(side_effect=side_effects)
+    mock_db.rollback = AsyncMock()
+
+    with patch.object(events_mod.asyncio, "sleep", new=AsyncMock(return_value=None)):
+        resp = await events_mod.stream_events(workspace_id, request, db=mock_db, current_user=user)
+        chunks = await _drain(resp)
+
+    # Aborted exactly at the ceiling: one rollback per failed poll, no infinite loop.
+    assert any("stream-error" in c for c in chunks)
+    assert mock_db.rollback.await_count == n
+    # n-1 heartbeats before the final abort chunk.
+    assert chunks.count(": heartbeat\n\n") == n - 1
+
+
+@pytest.mark.asyncio
+async def test_stream_events_success_resets_error_counter(workspace_id):
+    """A successful poll after failures resets the consecutive-error counter, so the
+    stream is not torn down by intermittent (non-consecutive) blips."""
+    from app.routers import events as events_mod
+
+    user = MagicMock()
+    user.workspace_id = workspace_id
+
+    request = MagicMock()
+    request.is_disconnected = _disconnect_after(2)  # two polls, then disconnect
+
+    ev = _fake_event(workspace_id, description="recovered")
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(None),          # seed cursor
+        RuntimeError("transient"),          # poll 1 fails
+        _make_scalars_result([ev]),         # poll 2 succeeds
+    ])
+    mock_db.rollback = AsyncMock()
+
+    with patch.object(events_mod.asyncio, "sleep", new=AsyncMock(return_value=None)):
+        resp = await events_mod.stream_events(workspace_id, request, db=mock_db, current_user=user)
+        chunks = await _drain(resp)
+
+    mock_db.rollback.assert_awaited_once()  # only the one failed poll rolled back
+    assert ": heartbeat\n\n" in chunks
+    assert any("recovered" in c for c in chunks)  # the successful poll's event streamed
+    assert not any("stream-error" in c for c in chunks)

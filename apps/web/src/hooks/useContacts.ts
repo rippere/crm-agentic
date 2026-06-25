@@ -72,7 +72,7 @@ export function useContacts(options: UseContactsOptions = {}) {
     try {
       const supabase = createBrowserClient();
       const { data: { session } } = await supabase.auth.getSession();
-      const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+      const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) as string | undefined;
       const token = session?.access_token;
       if (!workspaceId || !token) {
         setError("Not authenticated");
@@ -110,7 +110,7 @@ export function useContacts(options: UseContactsOptions = {}) {
     const supabase = createBrowserClient();
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
-    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) as string | undefined;
     if (!workspaceId || !token) throw new Error("Not authenticated");
 
     await apiClient.createContact(workspaceId, {
@@ -129,7 +129,7 @@ export function useContacts(options: UseContactsOptions = {}) {
     const supabase = createBrowserClient();
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
-    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) as string | undefined;
     if (!workspaceId || !token) throw new Error("Not authenticated");
 
     const result = await apiClient.updateContact(workspaceId, id, {
@@ -148,7 +148,7 @@ export function useContacts(options: UseContactsOptions = {}) {
     const supabase = createBrowserClient();
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
-    const workspaceId = session?.user?.user_metadata?.workspace_id as string | undefined;
+    const workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) as string | undefined;
     if (!workspaceId || !token) throw new Error("Not authenticated");
 
     await apiClient.deleteContact(workspaceId, id, token);
