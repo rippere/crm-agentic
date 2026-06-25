@@ -78,6 +78,7 @@ Phase 12 — Analytics & Reporting
 Phase 12p: Contact "no reply" detection — GET /workspaces/{id}/contacts/no-reply endpoint (contacts with sent messages but no inbound reply in 7+ days, ordered by oldest outreach first); amber widget on /inbox page; getNoReplyContacts() in api-client with demo stubs; 2 new tests.
 
 ## Blockers
+- **REQUIRES MANUAL ACTION**: master branch is protected from direct automated pushes. Phase 12o commit (`69d1f56`) is on `origin/phase-12o-work`. Local master was merged (commit `c01a2d9`) but push to origin/master returns 403. To land: `git push origin master` from a terminal with your credentials, or merge `phase-12o-work` on GitHub.
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
 - Local DATABASE_URL points to localhost:5433 (Docker Postgres) — /health returns `degraded` locally unless docker-compose is running. Supabase production credentials ARE present in apps/api/.env and apps/web/.env.local.
 - GMAIL_PUBSUB_TOPIC and GMAIL_WEBHOOK_SECRET not set — Gmail push notifications won't work until these are configured via Railway/Render dashboard + Google Cloud Console.
