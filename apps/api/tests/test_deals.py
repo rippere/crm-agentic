@@ -850,8 +850,8 @@ async def test_deal_forecast_returns_monthly_buckets(app_client):
     data = resp.json()
     assert isinstance(data, list)
     assert len(data) == 3
-    # First month should include d1
-    assert data[0]["deal_count"] >= 1
+    # At least one bucket should contain d1 (closes in ~15 days)
+    assert any(bucket["deal_count"] >= 1 for bucket in data)
 
 
 @pytest.mark.asyncio
@@ -1413,5 +1413,53 @@ async def test_overdue_actions_wrong_workspace_returns_403(app_client):
 
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/overdue-actions")
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/at-risk
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_at_risk_deals_returns_matching_deals(app_client):
+    """Returns deals with low win prob, stale stage, and overdue action date."""
+    from datetime import date
+
+    fastapi_app, mock_db, workspace_id = app_client
+    yesterday = date.today() - timedelta(days=1)
+    stale_changed = datetime.now(timezone.utc) - timedelta(days=20)
+
+    d1 = _fake_deal(
+        workspace_id,
+        title="At Risk Deal",
+        stage="proposal",
+        ml_win_probability=25,
+        stage_changed_at=stale_changed,
+        next_action_date=yesterday,
+    )
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([d1]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/at-risk")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "At Risk Deal"
+    assert data[0]["ml_win_probability"] == 25
+    assert data[0]["days_stale"] >= 20
+    assert len(data[0]["risk_signals"]) >= 3
+
+
+@pytest.mark.asyncio
+async def test_at_risk_deals_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's at-risk deals."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/at-risk")
 
     assert resp.status_code == 403

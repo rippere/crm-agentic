@@ -579,6 +579,66 @@ async def outcome_reasons(
     ]
 
 
+@router.get("/workspaces/{workspace_id}/deals/at-risk")
+async def at_risk_deals(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return open deals that combine low win probability, no recent activity, and a past action date.
+
+    A deal is "at risk" when ALL three signals are present:
+    - ml_win_probability < 35
+    - stage_changed_at is 14+ days ago (proxy for no recent activity)
+    - next_action_date is set and <= today
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    today = date.today()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.ml_win_probability < 35,
+            Deal.stage_changed_at <= cutoff,
+            Deal.next_action_date.is_not(None),
+            Deal.next_action_date <= today,
+        ).order_by(Deal.ml_win_probability.asc())
+        .limit(20)
+    )
+    deals = result.scalars().all()
+
+    out = []
+    for d in deals:
+        sc = d.stage_changed_at
+        if sc is not None and sc.tzinfo is None:
+            sc = sc.replace(tzinfo=timezone.utc)
+        days_stale = (datetime.now(timezone.utc) - sc).days if sc else 0
+        risk_signals = []
+        if (d.ml_win_probability or 50) < 35:
+            risk_signals.append(f"Win probability only {d.ml_win_probability}%")
+        if days_stale >= 14:
+            risk_signals.append(f"No stage change in {days_stale} days")
+        if d.next_action_date and d.next_action_date <= today:
+            overdue = (today - d.next_action_date).days
+            risk_signals.append(f"Action overdue by {overdue} day{'s' if overdue != 1 else ''}")
+        out.append({
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "stage": d.stage,
+            "value": float(d.value or 0),
+            "ml_win_probability": d.ml_win_probability,
+            "days_stale": days_stale,
+            "next_action_date": d.next_action_date.isoformat() if d.next_action_date else None,
+            "risk_signals": risk_signals,
+        })
+    return out
+
+
 @router.get("/workspaces/{workspace_id}/deals/overdue-actions")
 async def overdue_actions(
     workspace_id: uuid.UUID,
