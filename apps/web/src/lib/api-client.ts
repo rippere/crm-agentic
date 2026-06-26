@@ -687,6 +687,14 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/stale?threshold=${threshold}`, {}, token)
   },
 
+  getAtRiskDeals: (workspaceId: string, token: string): Promise<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; ml_win_probability: number; days_inactive: number }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'demo-deal-2', title: 'TechStart Series A', company: 'TechStart', stage: 'negotiation', value: 22000, ml_win_probability: 18, days_inactive: 21 },
+      { id: 'demo-deal-5', title: 'MedDevice Q2 Renewal', company: 'MedDevice Co', stage: 'proposal', value: 34500, ml_win_probability: 24, days_inactive: 17 },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/deals/at-risk`, {}, token)
+  },
+
   getOverdueActions: (workspaceId: string, token: string): Promise<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; next_action: string | null; next_action_date: string; days_overdue: number }>> => {
     if (isDemoMode) return Promise.resolve([
       { id: 'demo-deal-1', title: 'Acme Corp Expansion', company: 'Acme Corp', stage: 'negotiation', value: 48000, next_action: 'Send revised proposal to legal', next_action_date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), days_overdue: 1 },

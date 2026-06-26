@@ -1415,3 +1415,45 @@ async def test_overdue_actions_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/overdue-actions")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/at-risk
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_at_risk_returns_low_probability_inactive_deals(app_client):
+    """Returns open deals with low win probability and no recent activity."""
+    fastapi_app, mock_db, workspace_id = app_client
+    stale_date = datetime.now(timezone.utc) - timedelta(days=21)
+
+    d1 = _fake_deal(workspace_id, title="Fading Deal", stage="proposal",
+                    ml_win_probability=15, updated_at=stale_date)
+    d2 = _fake_deal(workspace_id, title="Cold Lead", stage="qualified",
+                    ml_win_probability=22, updated_at=stale_date)
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([d1, d2]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/at-risk")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["title"] == "Fading Deal"
+    assert data[0]["ml_win_probability"] == 15
+    assert data[0]["days_inactive"] >= 20
+    assert "stage" in data[0]
+    assert "value" in data[0]
+
+
+@pytest.mark.asyncio
+async def test_at_risk_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's at-risk deals."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/at-risk")
+
+    assert resp.status_code == 403
