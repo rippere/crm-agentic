@@ -1415,3 +1415,44 @@ async def test_overdue_actions_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/overdue-actions")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/at-risk
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_at_risk_deals_returns_matching_deals(app_client):
+    """Returns open deals that meet at least one at-risk criterion."""
+    fastapi_app, mock_db, workspace_id = app_client
+    stale_ts = datetime.now(timezone.utc) - timedelta(days=20)
+    d_low_prob = _fake_deal(workspace_id, title="Low Win Deal", ml_win_probability=25, stage="proposal", stage_changed_at=stale_ts)
+    d_stale = _fake_deal(workspace_id, title="Stale Deal", ml_win_probability=60, stage="qualified", stage_changed_at=stale_ts)
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([d_low_prob, d_stale]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/at-risk")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    low = next(r for r in data if r["title"] == "Low Win Deal")
+    assert low["ml_win_probability"] == 25
+    assert "low_win_probability" in low["risk_factors"]
+    assert "no_activity_14d" in low["risk_factors"]
+    stale = next(r for r in data if r["title"] == "Stale Deal")
+    assert "no_activity_14d" in stale["risk_factors"]
+    assert stale["days_stale"] >= 20
+
+
+@pytest.mark.asyncio
+async def test_at_risk_deals_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's at-risk deals."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/at-risk")
+
+    assert resp.status_code == 403
