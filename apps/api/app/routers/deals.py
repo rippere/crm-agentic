@@ -9,7 +9,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -613,6 +613,61 @@ async def overdue_actions(
             "next_action": d.next_action,
             "next_action_date": d.next_action_date.isoformat() if d.next_action_date else None,
             "days_overdue": (today - d.next_action_date).days if d.next_action_date else 0,
+        }
+        for d in deals
+    ]
+
+
+@router.get("/workspaces/{workspace_id}/deals/at-risk")
+async def at_risk_deals(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return open deals at risk: low win probability, no stage change in 14+ days, or overdue next action.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+    today = date.today()
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            or_(
+                Deal.ml_win_probability < 35,
+                Deal.stage_changed_at < stale_cutoff,
+                (Deal.next_action_date.is_not(None)) & (Deal.next_action_date < today),
+            ),
+        ).order_by(Deal.ml_win_probability.asc())
+    )
+    deals = result.scalars().all()
+
+    def _risk_factors(d: Deal) -> list[str]:
+        factors: list[str] = []
+        if d.ml_win_probability < 35:
+            factors.append("low_win_probability")
+        if d.stage_changed_at < stale_cutoff:
+            factors.append("no_activity_14d")
+        if d.next_action_date and d.next_action_date < today:
+            factors.append("overdue_action")
+        return factors
+
+    return [
+        {
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "stage": d.stage,
+            "value": float(d.value or 0),
+            "health_score": d.health_score,
+            "ml_win_probability": d.ml_win_probability,
+            "days_stale": max(0, (datetime.now(timezone.utc) - d.stage_changed_at).days),
+            "risk_factors": _risk_factors(d),
         }
         for d in deals
     ]

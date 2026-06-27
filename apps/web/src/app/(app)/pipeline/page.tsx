@@ -396,6 +396,8 @@ export default function PipelinePage() {
   });
   const [suggestions, setSuggestions] = useState<PipelineSuggestion[]>([]);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
+  const [atRiskDeals, setAtRiskDeals] = useState<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; health_score: number; ml_win_probability: number; days_stale: number; risk_factors: string[] }>>([]);
+  const [atRiskDismissed, setAtRiskDismissed] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkStageTarget, setBulkStageTarget] = useState<DealStage | null>(null);
@@ -422,6 +424,25 @@ export default function PipelinePage() {
       if (!workspaceId) return;
       apiClient.getPipelineSuggestions(workspaceId, session.access_token)
         .then((data) => { if (Array.isArray(data)) setSuggestions(data as PipelineSuggestion[]); })
+        .catch(() => {});
+    });
+  }, []);
+
+  useEffect(() => {
+    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+    if (isDemoMode) {
+      apiClient.getAtRiskDeals("demo-workspace-1", "demo-token")
+        .then((data) => { if (Array.isArray(data)) setAtRiskDeals(data); })
+        .catch(() => {});
+      return;
+    }
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) return;
+      const workspaceId: string | undefined = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id);
+      if (!workspaceId) return;
+      apiClient.getAtRiskDeals(workspaceId, session.access_token)
+        .then((data) => { if (Array.isArray(data)) setAtRiskDeals(data); })
         .catch(() => {});
     });
   }, []);
@@ -632,6 +653,50 @@ export default function PipelinePage() {
           </div>
         </Card>
       </div>
+
+      {/* At-Risk Deals Banner */}
+      {atRiskDeals.length > 0 && !atRiskDismissed && (
+        <Card className="border-amber-500/20 bg-amber-500/5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <AlertTriangle className="h-4 w-4 text-amber-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold text-zinc-100">
+                  At-Risk Deals — {atRiskDeals.length} deal{atRiskDeals.length !== 1 ? "s" : ""} need attention
+                </p>
+                <button
+                  onClick={() => setAtRiskDismissed(true)}
+                  className="text-zinc-600 hover:text-zinc-400 transition-colors"
+                  aria-label="Dismiss at-risk deals"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-2">
+                {atRiskDeals.slice(0, 3).map((d) => (
+                  <Link key={d.id} href={`/pipeline/${d.id}`} className="flex items-center gap-3 rounded-lg bg-zinc-900/60 px-3 py-2 hover:bg-zinc-900/80 transition-colors">
+                    <span className="h-1.5 w-1.5 rounded-full flex-shrink-0 bg-amber-400" />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-xs font-medium text-zinc-200">{d.title}</span>
+                      <span className="text-xs text-zinc-500 ml-2">·</span>
+                      <span className="text-xs text-zinc-500 ml-2">
+                        {d.risk_factors.includes("low_win_probability") && `${d.ml_win_probability}% win prob`}
+                        {d.risk_factors.includes("no_activity_14d") && d.risk_factors.includes("low_win_probability") && " · "}
+                        {d.risk_factors.includes("no_activity_14d") && `${d.days_stale}d stale`}
+                        {d.risk_factors.includes("overdue_action") && (d.risk_factors.length > 1 ? " · " : "") + "overdue action"}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono text-zinc-500 flex-shrink-0">{formatCurrency(d.value)}</span>
+                    <ChevronRight className="h-3 w-3 text-zinc-600 flex-shrink-0" />
+                  </Link>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Pipeline Board */}
       <div className="flex-1">
