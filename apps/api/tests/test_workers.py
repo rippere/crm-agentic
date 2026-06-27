@@ -396,7 +396,7 @@ def test_enumerate_workspace_ids_queries_workspace_table():
     session_factory = MagicMock(return_value=session_cm)
 
     with patch.object(pipeline_mod, "_get_async_session", return_value=session_factory):
-        out = asyncio.get_event_loop().run_until_complete(pipeline_mod._enumerate_workspace_ids())
+        out = asyncio.run(pipeline_mod._enumerate_workspace_ids())
 
     assert out == ["33333333-3333-3333-3333-333333333333"]
     assert all(isinstance(x, str) for x in out)
@@ -622,9 +622,7 @@ def test_backfill_links_matching_messages_only():
     ])
 
     with patch.object(ingest_mod, "_get_async_session", return_value=session_factory):
-        result = asyncio.get_event_loop().run_until_complete(
-            ingest_mod._run_backfill_contacts(str(_WS_ID))
-        )
+        result = asyncio.run(ingest_mod._run_backfill_contacts(str(_WS_ID)))
 
     assert result["scanned"] == 2
     assert result["linked"] == 1
@@ -641,9 +639,7 @@ def test_backfill_no_unlinked_messages_links_nothing():
     mock_db.execute = AsyncMock(side_effect=[scan_result])
 
     with patch.object(ingest_mod, "_get_async_session", return_value=session_factory):
-        result = asyncio.get_event_loop().run_until_complete(
-            ingest_mod._run_backfill_contacts(str(_WS_ID))
-        )
+        result = asyncio.run(ingest_mod._run_backfill_contacts(str(_WS_ID)))
 
     assert result == {"workspace_id": str(_WS_ID), "scanned": 0, "linked": 0}
     mock_db.commit.assert_awaited_once()

@@ -382,10 +382,16 @@ async def deal_forecast(
 
     now = datetime.now(timezone.utc)
     buckets: dict[str, dict] = {}
-    for i in range(months_ahead):
-        target = now + timedelta(days=30 * i)
-        key = target.strftime("%b %Y")
+    # Walk consecutive calendar months — using 30-day strides would skip a month
+    # across 31-day months and silently drop deals that close in the gap.
+    year, month = now.year, now.month
+    for _ in range(months_ahead):
+        key = now.replace(year=year, month=month, day=1).strftime("%b %Y")
         buckets[key] = {"month": key, "value": 0.0, "deal_count": 0}
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
 
     for deal in deals:
         if not deal.expected_close:

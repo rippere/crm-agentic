@@ -194,4 +194,4 @@ async def _run(contact_id: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.enrich_contact.enrich_contact", bind=True)
 def enrich_contact(self: Any, contact_id: str) -> dict[str, Any]:
     """Enrich a contact via Hunter.io (if key set) + Claude Haiku inference from messages."""
-    return asyncio.get_event_loop().run_until_complete(_run(contact_id))
+    return asyncio.run(_run(contact_id))

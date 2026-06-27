@@ -850,8 +850,9 @@ async def test_deal_forecast_returns_monthly_buckets(app_client):
     data = resp.json()
     assert isinstance(data, list)
     assert len(data) == 3
-    # First month should include d1
-    assert data[0]["deal_count"] >= 1
+    # Both deals close within the 3-month window (+15d and +45d), so they must
+    # land in the buckets regardless of which calendar day the test runs on.
+    assert sum(b["deal_count"] for b in data) == 2
 
 
 @pytest.mark.asyncio

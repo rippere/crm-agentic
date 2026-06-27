@@ -7,10 +7,12 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Zap, Brain, Sparkles, TrendingUp, Bot, Shield,
   ArrowRight, Check, ChevronDown, Mail, Mic, Heart,
-  BarChart3, Users, KanbanSquare, Menu, X,
+  BarChart3, Users, KanbanSquare, Menu, X, Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createBrowserClient } from "@/lib/supabase";
+import { Testimonials } from "./_landing/Testimonials";
+import { TrustStrip } from "./_landing/TrustStrip";
 
 // ─── Auth params rescue ───────────────────────────────────────────────────────
 // Supabase auth redirects fall back to the Site URL (this page) when the
@@ -155,18 +157,18 @@ function Hero() {
 
       <h1
         id="hero-heading"
-        className="mx-auto max-w-4xl text-5xl font-bold leading-tight tracking-tight text-zinc-100 sm:text-6xl lg:text-7xl"
+        className="mx-auto max-w-4xl text-balance text-5xl font-bold leading-[1.05] tracking-tight text-zinc-100 sm:text-6xl lg:text-[5rem]"
       >
-        Your CRM{" "}
-        <span className="bg-gradient-to-r from-indigo-400 to-emerald-400 bg-clip-text text-transparent">
-          thinks for itself
-        </span>
+        The CRM that{" "}
+        <span className="bg-gradient-to-r from-indigo-300 via-indigo-400 to-[#2DD4AA] bg-clip-text text-transparent">
+          works the pipeline
+        </span>{" "}
+        for you
       </h1>
 
-      <p className="mx-auto mt-6 max-w-2xl text-lg text-zinc-400 leading-relaxed">
-        NovaCRM uses semantic search to classify leads, AI to score and
-        prioritize deals, and autonomous agents to compose emails, summarize
-        calls, and move your pipeline — all without lifting a finger.
+      <p className="mx-auto mt-6 max-w-xl text-pretty text-lg text-zinc-400 leading-relaxed">
+        Six AI agents score your leads, draft the outreach, summarize the calls,
+        and catch stalled deals — so your team sells while the busywork runs itself.
       </p>
 
       <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
@@ -186,7 +188,37 @@ function Hero() {
         </a>
       </div>
 
-      <p className="mt-8 text-xs text-zinc-600">No credit card required · Cancel anytime</p>
+      <div className="mt-9 flex flex-col items-center gap-2.5">
+        <div className="flex items-center gap-3">
+          <div className="flex -space-x-2.5" aria-hidden="true">
+            {[
+              "from-indigo-500 to-indigo-700",
+              "from-[#00C896] to-[#007A5C]",
+              "from-amber-500 to-amber-700",
+              "from-rose-500 to-rose-700",
+            ].map((g, i) => (
+              <span
+                key={i}
+                className={cn(
+                  "h-7 w-7 rounded-full border-2 border-zinc-950 bg-gradient-to-br",
+                  g
+                )}
+              />
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="flex gap-0.5" aria-hidden="true">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Star key={i} className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+              ))}
+            </div>
+            <span className="text-sm text-zinc-400">
+              <span className="font-semibold text-zinc-200">4.9</span> from 200+ revenue teams
+            </span>
+          </div>
+        </div>
+        <p className="text-xs text-zinc-600">No credit card required · Cancel anytime</p>
+      </div>
 
       {/* Dashboard preview */}
       <div className="relative mt-16 w-full max-w-4xl mx-auto">
@@ -305,17 +337,60 @@ function FeaturesSection() {
             Each agent is a specialized AI workflow built for a specific CRM task — working together in a single, seamless flow.
           </p>
         </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {features.map((f) => {
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:auto-rows-fr">
+          {features.map((f, i) => {
             const c = colorMap[f.color];
+            // Bento spans — fills a 4-col × 3-row grid exactly. Index 0 is the
+            // featured cell (2×2); the rest alternate wide and compact.
+            const span = [
+              "lg:col-span-2 lg:row-span-2",
+              "lg:col-span-2",
+              "lg:col-span-1",
+              "lg:col-span-1",
+              "lg:col-span-2",
+              "lg:col-span-2",
+            ][i];
+            const featured = i === 0;
             return (
-              <div key={f.title} className={cn("group rounded-2xl border border-zinc-800 bg-zinc-900 p-6 transition-all duration-200 cursor-default hover:bg-zinc-800/80", c.border)}>
-                <div className={cn("mb-4 inline-flex h-10 w-10 items-center justify-center rounded-xl border", c.icon)}>
+              <div
+                key={f.title}
+                className={cn(
+                  "group relative flex flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 p-6 transition-all duration-200 cursor-default hover:-translate-y-0.5 hover:bg-zinc-800/80",
+                  c.border,
+                  span
+                )}
+              >
+                <div
+                  className={cn(
+                    "pointer-events-none absolute inset-x-0 -top-px h-px bg-gradient-to-r from-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100",
+                    f.color === "indigo" ? "via-indigo-500/60" : f.color === "emerald" ? "via-[#00C896]/60" : f.color === "amber" ? "via-amber-500/60" : "via-rose-500/60"
+                  )}
+                  aria-hidden="true"
+                />
+                <div className={cn("mb-4 inline-flex items-center justify-center rounded-xl border", c.icon, featured ? "h-12 w-12" : "h-10 w-10")}>
                   {f.icon}
                 </div>
-                <h3 className="text-base font-semibold text-zinc-100 mb-2">{f.title}</h3>
-                <p className="text-sm text-zinc-400 leading-relaxed mb-4">{f.description}</p>
-                <div className="flex flex-wrap gap-1.5">
+                <h3 className={cn("font-semibold text-zinc-100 mb-2", featured ? "text-xl" : "text-base")}>{f.title}</h3>
+                <p className={cn("text-zinc-400 leading-relaxed mb-4", featured ? "text-base max-w-md" : "text-sm")}>{f.description}</p>
+                {featured && (
+                  <div className="mb-6 space-y-2" aria-hidden="true">
+                    {[
+                      { name: "Dmitri Volkov", tag: "Enterprise Buyer", c: "text-indigo-300 bg-indigo-500/10 border-indigo-500/20" },
+                      { name: "Marcus Webb", tag: "Champion", c: "text-[#6EFFD5] bg-[#00C896]/10 border-[#00C896]/20" },
+                      { name: "Lena Kovacs", tag: "At Risk", c: "text-rose-300 bg-rose-500/10 border-rose-500/20" },
+                      { name: "Priya Sharma", tag: "Power User", c: "text-amber-300 bg-amber-500/10 border-amber-500/20" },
+                    ].map((row) => (
+                      <div key={row.name} className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+                        <span className="text-xs text-zinc-400">{row.name}</span>
+                        <span className="flex items-center gap-1.5 text-[11px] text-zinc-600">
+                          <ArrowRight className="h-3 w-3" />
+                          <span className={cn("rounded-full border px-2 py-0.5 font-mono font-medium", row.c)}>{row.tag}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-auto flex flex-wrap gap-1.5">
                   {f.tags.map((tag) => (
                     <span key={tag} className={cn("rounded-full px-2 py-0.5 text-[10px] font-mono font-medium", c.tag)}>{tag}</span>
                   ))}
@@ -454,7 +529,7 @@ function CTASection() {
       <div className="mx-auto max-w-2xl text-center relative">
         <h2 id="cta-heading" className="text-3xl font-bold text-zinc-100 sm:text-4xl">
           Your pipeline deserves{" "}
-          <span className="bg-gradient-to-r from-indigo-400 to-emerald-400 bg-clip-text text-transparent">a brain</span>
+          <span className="bg-gradient-to-r from-indigo-300 via-indigo-400 to-[#2DD4AA] bg-clip-text text-transparent">a brain</span>
         </h2>
         <p className="mt-4 text-zinc-400">
           Join teams using NovaCRM to close deals faster, never miss a follow-up, and let AI handle the work that slows you down.
@@ -515,8 +590,10 @@ export default function LandingPage() {
       <AuthParamsRescue />
       <Nav />
       <Hero />
+      <TrustStrip />
       <FeaturesSection />
       <AgentsSection />
+      <Testimonials />
       <PricingSection />
       <CTASection />
       <Footer />

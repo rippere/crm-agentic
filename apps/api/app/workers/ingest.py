@@ -168,7 +168,7 @@ async def _run_backfill_contacts(workspace_id: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.ingest.backfill_message_contact_ids", bind=True)
 def backfill_message_contact_ids(self: Any, workspace_id: str) -> dict[str, Any]:
     """Celery task: link existing unlinked messages to workspace contacts (link-only)."""
-    return asyncio.get_event_loop().run_until_complete(_run_backfill_contacts(workspace_id))
+    return asyncio.run(_run_backfill_contacts(workspace_id))
 
 
 def _build_relevance_prompt(subject: str, sender: str, snippet: str) -> str:
@@ -510,13 +510,13 @@ async def _run_enrich_message(message_id: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.ingest.enrich_message", bind=True)
 def enrich_message(self: Any, message_id: str) -> dict[str, Any]:
     """Celery task: enrich a single ingested message off the ingest critical path."""
-    return asyncio.get_event_loop().run_until_complete(_run_enrich_message(message_id))
+    return asyncio.run(_run_enrich_message(message_id))
 
 
 @celery_app.task(name="app.workers.ingest.process_gmail_sync", bind=True)
 def process_gmail_sync(self: Any, connector_id: str) -> dict[str, Any]:
     """Celery task: fetch and store new Gmail messages, extract tasks via Claude."""
-    return asyncio.get_event_loop().run_until_complete(_run_sync(connector_id))
+    return asyncio.run(_run_sync(connector_id))
 
 
 async def _run_reprocess(workspace_id: str) -> dict[str, Any]:
@@ -650,4 +650,4 @@ async def _run_reprocess(workspace_id: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.ingest.reprocess_workspace_messages", bind=True)
 def reprocess_workspace_messages(self: Any, workspace_id: str) -> dict[str, Any]:
     """Celery task: non-destructively re-enrich + relevance-flag existing messages."""
-    return asyncio.get_event_loop().run_until_complete(_run_reprocess(workspace_id))
+    return asyncio.run(_run_reprocess(workspace_id))

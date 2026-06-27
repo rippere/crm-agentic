@@ -116,7 +116,7 @@ def transcribe_call(self: Any, call_summary_id: str, audio_path: str) -> dict[st
     try:
         transcript, duration = _transcribe_audio(audio_path)
         extracted = _extract_with_claude(transcript)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             _persist(call_summary_id, transcript, duration, extracted)
         )
         return {
