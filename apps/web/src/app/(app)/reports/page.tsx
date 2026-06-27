@@ -448,7 +448,7 @@ export default function ReportsPage() {
                   width={80}
                 />
                 <Tooltip content={<VelocityTooltip />} />
-                <Bar dataKey="avg_days" name="Avg days" radius={[0, 4, 4, 0]} maxBarSize={18} label={{ position: "right", fill: "#71717A", fontSize: 10, formatter: (v: number) => `${v}d` }}>
+                <Bar dataKey="avg_days" name="Avg days" radius={[0, 4, 4, 0]} maxBarSize={18} label={{ position: "right", fill: "#71717A", fontSize: 10, formatter: (v) => `${v}d` }}>
                   {velocityData.map((entry) => (
                     <Cell key={entry.stage} fill={STAGE_COLORS[entry.stage] ?? "#52525B"} />
                   ))}
