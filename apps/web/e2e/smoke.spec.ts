@@ -8,10 +8,12 @@ test.describe("Navigation smoke tests", () => {
     await page.goto("/dashboard");
     await expect(page).toHaveTitle(/CRM/i);
 
-    // At least one KPI card value must be visible
-    await expect(page.getByRole("region", { name: /kpi/i }).first().or(
-      page.locator('[class*="font-mono"]').first()
-    )).toBeVisible({ timeout: 10_000 });
+    // KPI grid is a region labelled "Key Performance Indicators"; assert a card
+    // value inside it is visible (the page-level font-mono .first() previously
+    // resolved to a hidden nav label).
+    const kpis = page.getByRole("region", { name: /key performance/i });
+    await expect(kpis).toBeVisible({ timeout: 10_000 });
+    await expect(kpis.locator('[class*="font-mono"]').first()).toBeVisible();
 
     // Main heading
     await expect(page.getByRole("heading", { name: /dashboard/i, exact: false })).toBeVisible();
@@ -57,8 +59,9 @@ test.describe("Navigation smoke tests", () => {
     await page.goto("/contacts");
     await expect(page.getByRole("heading", { name: /contacts/i, exact: false })).toBeVisible();
 
-    // Find search input and type
-    const searchInput = page.getByPlaceholder(/search/i).or(page.getByRole("searchbox"));
+    // Target the contacts-page search specifically (the global nav also has a
+    // searchbox, which made the broad /search/i locator ambiguous).
+    const searchInput = page.getByPlaceholder(/search by name/i);
     if (await searchInput.count() > 0) {
       await searchInput.fill("zzzz_no_match_expected");
       // After filtering, some no-results state or reduced list

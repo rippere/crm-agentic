@@ -74,7 +74,7 @@ jobs:
           pip install \
             fastapi uvicorn sqlalchemy asyncpg pyjwt cryptography \
             celery httpx anthropic python-dotenv pydantic-settings \
-            pydantic pgvector slowapi python-multipart \
+            pydantic pgvector slowapi python-multipart redis \
             pytest pytest-asyncio anyio
 
       - name: Run tests
