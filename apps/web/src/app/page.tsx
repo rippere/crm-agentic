@@ -192,17 +192,20 @@ function Hero() {
         <div className="flex items-center gap-3">
           <div className="flex -space-x-2.5" aria-hidden="true">
             {[
-              "from-indigo-500 to-indigo-700",
-              "from-[#00C896] to-[#007A5C]",
-              "from-amber-500 to-amber-700",
-              "from-rose-500 to-rose-700",
-            ].map((g, i) => (
-              <span
+              "/testimonials/sarah-chen.jpg",
+              "/testimonials/marcus-webb.jpg",
+              "/testimonials/lena-kovacs.jpg",
+              "/testimonials/dmitri-volkov.jpg",
+            ].map((src, i) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
                 key={i}
-                className={cn(
-                  "h-7 w-7 rounded-full border-2 border-zinc-950 bg-gradient-to-br",
-                  g
-                )}
+                src={src}
+                alt=""
+                loading="lazy"
+                width={28}
+                height={28}
+                className="h-7 w-7 rounded-full border-2 border-zinc-950 object-cover"
               />
             ))}
           </div>
