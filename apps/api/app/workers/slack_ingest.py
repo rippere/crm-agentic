@@ -241,4 +241,4 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.slack_ingest.process_slack_sync", bind=True)
 def process_slack_sync(self: Any, connector_id: str) -> dict[str, Any]:
     """Celery task: fetch and store new Slack messages, extract tasks via Claude."""
-    return asyncio.get_event_loop().run_until_complete(_run_sync(connector_id))
+    return asyncio.run(_run_sync(connector_id))

@@ -123,7 +123,7 @@ async def _run(workspace_id: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.deal_health_worker.compute_deal_health", bind=True)
 def compute_deal_health(self: Any, workspace_id: str) -> dict[str, Any]:
     """Compute and persist health scores for all active deals in a workspace."""
-    return asyncio.get_event_loop().run_until_complete(_run(workspace_id))
+    return asyncio.run(_run(workspace_id))
 
 
 @celery_app.task(name="app.workers.deal_health_worker.compute_deal_health_all", bind=True)
@@ -133,7 +133,7 @@ def compute_deal_health_all(self: Any) -> dict[str, Any]:
     compute_deal_health requires a workspace_id, which celery beat cannot supply.
     This no-arg task enumerates all workspaces and enqueues one child task each.
     """
-    workspace_ids = asyncio.get_event_loop().run_until_complete(_enumerate_workspace_ids())
+    workspace_ids = asyncio.run(_enumerate_workspace_ids())
     for ws_id in workspace_ids:
         compute_deal_health.delay(str(ws_id))
     return {"dispatched": len(workspace_ids), "workspace_ids": workspace_ids}

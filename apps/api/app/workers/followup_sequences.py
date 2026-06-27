@@ -195,4 +195,4 @@ async def _run_hitl() -> dict[str, Any]:
 @celery_app.task(name="app.workers.followup_sequences.check_stale_deals_hitl", bind=True)
 def check_stale_deals_hitl(self: Any) -> dict[str, Any]:
     """Find stale deals, draft follow-up emails via Claude, post to Slack for approval."""
-    return asyncio.get_event_loop().run_until_complete(_run_hitl())
+    return asyncio.run(_run_hitl())

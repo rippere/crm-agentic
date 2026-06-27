@@ -60,4 +60,4 @@ async def _run(workspace_id: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.embed_contacts.embed_workspace_contacts", bind=True)
 def embed_workspace_contacts(self: Any, workspace_id: str) -> dict[str, Any]:
     """Batch-embed all contacts in a workspace and store vectors in Postgres."""
-    return asyncio.get_event_loop().run_until_complete(_run(workspace_id))
+    return asyncio.run(_run(workspace_id))

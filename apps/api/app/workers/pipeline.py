@@ -115,7 +115,7 @@ async def _run_optimize(workspace_id: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.pipeline.optimize_pipeline", bind=True)
 def optimize_pipeline(self: Any, workspace_id: str) -> dict[str, Any]:
     """Celery task: compute heuristic win probabilities for all open pipeline deals."""
-    return asyncio.get_event_loop().run_until_complete(_run_optimize(workspace_id))
+    return asyncio.run(_run_optimize(workspace_id))
 
 
 @celery_app.task(name="app.workers.pipeline.optimize_pipeline_all", bind=True)
@@ -125,7 +125,7 @@ def optimize_pipeline_all(self: Any) -> dict[str, Any]:
     optimize_pipeline requires a workspace_id, which celery beat cannot supply.
     This no-arg task enumerates all workspaces and enqueues one child task each.
     """
-    workspace_ids = asyncio.get_event_loop().run_until_complete(_enumerate_workspace_ids())
+    workspace_ids = asyncio.run(_enumerate_workspace_ids())
     for ws_id in workspace_ids:
         optimize_pipeline.delay(str(ws_id))
     return {"dispatched": len(workspace_ids), "workspace_ids": workspace_ids}

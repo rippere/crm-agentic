@@ -136,4 +136,4 @@ async def _run_health_check() -> dict[str, Any]:
 @celery_app.task(name="app.workers.pm_agent.run_health_check", bind=True)
 def run_health_check(self: Any) -> dict[str, Any]:
     """PM Agent: catch silent failures across agents, connectors, and projects."""
-    return asyncio.get_event_loop().run_until_complete(_run_health_check())
+    return asyncio.run(_run_health_check())

@@ -122,4 +122,4 @@ async def _run_score(contact_id: str, workspace_id: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.score_contact.score_lead", bind=True)
 def score_lead(self: Any, contact_id: str, workspace_id: str) -> dict[str, Any]:
     """Celery task: compute heuristic lead score and update contact.ml_score."""
-    return asyncio.get_event_loop().run_until_complete(_run_score(contact_id, workspace_id))
+    return asyncio.run(_run_score(contact_id, workspace_id))
