@@ -14,6 +14,7 @@ type Testimonial = {
   quote: string;
   metric: string;
   initials: string;
+  image: string;
   accent: "indigo" | "signal";
 };
 
@@ -26,6 +27,7 @@ const testimonials: Testimonial[] = [
       "The lead scorer reordered our entire pipeline on day one. Reps stopped chasing dead deals and our hottest accounts finally got worked first.",
     metric: "+34% win rate",
     initials: "SC",
+    image: "/testimonials/sarah-chen.jpg",
     accent: "signal",
   },
   {
@@ -36,16 +38,18 @@ const testimonials: Testimonial[] = [
       "It drafts outreach that actually sounds like me. I review a queue every morning instead of writing cold emails from scratch.",
     metric: "6 hrs/week back",
     initials: "MW",
+    image: "/testimonials/marcus-webb.jpg",
     accent: "indigo",
   },
   {
-    name: "Priya Sharma",
+    name: "Hannah Brooks",
     role: "RevOps Lead",
     company: "Northwind",
     quote:
       "Stall detection caught a $180k deal that had gone quiet for three weeks. We re-engaged the day it flagged and closed it.",
     metric: "$180k saved",
-    initials: "PS",
+    initials: "HB",
+    image: "/testimonials/hannah-brooks.jpg",
     accent: "signal",
   },
   {
@@ -56,6 +60,7 @@ const testimonials: Testimonial[] = [
       "Semantic sorting tagged 1,200 contacts by buying stage overnight. No rules, no manual fields. It just understood the book.",
     metric: "1.2k auto-tagged",
     initials: "DV",
+    image: "/testimonials/dmitri-volkov.jpg",
     accent: "indigo",
   },
   {
@@ -66,6 +71,7 @@ const testimonials: Testimonial[] = [
       "Churn risk pinged me before a key account went cold. I'd have missed the sentiment drop entirely in our old CRM.",
     metric: "0 surprise churns",
     initials: "LK",
+    image: "/testimonials/lena-kovacs.jpg",
     accent: "signal",
   },
   {
@@ -76,6 +82,7 @@ const testimonials: Testimonial[] = [
       "We replaced three tools and a part-time ops hire with NovaCRM. The agents run whether anyone's watching the dashboard or not.",
     metric: "3 tools → 1",
     initials: "JW",
+    image: "/testimonials/james-wilson.jpg",
     accent: "indigo",
   },
 ];
@@ -138,9 +145,15 @@ export function Testimonials() {
                 </blockquote>
                 <figcaption className="mt-6 flex items-center justify-between border-t border-zinc-800 pt-5">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-[#00C896] text-sm font-semibold text-white">
-                      {t.initials}
-                    </div>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={t.image}
+                      alt={t.name}
+                      loading="lazy"
+                      width={44}
+                      height={44}
+                      className="h-11 w-11 rounded-full object-cover ring-2 ring-zinc-700/60"
+                    />
                     <div className="leading-tight">
                       <p className="text-sm font-semibold text-zinc-100">{t.name}</p>
                       <p className="text-xs text-zinc-500">{t.role} · {t.company}</p>
