@@ -624,6 +624,61 @@ async def overdue_actions(
     ]
 
 
+@router.get("/workspaces/{workspace_id}/deals/at-risk")
+async def at_risk_deals(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return open deals with ml_win_probability < 30 and no stage movement in 14+ days.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=14)
+    today = now.date()
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.ml_win_probability < 30,
+            Deal.stage_changed_at <= cutoff,
+        ).order_by(Deal.ml_win_probability.asc())
+    )
+    deals = result.scalars().all()
+
+    output = []
+    for d in deals:
+        sc = d.stage_changed_at
+        if sc.tzinfo is None:
+            sc = sc.replace(tzinfo=timezone.utc)
+        days_stale = (now - sc).days
+        signals = [
+            f"Win probability {d.ml_win_probability}% — critically low",
+            f"No stage movement in {days_stale} day{'s' if days_stale != 1 else ''}",
+        ]
+        if d.next_action_date and d.next_action_date < today:
+            signals.append(f"Next action overdue by {(today - d.next_action_date).days} day(s)")
+        elif not d.next_action_date:
+            signals.append("No next action scheduled")
+        output.append({
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "stage": d.stage,
+            "value": float(d.value or 0),
+            "ml_win_probability": d.ml_win_probability,
+            "health_score": d.health_score,
+            "days_stale": days_stale,
+            "signals": signals,
+        })
+    return output
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
