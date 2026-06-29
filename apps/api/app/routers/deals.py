@@ -793,6 +793,44 @@ async def deals_by_agent(
     return sorted(buckets.values(), key=lambda b: b["count"], reverse=True)
 
 
+@router.get("/workspaces/{workspace_id}/deals/revenue-forecast")
+async def deal_revenue_forecast(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return weighted expected revenue grouped by expected-close month for open deals.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = result.scalars().all()
+
+    buckets: dict[str, dict] = {}
+    for d in deals:
+        if not d.expected_close:
+            continue
+        month = str(d.expected_close)[:7]  # "YYYY-MM"
+        value = float(d.value or 0)
+        prob = float(d.ml_win_probability or 0) / 100.0
+        expected = round(value * prob, 2)
+        if month not in buckets:
+            buckets[month] = {"month": month, "expected_revenue": 0.0, "deal_count": 0, "total_value": 0.0}
+        buckets[month]["expected_revenue"] = round(buckets[month]["expected_revenue"] + expected, 2)
+        buckets[month]["deal_count"] += 1
+        buckets[month]["total_value"] = round(buckets[month]["total_value"] + value, 2)
+
+    return sorted(buckets.values(), key=lambda b: b["month"])
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
@@ -1409,3 +1447,5 @@ async def deal_stage_history(
             "days_in_stage": max(0, int((end_ts - ts).total_seconds() / 86400)),
             "is_current": is_last,
         })
+
+    return history
