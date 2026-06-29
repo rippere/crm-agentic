@@ -27,6 +27,12 @@ const STAGE_COLORS: Record<string, string> = {
   closed_lost: "#F43F5E",
 };
 
+const HEALTH_DIST_CONFIG: Record<string, { label: string; color: string }> = {
+  critical: { label: "Critical (<40)",    color: "#F43F5E" },
+  at_risk:  { label: "At Risk (40–69)",   color: "#FBBF24" },
+  healthy:  { label: "Healthy (70–100)",  color: "#00C896" },
+};
+
 const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: { value: number; name: string }[]; label?: string }) => {
   if (!active || !payload?.length) return null;
   return (
@@ -61,6 +67,7 @@ export default function ReportsPage() {
   const [outcomeReasons, setOutcomeReasons] = useState<OutcomeReasonRow[]>([]);
   const [agentRunStats, setAgentRunStats] = useState<{ agent_name: string; success: number; failure: number }[]>([]);
   const [slippedDeals, setSlippedDeals] = useState<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; expected_close: string | null; days_overdue: number }>>([]);
+  const [healthDist, setHealthDist] = useState<Array<{ bucket: string; count: number; total_value: number }>>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -73,6 +80,7 @@ export default function ReportsPage() {
       apiClient.getDealOutcomeReasons("demo-workspace-1", "demo-token").then(setOutcomeReasons).catch(() => {});
       apiClient.getAgentRunStats("demo-workspace-1", "demo-token").then(setAgentRunStats).catch(() => {});
       apiClient.getDealCloseDateSlipped("demo-workspace-1", "demo-token").then(setSlippedDeals).catch(() => {});
+      apiClient.getDealHealthDistribution("demo-workspace-1", "demo-token").then(setHealthDist).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -89,6 +97,7 @@ export default function ReportsPage() {
       apiClient.getDealOutcomeReasons(workspaceId, session.access_token).then(setOutcomeReasons).catch(() => {});
       apiClient.getAgentRunStats(workspaceId, session.access_token).then(setAgentRunStats).catch(() => {});
       apiClient.getDealCloseDateSlipped(workspaceId, session.access_token).then(setSlippedDeals).catch(() => {});
+      apiClient.getDealHealthDistribution(workspaceId, session.access_token).then(setHealthDist).catch(() => {});
     });
   }, []);
 
@@ -628,6 +637,76 @@ export default function ReportsPage() {
           </ResponsiveContainer>
         </Card>
       )}
+
+      {/* Pipeline health score distribution */}
+      {healthDist.some((b) => b.count > 0) && (() => {
+        const totalDeals = healthDist.reduce((s, b) => s + b.count, 0);
+        const donutData = healthDist.filter((b) => b.count > 0);
+        return (
+          <Card>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Pipeline Health Distribution</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">Open deals grouped by health score bucket</p>
+              </div>
+              <Badge variant="indigo">{totalDeals} open deal{totalDeals !== 1 ? "s" : ""}</Badge>
+            </div>
+            <div className="flex flex-col sm:flex-row items-center gap-6">
+              <div className="h-44 w-44 flex-shrink-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={donutData}
+                      dataKey="count"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={48}
+                      outerRadius={68}
+                      paddingAngle={3}
+                    >
+                      {donutData.map((b) => (
+                        <Cell key={b.bucket} fill={HEALTH_DIST_CONFIG[b.bucket]?.color ?? "#52525B"} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null;
+                        const b = payload[0].payload as { bucket: string; count: number; total_value: number };
+                        return (
+                          <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                            <p className="font-mono text-zinc-400 mb-1">{HEALTH_DIST_CONFIG[b.bucket]?.label ?? b.bucket}</p>
+                            <p className="text-zinc-200">{b.count} deal{b.count !== 1 ? "s" : ""}</p>
+                            <p className="text-zinc-400">{formatCurrency(b.total_value)}</p>
+                          </div>
+                        );
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="flex-1 w-full space-y-3">
+                {healthDist.map((b) => (
+                  <div key={b.bucket} className="flex items-center gap-3">
+                    <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ background: HEALTH_DIST_CONFIG[b.bucket]?.color ?? "#52525B" }} />
+                    <span className="text-xs text-zinc-400 w-32 flex-shrink-0">{HEALTH_DIST_CONFIG[b.bucket]?.label ?? b.bucket}</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: totalDeals > 0 ? `${(b.count / totalDeals) * 100}%` : "0%",
+                          background: HEALTH_DIST_CONFIG[b.bucket]?.color ?? "#52525B",
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs font-mono text-zinc-300 w-14 text-right tabular-nums">{b.count} deal{b.count !== 1 ? "s" : ""}</span>
+                    <span className="text-xs font-mono text-zinc-500 w-24 text-right tabular-nums">{formatCurrency(b.total_value)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* Close-date slippage */}
       {slippedDeals.length > 0 && (
