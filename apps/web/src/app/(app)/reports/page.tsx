@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
 } from "recharts";
 import {
-  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff,
+  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -75,6 +75,7 @@ export default function ReportsPage() {
   const [pipelineContribution, setPipelineContribution] = useState<Array<{ contact_id: string; name: string | null; email: string | null; company: string | null; pipeline_value: number; closed_won_value: number; deal_count: number; win_rate: number }>>([]);
   const [concentrationRisk, setConcentrationRisk] = useState<{ total_pipeline: number; top_deals: Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; pct_of_pipeline: number }>; top3_pct: number; risk_level: "low" | "medium" | "high" } | null>(null);
   const [closeDateAccuracy, setCloseDateAccuracy] = useState<Array<{ id: string; title: string | null; company: string | null; value: number; expected_close: string; actual_close: string; days_delta: number; outcome: "early" | "on_time" | "late" }>>([]);
+  const [activityTrends, setActivityTrends] = useState<Array<{ week_start: string; total: number; deals: number; contacts: number; agents: number; messages: number }>>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -95,6 +96,7 @@ export default function ReportsPage() {
       apiClient.getContactPipelineContribution("demo-workspace-1", "demo-token").then(setPipelineContribution).catch(() => {});
       apiClient.getDealConcentrationRisk("demo-workspace-1", "demo-token").then(setConcentrationRisk).catch(() => {});
       apiClient.getDealCloseDateAccuracy("demo-workspace-1", "demo-token").then(setCloseDateAccuracy).catch(() => {});
+      apiClient.getActivityTrends("demo-workspace-1", "demo-token").then(setActivityTrends).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -119,6 +121,7 @@ export default function ReportsPage() {
       apiClient.getContactPipelineContribution(workspaceId, session.access_token).then(setPipelineContribution).catch(() => {});
       apiClient.getDealConcentrationRisk(workspaceId, session.access_token).then(setConcentrationRisk).catch(() => {});
       apiClient.getDealCloseDateAccuracy(workspaceId, session.access_token).then(setCloseDateAccuracy).catch(() => {});
+      apiClient.getActivityTrends(workspaceId, session.access_token).then(setActivityTrends).catch(() => {});
     });
   }, []);
 
@@ -1022,6 +1025,40 @@ export default function ReportsPage() {
               );
             })}
           </div>
+        </Card>
+      )}
+
+      {/* Activity Trends — Phase 13a */}
+      {activityTrends.length > 0 && (
+        <Card>
+          <div className="flex items-center gap-2 mb-4">
+            <Activity className="h-4 w-4 text-violet-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Activity Trends</h3>
+            <span className="ml-auto text-xs text-zinc-500">Last {activityTrends.length} weeks</span>
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={activityTrends} margin={{ top: 0, right: 8, left: -24, bottom: 0 }} barCategoryGap="20%">
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+              <XAxis
+                dataKey="week_start"
+                tick={{ fill: "#71717a", fontSize: 10 }}
+                tickLine={false}
+                axisLine={false}
+                tickFormatter={(v: string) => v.slice(5)}
+              />
+              <YAxis tick={{ fill: "#71717a", fontSize: 10 }} tickLine={false} axisLine={false} />
+              <Tooltip
+                contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 6, fontSize: 12 }}
+                labelStyle={{ color: "#a1a1aa" }}
+                itemStyle={{ color: "#e4e4e7" }}
+              />
+              <Legend wrapperStyle={{ fontSize: 11, color: "#71717a" }} />
+              <Bar dataKey="deals" stackId="a" fill="#6366f1" name="Deals" radius={[0, 0, 0, 0]} />
+              <Bar dataKey="contacts" stackId="a" fill="#22d3ee" name="Contacts" radius={[0, 0, 0, 0]} />
+              <Bar dataKey="agents" stackId="a" fill="#a78bfa" name="Agents" radius={[0, 0, 0, 0]} />
+              <Bar dataKey="messages" stackId="a" fill="#34d399" name="Messages" radius={[2, 2, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
         </Card>
       )}
 
