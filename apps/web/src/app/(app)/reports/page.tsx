@@ -68,6 +68,7 @@ export default function ReportsPage() {
   const [agentRunStats, setAgentRunStats] = useState<{ agent_name: string; success: number; failure: number }[]>([]);
   const [slippedDeals, setSlippedDeals] = useState<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; expected_close: string | null; days_overdue: number }>>([]);
   const [healthDist, setHealthDist] = useState<Array<{ bucket: string; count: number; total_value: number }>>([]);
+  const [dealsByAgent, setDealsByAgent] = useState<Array<{ agent_name: string; count: number; total_value: number }>>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -81,6 +82,7 @@ export default function ReportsPage() {
       apiClient.getAgentRunStats("demo-workspace-1", "demo-token").then(setAgentRunStats).catch(() => {});
       apiClient.getDealCloseDateSlipped("demo-workspace-1", "demo-token").then(setSlippedDeals).catch(() => {});
       apiClient.getDealHealthDistribution("demo-workspace-1", "demo-token").then(setHealthDist).catch(() => {});
+      apiClient.getDealsByAgent("demo-workspace-1", "demo-token").then(setDealsByAgent).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -98,6 +100,7 @@ export default function ReportsPage() {
       apiClient.getAgentRunStats(workspaceId, session.access_token).then(setAgentRunStats).catch(() => {});
       apiClient.getDealCloseDateSlipped(workspaceId, session.access_token).then(setSlippedDeals).catch(() => {});
       apiClient.getDealHealthDistribution(workspaceId, session.access_token).then(setHealthDist).catch(() => {});
+      apiClient.getDealsByAgent(workspaceId, session.access_token).then(setDealsByAgent).catch(() => {});
     });
   }, []);
 
@@ -703,6 +706,41 @@ export default function ReportsPage() {
                   </div>
                 ))}
               </div>
+            </div>
+          </Card>
+        );
+      })()}
+
+      {/* Deals by assigned agent */}
+      {dealsByAgent.length > 0 && (() => {
+        const maxCount = Math.max(...dealsByAgent.map((b) => b.count), 1);
+        return (
+          <Card>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Open Deals by Agent</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">Active pipeline per assigned agent</p>
+              </div>
+              <Badge variant="indigo">{dealsByAgent.reduce((s, b) => s + b.count, 0)} deals</Badge>
+            </div>
+            <div className="space-y-3">
+              {dealsByAgent.map((b) => (
+                <div key={b.agent_name} className="flex items-center gap-3">
+                  <span className="text-xs text-zinc-400 w-24 flex-shrink-0 truncate">{b.agent_name}</span>
+                  <div className="flex-1 h-6 bg-zinc-800/40 rounded-md overflow-hidden">
+                    <div
+                      className="h-full rounded-md flex items-center pl-2 transition-all duration-500"
+                      style={{
+                        width: `${Math.max(4, (b.count / maxCount) * 100)}%`,
+                        background: b.agent_name === "Unassigned" ? "#52525B" : "#6366F1",
+                      }}
+                    >
+                      <span className="text-[10px] font-mono font-bold text-white/80 select-none">{b.count}</span>
+                    </div>
+                  </div>
+                  <span className="text-xs font-mono text-zinc-400 w-24 text-right flex-shrink-0">{formatCurrency(b.total_value)}</span>
+                </div>
+              ))}
             </div>
           </Card>
         );
