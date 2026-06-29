@@ -761,6 +761,38 @@ async def health_distribution(
     return list(buckets.values())
 
 
+@router.get("/workspaces/{workspace_id}/deals/by-agent")
+async def deals_by_agent(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Group open deals by assigned_agent; null agents appear as 'Unassigned'.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = result.scalars().all()
+
+    buckets: dict[str, dict] = {}
+    for d in deals:
+        name = d.assigned_agent or "Unassigned"
+        if name not in buckets:
+            buckets[name] = {"agent_name": name, "count": 0, "total_value": 0.0}
+        buckets[name]["count"] += 1
+        buckets[name]["total_value"] += float(d.value or 0)
+
+    return sorted(buckets.values(), key=lambda b: b["count"], reverse=True)
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
