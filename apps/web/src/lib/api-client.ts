@@ -719,6 +719,15 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/close-date-slipped`, {}, token)
   },
 
+  getDealHealthDistribution: (workspaceId: string, token: string): Promise<Array<{ bucket: string; count: number; total_value: number }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { bucket: 'critical', count: 2, total_value: 68000 },
+      { bucket: 'at_risk', count: 3, total_value: 142000 },
+      { bucket: 'healthy', count: 7, total_value: 480000 },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/deals/health-distribution`, {}, token)
+  },
+
   getPipelineSuggestions: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve([
       { deal_id: 'demo-1', title: 'Acme Corp Expansion', company: 'Acme Corp', stage: 'proposal', value: 48000, action: 'follow_up', reason: 'No stage change in 24 days', priority: 'high' },
