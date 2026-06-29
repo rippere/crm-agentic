@@ -1601,3 +1601,35 @@ async def test_deals_by_agent_wrong_workspace_returns_403(app_client):
 
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/by-agent")
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_revenue_forecast_groups_by_month(app_client):
+    """Revenue forecast groups open deals by expected_close month and computes weighted revenue."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal_a = _fake_deal(workspace_id, title="July Deal", value=100000.0, ml_win_probability=80, expected_close="2026-07-15")
+    deal_b = _fake_deal(workspace_id, title="August Deal", value=50000.0, ml_win_probability=60, expected_close="2026-08-20")
+    deal_c = _fake_deal(workspace_id, title="July Deal 2", value=200000.0, ml_win_probability=50, expected_close="2026-07-30")
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([deal_a, deal_b, deal_c]))
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/revenue-forecast")
+    assert resp.status_code == 200
+    by_month = {r["month"]: r for r in resp.json()}
+    assert "2026-07" in by_month
+    assert by_month["2026-07"]["deal_count"] == 2
+    # 100000 * 0.80 + 200000 * 0.50 = 80000 + 100000 = 180000
+    assert by_month["2026-07"]["expected_revenue"] == 180000.0
+    assert "2026-08" in by_month
+    assert by_month["2026-08"]["expected_revenue"] == 30000.0
+
+
+@pytest.mark.asyncio
+async def test_revenue_forecast_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's revenue forecast."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/revenue-forecast")
+    assert resp.status_code == 403
