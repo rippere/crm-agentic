@@ -703,6 +703,14 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/at-risk`, {}, token)
   },
 
+  getGoingDarkContacts: (workspaceId: string, token: string): Promise<Array<{ id: string; name: string | null; email: string | null; company: string | null; status: string; days_since_last_contact: number; last_contact_date: string | null }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'c-002', name: 'Marcus Rivera', email: 'mrivera@globalfinance.io', company: 'Global Finance Inc.', status: 'prospect', days_since_last_contact: 42, last_contact_date: new Date(Date.now() - 42 * 86400000).toISOString().slice(0, 10) },
+      { id: 'c-007', name: 'Devon Park', email: 'devon@nexusai.com', company: 'Nexus AI', status: 'prospect', days_since_last_contact: 31, last_contact_date: new Date(Date.now() - 31 * 86400000).toISOString().slice(0, 10) },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/contacts/going-dark`, {}, token)
+  },
+
   getPipelineSuggestions: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve([
       { deal_id: 'demo-1', title: 'Acme Corp Expansion', company: 'Acme Corp', stage: 'proposal', value: 48000, action: 'follow_up', reason: 'No stage change in 24 days', priority: 'high' },
