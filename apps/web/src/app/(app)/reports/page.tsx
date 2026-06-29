@@ -69,6 +69,7 @@ export default function ReportsPage() {
   const [slippedDeals, setSlippedDeals] = useState<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; expected_close: string | null; days_overdue: number }>>([]);
   const [healthDist, setHealthDist] = useState<Array<{ bucket: string; count: number; total_value: number }>>([]);
   const [dealsByAgent, setDealsByAgent] = useState<Array<{ agent_name: string; count: number; total_value: number }>>([]);
+  const [revenueForecast, setRevenueForecast] = useState<Array<{ month: string; expected_revenue: number; deal_count: number; total_value: number }>>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -83,6 +84,7 @@ export default function ReportsPage() {
       apiClient.getDealCloseDateSlipped("demo-workspace-1", "demo-token").then(setSlippedDeals).catch(() => {});
       apiClient.getDealHealthDistribution("demo-workspace-1", "demo-token").then(setHealthDist).catch(() => {});
       apiClient.getDealsByAgent("demo-workspace-1", "demo-token").then(setDealsByAgent).catch(() => {});
+      apiClient.getDealRevenueForecast("demo-workspace-1", "demo-token").then(setRevenueForecast).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -101,6 +103,7 @@ export default function ReportsPage() {
       apiClient.getDealCloseDateSlipped(workspaceId, session.access_token).then(setSlippedDeals).catch(() => {});
       apiClient.getDealHealthDistribution(workspaceId, session.access_token).then(setHealthDist).catch(() => {});
       apiClient.getDealsByAgent(workspaceId, session.access_token).then(setDealsByAgent).catch(() => {});
+      apiClient.getDealRevenueForecast(workspaceId, session.access_token).then(setRevenueForecast).catch(() => {});
     });
   }, []);
 
@@ -745,6 +748,41 @@ export default function ReportsPage() {
           </Card>
         );
       })()}
+
+      {/* Expected revenue forecast by close month */}
+      {revenueForecast.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Expected Revenue by Close Month</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Open deals weighted by win probability</p>
+            </div>
+            <Badge variant="indigo">{revenueForecast.reduce((s, r) => s + r.deal_count, 0)} deals</Badge>
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={revenueForecast} margin={{ top: 0, right: 8, left: -10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis dataKey="month" tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  const row = payload[0].payload as { month: string; expected_revenue: number; deal_count: number; total_value: number };
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-2">{label}</p>
+                      <p className="text-emerald-400 font-mono font-bold">{formatCurrency(row.expected_revenue)} expected</p>
+                      <p className="text-zinc-400">{formatCurrency(row.total_value)} total pipeline</p>
+                      <p className="text-zinc-500 mt-1">{row.deal_count} deal{row.deal_count !== 1 ? "s" : ""}</p>
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="expected_revenue" name="Expected Revenue" fill="#00C896" radius={[4, 4, 0, 0]} maxBarSize={48} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
 
       {/* Close-date slippage */}
       {slippedDeals.length > 0 && (
