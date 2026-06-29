@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1729,4 +1729,57 @@ async def test_concentration_risk_wrong_workspace_returns_403(app_client):
     wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/concentration-risk")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/close-date-accuracy — Phase 12z
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_close_date_accuracy_computes_delta(app_client):
+    """Computes days_delta and outcome correctly for closed_won deals."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    late_deal = _fake_deal(
+        workspace_id,
+        stage="closed_won",
+        expected_close="2026-05-01",
+        stage_changed_at=datetime(2026, 5, 11, 10, 0, 0, tzinfo=timezone.utc),  # 10 days late
+        value=50000.0,
+        title="Late Deal",
+    )
+    early_deal = _fake_deal(
+        workspace_id,
+        stage="closed_won",
+        expected_close="2026-05-01",
+        stage_changed_at=datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc),  # 6 days early
+        value=30000.0,
+        title="Early Deal",
+    )
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([late_deal, early_deal]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/close-date-accuracy")
+
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 2
+    # Sorted by days_delta desc (biggest slippage first)
+    assert rows[0]["days_delta"] == 10
+    assert rows[0]["outcome"] == "late"
+    assert rows[0]["title"] == "Late Deal"
+    assert rows[1]["days_delta"] == -6
+    assert rows[1]["outcome"] == "early"
+    assert rows[1]["title"] == "Early Deal"
+
+
+@pytest.mark.asyncio
+async def test_close_date_accuracy_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's close-date accuracy."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/close-date-accuracy")
     assert resp.status_code == 403
