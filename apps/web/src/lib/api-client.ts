@@ -711,6 +711,14 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/contacts/going-dark`, {}, token)
   },
 
+  getDealCloseDateSlipped: (workspaceId: string, token: string): Promise<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; expected_close: string | null; days_overdue: number }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'd-002', title: 'Global Finance Enterprise Suite', company: 'Global Finance Inc.', stage: 'proposal', value: 250000, expected_close: new Date(Date.now() - 21 * 86400000).toISOString().slice(0, 10), days_overdue: 21 },
+      { id: 'd-006', title: 'ScalePath Japan Starter', company: 'ScalePath', stage: 'discovery', value: 18000, expected_close: new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10), days_overdue: 7 },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/deals/close-date-slipped`, {}, token)
+  },
+
   getPipelineSuggestions: (workspaceId: string, token: string) => {
     if (isDemoMode) return Promise.resolve([
       { deal_id: 'demo-1', title: 'Acme Corp Expansion', company: 'Acme Corp', stage: 'proposal', value: 48000, action: 'follow_up', reason: 'No stage change in 24 days', priority: 'high' },
