@@ -308,6 +308,96 @@ async def get_duplicate_candidates(
     return {"pairs": pairs[:20]}
 
 
+@router.get("/workspaces/{workspace_id}/contacts/going-dark")
+async def going_dark_contacts(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return customer/prospect contacts with no messages or notes in the last 30 days."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from app.models.message import Message
+    from datetime import timezone
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+        )
+    )
+    contacts = contact_result.scalars().all()
+    if not contacts:
+        return []
+
+    contact_ids = [c.id for c in contacts]
+    now = datetime.now(timezone.utc)
+    cutoff_90 = now - timedelta(days=90)
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id.in_(contact_ids),
+            Message.received_at >= cutoff_90,
+        )
+    )
+    messages = msg_result.scalars().all()
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id.in_(contact_ids),
+            ContactNote.created_at >= cutoff_90,
+        )
+    )
+    notes = note_result.scalars().all()
+
+    last_msg: dict = {}
+    for m in messages:
+        if m.contact_id and m.received_at:
+            ts = m.received_at
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if m.contact_id not in last_msg or ts > last_msg[m.contact_id]:
+                last_msg[m.contact_id] = ts
+
+    last_note: dict = {}
+    for n in notes:
+        ts = n.created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if n.contact_id not in last_note or ts > last_note[n.contact_id]:
+            last_note[n.contact_id] = ts
+
+    cutoff_30 = now - timedelta(days=30)
+    out = []
+    for c in contacts:
+        dates = [d for d in [last_msg.get(c.id), last_note.get(c.id)] if d is not None]
+        if dates:
+            last_contact = max(dates)
+            if last_contact >= cutoff_30:
+                continue
+            days_since = int((now - last_contact).total_seconds() / 86400)
+            last_contact_str = last_contact.date().isoformat()
+        else:
+            days_since = 90
+            last_contact_str = None
+
+        out.append({
+            "id": str(c.id),
+            "name": c.name,
+            "email": c.email,
+            "company": c.company,
+            "status": c.status,
+            "days_since_last_contact": days_since,
+            "last_contact_date": last_contact_str,
+        })
+
+    out.sort(key=lambda x: x["days_since_last_contact"], reverse=True)
+    return out
+
+
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/score", status_code=status.HTTP_200_OK)
 async def score_contact(
     workspace_id: uuid.UUID,
