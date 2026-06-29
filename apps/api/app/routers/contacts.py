@@ -398,6 +398,72 @@ async def going_dark_contacts(
     return out
 
 
+@router.get("/workspaces/{workspace_id}/contacts/pipeline-contribution")
+async def contact_pipeline_contribution(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return each contact's pipeline contribution: deal counts, pipeline value, won value.
+
+    NOTE: registered before /{contact_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from app.models.deal import Deal
+
+    deal_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id.is_not(None),
+        )
+    )
+    deals = deal_result.scalars().all()
+    if not deals:
+        return []
+
+    contact_ids = list({d.contact_id for d in deals})
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id.in_(contact_ids),
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contacts = {c.id: c for c in contact_result.scalars().all()}
+
+    buckets: dict = {}
+    for d in deals:
+        cid = d.contact_id
+        if cid not in buckets:
+            buckets[cid] = {"contact_id": str(cid), "pipeline_value": 0.0, "closed_won_value": 0.0, "deal_count": 0, "won_count": 0}
+        v = float(d.value or 0)
+        buckets[cid]["deal_count"] += 1
+        if d.stage == "closed_won":
+            buckets[cid]["closed_won_value"] += v
+            buckets[cid]["won_count"] += 1
+        elif d.stage != "closed_lost":
+            buckets[cid]["pipeline_value"] += v
+
+    out = []
+    for cid, b in buckets.items():
+        c = contacts.get(cid)
+        win_rate = round((b["won_count"] / b["deal_count"]) * 100, 1) if b["deal_count"] else 0.0
+        out.append({
+            "contact_id": b["contact_id"],
+            "name": c.name if c else None,
+            "email": c.email if c else None,
+            "company": c.company if c else None,
+            "pipeline_value": round(b["pipeline_value"], 2),
+            "closed_won_value": round(b["closed_won_value"], 2),
+            "deal_count": b["deal_count"],
+            "win_rate": win_rate,
+        })
+
+    out.sort(key=lambda x: x["pipeline_value"], reverse=True)
+    return out
+
+
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/score", status_code=status.HTTP_200_OK)
 async def score_contact(
     workspace_id: uuid.UUID,
