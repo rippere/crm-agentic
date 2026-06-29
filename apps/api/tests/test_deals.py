@@ -1517,3 +1517,43 @@ async def test_close_date_slipped_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/close-date-slipped")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/health-distribution
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_health_distribution_groups_deals_into_buckets(app_client):
+    """Open deals are grouped into critical/at_risk/healthy buckets with correct counts and values."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    critical_deal = _fake_deal(workspace_id, title="Critical", health_score=20, value=10000.0)
+    at_risk_deal = _fake_deal(workspace_id, title="At Risk", health_score=55, value=25000.0)
+    healthy_deal1 = _fake_deal(workspace_id, title="Healthy A", health_score=80, value=50000.0)
+    healthy_deal2 = _fake_deal(workspace_id, title="Healthy B", health_score=100, value=30000.0)
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([critical_deal, at_risk_deal, healthy_deal1, healthy_deal2]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/health-distribution")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    by_bucket = {b["bucket"]: b for b in data}
+    assert by_bucket["critical"]["count"] == 1
+    assert by_bucket["critical"]["total_value"] == 10000.0
+    assert by_bucket["at_risk"]["count"] == 1
+    assert by_bucket["at_risk"]["total_value"] == 25000.0
+    assert by_bucket["healthy"]["count"] == 2
+    assert by_bucket["healthy"]["total_value"] == 80000.0
+
+
+@pytest.mark.asyncio
+async def test_health_distribution_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's health distribution."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/health-distribution")
