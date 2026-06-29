@@ -1633,3 +1633,100 @@ async def test_revenue_forecast_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/revenue-forecast")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_stage_aging_returns_days_in_stage(app_client):
+    """Stage aging returns open deals with correct days_in_stage and sorted by stage order then age."""
+    fastapi_app, mock_db, workspace_id = app_client
+    now = datetime.now(timezone.utc)
+    old_deal = _fake_deal(workspace_id, title="Old Deal", stage="discovery", value=80000.0)
+    old_deal.stage_changed_at = now - timedelta(days=45)
+    new_deal = _fake_deal(workspace_id, title="New Deal", stage="discovery", value=30000.0)
+    new_deal.stage_changed_at = now - timedelta(days=3)
+    prop_deal = _fake_deal(workspace_id, title="Proposal Deal", stage="proposal", value=120000.0)
+    prop_deal.stage_changed_at = now - timedelta(days=20)
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([new_deal, prop_deal, old_deal]))
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/stage-aging")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 3
+    # discovery comes before proposal in stage order; within discovery, old (45d) before new (3d)
+    assert data[0]["stage"] == "discovery"
+    assert data[0]["days_in_stage"] >= 44
+    assert data[1]["stage"] == "discovery"
+    assert data[1]["days_in_stage"] <= 4
+    assert data[2]["stage"] == "proposal"
+
+
+@pytest.mark.asyncio
+async def test_stage_aging_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's stage aging."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/stage-aging")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_win_probability_by_stage_averages_correctly(app_client):
+    """Win probability by stage returns correct averages and all 4 open stages."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deals = [
+        _fake_deal(workspace_id, stage="discovery",   ml_win_probability=20),
+        _fake_deal(workspace_id, stage="discovery",   ml_win_probability=40),
+        _fake_deal(workspace_id, stage="qualified",   ml_win_probability=55),
+        _fake_deal(workspace_id, stage="proposal",    ml_win_probability=70),
+        _fake_deal(workspace_id, stage="negotiation", ml_win_probability=80),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result(deals))
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/win-probability-by-stage")
+    assert resp.status_code == 200
+    by_stage = {r["stage"]: r for r in resp.json()}
+    assert by_stage["discovery"]["avg_probability"] == 30.0
+    assert by_stage["discovery"]["deal_count"] == 2
+    assert by_stage["qualified"]["avg_probability"] == 55.0
+    assert by_stage["proposal"]["avg_probability"] == 70.0
+    assert by_stage["negotiation"]["avg_probability"] == 80.0
+
+
+@pytest.mark.asyncio
+async def test_win_probability_by_stage_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's win probability."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/win-probability-by-stage")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_concentration_risk_computes_correctly(app_client):
+    """Concentration risk flags high when top 3 deals dominate pipeline."""
+    fastapi_app, mock_db, workspace_id = app_client
+    big   = _fake_deal(workspace_id, title="Big Deal",   value=300000.0, stage="proposal")
+    mid   = _fake_deal(workspace_id, title="Mid Deal",   value=200000.0, stage="qualified")
+    small = _fake_deal(workspace_id, title="Small Deal", value=100000.0, stage="discovery")
+    tiny  = _fake_deal(workspace_id, title="Tiny Deal",  value=10000.0,  stage="discovery")
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([big, mid, small, tiny]))
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/concentration-risk")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["risk_level"] == "high"
+    assert data["top3_pct"] >= 90.0
+    assert data["total_pipeline"] == pytest.approx(610000.0)
+    assert len(data["top_deals"]) <= 5
+
+
+@pytest.mark.asyncio
+async def test_concentration_risk_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's concentration risk."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/concentration-risk")
+    assert resp.status_code == 403
