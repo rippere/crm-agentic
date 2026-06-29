@@ -396,6 +396,9 @@ export default function PipelinePage() {
   });
   const [suggestions, setSuggestions] = useState<PipelineSuggestion[]>([]);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
+  const [atRiskDeals, setAtRiskDeals] = useState<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; ml_win_probability: number; days_inactive: number; risk_reason: string }>>([]);
+  const [atRiskDismissed, setAtRiskDismissed] = useState(false);
+  const [atRiskExpanded, setAtRiskExpanded] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkStageTarget, setBulkStageTarget] = useState<DealStage | null>(null);
@@ -422,6 +425,25 @@ export default function PipelinePage() {
       if (!workspaceId) return;
       apiClient.getPipelineSuggestions(workspaceId, session.access_token)
         .then((data) => { if (Array.isArray(data)) setSuggestions(data as PipelineSuggestion[]); })
+        .catch(() => {});
+    });
+  }, []);
+
+  useEffect(() => {
+    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+    if (isDemoMode) {
+      apiClient.getAtRiskDeals("demo-workspace-1", "demo-token")
+        .then((data) => { if (Array.isArray(data)) setAtRiskDeals(data); })
+        .catch(() => {});
+      return;
+    }
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) return;
+      const workspaceId: string | undefined = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id);
+      if (!workspaceId) return;
+      apiClient.getAtRiskDeals(workspaceId, session.access_token)
+        .then((data) => { if (Array.isArray(data)) setAtRiskDeals(data); })
         .catch(() => {});
     });
   }, []);
@@ -577,6 +599,70 @@ export default function PipelinePage() {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* At-Risk Deals Banner */}
+      {atRiskDeals.length > 0 && !atRiskDismissed && (
+        <Card className="border-amber-500/30 bg-amber-500/5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <AlertTriangle className="h-4 w-4 text-amber-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between mb-2">
+                <button
+                  onClick={() => setAtRiskExpanded((v) => !v)}
+                  className="flex items-center gap-2 text-left"
+                  aria-expanded={atRiskExpanded}
+                >
+                  <p className="text-sm font-semibold text-amber-300">
+                    {atRiskDeals.length} deal{atRiskDeals.length !== 1 ? "s" : ""} at risk
+                  </p>
+                  <span className="text-[10px] text-amber-500/70 font-mono">
+                    {atRiskExpanded ? "▲ hide" : "▼ show"}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setAtRiskDismissed(true)}
+                  className="text-zinc-600 hover:text-zinc-400 transition-colors"
+                  aria-label="Dismiss at-risk warning"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <p className="text-xs text-amber-600/80">
+                Low win probability (&lt;30%) + no stage change in 14+ days.
+              </p>
+              {atRiskExpanded && (
+                <div className="mt-3 space-y-2">
+                  {atRiskDeals.map((d) => (
+                    <div key={d.id} className="flex items-center gap-3 rounded-lg bg-zinc-900/60 border border-amber-500/10 px-3 py-2">
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-zinc-200 truncate">{d.title}</span>
+                          <span className="text-[10px] font-mono text-amber-500 flex-shrink-0">{d.ml_win_probability}% win</span>
+                          <span className="text-[10px] text-zinc-600 flex-shrink-0">{d.days_inactive}d inactive</span>
+                        </div>
+                        <p className="text-[10px] text-zinc-500 truncate">{d.company} · {d.stage}</p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="text-[10px] font-mono text-zinc-500">{formatCurrency(d.value)}</span>
+                        <Link
+                          href={`/pipeline/${d.id}`}
+                          className="text-zinc-600 hover:text-amber-400 transition-colors"
+                          aria-label={`Open deal ${d.title}`}
+                        >
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </Link>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </Card>
