@@ -70,6 +70,10 @@ export default function ReportsPage() {
   const [healthDist, setHealthDist] = useState<Array<{ bucket: string; count: number; total_value: number }>>([]);
   const [dealsByAgent, setDealsByAgent] = useState<Array<{ agent_name: string; count: number; total_value: number }>>([]);
   const [revenueForecast, setRevenueForecast] = useState<Array<{ month: string; expected_revenue: number; deal_count: number; total_value: number }>>([]);
+  const [stageAging, setStageAging] = useState<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; days_in_stage: number }>>([]);
+  const [winProbByStage, setWinProbByStage] = useState<Array<{ stage: string; avg_probability: number; deal_count: number; total_value: number }>>([]);
+  const [pipelineContribution, setPipelineContribution] = useState<Array<{ contact_id: string; name: string | null; email: string | null; company: string | null; pipeline_value: number; closed_won_value: number; deal_count: number; win_rate: number }>>([]);
+  const [concentrationRisk, setConcentrationRisk] = useState<{ total_pipeline: number; top_deals: Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; pct_of_pipeline: number }>; top3_pct: number; risk_level: "low" | "medium" | "high" } | null>(null);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -85,6 +89,10 @@ export default function ReportsPage() {
       apiClient.getDealHealthDistribution("demo-workspace-1", "demo-token").then(setHealthDist).catch(() => {});
       apiClient.getDealsByAgent("demo-workspace-1", "demo-token").then(setDealsByAgent).catch(() => {});
       apiClient.getDealRevenueForecast("demo-workspace-1", "demo-token").then(setRevenueForecast).catch(() => {});
+      apiClient.getDealStageAging("demo-workspace-1", "demo-token").then(setStageAging).catch(() => {});
+      apiClient.getDealWinProbabilityByStage("demo-workspace-1", "demo-token").then(setWinProbByStage).catch(() => {});
+      apiClient.getContactPipelineContribution("demo-workspace-1", "demo-token").then(setPipelineContribution).catch(() => {});
+      apiClient.getDealConcentrationRisk("demo-workspace-1", "demo-token").then(setConcentrationRisk).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -104,6 +112,10 @@ export default function ReportsPage() {
       apiClient.getDealHealthDistribution(workspaceId, session.access_token).then(setHealthDist).catch(() => {});
       apiClient.getDealsByAgent(workspaceId, session.access_token).then(setDealsByAgent).catch(() => {});
       apiClient.getDealRevenueForecast(workspaceId, session.access_token).then(setRevenueForecast).catch(() => {});
+      apiClient.getDealStageAging(workspaceId, session.access_token).then(setStageAging).catch(() => {});
+      apiClient.getDealWinProbabilityByStage(workspaceId, session.access_token).then(setWinProbByStage).catch(() => {});
+      apiClient.getContactPipelineContribution(workspaceId, session.access_token).then(setPipelineContribution).catch(() => {});
+      apiClient.getDealConcentrationRisk(workspaceId, session.access_token).then(setConcentrationRisk).catch(() => {});
     });
   }, []);
 
@@ -783,6 +795,172 @@ export default function ReportsPage() {
           </ResponsiveContainer>
         </Card>
       )}
+
+      {/* Deal aging by stage */}
+      {stageAging.length > 0 && (() => {
+        const AGING_COLOR = (days: number) =>
+          days >= 30 ? "#F43F5E" : days >= 14 ? "#FBBF24" : "#00C896";
+        const stages = Array.from(new Set(stageAging.map((d) => d.stage)));
+        return (
+          <Card>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Deal Aging by Stage</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">Days each open deal has spent in its current stage</p>
+              </div>
+              <div className="flex items-center gap-3 text-[10px] text-zinc-500">
+                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-[#00C896]" /> &lt;14d</span>
+                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-400" /> 14–30d</span>
+                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-500" /> 30d+</span>
+              </div>
+            </div>
+            <div className="space-y-4">
+              {stages.map((stage) => {
+                const deals = stageAging.filter((d) => d.stage === stage);
+                return (
+                  <div key={stage}>
+                    <p className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5">
+                      {stageConfig[stage as keyof typeof stageConfig]?.label ?? stage} · {deals.length}
+                    </p>
+                    <div className="space-y-1">
+                      {deals.map((d) => (
+                        <div key={d.id} className="flex items-center gap-3 rounded-lg px-3 py-2 bg-zinc-800/30">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-zinc-200 truncate">{d.title ?? "Untitled"}</p>
+                            <p className="text-[10px] text-zinc-600 truncate">{d.company ?? "—"} · {formatCurrency(d.value)}</p>
+                          </div>
+                          <span
+                            className="shrink-0 rounded-md px-2 py-0.5 text-[11px] font-mono tabular-nums font-bold"
+                            style={{ color: AGING_COLOR(d.days_in_stage), background: `${AGING_COLOR(d.days_in_stage)}18` }}
+                          >
+                            {d.days_in_stage}d
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        );
+      })()}
+
+      {/* Win probability by stage */}
+      {winProbByStage.some((b) => b.deal_count > 0) && (
+        <Card>
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Win Probability by Stage</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Average ML win probability for open deals per stage</p>
+            </div>
+            <Badge variant="indigo">{winProbByStage.reduce((s, b) => s + b.deal_count, 0)} deals</Badge>
+          </div>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart
+              data={winProbByStage.filter((b) => b.deal_count > 0).map((b) => ({
+                ...b,
+                label: stageConfig[b.stage as keyof typeof stageConfig]?.label ?? b.stage,
+              }))}
+              margin={{ top: 4, right: 8, left: -10, bottom: 0 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis dataKey="label" tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#71717A", fontSize: 11 }} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  const b = payload[0].payload as { avg_probability: number; deal_count: number; total_value: number };
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-2">{label}</p>
+                      <p className="text-violet-400 font-mono font-bold">{b.avg_probability}% avg win prob</p>
+                      <p className="text-zinc-400">{b.deal_count} deal{b.deal_count !== 1 ? "s" : ""}</p>
+                      <p className="text-zinc-500">{formatCurrency(b.total_value)} pipeline</p>
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="avg_probability" name="Avg Win Probability" radius={[4, 4, 0, 0]} maxBarSize={48}>
+                {winProbByStage.filter((b) => b.deal_count > 0).map((b) => (
+                  <Cell key={b.stage} fill={STAGE_COLORS[b.stage] ?? "#52525B"} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Contact pipeline contribution */}
+      {pipelineContribution.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Contact Pipeline Contribution</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Top contacts by open pipeline value</p>
+            </div>
+            <Badge variant="indigo">{pipelineContribution.length} contacts</Badge>
+          </div>
+          <div className="space-y-1">
+            {pipelineContribution.slice(0, 8).map((c) => (
+              <div key={c.contact_id} className="flex items-center gap-3 rounded-lg px-3 py-2.5 bg-zinc-800/30">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-zinc-200 truncate">{c.name ?? c.email ?? "Unknown"}</p>
+                  <p className="text-[10px] text-zinc-600 truncate">{c.company ?? "—"} · {c.deal_count} deal{c.deal_count !== 1 ? "s" : ""} · {c.win_rate.toFixed(0)}% win rate</p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-xs font-mono font-bold text-indigo-400">{formatCurrency(c.pipeline_value)}</p>
+                  {c.closed_won_value > 0 && (
+                    <p className="text-[10px] font-mono text-[#00C896]">{formatCurrency(c.closed_won_value)} won</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Pipeline concentration risk */}
+      {concentrationRisk && concentrationRisk.total_pipeline > 0 && (() => {
+        const RISK_CONFIG = {
+          low:    { label: "Low",    color: "#00C896", bg: "#00C89618" },
+          medium: { label: "Medium", color: "#FBBF24", bg: "#FBBF2418" },
+          high:   { label: "High",   color: "#F43F5E", bg: "#F43F5E18" },
+        };
+        const cfg = RISK_CONFIG[concentrationRisk.risk_level];
+        return (
+          <Card>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Pipeline Concentration Risk</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">Top 3 deals · {concentrationRisk.top3_pct}% of {formatCurrency(concentrationRisk.total_pipeline)} pipeline</p>
+              </div>
+              <span className="rounded-md px-2.5 py-1 text-xs font-bold" style={{ color: cfg.color, background: cfg.bg }}>
+                {cfg.label} risk
+              </span>
+            </div>
+            <div className="space-y-2">
+              {concentrationRisk.top_deals.map((d) => (
+                <div key={d.id} className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs text-zinc-300 truncate">{d.title ?? "Untitled"} · {d.company ?? "—"}</span>
+                      <span className="text-xs font-mono text-zinc-400 flex-shrink-0 ml-2">{d.pct_of_pipeline.toFixed(1)}%</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{ width: `${d.pct_of_pipeline}%`, background: STAGE_COLORS[d.stage] ?? "#52525B" }}
+                      />
+                    </div>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-zinc-200 flex-shrink-0 w-20 text-right">{formatCurrency(d.value)}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* Close-date slippage */}
       {slippedDeals.length > 0 && (
