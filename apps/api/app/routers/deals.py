@@ -719,6 +719,48 @@ async def close_date_slipped(
     ]
 
 
+@router.get("/workspaces/{workspace_id}/deals/health-distribution")
+async def health_distribution(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Group all open deals into health buckets: critical (<40), at_risk (40–69), healthy (70–100).
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = result.scalars().all()
+
+    buckets: dict[str, dict] = {
+        "critical": {"bucket": "critical", "count": 0, "total_value": 0.0},
+        "at_risk": {"bucket": "at_risk", "count": 0, "total_value": 0.0},
+        "healthy": {"bucket": "healthy", "count": 0, "total_value": 0.0},
+    }
+    for d in deals:
+        score = d.health_score if d.health_score is not None else 100
+        value = float(d.value or 0)
+        if score < 40:
+            buckets["critical"]["count"] += 1
+            buckets["critical"]["total_value"] += value
+        elif score < 70:
+            buckets["at_risk"]["count"] += 1
+            buckets["at_risk"]["total_value"] += value
+        else:
+            buckets["healthy"]["count"] += 1
+            buckets["healthy"]["total_value"] += value
+
+    return list(buckets.values())
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
@@ -1334,3 +1376,4 @@ async def deal_stage_history(
             "entered_at": ts.isoformat(),
             "days_in_stage": max(0, int((end_ts - ts).total_seconds() / 86400)),
             "is_current": is_last,
+        })
