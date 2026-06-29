@@ -585,6 +585,63 @@ async def outcome_reasons(
     ]
 
 
+@router.get("/workspaces/{workspace_id}/deals/at-risk")
+async def at_risk_deals(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return open deals flagged as 'at risk': low ML win probability (<30%) AND
+    no stage change in 14+ days.  Optionally also surfaced when next_action_date
+    is in the past.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=14)
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.ml_win_probability < 30,
+        ).order_by(Deal.ml_win_probability.asc())
+    )
+    deals = result.scalars().all()
+
+    today = date.today()
+    out = []
+    for d in deals:
+        sc = d.stage_changed_at or d.created_at
+        if sc and sc.tzinfo is None:
+            sc = sc.replace(tzinfo=timezone.utc)
+        days_inactive = int((now - sc).total_seconds() / 86400) if sc else 0
+        if days_inactive < 14:
+            continue
+
+        reasons: list[str] = [f"Win probability only {d.ml_win_probability}%"]
+        reasons.append(f"No activity in {days_inactive} days")
+        if d.next_action_date and d.next_action_date < today:
+            overdue = (today - d.next_action_date).days
+            reasons.append(f"Next action overdue by {overdue} day{'s' if overdue != 1 else ''}")
+
+        out.append({
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "stage": d.stage,
+            "value": float(d.value or 0),
+            "ml_win_probability": d.ml_win_probability,
+            "days_inactive": days_inactive,
+            "risk_reason": "; ".join(reasons),
+        })
+
+    return out
+
+
 @router.get("/workspaces/{workspace_id}/deals/overdue-actions")
 async def overdue_actions(
     workspace_id: uuid.UUID,
