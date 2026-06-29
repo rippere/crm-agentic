@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
 } from "recharts";
 import {
-  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot,
+  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -60,6 +60,7 @@ export default function ReportsPage() {
   const [funnelData, setFunnelData] = useState<FunnelRow[]>([]);
   const [outcomeReasons, setOutcomeReasons] = useState<OutcomeReasonRow[]>([]);
   const [agentRunStats, setAgentRunStats] = useState<{ agent_name: string; success: number; failure: number }[]>([]);
+  const [slippedDeals, setSlippedDeals] = useState<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; expected_close: string | null; days_overdue: number }>>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -71,6 +72,7 @@ export default function ReportsPage() {
       }).catch(() => {});
       apiClient.getDealOutcomeReasons("demo-workspace-1", "demo-token").then(setOutcomeReasons).catch(() => {});
       apiClient.getAgentRunStats("demo-workspace-1", "demo-token").then(setAgentRunStats).catch(() => {});
+      apiClient.getDealCloseDateSlipped("demo-workspace-1", "demo-token").then(setSlippedDeals).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -86,6 +88,7 @@ export default function ReportsPage() {
       }).catch(() => {});
       apiClient.getDealOutcomeReasons(workspaceId, session.access_token).then(setOutcomeReasons).catch(() => {});
       apiClient.getAgentRunStats(workspaceId, session.access_token).then(setAgentRunStats).catch(() => {});
+      apiClient.getDealCloseDateSlipped(workspaceId, session.access_token).then(setSlippedDeals).catch(() => {});
     });
   }, []);
 
@@ -623,6 +626,32 @@ export default function ReportsPage() {
               <Bar dataKey="failure" name="failure" fill="#F43F5E" radius={[4, 4, 0, 0]} maxBarSize={28} />
             </BarChart>
           </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Close-date slippage */}
+      {slippedDeals.length > 0 && (
+        <Card className="border-amber-500/20 space-y-3">
+          <div className="flex items-center gap-2">
+            <CalendarOff className="h-4 w-4 text-amber-400 flex-shrink-0" />
+            <p className="text-sm font-semibold text-zinc-100">
+              {slippedDeals.length} deal{slippedDeals.length !== 1 ? "s" : ""} past close date
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            {slippedDeals.map((d) => (
+              <div key={d.id} className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-zinc-200 truncate">{d.title ?? "Untitled"}</p>
+                  <p className="text-[11px] text-zinc-500 truncate">{d.company ?? "—"} · {stageConfig[d.stage as keyof typeof stageConfig]?.label ?? d.stage}</p>
+                </div>
+                <span className="shrink-0 text-xs font-mono text-zinc-400">{formatCurrency(d.value)}</span>
+                <span className="shrink-0 rounded-md bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-[11px] font-mono text-amber-400 tabular-nums">
+                  {d.days_overdue}d overdue
+                </span>
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 
