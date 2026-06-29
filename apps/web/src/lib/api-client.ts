@@ -408,7 +408,7 @@ export const apiClient = {
     if (!res.ok) throw new Error(`Export failed: ${res.status}`)
     return res.blob()
   },
-  exportContactTimeline: async (workspaceId: string, contactId: string, token: string): Promise<Blob> => {
+  exportContactTimeline: async (workspaceId: string, token: string, contactId: string): Promise<Blob> => {
     if (isDemoMode) {
       const rows = [
         ['date', 'type', 'title', 'description', 'severity'],
@@ -693,6 +693,14 @@ export const apiClient = {
       { id: 'demo-deal-3', title: 'GlobalTech Platform', company: 'GlobalTech', stage: 'proposal', value: 120000, next_action: 'Schedule follow-up call', next_action_date: new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10), days_overdue: 3 },
     ])
     return apiFetch(`/workspaces/${workspaceId}/deals/overdue-actions`, {}, token)
+  },
+
+  getAtRiskDeals: (workspaceId: string, token: string): Promise<Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; ml_win_probability: number; days_inactive: number; risk_reason: string }>> => {
+    if (isDemoMode) return Promise.resolve([
+      { id: 'demo-deal-2', title: 'TechStart Series A', company: 'TechStart', stage: 'proposal', value: 22000, ml_win_probability: 18, days_inactive: 21, risk_reason: 'Win probability only 18%; No activity in 21 days' },
+      { id: 'demo-deal-5', title: 'Retail Chain Pilot', company: 'RetailCo', stage: 'qualified', value: 35000, ml_win_probability: 24, days_inactive: 16, risk_reason: 'Win probability only 24%; No activity in 16 days; Next action overdue by 5 days' },
+    ])
+    return apiFetch(`/workspaces/${workspaceId}/deals/at-risk`, {}, token)
   },
 
   getPipelineSuggestions: (workspaceId: string, token: string) => {
