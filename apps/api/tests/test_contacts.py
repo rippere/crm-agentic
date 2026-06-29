@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1367,5 +1368,55 @@ async def test_duplicate_candidates_wrong_workspace_returns_403(app_client):
 
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/duplicate-candidates")
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/going-dark
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_going_dark_returns_contacts_with_no_recent_activity(app_client):
+    """Contacts with no messages or notes in the last 30 days are returned."""
+    from datetime import timezone
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    dark = _fake_contact(workspace_id, status="customer")
+    active = _fake_contact(workspace_id, status="prospect")
+
+    # Build a fake message for the active contact (received 5 days ago)
+    recent_msg = MagicMock()
+    recent_msg.contact_id = active.id
+    recent_msg.received_at = datetime.now(timezone.utc) - timedelta(days=5)
+
+    # 3 execute calls: contacts, messages, notes
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalars_result([dark, active]),  # contacts query
+        _make_scalars_result([recent_msg]),    # messages query
+        _make_scalars_result([]),              # notes query
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/going-dark")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["id"] == str(dark.id)
+    assert data[0]["days_since_last_contact"] == 90
+    assert data[0]["status"] == "customer"
+
+
+@pytest.mark.asyncio
+async def test_going_dark_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's going-dark contacts."""
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/contacts/going-dark")
 
     assert resp.status_code == 403
