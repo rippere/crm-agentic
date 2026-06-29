@@ -285,3 +285,47 @@ async def test_stream_events_success_resets_error_counter(workspace_id):
     assert ": heartbeat\n\n" in chunks
     assert any("recovered" in c for c in chunks)  # the successful poll's event streamed
     assert not any("stream-error" in c for c in chunks)
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/activity/trends — Phase 13a
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_activity_trends_returns_weekly_buckets(app_client):
+    """Returns 12 weekly buckets with category counts."""
+    fastapi_app, mock_db, workspace_id = app_client
+    from datetime import date as date_cls, timedelta
+
+    # Place events explicitly inside the current Mon–Sun calendar week so the
+    # test is robust regardless of which day of the week it runs on.
+    today = datetime.now(timezone.utc).date()
+    this_monday = today - timedelta(days=today.weekday())
+    week_open = datetime(this_monday.year, this_monday.month, this_monday.day, 0, 0, tzinfo=timezone.utc)
+    ev1 = _fake_event(workspace_id, type="deal_moved", created_at=week_open + timedelta(hours=1))
+    ev2 = _fake_event(workspace_id, type="contact_created", created_at=week_open + timedelta(hours=2))
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([ev1, ev2]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/activity/trends?weeks=12")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 12
+    # Most-recent bucket (last entry) should have both events
+    last = data[-1]
+    assert last["deals"] == 1
+    assert last["contacts"] == 1
+    assert last["total"] == 2
+    assert "week_start" in last
+
+
+@pytest.mark.asyncio
+async def test_activity_trends_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's activity trends."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/activity/trends")
+    assert resp.status_code == 403
