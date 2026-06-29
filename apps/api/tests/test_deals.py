@@ -1474,4 +1474,46 @@ async def test_at_risk_deals_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/at-risk")
 
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/close-date-slipped
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_close_date_slipped_returns_overdue_deals(app_client):
+    """Open deals with expected_close in the past are returned, ordered most-overdue first."""
+    from datetime import date
+    fastapi_app, mock_db, workspace_id = app_client
+
+    past_close = (date.today() - timedelta(days=10)).isoformat()
+    older_close = (date.today() - timedelta(days=30)).isoformat()
+    future_close = (date.today() + timedelta(days=5)).isoformat()
+
+    overdue_recent = _fake_deal(workspace_id, title="Slipped Recent", stage="proposal", expected_close=past_close)
+    overdue_old = _fake_deal(workspace_id, title="Slipped Old", stage="negotiation", expected_close=older_close)
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([overdue_old, overdue_recent]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/close-date-slipped")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["title"] == "Slipped Old"
+    assert data[0]["days_overdue"] >= 30
+    assert data[0]["expected_close"] == older_close
+    assert data[1]["title"] == "Slipped Recent"
+    assert data[1]["days_overdue"] >= 10
+
+
+@pytest.mark.asyncio
+async def test_close_date_slipped_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's slipped deals."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/close-date-slipped")
+
     assert resp.status_code == 403
