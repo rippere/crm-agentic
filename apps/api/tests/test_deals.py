@@ -1557,3 +1557,47 @@ async def test_health_distribution_wrong_workspace_returns_403(app_client):
 
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/health-distribution")
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/by-agent
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_deals_by_agent_groups_and_sorts(app_client):
+    """Open deals grouped by assigned_agent, sorted by count desc; null → Unassigned."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    deal_a1 = _fake_deal(workspace_id, assigned_agent="Nova", value=30000.0)
+    deal_a2 = _fake_deal(workspace_id, assigned_agent="Nova", value=20000.0)
+    deal_b1 = _fake_deal(workspace_id, assigned_agent="Sage", value=50000.0)
+    deal_un = _fake_deal(workspace_id, assigned_agent=None, value=10000.0)
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([deal_a1, deal_a2, deal_b1, deal_un]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/by-agent")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    by_name = {b["agent_name"]: b for b in data}
+    assert by_name["Nova"]["count"] == 2
+    assert by_name["Nova"]["total_value"] == 50000.0
+    assert by_name["Sage"]["count"] == 1
+    assert by_name["Sage"]["total_value"] == 50000.0
+    assert by_name["Unassigned"]["count"] == 1
+    assert by_name["Unassigned"]["total_value"] == 10000.0
+    # sorted by count desc — Nova (2) should be first
+    assert data[0]["agent_name"] == "Nova"
+
+
+@pytest.mark.asyncio
+async def test_deals_by_agent_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's by-agent distribution."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/by-agent")
