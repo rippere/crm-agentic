@@ -1416,3 +1416,62 @@ async def test_overdue_actions_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/overdue-actions")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/at-risk
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_at_risk_deals_returns_qualifying_deals(app_client):
+    """Deals with ml_win_probability < 30 and stage_changed_at > 14 days ago are returned."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    risky = _fake_deal(
+        workspace_id,
+        title="Stalled Deal",
+        stage="proposal",
+        ml_win_probability=20,
+        stage_changed_at=datetime.now(timezone.utc) - timedelta(days=20),
+    )
+    # Should NOT be returned — probability too high
+    safe = _fake_deal(
+        workspace_id,
+        title="Healthy Deal",
+        stage="qualified",
+        ml_win_probability=70,
+        stage_changed_at=datetime.now(timezone.utc) - timedelta(days=20),
+    )
+    # Should NOT be returned — recent stage change (< 14 days)
+    recent = _fake_deal(
+        workspace_id,
+        title="Recent Deal",
+        stage="negotiation",
+        ml_win_probability=15,
+        stage_changed_at=datetime.now(timezone.utc) - timedelta(days=5),
+    )
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([risky, recent]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/at-risk")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "Stalled Deal"
+    assert data[0]["ml_win_probability"] == 20
+    assert data[0]["days_inactive"] >= 20
+    assert "Win probability only 20%" in data[0]["risk_reason"]
+
+
+@pytest.mark.asyncio
+async def test_at_risk_deals_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's at-risk deals."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/at-risk")
+
+    assert resp.status_code == 403
