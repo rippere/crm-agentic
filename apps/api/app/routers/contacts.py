@@ -1525,3 +1525,79 @@ async def export_contact_timeline(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/last-touch")
+async def contact_last_touch(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return the most recent touch point for a contact across messages, notes, and activity events."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+
+    msg_result = await db.execute(
+        select(Message.received_at, Message.created_at).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+        ).order_by(Message.received_at.desc().nullslast()).limit(1)
+    )
+    msg_row = msg_result.first()
+    last_message_date = (msg_row[0] or msg_row[1]).isoformat() if msg_row and (msg_row[0] or msg_row[1]) else None
+
+    note_result = await db.execute(
+        select(ContactNote.created_at).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+        ).order_by(ContactNote.created_at.desc()).limit(1)
+    )
+    note_row = note_result.first()
+    last_note_date = note_row[0].isoformat() if note_row and note_row[0] else None
+
+    contact_meta = f"contact:{contact_id}"
+    evt_result = await db.execute(
+        select(ActivityEvent.created_at).where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.meta.like(f"%{contact_meta}%"),
+        ).order_by(ActivityEvent.created_at.desc()).limit(1)
+    )
+    evt_row = evt_result.first()
+    last_activity_date = evt_row[0].isoformat() if evt_row and evt_row[0] else None
+
+    candidates: list[tuple[str, str]] = []
+    if last_message_date:
+        candidates.append((last_message_date, "message"))
+    if last_note_date:
+        candidates.append((last_note_date, "note"))
+    if last_activity_date:
+        candidates.append((last_activity_date, "activity"))
+
+    now = datetime.utcnow()
+    most_recent_type: str | None = None
+    days_ago: int | None = None
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        most_recent_type = candidates[0][1]
+        try:
+            most_recent_dt = datetime.fromisoformat(candidates[0][0].replace("Z", "+00:00")).replace(tzinfo=None)
+            days_ago = max(0, (now - most_recent_dt).days)
+        except ValueError:
+            days_ago = None
+
+    return {
+        "last_message_date": last_message_date,
+        "last_note_date": last_note_date,
+        "last_activity_date": last_activity_date,
+        "most_recent_type": most_recent_type,
+        "days_ago": days_ago,
+    }
