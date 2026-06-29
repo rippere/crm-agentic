@@ -1472,3 +1472,59 @@ async def test_last_touch_contact_not_found_returns_404(app_client):
 
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{missing_id}/last-touch")
+
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/pipeline-contribution (Phase 12x)
+# ---------------------------------------------------------------------------
+
+
+def _fake_deal_for_contact(workspace_id: uuid.UUID, contact_id: uuid.UUID, **kwargs) -> MagicMock:
+    d = MagicMock()
+    d.id = uuid.uuid4()
+    d.workspace_id = workspace_id
+    d.contact_id = contact_id
+    d.value = kwargs.get("value", 50000.0)
+    d.stage = kwargs.get("stage", "discovery")
+    return d
+
+
+@pytest.mark.asyncio
+async def test_pipeline_contribution_aggregates_correctly(app_client):
+    """pipeline-contribution aggregates open pipeline + won value per contact."""
+    fastapi_app, mock_db, workspace_id = app_client
+    cid = uuid.uuid4()
+    deal_open = _fake_deal_for_contact(workspace_id, cid, value=100000.0, stage="proposal")
+    deal_won  = _fake_deal_for_contact(workspace_id, cid, value=50000.0,  stage="closed_won")
+    deal_lost = _fake_deal_for_contact(workspace_id, cid, value=30000.0,  stage="closed_lost")
+    contact = _fake_contact(workspace_id, name="Pipeline Person")
+    contact.id = cid
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalars_result([deal_open, deal_won, deal_lost]),
+        _make_scalars_result([contact]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/pipeline-contribution")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    row = data[0]
+    assert row["pipeline_value"] == 100000.0
+    assert row["closed_won_value"] == 50000.0
+    assert row["deal_count"] == 3
+    assert row["win_rate"] == pytest.approx(33.3, abs=0.2)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_contribution_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's pipeline contribution."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/contacts/pipeline-contribution")
+    assert resp.status_code == 403
