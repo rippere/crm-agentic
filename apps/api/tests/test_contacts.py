@@ -1420,3 +1420,55 @@ async def test_going_dark_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/going-dark")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/last-touch
+# ---------------------------------------------------------------------------
+
+def _make_first_result(value):
+    """Mock for execute().first() returning a single tuple row."""
+    r = MagicMock()
+    r.first.return_value = value
+    return r
+
+
+@pytest.mark.asyncio
+async def test_last_touch_returns_most_recent_touch(app_client):
+    """Returns last message/note/activity dates and identifies the most recent type."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+    contact_id = contact.id
+
+    msg_dt = datetime.now() - timedelta(days=3)
+    note_dt = datetime.now() - timedelta(days=10)
+    act_dt = datetime.now() - timedelta(days=20)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),              # contact lookup
+        _make_first_result((msg_dt, msg_dt)),      # message received_at, created_at
+        _make_first_result((note_dt,)),            # note created_at
+        _make_first_result((act_dt,)),             # activity created_at
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact_id}/last-touch")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["most_recent_type"] == "message"
+    assert data["days_ago"] is not None and data["days_ago"] <= 4
+    assert data["last_message_date"] is not None
+    assert data["last_note_date"] is not None
+    assert data["last_activity_date"] is not None
+
+
+@pytest.mark.asyncio
+async def test_last_touch_contact_not_found_returns_404(app_client):
+    """Returns 404 when contact does not exist."""
+    fastapi_app, mock_db, workspace_id = app_client
+    missing_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{missing_id}/last-touch")
