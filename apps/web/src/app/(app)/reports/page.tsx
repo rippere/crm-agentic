@@ -74,6 +74,7 @@ export default function ReportsPage() {
   const [winProbByStage, setWinProbByStage] = useState<Array<{ stage: string; avg_probability: number; deal_count: number; total_value: number }>>([]);
   const [pipelineContribution, setPipelineContribution] = useState<Array<{ contact_id: string; name: string | null; email: string | null; company: string | null; pipeline_value: number; closed_won_value: number; deal_count: number; win_rate: number }>>([]);
   const [concentrationRisk, setConcentrationRisk] = useState<{ total_pipeline: number; top_deals: Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; pct_of_pipeline: number }>; top3_pct: number; risk_level: "low" | "medium" | "high" } | null>(null);
+  const [closeDateAccuracy, setCloseDateAccuracy] = useState<Array<{ id: string; title: string | null; company: string | null; value: number; expected_close: string; actual_close: string; days_delta: number; outcome: "early" | "on_time" | "late" }>>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -93,6 +94,7 @@ export default function ReportsPage() {
       apiClient.getDealWinProbabilityByStage("demo-workspace-1", "demo-token").then(setWinProbByStage).catch(() => {});
       apiClient.getContactPipelineContribution("demo-workspace-1", "demo-token").then(setPipelineContribution).catch(() => {});
       apiClient.getDealConcentrationRisk("demo-workspace-1", "demo-token").then(setConcentrationRisk).catch(() => {});
+      apiClient.getDealCloseDateAccuracy("demo-workspace-1", "demo-token").then(setCloseDateAccuracy).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -116,6 +118,7 @@ export default function ReportsPage() {
       apiClient.getDealWinProbabilityByStage(workspaceId, session.access_token).then(setWinProbByStage).catch(() => {});
       apiClient.getContactPipelineContribution(workspaceId, session.access_token).then(setPipelineContribution).catch(() => {});
       apiClient.getDealConcentrationRisk(workspaceId, session.access_token).then(setConcentrationRisk).catch(() => {});
+      apiClient.getDealCloseDateAccuracy(workspaceId, session.access_token).then(setCloseDateAccuracy).catch(() => {});
     });
   }, []);
 
@@ -984,6 +987,40 @@ export default function ReportsPage() {
                 </span>
               </div>
             ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Close Date Accuracy — Phase 12z */}
+      {closeDateAccuracy.length > 0 && (
+        <Card>
+          <div className="flex items-center gap-2 mb-3">
+            <CalendarOff className="h-4 w-4 text-zinc-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Close Date Accuracy</h3>
+            <span className="ml-auto text-xs text-zinc-500">{closeDateAccuracy.length} closed deal{closeDateAccuracy.length !== 1 ? "s" : ""}</span>
+          </div>
+          <div className="space-y-2">
+            {closeDateAccuracy.slice(0, 8).map((d) => {
+              const isLate = d.outcome === "late";
+              const isEarly = d.outcome === "early";
+              const deltaAbs = Math.abs(d.days_delta);
+              const badgeCls = isLate
+                ? "bg-rose-500/10 border-rose-500/20 text-rose-400"
+                : isEarly
+                  ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                  : "bg-zinc-700/40 border-zinc-600/30 text-zinc-400";
+              const label = isLate ? `${deltaAbs}d late` : isEarly ? `${deltaAbs}d early` : "on time";
+              return (
+                <div key={d.id} className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-zinc-200 truncate">{d.title ?? "Untitled"}</p>
+                    <p className="text-[11px] text-zinc-500 truncate">{d.company ?? "—"} · exp {d.expected_close} → closed {d.actual_close}</p>
+                  </div>
+                  <span className="shrink-0 text-xs font-mono text-zinc-400">{formatCurrency(d.value)}</span>
+                  <span className={`shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-mono tabular-nums ${badgeCls}`}>{label}</span>
+                </div>
+              );
+            })}
           </div>
         </Card>
       )}
