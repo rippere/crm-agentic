@@ -1650,4 +1650,46 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/contacts/reengagement-summary?weeks=${weeks}`, {}, token)
   },
+
+  getRevenueCohort: (
+    workspaceId: string,
+    token: string,
+    cohortMonths = 6,
+    lookforwardMonths = 6,
+  ): Promise<Array<{
+    cohort_month: string;
+    initial_revenue: number;
+    months: Array<{ month_offset: number; revenue: number; deal_count: number; pct_of_initial: number | null }>;
+  }>> => {
+    if (isDemoMode) {
+      // Deterministic demo: decaying retention across 6 cohorts × 6 months
+      const retentionPattern = [100, 38, 22, 15, 9, 4]
+      const initialRevenues = [145000, 210000, 88000, 175000, 320000, 95000]
+      const now = new Date()
+      const cohorts = []
+      for (let c = cohortMonths - 1; c >= 0; c--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - c, 1)
+        const cohort_month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        const initial = initialRevenues[c % initialRevenues.length]
+        const months = []
+        for (let o = 0; o < lookforwardMonths; o++) {
+          const futureOffset = c - o  // negative means future (not yet reached)
+          if (futureOffset < 0) {
+            months.push({ month_offset: o, revenue: 0, deal_count: 0, pct_of_initial: null })
+          } else {
+            const pct = retentionPattern[o] ?? 0
+            const rev = Math.round(initial * pct / 100)
+            months.push({ month_offset: o, revenue: rev, deal_count: o === 0 ? 2 : (pct > 10 ? 1 : 0), pct_of_initial: pct })
+          }
+        }
+        cohorts.push({ cohort_month, initial_revenue: initial, months })
+      }
+      return Promise.resolve(cohorts)
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/revenue-cohort?cohort_months=${cohortMonths}&lookforward_months=${lookforwardMonths}`,
+      {},
+      token,
+    )
+  },
 }

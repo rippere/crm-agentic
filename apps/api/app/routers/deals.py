@@ -1033,6 +1033,112 @@ async def deal_close_date_accuracy(
     return rows
 
 
+@router.get("/workspaces/{workspace_id}/deals/revenue-cohort")
+async def deal_revenue_cohort(
+    workspace_id: uuid.UUID,
+    cohort_months: int = Query(default=6, ge=1, le=24),
+    lookforward_months: int = Query(default=6, ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Revenue cohort analysis: closed-won revenue grouped by contact acquisition cohort.
+
+    Each cohort is defined by the month a contact's FIRST closed-won deal was recorded.
+    Subsequent deals from the same contact contribute to that cohort's later months,
+    enabling expansion-revenue tracking (LTV curve by acquisition cohort).
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.now(timezone.utc)
+
+    # Build ordered list of cohort month (year, month) tuples — oldest first
+    cohort_month_keys: list[tuple[int, int]] = []
+    for i in range(cohort_months - 1, -1, -1):
+        m = now.month - i
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        cohort_month_keys.append((y, m))
+    cohort_set = set(cohort_month_keys)
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at.isnot(None),
+        )
+    )
+    all_deals = list(result.scalars().all())
+
+    # For each contact, find the month of their FIRST closed-won deal (cohort month)
+    contact_cohort: dict[str, tuple[int, int]] = {}
+    for deal in all_deals:
+        if deal.contact_id is None:
+            continue
+        cid = str(deal.contact_id)
+        dt = deal.stage_changed_at
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        ym = (dt.year, dt.month)
+        if cid not in contact_cohort or ym < contact_cohort[cid]:
+            contact_cohort[cid] = ym
+
+    # Accumulate revenue and deal counts by (cohort_month, deal_month)
+    cohort_revenue: dict[tuple[int, int], dict[tuple[int, int], float]] = {}
+    cohort_count: dict[tuple[int, int], dict[tuple[int, int], int]] = {}
+
+    for deal in all_deals:
+        dt = deal.stage_changed_at
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        deal_ym = (dt.year, dt.month)
+
+        cohort = contact_cohort.get(str(deal.contact_id)) if deal.contact_id else deal_ym
+        if cohort is None:
+            cohort = deal_ym
+        if cohort not in cohort_set:
+            continue
+
+        rev = float(deal.value or 0)
+        cohort_revenue.setdefault(cohort, {})
+        cohort_count.setdefault(cohort, {})
+        cohort_revenue[cohort][deal_ym] = cohort_revenue[cohort].get(deal_ym, 0.0) + rev
+        cohort_count[cohort][deal_ym] = cohort_count[cohort].get(deal_ym, 0) + 1
+
+    rows: list[dict] = []
+    for cy, cm in cohort_month_keys:
+        cohort = (cy, cm)
+        initial = cohort_revenue.get(cohort, {}).get(cohort, 0.0)
+
+        months: list[dict] = []
+        for offset in range(lookforward_months):
+            mm, yy = cm + offset, cy
+            while mm > 12:
+                mm -= 12
+                yy += 1
+            month_ym = (yy, mm)
+            rev = cohort_revenue.get(cohort, {}).get(month_ym, 0.0)
+            cnt = cohort_count.get(cohort, {}).get(month_ym, 0)
+            months.append({
+                "month_offset": offset,
+                "revenue": round(rev, 2),
+                "deal_count": cnt,
+                "pct_of_initial": round(rev / initial * 100, 1) if initial > 0 else None,
+            })
+
+        rows.append({
+            "cohort_month": f"{cy}-{cm:02d}",
+            "initial_revenue": round(initial, 2),
+            "months": months,
+        })
+
+    return rows
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
