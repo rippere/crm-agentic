@@ -77,6 +77,11 @@ export default function ReportsPage() {
   const [closeDateAccuracy, setCloseDateAccuracy] = useState<Array<{ id: string; title: string | null; company: string | null; value: number; expected_close: string; actual_close: string; days_delta: number; outcome: "early" | "on_time" | "late" }>>([]);
   const [activityTrends, setActivityTrends] = useState<Array<{ week_start: string; total: number; deals: number; contacts: number; agents: number; messages: number }>>([]);
   const [reengagementSummary, setReengagementSummary] = useState<Array<{ week_start: string; reengaged: number }>>([]);
+  const [revenueCohort, setRevenueCohort] = useState<Array<{
+    cohort_month: string;
+    initial_revenue: number;
+    months: Array<{ month_offset: number; revenue: number; deal_count: number; pct_of_initial: number | null }>;
+  }>>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -99,6 +104,7 @@ export default function ReportsPage() {
       apiClient.getDealCloseDateAccuracy("demo-workspace-1", "demo-token").then(setCloseDateAccuracy).catch(() => {});
       apiClient.getActivityTrends("demo-workspace-1", "demo-token").then(setActivityTrends).catch(() => {});
       apiClient.getContactReengagementSummary("demo-workspace-1", "demo-token").then(setReengagementSummary).catch(() => {});
+      apiClient.getRevenueCohort("demo-workspace-1", "demo-token").then(setRevenueCohort).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -125,6 +131,7 @@ export default function ReportsPage() {
       apiClient.getDealCloseDateAccuracy(workspaceId, session.access_token).then(setCloseDateAccuracy).catch(() => {});
       apiClient.getActivityTrends(workspaceId, session.access_token).then(setActivityTrends).catch(() => {});
       apiClient.getContactReengagementSummary(workspaceId, session.access_token).then(setReengagementSummary).catch(() => {});
+      apiClient.getRevenueCohort(workspaceId, session.access_token).then(setRevenueCohort).catch(() => {});
     });
   }, []);
 
@@ -1101,6 +1108,65 @@ export default function ReportsPage() {
             </BarChart>
           </ResponsiveContainer>
           <p className="mt-2 text-[10px] text-zinc-600 font-mono">Contacts that received a touch after 30+ days of silence</p>
+        </Card>
+      )}
+
+      {/* Revenue Cohort Analysis — Phase 13c */}
+      {revenueCohort.length > 0 && revenueCohort.some((c) => c.initial_revenue > 0) && (
+        <Card>
+          <div className="flex items-center gap-2 mb-4">
+            <TrendingUp className="h-4 w-4 text-indigo-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Revenue Cohort Retention</h3>
+            <span className="ml-auto text-xs text-zinc-500">by acquisition month · % of initial revenue</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs font-mono">
+              <thead>
+                <tr>
+                  <th className="text-left text-zinc-500 pr-4 pb-2 font-normal">Cohort</th>
+                  <th className="text-right text-zinc-500 pr-4 pb-2 font-normal">Initial</th>
+                  {revenueCohort[0].months.map((m) => (
+                    <th key={m.month_offset} className="text-center text-zinc-500 pb-2 px-1 font-normal min-w-[52px]">
+                      {m.month_offset === 0 ? "M+0" : `M+${m.month_offset}`}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {revenueCohort.map((cohort) => (
+                  <tr key={cohort.cohort_month}>
+                    <td className="pr-4 py-1 text-zinc-300">{cohort.cohort_month}</td>
+                    <td className="pr-4 py-1 text-right text-zinc-300">{formatCurrency(cohort.initial_revenue)}</td>
+                    {cohort.months.map((m) => {
+                      const pct = m.pct_of_initial;
+                      const bg =
+                        pct === null ? "bg-zinc-800/30" :
+                        pct === 0   ? "bg-zinc-800/50" :
+                        pct >= 80   ? "bg-emerald-900/70" :
+                        pct >= 50   ? "bg-emerald-900/50" :
+                        pct >= 25   ? "bg-emerald-900/30" :
+                                      "bg-emerald-900/15";
+                      const textColor =
+                        pct === null ? "text-zinc-700" :
+                        pct === 0   ? "text-zinc-600" :
+                        pct >= 50   ? "text-emerald-300" :
+                                      "text-emerald-500";
+                      return (
+                        <td key={m.month_offset} className={`px-1 py-1 text-center rounded ${bg}`}>
+                          <span className={textColor}>
+                            {pct === null ? "—" : pct === 0 ? "0%" : `${pct}%`}
+                          </span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-[10px] text-zinc-600 font-mono">
+            Each row = contacts first acquired that month. Later columns show expansion revenue from those contacts as % of initial.
+          </p>
         </Card>
       )}
 

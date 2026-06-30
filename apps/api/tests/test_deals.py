@@ -1783,3 +1783,95 @@ async def test_close_date_accuracy_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/close-date-accuracy")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/revenue-cohort — Phase 13c
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_revenue_cohort_groups_by_contact_acquisition_month(app_client):
+    """Deals from the same contact are attributed to that contact's first closed-won cohort."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    contact_id = uuid.uuid4()
+    now = datetime(2026, 6, 30, 12, 0, 0, tzinfo=timezone.utc)
+
+    # First deal for this contact — closed May 2026 (cohort month)
+    first_deal = _fake_deal(
+        workspace_id,
+        stage="closed_won",
+        value=100000.0,
+        contact_id=contact_id,
+        stage_changed_at=datetime(2026, 5, 15, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    # Expansion deal from same contact — closed June 2026 (month +1)
+    expansion_deal = _fake_deal(
+        workspace_id,
+        stage="closed_won",
+        value=40000.0,
+        contact_id=contact_id,
+        stage_changed_at=datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc),
+    )
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([first_deal, expansion_deal]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/deals/revenue-cohort",
+            params={"cohort_months": 3, "lookforward_months": 3},
+        )
+
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 3
+
+    # Find the May cohort row
+    may_row = next((r for r in rows if r["cohort_month"] == "2026-05"), None)
+    assert may_row is not None
+    assert may_row["initial_revenue"] == 100000.0
+
+    # Month +0 (May) should have the first deal
+    assert may_row["months"][0]["month_offset"] == 0
+    assert may_row["months"][0]["revenue"] == 100000.0
+    assert may_row["months"][0]["pct_of_initial"] == 100.0
+
+    # Month +1 (June) should have the expansion deal attributed to May cohort
+    assert may_row["months"][1]["month_offset"] == 1
+    assert may_row["months"][1]["revenue"] == 40000.0
+    assert may_row["months"][1]["pct_of_initial"] == 40.0
+
+
+@pytest.mark.asyncio
+async def test_revenue_cohort_empty_workspace_returns_zeroed_rows(app_client):
+    """Workspace with no closed-won deals returns rows with all-zero revenue."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/deals/revenue-cohort",
+            params={"cohort_months": 4, "lookforward_months": 3},
+        )
+
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 4
+    for row in rows:
+        assert row["initial_revenue"] == 0.0
+        assert len(row["months"]) == 3
+        for m in row["months"]:
+            assert m["revenue"] == 0.0
+            assert m["pct_of_initial"] is None
+
+
+@pytest.mark.asyncio
+async def test_revenue_cohort_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's revenue cohort."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/revenue-cohort")
+    assert resp.status_code == 403
