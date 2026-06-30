@@ -464,6 +464,87 @@ async def contact_pipeline_contribution(
     return out
 
 
+@router.get("/workspaces/{workspace_id}/contacts/reengagement-summary")
+async def contact_reengagement_summary(
+    workspace_id: uuid.UUID,
+    weeks: int = Query(default=12, ge=1, le=52),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Weekly count of contacts re-engaged after a 30+ day dark period.
+
+    A re-engagement is when a contact receives a message or note after their
+    previous touch was more than 30 days earlier.
+
+    NOTE: registered before /{contact_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from datetime import timezone as _tz
+    from app.models.message import Message as _Message
+
+    today = datetime.now(_tz.utc).date()
+    this_monday = today - timedelta(days=today.weekday())
+    week_starts = [this_monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+    cutoff = datetime.combine(week_starts[0], datetime.min.time()).replace(tzinfo=_tz.utc)
+    lookback_start = cutoff - timedelta(days=60)
+
+    msg_result = await db.execute(
+        select(_Message).where(
+            _Message.workspace_id == workspace_id,
+            _Message.received_at >= lookback_start,
+            _Message.contact_id.is_not(None),
+        )
+    )
+    messages = msg_result.scalars().all()
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.created_at >= lookback_start,
+        )
+    )
+    notes = note_result.scalars().all()
+
+    touches_by_contact: dict = {}
+    for m in messages:
+        cid = m.contact_id
+        if cid is None:
+            continue
+        ts = m.received_at
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_tz.utc)
+        touches_by_contact.setdefault(cid, []).append(ts)
+    for n in notes:
+        cid = n.contact_id
+        ts = n.created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_tz.utc)
+        touches_by_contact.setdefault(cid, []).append(ts)
+
+    reengagement_events: list[datetime] = []
+    for cid, dates in touches_by_contact.items():
+        dates_sorted = sorted(dates)
+        for i in range(1, len(dates_sorted)):
+            gap_days = (dates_sorted[i] - dates_sorted[i - 1]).total_seconds() / 86400
+            if gap_days > 30 and dates_sorted[i] >= cutoff:
+                reengagement_events.append(dates_sorted[i])
+
+    week_counts = {ws: 0 for ws in week_starts}
+    for evt_ts in reengagement_events:
+        for ws in reversed(week_starts):
+            ws_dt = datetime.combine(ws, datetime.min.time()).replace(tzinfo=_tz.utc)
+            we_dt = ws_dt + timedelta(weeks=1)
+            if ws_dt <= evt_ts < we_dt:
+                week_counts[ws] += 1
+                break
+
+    return [{"week_start": ws.isoformat(), "reengaged": week_counts[ws]} for ws in week_starts]
+
+
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/score", status_code=status.HTTP_200_OK)
 async def score_contact(
     workspace_id: uuid.UUID,

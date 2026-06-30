@@ -1528,3 +1528,60 @@ async def test_pipeline_contribution_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/pipeline-contribution")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/reengagement-summary — Phase 13b
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reengagement_summary_counts_contacts_after_dark_period(app_client):
+    """Returns 12 weekly buckets; counts a reengagement when gap between touches > 30 days."""
+    from datetime import timezone
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    contact_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+
+    # First message: 50 days ago (beyond the dark threshold)
+    old_msg = MagicMock()
+    old_msg.contact_id = contact_id
+    old_msg.received_at = now - timedelta(days=50)
+
+    # Second message: 2 days ago (within last 12 weeks, gap of 48 days — triggers reengagement)
+    new_msg = MagicMock()
+    new_msg.contact_id = contact_id
+    new_msg.received_at = now - timedelta(days=2)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalars_result([old_msg, new_msg]),  # messages query
+        _make_scalars_result([]),                   # notes query
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/reengagement-summary?weeks=12")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 12
+    # Exactly one reengagement total across all weeks
+    total = sum(row["reengaged"] for row in data)
+    assert total == 1
+    # Reengagement lands in the correct week bucket for the new_msg date
+    from datetime import timezone
+    new_date = (now - timedelta(days=2)).date()
+    new_monday = new_date - timedelta(days=new_date.weekday())
+    matching = [r for r in data if r["week_start"] == new_monday.isoformat()]
+    assert len(matching) == 1 and matching[0]["reengaged"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reengagement_summary_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's reengagement summary."""
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/contacts/reengagement-summary")
+    assert resp.status_code == 403
