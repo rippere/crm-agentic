@@ -76,6 +76,7 @@ export default function ReportsPage() {
   const [concentrationRisk, setConcentrationRisk] = useState<{ total_pipeline: number; top_deals: Array<{ id: string; title: string | null; company: string | null; stage: string; value: number; pct_of_pipeline: number }>; top3_pct: number; risk_level: "low" | "medium" | "high" } | null>(null);
   const [closeDateAccuracy, setCloseDateAccuracy] = useState<Array<{ id: string; title: string | null; company: string | null; value: number; expected_close: string; actual_close: string; days_delta: number; outcome: "early" | "on_time" | "late" }>>([]);
   const [activityTrends, setActivityTrends] = useState<Array<{ week_start: string; total: number; deals: number; contacts: number; agents: number; messages: number }>>([]);
+  const [reengagementSummary, setReengagementSummary] = useState<Array<{ week_start: string; reengaged: number }>>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -97,6 +98,7 @@ export default function ReportsPage() {
       apiClient.getDealConcentrationRisk("demo-workspace-1", "demo-token").then(setConcentrationRisk).catch(() => {});
       apiClient.getDealCloseDateAccuracy("demo-workspace-1", "demo-token").then(setCloseDateAccuracy).catch(() => {});
       apiClient.getActivityTrends("demo-workspace-1", "demo-token").then(setActivityTrends).catch(() => {});
+      apiClient.getContactReengagementSummary("demo-workspace-1", "demo-token").then(setReengagementSummary).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -122,6 +124,7 @@ export default function ReportsPage() {
       apiClient.getDealConcentrationRisk(workspaceId, session.access_token).then(setConcentrationRisk).catch(() => {});
       apiClient.getDealCloseDateAccuracy(workspaceId, session.access_token).then(setCloseDateAccuracy).catch(() => {});
       apiClient.getActivityTrends(workspaceId, session.access_token).then(setActivityTrends).catch(() => {});
+      apiClient.getContactReengagementSummary(workspaceId, session.access_token).then(setReengagementSummary).catch(() => {});
     });
   }, []);
 
@@ -1059,6 +1062,45 @@ export default function ReportsPage() {
               <Bar dataKey="messages" stackId="a" fill="#34d399" name="Messages" radius={[2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Contact Re-engagement Summary — Phase 13b */}
+      {reengagementSummary.length > 0 && reengagementSummary.some((r) => r.reengaged > 0) && (
+        <Card>
+          <div className="flex items-center gap-2 mb-4">
+            <Activity className="h-4 w-4 text-emerald-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Contact Re-engagement</h3>
+            <span className="ml-auto text-xs text-zinc-500">
+              {reengagementSummary.reduce((s, r) => s + r.reengaged, 0)} re-engagements · last {reengagementSummary.length} weeks
+            </span>
+          </div>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={reengagementSummary} margin={{ top: 0, right: 8, left: -24, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+              <XAxis
+                dataKey="week_start"
+                tick={{ fill: "#71717a", fontSize: 10 }}
+                tickLine={false}
+                axisLine={false}
+                tickFormatter={(v: string) => v.slice(5)}
+              />
+              <YAxis tick={{ fill: "#71717a", fontSize: 10 }} tickLine={false} axisLine={false} allowDecimals={false} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-1">Week of {label}</p>
+                      <p className="text-emerald-400 font-mono font-bold">{payload[0].value} re-engaged</p>
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="reengaged" name="Re-engaged" fill="#00C896" radius={[4, 4, 0, 0]} maxBarSize={36} />
+            </BarChart>
+          </ResponsiveContainer>
+          <p className="mt-2 text-[10px] text-zinc-600 font-mono">Contacts that received a touch after 30+ days of silence</p>
         </Card>
       )}
 
