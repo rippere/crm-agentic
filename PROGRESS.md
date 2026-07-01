@@ -70,11 +70,22 @@
 - [2026-06-21] Phase 12m: Next-action reminder banner — GET /workspaces/{id}/deals/overdue-actions endpoint (open deals where next_action_date <= today, ordered most-overdue first); dismissible amber banner on /pipeline/[id] when action is due/overdue (sessionStorage dismiss per deal, Clear button to remove action); inline "Next Action" card on deal detail (text + date picker + Save, pre-seeded from deal data); "Overdue Actions" dashboard widget (up to 5 rows, days-overdue label, links to deal detail); api-client updateDeal updated with next_action/next_action_date fields; getOverdueActions() with demo stub; DealDetail type updated; 3 new tests; 443 tests pass
 - [2026-06-22] Phase 12n: Contact merge deduplication suggestions — GET /workspaces/{id}/contacts/duplicate-candidates endpoint (difflib.SequenceMatcher name similarity × 0.7 + same-email-domain bonus × 0.3, threshold 0.65, capped at 20 pairs, route placed before /{contact_id} to avoid 422); amber suggestions widget on /contacts page (dismissed per session, per-pair X dismiss, similarity % badge); dedicated merge confirmation modal (reuses mergeContacts() api-client call); getSuggestedMerges() in api-client with 2-pair demo stub; SuggestedMergePair interface; GitMerge icon import; 2 new tests (returns-pairs, 403); 446 tests pass
 
+- [2026-07-01] Phases 12o–13d (batch): 16 new analytics endpoints + 113 new tests + frontend analytics expansion
+  - deals.py: +11 endpoints — at-risk (ml_win_probability < 30 or stale 14+ days), close-date-slipped, health-distribution, by-agent, revenue-forecast (probability-weighted monthly), stage-aging (oldest-first per stage), win-probability-by-stage, concentration-risk, close-date-accuracy, revenue-cohort, velocity-trends
+  - contacts.py: +4 endpoints — going-dark (customer/prospect with no touch in N days), pipeline-contribution (deals aggregated by contact), reengagement-summary (weekly re-touch after 30-day gap), last-touch (per-contact message/note/activity recency)
+  - events.py: +1 endpoint — activity/trends (weekly deal/contact/agent/message counts for N weeks)
+  - api-client.ts: +16 typed methods with demo stubs for all new endpoints
+  - reports/page.tsx: 10 new chart/table widgets (velocity trends LineChart, revenue forecast BarChart, win-probability-by-stage, concentration risk, stage aging table, close-date-slipped/accuracy tables, activity trends stacked BarChart, re-engagement BarChart, pipeline contribution table, revenue cohort heatmap)
+  - pipeline/page.tsx: amber at-risk deals banner with expand/collapse
+  - contacts/page.tsx: amber going-dark contacts banner with expand/collapse
+  - contacts/[id]/page.tsx: Last Touch card (message/note/activity recency + color-coded days-ago badge)
+  - test_deals.py: +20 tests → 95 total; test_contacts.py: +9 tests → 79 total; test_events.py: +3 tests → 14 total; 188 tests pass across three files
+
 ## Current Phase
-Phase 12 — Analytics & Reporting
+Phase 13 — Advanced Analytics & Intelligence
 
 ## Next Task
-Phase 12o: Deal "at risk" early warning — GET /workspaces/{id}/deals/at-risk endpoint (deals with low ml_win_probability + no activity in 14+ days + next_action_date in the past); amber banner card on /pipeline board page; getAtRiskDeals() in api-client with demo stubs; 2 new tests.
+Phase 13e: Deal scoring leaderboard — GET /workspaces/{id}/deals/leaderboard endpoint (top N deals by composite score: ml_win_probability × value, with rank, trend vs prior week); leaderboard table widget on /reports page (rank badge, value, probability, score column); getDealLeaderboard() in api-client with demo stub; 2 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
