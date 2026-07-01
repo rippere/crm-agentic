@@ -339,6 +339,13 @@ export default function ContactDetailPage() {
   const [engagementScore, setEngagementScore] = useState<EngagementScore | null>(null);
   const [engagementLoading, setEngagementLoading] = useState(false);
   const [dealSummary, setDealSummary] = useState<DealSummary | null>(null);
+  const [lastTouch, setLastTouch] = useState<{
+    last_message_date: string | null;
+    last_note_date: string | null;
+    last_activity_date: string | null;
+    most_recent_type: string | null;
+    days_ago: number | null;
+  } | null>(null);
 
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -471,6 +478,11 @@ export default function ContactDetailPage() {
       .getContactDealSummary(workspaceId, contactId, token)
       .then((data: DealSummary) => setDealSummary(data))
       .catch(() => setDealSummary(null));
+
+    apiClient
+      .getContactLastTouch(workspaceId, contactId, token)
+      .then((data) => setLastTouch(data as typeof lastTouch))
+      .catch(() => setLastTouch(null));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -808,6 +820,38 @@ export default function ContactDetailPage() {
               );
             })()}
           </Card>
+
+          {/* Last Touch */}
+          {lastTouch && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-indigo-400" />
+                <p className="text-xs font-semibold text-zinc-300">Last Touch</p>
+                {lastTouch.days_ago !== null && (
+                  <span className={cn(
+                    "ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded",
+                    lastTouch.days_ago <= 7 ? "bg-emerald-500/10 text-emerald-400" :
+                    lastTouch.days_ago <= 30 ? "bg-amber-500/10 text-amber-400" :
+                    "bg-rose-500/10 text-rose-400"
+                  )}>
+                    {lastTouch.days_ago}d ago
+                  </span>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                {[
+                  { label: "Message", value: lastTouch.last_message_date },
+                  { label: "Note", value: lastTouch.last_note_date },
+                  { label: "Activity", value: lastTouch.last_activity_date },
+                ].map(({ label, value }) => (
+                  <div key={label} className="flex justify-between text-[11px]">
+                    <span className="text-zinc-500">{label}</span>
+                    <span className="text-zinc-300 font-mono">{value ? formatRelative(value) : "—"}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
 
           {/* Semantic tags — inline chip editor */}
           <Card className="p-4 space-y-3">

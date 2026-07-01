@@ -285,3 +285,58 @@ async def test_stream_events_success_resets_error_counter(workspace_id):
     assert ": heartbeat\n\n" in chunks
     assert any("recovered" in c for c in chunks)  # the successful poll's event streamed
     assert not any("stream-error" in c for c in chunks)
+
+
+# ─── Phase 13c: activity trends endpoint ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_activity_trends_returns_weekly_buckets(app_client):
+    """Returns 12 weekly buckets with deal/contact/agent/message counts."""
+    from datetime import datetime, timedelta, timezone
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.now(timezone.utc)
+    # Use today and yesterday — guaranteed to be in the current Mon-Sun bucket
+    today_weekday = now.weekday()
+    ev_deal = _fake_event(workspace_id, type="deal_created", created_at=now - timedelta(days=today_weekday))
+    ev_contact = _fake_event(workspace_id, type="contact_updated", created_at=now - timedelta(days=max(0, today_weekday - 1)))
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([ev_deal, ev_contact]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/activity/trends")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 12
+    assert "week_start" in data[0]
+    assert "deals" in data[0]
+    assert "contacts" in data[0]
+    assert "agents" in data[0]
+    assert "messages" in data[0]
+    # The most recent week should contain both events
+    last_week = data[-1]
+    assert last_week["deals"] >= 1
+    assert last_week["contacts"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_activity_trends_custom_weeks(app_client):
+    """Accepts a ?weeks= query parameter; returns that many buckets."""
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/activity/trends?weeks=4")
+
+    assert resp.status_code == 200
+    assert len(resp.json()) == 4
+
+
+@pytest.mark.asyncio
+async def test_activity_trends_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong = uuid.UUID("66666666-6666-6666-6666-666666666666")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong}/activity/trends")
+    assert resp.status_code == 403

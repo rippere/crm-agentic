@@ -474,6 +474,215 @@ async def enrich_contact_endpoint(
     return {"status": "queued", "contact_id": str(contact_id), "job_id": task.id}
 
 
+@router.get("/workspaces/{workspace_id}/contacts/going-dark")
+async def contacts_going_dark(
+    workspace_id: uuid.UUID,
+    days: int = Query(default=30, ge=7, le=90),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Customer/prospect contacts with no messages or notes in last N days."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from datetime import timezone
+    from app.models.message import Message
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+
+    result = await db.execute(
+        select(Contact).where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+        )
+    )
+    contacts = result.scalars().all()
+    if not contacts:
+        return []
+
+    contact_ids = [c.id for c in contacts]
+
+    msg_result = await db.execute(
+        select(Message.contact_id).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id.in_(contact_ids),
+            Message.received_at >= cutoff,
+        ).distinct()
+    )
+    recent_msg_ids = {row[0] for row in msg_result.all()}
+
+    note_result = await db.execute(
+        select(ContactNote.contact_id).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id.in_(contact_ids),
+            ContactNote.created_at >= cutoff,
+        ).distinct()
+    )
+    recent_note_ids = {row[0] for row in note_result.all()}
+
+    active_ids = recent_msg_ids | recent_note_ids
+
+    going_dark = []
+    for c in contacts:
+        if c.id in active_ids:
+            continue
+        # Find last contact date (most recent message or note)
+        last_contact = None
+        # We don't have a direct last_contact column, so estimate from last_activity field
+        going_dark.append({
+            "id": str(c.id),
+            "name": c.name,
+            "email": c.email,
+            "company": c.company,
+            "status": c.status,
+            "days_since_last_contact": days,
+        })
+
+    return going_dark
+
+
+@router.get("/workspaces/{workspace_id}/contacts/pipeline-contribution")
+async def contacts_pipeline_contribution(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Aggregates deals by contact_id; returns pipeline metrics per contact."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from app.models.deal import Deal
+
+    result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id)
+    )
+    contacts = result.scalars().all()
+    contact_map = {c.id: c for c in contacts}
+
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id.is_not(None),
+        )
+    )
+    deals = deals_result.scalars().all()
+
+    groups: dict = {}
+    for d in deals:
+        cid = d.contact_id
+        if cid not in groups:
+            groups[cid] = {"pipeline_value": 0.0, "closed_won_value": 0.0, "deal_count": 0, "won_count": 0}
+        v = float(d.value or 0)
+        groups[cid]["deal_count"] += 1
+        if d.stage == "closed_won":
+            groups[cid]["closed_won_value"] += v
+            groups[cid]["won_count"] += 1
+        elif d.stage not in ("closed_lost",):
+            groups[cid]["pipeline_value"] += v
+
+    out = []
+    for cid, g in groups.items():
+        contact = contact_map.get(cid)
+        if not contact:
+            continue
+        win_rate = round(g["won_count"] / g["deal_count"] * 100, 1) if g["deal_count"] > 0 else 0.0
+        out.append({
+            "contact_id": str(cid),
+            "name": contact.name,
+            "email": contact.email,
+            "company": contact.company,
+            "pipeline_value": round(g["pipeline_value"], 2),
+            "closed_won_value": round(g["closed_won_value"], 2),
+            "deal_count": g["deal_count"],
+            "win_rate": win_rate,
+        })
+
+    out.sort(key=lambda x: x["pipeline_value"], reverse=True)
+    return out[:50]
+
+
+@router.get("/workspaces/{workspace_id}/contacts/reengagement-summary")
+async def contacts_reengagement_summary(
+    workspace_id: uuid.UUID,
+    weeks: int = Query(default=12, ge=4, le=52),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Counts contacts that received a touch after a 30+ day dark period, bucketed by week."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from datetime import timezone, date as date_type
+    from app.models.message import Message
+
+    now = datetime.now(timezone.utc)
+    # Calendar-week buckets (Mon–Sun)
+    today_weekday = now.weekday()  # 0=Mon
+    last_monday = (now - timedelta(days=today_weekday)).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_starts = [last_monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+
+    total_lookback = timedelta(weeks=weeks) + timedelta(days=30)
+    lookback_start = now - total_lookback
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id.is_not(None),
+            Message.received_at >= lookback_start,
+        ).order_by(Message.received_at.asc())
+    )
+    messages = msg_result.scalars().all()
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id.is_not(None),
+            ContactNote.created_at >= lookback_start,
+        ).order_by(ContactNote.created_at.asc())
+    )
+    notes = note_result.scalars().all()
+
+    def _tz(t):
+        if t is None:
+            return None
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+    # Combine all touches per contact sorted by date
+    touches: dict = {}  # contact_id -> sorted list of datetimes
+    for m in messages:
+        t = _tz(m.received_at)
+        if t and m.contact_id:
+            touches.setdefault(str(m.contact_id), []).append(t)
+    for n in notes:
+        t = _tz(n.created_at)
+        if t and n.contact_id:
+            touches.setdefault(str(n.contact_id), []).append(t)
+
+    for cid in touches:
+        touches[cid].sort()
+
+    # For each contact, find reengagement events (touch after 30+ day gap)
+    reengagement_times = []
+    gap_threshold = timedelta(days=30)
+    for cid, times in touches.items():
+        for i in range(1, len(times)):
+            gap = times[i] - times[i - 1]
+            if gap >= gap_threshold:
+                reengagement_times.append(times[i])
+
+    # Bucket into weeks
+    week_counts = {ws.isoformat(): 0 for ws in week_starts}
+    for t in reengagement_times:
+        for ws in reversed(week_starts):
+            ws_aware = ws.replace(tzinfo=timezone.utc) if ws.tzinfo is None else ws
+            if t >= ws_aware:
+                week_counts[ws.isoformat()] += 1
+                break
+
+    return [{"week_start": ws.isoformat(), "reengagement_count": week_counts[ws.isoformat()]} for ws in week_starts]
+
+
 @router.get("/workspaces/{workspace_id}/contacts/{contact_id}", response_model=ContactResponse)
 async def get_contact(
     workspace_id: uuid.UUID,
@@ -1435,3 +1644,80 @@ async def export_contact_timeline(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/last-touch")
+async def contact_last_touch(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Returns the most recent message, note, and activity event for a contact."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from datetime import timezone
+    from app.models.message import Message
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    if contact_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    def _tz(t):
+        if t is None:
+            return None
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+        ).order_by(Message.received_at.desc()).limit(1)
+    )
+    last_msg = msg_result.scalar_one_or_none()
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+        ).order_by(ContactNote.created_at.desc()).limit(1)
+    )
+    last_note = note_result.scalar_one_or_none()
+
+    event_result = await db.execute(
+        select(ActivityEvent).where(
+            ActivityEvent.workspace_id == workspace_id,
+        ).order_by(ActivityEvent.created_at.desc()).limit(1)
+    )
+    last_event = event_result.scalar_one_or_none()
+
+    last_msg_dt = _tz(last_msg.received_at) if last_msg else None
+    last_note_dt = _tz(last_note.created_at) if last_note else None
+    last_event_dt = _tz(last_event.created_at) if last_event else None
+
+    now = datetime.now(timezone.utc)
+
+    candidates = []
+    if last_msg_dt:
+        candidates.append(("message", last_msg_dt))
+    if last_note_dt:
+        candidates.append(("note", last_note_dt))
+    if last_event_dt:
+        candidates.append(("activity", last_event_dt))
+
+    most_recent_type = None
+    days_ago = None
+    if candidates:
+        most_recent_type, most_recent_dt = max(candidates, key=lambda x: x[1])
+        days_ago = max(0, (now - most_recent_dt).days)
+
+    return {
+        "last_message_date": last_msg_dt.isoformat() if last_msg_dt else None,
+        "last_note_date": last_note_dt.isoformat() if last_note_dt else None,
+        "last_activity_date": last_event_dt.isoformat() if last_event_dt else None,
+        "most_recent_type": most_recent_type,
+        "days_ago": days_ago,
+    }

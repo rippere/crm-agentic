@@ -397,6 +397,9 @@ export default function PipelinePage() {
   const [suggestions, setSuggestions] = useState<PipelineSuggestion[]>([]);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [atRiskDeals, setAtRiskDeals] = useState<{ id: string; title: string; company: string; stage: string; value: number; ml_win_probability: number; days_inactive: number; reason: string }[]>([]);
+  const [atRiskDismissed, setAtRiskDismissed] = useState(false);
+  const [atRiskExpanded, setAtRiskExpanded] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkStageTarget, setBulkStageTarget] = useState<DealStage | null>(null);
   const [bulkLoading, setBulkLoading] = useState(false);
@@ -413,6 +416,7 @@ export default function PipelinePage() {
       apiClient.getPipelineSuggestions("demo-workspace-1", "demo-token")
         .then((data) => { if (Array.isArray(data)) setSuggestions(data as PipelineSuggestion[]); })
         .catch(() => {});
+      apiClient.getAtRiskDeals("demo-workspace-1", "demo-token").then(setAtRiskDeals).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -423,6 +427,7 @@ export default function PipelinePage() {
       apiClient.getPipelineSuggestions(workspaceId, session.access_token)
         .then((data) => { if (Array.isArray(data)) setSuggestions(data as PipelineSuggestion[]); })
         .catch(() => {});
+      apiClient.getAtRiskDeals(workspaceId, session.access_token).then(setAtRiskDeals).catch(() => {});
     });
   }, []);
 
@@ -541,6 +546,40 @@ export default function PipelinePage() {
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6 min-h-screen">
       <Header title="Pipeline" subtitle={`${deals.length} deals · ML win prediction active`} />
+
+      {/* At-risk deals banner */}
+      {atRiskDeals.length > 0 && !atRiskDismissed && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-amber-400 flex-shrink-0" />
+              <span className="text-sm font-medium text-amber-300">
+                {atRiskDeals.length} deal{atRiskDeals.length !== 1 ? "s" : ""} at risk — low win probability or stale
+              </span>
+              <button onClick={() => setAtRiskExpanded((v) => !v)} className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer">
+                {atRiskExpanded ? "Collapse" : "Expand"}
+              </button>
+            </div>
+            <button onClick={() => setAtRiskDismissed(true)} className="text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer" title="Dismiss">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          {atRiskExpanded && (
+            <div className="mt-3 space-y-2">
+              {atRiskDeals.map((d) => (
+                <div key={d.id} className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-zinc-200 truncate">{d.title}</p>
+                    <p className="text-[11px] text-zinc-500 truncate">{d.company} · {d.stage}</p>
+                  </div>
+                  <span className="text-xs font-mono text-amber-400">{d.ml_win_probability}% prob</span>
+                  <a href={`/pipeline/${d.id}`} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">View →</a>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Pipeline Optimizer Suggestions */}
       {suggestions.length > 0 && !suggestionsDismissed && (

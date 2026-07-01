@@ -1369,3 +1369,149 @@ async def test_duplicate_candidates_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/duplicate-candidates")
 
     assert resp.status_code == 403
+
+
+# ─── Phase 12o–13d: new contact analytics endpoints ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_going_dark_returns_inactive_contacts(app_client):
+    """Customer/prospect contacts with no recent messages or notes are returned."""
+    from datetime import timezone
+    from unittest.mock import MagicMock
+    fastapi_app, mock_db, workspace_id = app_client
+    c1 = _fake_contact(workspace_id, name="Dark Contact", status="customer")
+    c2 = _fake_contact(workspace_id, name="Active Contact", status="prospect")
+
+    contacts_result = _make_scalars_result([c1, c2])
+    # c2 has a recent message; c1 does not
+    msg_rows = MagicMock()
+    msg_rows.all.return_value = [(c2.id,)]
+    empty_note_rows = MagicMock()
+    empty_note_rows.all.return_value = []
+    mock_db.execute = AsyncMock(side_effect=[contacts_result, msg_rows, empty_note_rows])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/going-dark")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    names = [d["name"] for d in data]
+    assert "Dark Contact" in names
+    assert "Active Contact" not in names
+
+
+@pytest.mark.asyncio
+async def test_going_dark_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong = uuid.UUID("22222222-2222-2222-2222-222222222222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong}/contacts/going-dark")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_pipeline_contribution_aggregates_deals(app_client):
+    """Contacts are returned with pipeline_value summed from open deals."""
+    fastapi_app, mock_db, workspace_id = app_client
+    c = _fake_contact(workspace_id, name="Alice", email="alice@acme.com")
+
+    fake_deal = MagicMock()
+    fake_deal.contact_id = c.id
+    fake_deal.value = 75000
+    fake_deal.stage = "proposal"
+
+    contacts_result = _make_scalars_result([c])
+    deals_result = _make_scalars_result([fake_deal])
+    mock_db.execute = AsyncMock(side_effect=[contacts_result, deals_result])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/pipeline-contribution")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "Alice"
+    assert data[0]["pipeline_value"] == 75000.0
+    assert data[0]["deal_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_contribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong = uuid.UUID("33333333-3333-3333-3333-333333333333")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong}/contacts/pipeline-contribution")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_reengagement_summary_returns_weekly_buckets(app_client):
+    """Returns 12 weekly buckets with reengagement_count keys (empty data = all zeros)."""
+    fastapi_app, mock_db, workspace_id = app_client
+    empty = _make_scalars_result([])
+    mock_db.execute = AsyncMock(return_value=empty)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/reengagement-summary")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 12
+    assert "week_start" in data[0]
+    assert "reengagement_count" in data[0]
+    assert all(d["reengagement_count"] == 0 for d in data)
+
+
+@pytest.mark.asyncio
+async def test_reengagement_summary_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong = uuid.UUID("44444444-4444-4444-4444-444444444444")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong}/contacts/reengagement-summary")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_last_touch_returns_most_recent_message(app_client):
+    """Returns last_message_date and days_ago when a recent message exists."""
+    from datetime import datetime, timezone, timedelta
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    msg = MagicMock()
+    msg.received_at = datetime.now(timezone.utc) - timedelta(days=3)
+
+    contact_result = _make_scalar_result(contact)
+    msg_result = _make_scalar_result(msg)
+    no_note = _make_scalar_result(None)
+    no_event = _make_scalar_result(None)
+    mock_db.execute = AsyncMock(side_effect=[contact_result, msg_result, no_note, no_event])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact.id}/last-touch")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["last_message_date"] is not None
+    assert data["most_recent_type"] == "message"
+    assert data["days_ago"] == 3
+    assert data["last_note_date"] is None
+
+
+@pytest.mark.asyncio
+async def test_last_touch_returns_404_for_missing_contact(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{uuid.uuid4()}/last-touch")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_last_touch_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong = uuid.UUID("55555555-5555-5555-5555-555555555555")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong}/contacts/{uuid.uuid4()}/last-touch")
+    assert resp.status_code == 403

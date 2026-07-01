@@ -1451,4 +1451,290 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/contacts/duplicate-candidates`, {}, token)
   },
+
+  // ─── Deal analytics (12o–13d) ───────────────────────────────────────────
+
+  getAtRiskDeals: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ id: string; title: string; company: string; stage: string; value: number; ml_win_probability: number; days_inactive: number; reason: string }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { id: 'd-002', title: 'FinancePro Renewal', company: 'FinancePro Ltd', stage: 'proposal', value: 95000, ml_win_probability: 22, days_inactive: 18, reason: 'low_probability' },
+        { id: 'd-004', title: 'Acme Corp Upsell', company: 'Acme Corp', stage: 'qualified', value: 45000, ml_win_probability: 28, days_inactive: 22, reason: 'stale' },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/at-risk`, {}, token)
+  },
+
+  getDealCloseDateSlipped: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ id: string; title: string; company: string; stage: string; value: number; expected_close: string; days_overdue: number }>> => {
+    if (isDemoMode) {
+      const today = new Date()
+      const d21 = new Date(today); d21.setDate(d21.getDate() - 21)
+      const d7  = new Date(today); d7.setDate(d7.getDate() - 7)
+      return Promise.resolve([
+        { id: 'd-003', title: 'GlobalBank Integration', company: 'GlobalBank', stage: 'negotiation', value: 220000, expected_close: d21.toISOString().slice(0, 10), days_overdue: 21 },
+        { id: 'd-005', title: 'StartupX Pilot',        company: 'StartupX',   stage: 'proposal',     value:  38000, expected_close: d7.toISOString().slice(0, 10),  days_overdue: 7  },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/close-date-slipped`, {}, token)
+  },
+
+  getDealHealthDistribution: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ bucket: string; label: string; count: number; total_value: number }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { bucket: 'critical',  label: 'Critical (<40)',   count: 2, total_value: 140000 },
+        { bucket: 'at_risk',   label: 'At Risk (40–69)',  count: 3, total_value: 275000 },
+        { bucket: 'healthy',   label: 'Healthy (70–100)', count: 7, total_value: 820000 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/health-distribution`, {}, token)
+  },
+
+  getDealsByAgent: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ agent: string; count: number; total_value: number }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { agent: 'Nova AI',    count: 5, total_value: 580000 },
+        { agent: 'Aria',       count: 3, total_value: 240000 },
+        { agent: 'Unassigned', count: 2, total_value:  95000 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/by-agent`, {}, token)
+  },
+
+  getDealRevenueForecast: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ month: string; expected_revenue: number; deal_count: number; total_value: number }>> => {
+    if (isDemoMode) {
+      const today = new Date()
+      const months = [0, 1, 2].map((i) => {
+        const d = new Date(today.getFullYear(), today.getMonth() + i, 1)
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      })
+      return Promise.resolve([
+        { month: months[0], expected_revenue: 125000, deal_count: 3, total_value: 280000 },
+        { month: months[1], expected_revenue:  89000, deal_count: 2, total_value: 180000 },
+        { month: months[2], expected_revenue: 215000, deal_count: 4, total_value: 520000 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/revenue-forecast`, {}, token)
+  },
+
+  getDealStageAging: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ id: string; title: string; company: string; stage: string; value: number; days_in_stage: number }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { id: 'd-006', title: 'RetailCo Expansion', company: 'RetailCo',   stage: 'discovery',    value:  55000, days_in_stage:  5 },
+        { id: 'd-007', title: 'MediaGroup Suite',   company: 'MediaGroup', stage: 'discovery',    value:  42000, days_in_stage: 12 },
+        { id: 'd-002', title: 'FinancePro Renewal', company: 'FinancePro', stage: 'proposal',     value:  95000, days_in_stage: 22 },
+        { id: 'd-001', title: 'TechCorp Platform',  company: 'TechCorp',   stage: 'negotiation',  value: 185000, days_in_stage: 38 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/stage-aging`, {}, token)
+  },
+
+  getDealWinProbabilityByStage: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ stage: string; avg_probability: number; deal_count: number; total_value: number }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { stage: 'discovery',   avg_probability: 15, deal_count: 2, total_value:  97000 },
+        { stage: 'qualified',   avg_probability: 35, deal_count: 3, total_value: 245000 },
+        { stage: 'proposal',    avg_probability: 55, deal_count: 2, total_value: 175000 },
+        { stage: 'negotiation', avg_probability: 75, deal_count: 1, total_value: 185000 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/win-probability-by-stage`, {}, token)
+  },
+
+  getDealConcentrationRisk: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{ top3_pct: number; risk_level: string; top_deals: Array<{ id: string; title: string; company: string; stage: string; value: number; pct_of_pipeline: number }>; total_pipeline_value: number }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        top3_pct: 72.4,
+        risk_level: 'high',
+        total_pipeline_value: 702000,
+        top_deals: [
+          { id: 'd-003', title: 'GlobalBank Integration', company: 'GlobalBank',  stage: 'negotiation', value: 220000, pct_of_pipeline: 31.3 },
+          { id: 'd-001', title: 'TechCorp Platform',      company: 'TechCorp',    stage: 'negotiation', value: 185000, pct_of_pipeline: 26.4 },
+          { id: 'd-002', title: 'FinancePro Renewal',     company: 'FinancePro',  stage: 'proposal',    value:  95000, pct_of_pipeline: 13.5 },
+          { id: 'd-008', title: 'Horizon AI Add-on',      company: 'Horizon AI',  stage: 'qualified',   value:  72000, pct_of_pipeline: 10.3 },
+          { id: 'd-004', title: 'Acme Corp Upsell',       company: 'Acme Corp',   stage: 'qualified',   value:  45000, pct_of_pipeline:  6.4 },
+        ],
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/concentration-risk`, {}, token)
+  },
+
+  getDealCloseDateAccuracy: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ id: string; title: string; company: string; expected_close: string; actual_close: string; days_delta: number; outcome: string }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { id: 'd-w1', title: 'RetailEdge Contract',  company: 'RetailEdge',  expected_close: '2026-03-15', actual_close: '2026-03-29', days_delta:  14, outcome: 'late'     },
+        { id: 'd-w2', title: 'InfraSoft Deal',       company: 'InfraSoft',   expected_close: '2026-04-01', actual_close: '2026-04-22', days_delta:  21, outcome: 'late'     },
+        { id: 'd-w3', title: 'NovaCorp Pilot',       company: 'NovaCorp',    expected_close: '2026-05-10', actual_close: '2026-05-12', days_delta:   2, outcome: 'on_time'  },
+        { id: 'd-w4', title: 'DataVault Suite',      company: 'DataVault',   expected_close: '2026-05-30', actual_close: '2026-05-24', days_delta:  -6, outcome: 'early'    },
+        { id: 'd-w5', title: 'CloudBridge License',  company: 'CloudBridge', expected_close: '2026-06-15', actual_close: '2026-06-06', days_delta:  -9, outcome: 'early'    },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/close-date-accuracy`, {}, token)
+  },
+
+  getRevenueCohort: (
+    workspaceId: string,
+    token: string,
+    cohortMonths = 6,
+    lookforwardMonths = 6,
+  ): Promise<Array<{ cohort_month: string; initial_revenue: number; months: Array<{ month_offset: number; revenue: number; deal_count: number; pct_of_initial: number | null }> }>> => {
+    if (isDemoMode) {
+      const today = new Date()
+      const retentionPcts = [100, 38, 22, 15, 9, 4]
+      return Promise.resolve(
+        Array.from({ length: cohortMonths }, (_, ci) => {
+          const d = new Date(today.getFullYear(), today.getMonth() - (cohortMonths - 1 - ci), 1)
+          const cohortMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+          const initial = 80000 + ci * 15000
+          return {
+            cohort_month: cohortMonth,
+            initial_revenue: initial,
+            months: Array.from({ length: lookforwardMonths }, (__, mo) => {
+              const pct = retentionPcts[mo] ?? 0
+              const monthsAgo = cohortMonths - 1 - ci + mo
+              if (monthsAgo > cohortMonths) return { month_offset: mo, revenue: 0, deal_count: 0, pct_of_initial: null }
+              return { month_offset: mo, revenue: Math.round(initial * pct / 100), deal_count: mo === 0 ? 1 : 0, pct_of_initial: pct }
+            }),
+          }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/revenue-cohort?cohort_months=${cohortMonths}&lookforward_months=${lookforwardMonths}`, {}, token)
+  },
+
+  getDealVelocityTrends: (
+    workspaceId: string,
+    token: string,
+    months = 6,
+  ): Promise<Array<{ month: string; avg_cycle_days: number | null; deal_count: number }>> => {
+    if (isDemoMode) {
+      const today = new Date()
+      const baseDays = [55, 48, 52, 41, 38, 44]
+      return Promise.resolve(
+        Array.from({ length: months }, (_, i) => {
+          const d = new Date(today.getFullYear(), today.getMonth() - (months - 1 - i), 1)
+          const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+          return { month, avg_cycle_days: baseDays[i] ?? 45, deal_count: 2 + (i % 3) }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/velocity-trends?months=${months}`, {}, token)
+  },
+
+  // ─── Contact analytics (12p, 12t, 12x, 13b) ────────────────────────────
+
+  getGoingDarkContacts: (
+    workspaceId: string,
+    token: string,
+    days = 30,
+  ): Promise<Array<{ id: string; name: string; email: string | null; company: string; status: string; days_since_last_contact: number }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { id: 'c-004', name: 'Marcus Webb',    email: 'marcus@infrasoft.io', company: 'InfraSoft',   status: 'customer',  days_since_last_contact: 38 },
+        { id: 'c-007', name: 'Priya Nair',     email: 'priya@novacorp.in',   company: 'NovaCorp',    status: 'prospect',  days_since_last_contact: 31 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/going-dark?days=${days}`, {}, token)
+  },
+
+  getContactLastTouch: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{ last_message_date: string | null; last_note_date: string | null; last_activity_date: string | null; most_recent_type: string | null; days_ago: number | null }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { last_message_date: string | null; last_note_date: string | null; last_activity_date: string | null; most_recent_type: string; days_ago: number }> = {
+        'c-001': { last_message_date: '2026-06-28T09:14:00Z', last_note_date: '2026-06-25T15:30:00Z', last_activity_date: '2026-06-29T10:00:00Z', most_recent_type: 'activity', days_ago: 2 },
+        'c-002': { last_message_date: '2026-06-20T11:00:00Z', last_note_date: '2026-06-18T08:45:00Z', last_activity_date: '2026-06-22T14:00:00Z', most_recent_type: 'message', days_ago: 11 },
+        'c-003': { last_message_date: null,                  last_note_date: '2026-06-10T10:00:00Z', last_activity_date: null,                  most_recent_type: 'note',    days_ago: 21 },
+      }
+      return Promise.resolve(stubs[contactId] ?? { last_message_date: null, last_note_date: null, last_activity_date: null, most_recent_type: null, days_ago: null })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/last-touch`, {}, token)
+  },
+
+  getContactPipelineContribution: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ contact_id: string; name: string; email: string | null; company: string; pipeline_value: number; closed_won_value: number; deal_count: number; win_rate: number }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { contact_id: 'c-003', name: 'Alex Rivera',    email: 'alex@globalbank.com', company: 'GlobalBank',        pipeline_value: 220000, closed_won_value: 95000, deal_count: 3, win_rate: 33 },
+        { contact_id: 'c-001', name: 'Sarah Chen',     email: 'sarah@techcorp.com',  company: 'TechCorp Solutions', pipeline_value: 185000, closed_won_value: 60000, deal_count: 2, win_rate: 50 },
+        { contact_id: 'c-002', name: 'Marcus Webb',    email: 'marcus@infrasoft.io', company: 'InfraSoft',          pipeline_value:  95000, closed_won_value:     0, deal_count: 1, win_rate:  0 },
+        { contact_id: 'c-005', name: 'Lena Kowalski',  email: 'lena@mediahub.eu',    company: 'MediaHub Europe',    pipeline_value:  72000, closed_won_value: 45000, deal_count: 2, win_rate: 50 },
+      ])
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/pipeline-contribution`, {}, token)
+  },
+
+  getContactReengagementSummary: (
+    workspaceId: string,
+    token: string,
+    weeks = 12,
+  ): Promise<Array<{ week_start: string; reengagement_count: number }>> => {
+    if (isDemoMode) {
+      const today = new Date()
+      const lastMonday = new Date(today)
+      lastMonday.setDate(today.getDate() - today.getDay() + (today.getDay() === 0 ? -6 : 1))
+      return Promise.resolve(
+        Array.from({ length: weeks }, (_, i) => {
+          const ws = new Date(lastMonday)
+          ws.setDate(lastMonday.getDate() - (weeks - 1 - i) * 7)
+          const seed = i * 7 + 3
+          return { week_start: ws.toISOString(), reengagement_count: seed % 4 === 0 ? 0 : (seed % 3) + 1 }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/reengagement-summary?weeks=${weeks}`, {}, token)
+  },
+
+  // ─── Activity trends (13a) ──────────────────────────────────────────────
+
+  getActivityTrends: (
+    workspaceId: string,
+    token: string,
+    weeks = 12,
+  ): Promise<Array<{ week_start: string; deals: number; contacts: number; agents: number; messages: number }>> => {
+    if (isDemoMode) {
+      const today = new Date()
+      const lastMonday = new Date(today)
+      lastMonday.setDate(today.getDate() - today.getDay() + (today.getDay() === 0 ? -6 : 1))
+      const seeds = [3, 5, 2, 7, 4, 6, 3, 8, 5, 4, 6, 7]
+      return Promise.resolve(
+        Array.from({ length: weeks }, (_, i) => {
+          const ws = new Date(lastMonday)
+          ws.setDate(lastMonday.getDate() - (weeks - 1 - i) * 7)
+          const s = seeds[i % seeds.length]
+          return { week_start: ws.toISOString(), deals: s % 4 + 1, contacts: s % 3, agents: s % 5 + 1, messages: s % 6 + 2 }
+        })
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/activity/trends?weeks=${weeks}`, {}, token)
+  },
 }

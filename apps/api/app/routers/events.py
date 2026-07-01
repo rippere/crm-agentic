@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -99,6 +99,64 @@ async def create_activity(
     await db.commit()
     await db.refresh(event)
     return ActivityEventResponse.model_validate(event)
+
+
+@router.get("/workspaces/{workspace_id}/activity/trends")
+async def activity_trends(
+    workspace_id: uuid.UUID,
+    weeks: int = Query(default=12, ge=4, le=52),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Weekly event counts for last N weeks grouped into 4 categories: deals/contacts/agents/messages."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.now(timezone.utc)
+    today_weekday = now.weekday()  # 0=Monday
+    last_monday = (now - timedelta(days=today_weekday)).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_starts = [last_monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+
+    lookback = last_monday - timedelta(weeks=weeks - 1)
+    result = await db.execute(
+        select(ActivityEvent).where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.created_at >= lookback,
+        ).order_by(ActivityEvent.created_at.asc())
+    )
+    events = result.scalars().all()
+
+    def _category(evt: ActivityEvent) -> str:
+        t = (evt.type or "").lower()
+        if any(k in t for k in ("deal", "pipeline")):
+            return "deals"
+        if any(k in t for k in ("contact", "merge", "enrich")):
+            return "contacts"
+        if any(k in t for k in ("agent", "score", "compose", "embed")):
+            return "agents"
+        return "messages"
+
+    def _tz(t: datetime) -> datetime:
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+    out = []
+    for ws in week_starts:
+        we = ws + timedelta(weeks=1)
+        ws_aware = ws if ws.tzinfo else ws.replace(tzinfo=timezone.utc)
+        we_aware = we if we.tzinfo else we.replace(tzinfo=timezone.utc)
+        counts: dict[str, int] = {"deals": 0, "contacts": 0, "agents": 0, "messages": 0}
+        for evt in events:
+            t = _tz(evt.created_at)
+            if ws_aware <= t < we_aware:
+                counts[_category(evt)] += 1
+        out.append({
+            "week_start": ws_aware.isoformat(),
+            "deals": counts["deals"],
+            "contacts": counts["contacts"],
+            "agents": counts["agents"],
+            "messages": counts["messages"],
+        })
+    return out
 
 
 def _serialize(event: ActivityEvent) -> str:

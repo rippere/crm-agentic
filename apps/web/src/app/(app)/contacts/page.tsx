@@ -1006,6 +1006,9 @@ export default function ContactsPage() {
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
   const [mergeSuggestion, setMergeSuggestion] = useState<SuggestedMergePair | null>(null);
   const [mergeSugBusy, setMergeSugBusy] = useState(false);
+  const [goingDarkContacts, setGoingDarkContacts] = useState<{ id: string; name: string; email: string | null; company: string; status: string; days_since_last_contact: number }[]>([]);
+  const [goingDarkDismissed, setGoingDarkDismissed] = useState(false);
+  const [goingDarkExpanded, setGoingDarkExpanded] = useState(false);
 
   const { contacts, createContact } = useContacts();
 
@@ -1035,6 +1038,9 @@ export default function ContactsPage() {
     if (!token || !workspaceId) return;
     apiClient.getSuggestedMerges(workspaceId, token)
       .then(({ pairs }) => setSuggestedMerges(pairs.slice(0, 4)))
+      .catch(() => {});
+    apiClient.getGoingDarkContacts(workspaceId, token)
+      .then(setGoingDarkContacts)
       .catch(() => {});
   }, [token, workspaceId]);
 
@@ -1278,6 +1284,39 @@ export default function ContactsPage() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Going-dark banner */}
+      {goingDarkContacts.length > 0 && !goingDarkDismissed && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-amber-400 flex-shrink-0" />
+              <span className="text-sm font-medium text-amber-300">
+                {goingDarkContacts.length} contact{goingDarkContacts.length !== 1 ? "s" : ""} going dark — no activity in 30+ days
+              </span>
+              <button onClick={() => setGoingDarkExpanded((v) => !v)} className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer">
+                {goingDarkExpanded ? "Hide" : "Show"}
+              </button>
+            </div>
+            <button onClick={() => setGoingDarkDismissed(true)} className="text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer" title="Dismiss">
+              <span className="text-xs">✕</span>
+            </button>
+          </div>
+          {goingDarkExpanded && (
+            <div className="mt-3 space-y-2">
+              {goingDarkContacts.map((c) => (
+                <div key={c.id} className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-zinc-200 truncate">{c.name}</p>
+                    <p className="text-[11px] text-zinc-500 truncate">{c.company} · {c.status}</p>
+                  </div>
+                  <span className="text-xs font-mono text-amber-400">{c.days_since_last_contact}d silent</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

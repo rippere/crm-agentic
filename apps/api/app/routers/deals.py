@@ -624,6 +624,542 @@ async def overdue_actions(
     ]
 
 
+@router.get("/workspaces/{workspace_id}/deals/at-risk")
+async def deals_at_risk(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Open deals with win probability < 30 OR no stage change in 14+ days."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=14)
+    today = date.today()
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = result.scalars().all()
+
+    at_risk = []
+    for d in deals:
+        low_prob = d.ml_win_probability < 30
+        sc = d.stage_changed_at or d.created_at
+        if sc and sc.tzinfo is None:
+            sc = sc.replace(tzinfo=timezone.utc)
+        stale = sc < cutoff if sc else False
+        overdue = (
+            d.next_action_date is not None and d.next_action_date < today
+        )
+        if not (low_prob or stale or overdue):
+            continue
+        days_inactive = max(0, (now - sc).days) if sc else 0
+        at_risk.append({
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "stage": d.stage,
+            "value": float(d.value or 0),
+            "ml_win_probability": d.ml_win_probability,
+            "days_inactive": days_inactive,
+            "reason": "low_probability" if low_prob else ("overdue_action" if overdue else "stale"),
+        })
+
+    at_risk.sort(key=lambda x: x["ml_win_probability"])
+    return at_risk
+
+
+@router.get("/workspaces/{workspace_id}/deals/close-date-slipped")
+async def deals_close_date_slipped(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Open deals where expected_close < today, ordered most-overdue first."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    today_str = date.today().isoformat()
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.expected_close.is_not(None),
+        )
+    )
+    deals = result.scalars().all()
+
+    slipped = []
+    today = date.today()
+    for d in deals:
+        if not d.expected_close:
+            continue
+        try:
+            close_date = date.fromisoformat(d.expected_close[:10])
+        except (ValueError, TypeError):
+            continue
+        if close_date >= today:
+            continue
+        slipped.append({
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "stage": d.stage,
+            "value": float(d.value or 0),
+            "expected_close": d.expected_close,
+            "days_overdue": (today - close_date).days,
+        })
+
+    slipped.sort(key=lambda x: x["days_overdue"], reverse=True)
+    return slipped
+
+
+@router.get("/workspaces/{workspace_id}/deals/health-distribution")
+async def deals_health_distribution(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Groups all open deals into health buckets: critical <40, at-risk 40-69, healthy 70-100."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = result.scalars().all()
+
+    buckets = {
+        "critical": {"label": "Critical (<40)", "count": 0, "total_value": 0.0},
+        "at_risk": {"label": "At Risk (40–69)", "count": 0, "total_value": 0.0},
+        "healthy": {"label": "Healthy (70–100)", "count": 0, "total_value": 0.0},
+    }
+    for d in deals:
+        v = float(d.value or 0)
+        score = d.health_score or 0
+        if score < 40:
+            buckets["critical"]["count"] += 1
+            buckets["critical"]["total_value"] += v
+        elif score < 70:
+            buckets["at_risk"]["count"] += 1
+            buckets["at_risk"]["total_value"] += v
+        else:
+            buckets["healthy"]["count"] += 1
+            buckets["healthy"]["total_value"] += v
+
+    return [
+        {"bucket": k, "label": v["label"], "count": v["count"], "total_value": round(v["total_value"], 2)}
+        for k, v in buckets.items()
+    ]
+
+
+@router.get("/workspaces/{workspace_id}/deals/by-agent")
+async def deals_by_agent(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Groups open deals by assigned_agent, null -> 'Unassigned', sorted by count desc."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = result.scalars().all()
+
+    groups: dict[str, dict] = {}
+    for d in deals:
+        agent = d.assigned_agent or "Unassigned"
+        if agent not in groups:
+            groups[agent] = {"agent": agent, "count": 0, "total_value": 0.0}
+        groups[agent]["count"] += 1
+        groups[agent]["total_value"] += float(d.value or 0)
+
+    out = sorted(groups.values(), key=lambda x: x["count"], reverse=True)
+    for row in out:
+        row["total_value"] = round(row["total_value"], 2)
+    return out
+
+
+@router.get("/workspaces/{workspace_id}/deals/revenue-forecast")
+async def deals_revenue_forecast(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Groups open deals by expected_close month, computes probability-weighted expected revenue."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.expected_close.is_not(None),
+        )
+    )
+    deals = result.scalars().all()
+
+    buckets: dict[str, dict] = {}
+    for d in deals:
+        if not d.expected_close:
+            continue
+        try:
+            close_date = date.fromisoformat(d.expected_close[:10])
+        except (ValueError, TypeError):
+            continue
+        month_key = f"{close_date.year}-{close_date.month:02d}"
+        v = float(d.value or 0)
+        prob = (d.ml_win_probability or 0) / 100.0
+        if month_key not in buckets:
+            buckets[month_key] = {"month": month_key, "expected_revenue": 0.0, "deal_count": 0, "total_value": 0.0}
+        buckets[month_key]["expected_revenue"] += v * prob
+        buckets[month_key]["deal_count"] += 1
+        buckets[month_key]["total_value"] += v
+
+    out = sorted(buckets.values(), key=lambda x: x["month"])
+    for row in out:
+        row["expected_revenue"] = round(row["expected_revenue"], 2)
+        row["total_value"] = round(row["total_value"], 2)
+    return out
+
+
+@router.get("/workspaces/{workspace_id}/deals/stage-aging")
+async def deals_stage_aging(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """All open deals with days_in_stage, grouped by stage order then oldest-first."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = result.scalars().all()
+
+    now = datetime.now(timezone.utc)
+    stage_order = ["discovery", "qualified", "proposal", "negotiation"]
+
+    rows = []
+    for d in deals:
+        sc = d.stage_changed_at or d.created_at
+        if sc and sc.tzinfo is None:
+            sc = sc.replace(tzinfo=timezone.utc)
+        days = max(0, (now - sc).days) if sc else 0
+        try:
+            stage_idx = stage_order.index(d.stage or "discovery")
+        except ValueError:
+            stage_idx = len(stage_order)
+        rows.append({
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "stage": d.stage,
+            "value": float(d.value or 0),
+            "days_in_stage": days,
+            "_stage_idx": stage_idx,
+        })
+
+    rows.sort(key=lambda x: (x["_stage_idx"], -x["days_in_stage"]))
+    for r in rows:
+        del r["_stage_idx"]
+    return rows
+
+
+@router.get("/workspaces/{workspace_id}/deals/win-probability-by-stage")
+async def deals_win_probability_by_stage(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Average win probability per stage for open deals."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = result.scalars().all()
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation"]
+    groups: dict[str, list] = {s: [] for s in stage_order}
+    for d in deals:
+        stage = d.stage or "discovery"
+        if stage in groups:
+            groups[stage].append(d)
+
+    out = []
+    for stage in stage_order:
+        ds = groups[stage]
+        if not ds:
+            continue
+        avg_prob = round(sum(d.ml_win_probability for d in ds) / len(ds), 1)
+        total_val = sum(float(d.value or 0) for d in ds)
+        out.append({
+            "stage": stage,
+            "avg_probability": avg_prob,
+            "deal_count": len(ds),
+            "total_value": round(total_val, 2),
+        })
+    return out
+
+
+@router.get("/workspaces/{workspace_id}/deals/concentration-risk")
+async def deals_concentration_risk(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Top-deal concentration risk: top3_pct and risk level."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = result.scalars().all()
+    deals_sorted = sorted(deals, key=lambda d: float(d.value or 0), reverse=True)
+
+    total = sum(float(d.value or 0) for d in deals_sorted)
+    if total == 0:
+        return {"top3_pct": 0.0, "risk_level": "low", "top_deals": [], "total_pipeline_value": 0.0}
+
+    top3_val = sum(float(d.value or 0) for d in deals_sorted[:3])
+    top3_pct = round(top3_val / total * 100, 1)
+    risk_level = "high" if top3_pct >= 60 else ("medium" if top3_pct >= 40 else "low")
+
+    top_deals = []
+    for d in deals_sorted[:5]:
+        v = float(d.value or 0)
+        top_deals.append({
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "stage": d.stage,
+            "value": v,
+            "pct_of_pipeline": round(v / total * 100, 1),
+        })
+
+    return {
+        "top3_pct": top3_pct,
+        "risk_level": risk_level,
+        "top_deals": top_deals,
+        "total_pipeline_value": round(total, 2),
+    }
+
+
+@router.get("/workspaces/{workspace_id}/deals/close-date-accuracy")
+async def deals_close_date_accuracy(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """For closed_won deals: compare expected_close vs actual close date."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.expected_close.is_not(None),
+        )
+    )
+    deals = result.scalars().all()
+
+    out = []
+    for d in deals:
+        if not d.expected_close or not d.stage_changed_at:
+            continue
+        try:
+            expected = date.fromisoformat(d.expected_close[:10])
+        except (ValueError, TypeError):
+            continue
+        actual = d.stage_changed_at
+        if actual.tzinfo is None:
+            actual = actual.replace(tzinfo=timezone.utc)
+        actual_date = actual.date()
+        days_delta = (actual_date - expected).days
+        outcome = "on_time" if abs(days_delta) <= 3 else ("early" if days_delta < 0 else "late")
+        out.append({
+            "id": str(d.id),
+            "title": d.title,
+            "company": d.company,
+            "expected_close": d.expected_close,
+            "actual_close": actual_date.isoformat(),
+            "days_delta": days_delta,
+            "outcome": outcome,
+        })
+
+    out.sort(key=lambda x: x["days_delta"], reverse=True)
+    return out
+
+
+@router.get("/workspaces/{workspace_id}/deals/revenue-cohort")
+async def deals_revenue_cohort(
+    workspace_id: uuid.UUID,
+    cohort_months: int = Query(default=6, ge=1, le=24),
+    lookforward_months: int = Query(default=6, ge=1, le=24),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Groups closed_won deals by contact acquisition cohort month; returns expansion revenue matrix."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.contact_id.is_not(None),
+        )
+    )
+    deals = result.scalars().all()
+
+    today = date.today()
+    # Build cohort months list (oldest first)
+    cohort_starts: list[date] = []
+    for i in range(cohort_months - 1, -1, -1):
+        yr = today.year
+        mo = today.month - i
+        while mo <= 0:
+            mo += 12
+            yr -= 1
+        cohort_starts.append(date(yr, mo, 1))
+
+    # Group deals by contact: first deal = acquisition cohort
+    from collections import defaultdict
+    contact_deals: dict = defaultdict(list)
+    for d in deals:
+        if d.stage_changed_at:
+            sc = d.stage_changed_at
+            if sc.tzinfo is None:
+                sc = sc.replace(tzinfo=timezone.utc)
+            contact_deals[str(d.contact_id)].append((sc.date(), float(d.value or 0)))
+
+    # For each contact, sort deals by date; first deal month = cohort
+    cohort_revenue: dict[str, dict[int, float]] = {}  # cohort_key -> {month_offset -> revenue}
+    for contact_id, deal_list in contact_deals.items():
+        deal_list.sort(key=lambda x: x[0])
+        first_date = deal_list[0][0]
+        cohort_key = f"{first_date.year}-{first_date.month:02d}"
+        if cohort_key not in cohort_revenue:
+            cohort_revenue[cohort_key] = {}
+        for deal_date, val in deal_list:
+            # Compute month offset from first deal
+            offset = (deal_date.year - first_date.year) * 12 + (deal_date.month - first_date.month)
+            if 0 <= offset < lookforward_months:
+                cohort_revenue[cohort_key][offset] = cohort_revenue[cohort_key].get(offset, 0.0) + val
+
+    out = []
+    for cohort_start in cohort_starts:
+        cohort_key = f"{cohort_start.year}-{cohort_start.month:02d}"
+        revenue_map = cohort_revenue.get(cohort_key, {})
+        initial = revenue_map.get(0, 0.0)
+        months = []
+        for offset in range(lookforward_months):
+            rev = revenue_map.get(offset, 0.0)
+            pct = round(rev / initial * 100, 1) if initial > 0 else None
+            months.append({"month_offset": offset, "revenue": round(rev, 2), "deal_count": 0, "pct_of_initial": pct})
+        out.append({
+            "cohort_month": cohort_key,
+            "initial_revenue": round(initial, 2),
+            "months": months,
+        })
+    return out
+
+
+@router.get("/workspaces/{workspace_id}/deals/velocity-trends")
+async def deals_velocity_trends(
+    workspace_id: uuid.UUID,
+    months: int = Query(default=6, ge=1, le=24),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Average deal cycle time (days from created_at to close) per month for the last N months.
+
+    Tracks how quickly deals are closed month-over-month.
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at.is_not(None),
+        )
+    )
+    deals = result.scalars().all()
+
+    today = date.today()
+    # Build month buckets (oldest first)
+    month_starts: list[date] = []
+    for i in range(months - 1, -1, -1):
+        yr = today.year
+        mo = today.month - i
+        while mo <= 0:
+            mo += 12
+            yr -= 1
+        month_starts.append(date(yr, mo, 1))
+
+    buckets: dict[str, list[float]] = {f"{ms.year}-{ms.month:02d}": [] for ms in month_starts}
+
+    for d in deals:
+        sc = d.stage_changed_at
+        if sc is None:
+            continue
+        if sc.tzinfo is None:
+            sc = sc.replace(tzinfo=timezone.utc)
+        close_date = sc.date()
+        month_key = f"{close_date.year}-{close_date.month:02d}"
+        if month_key not in buckets:
+            continue
+        created = d.created_at
+        if created is None:
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        cycle_days = max(0.0, (sc - created).total_seconds() / 86400)
+        buckets[month_key].append(cycle_days)
+
+    out = []
+    for ms in month_starts:
+        month_key = f"{ms.year}-{ms.month:02d}"
+        cycle_list = buckets[month_key]
+        avg = round(sum(cycle_list) / len(cycle_list), 1) if cycle_list else None
+        out.append({
+            "month": month_key,
+            "avg_cycle_days": avg,
+            "deal_count": len(cycle_list),
+        })
+    return out
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,

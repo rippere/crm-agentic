@@ -11,9 +11,11 @@ import { createBrowserClient } from "@/lib/supabase";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
+  LineChart, AreaChart, Area,
 } from "recharts";
 import {
   TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot,
+  CalendarOff, Users, Activity, Zap,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -60,17 +62,46 @@ export default function ReportsPage() {
   const [funnelData, setFunnelData] = useState<FunnelRow[]>([]);
   const [outcomeReasons, setOutcomeReasons] = useState<OutcomeReasonRow[]>([]);
   const [agentRunStats, setAgentRunStats] = useState<{ agent_name: string; success: number; failure: number }[]>([]);
+  const [velocityTrends, setVelocityTrends] = useState<{ month: string; avg_cycle_days: number | null; deal_count: number }[]>([]);
+  const [revenueForecast, setRevenueForecast] = useState<{ month: string; expected_revenue: number; deal_count: number; total_value: number }[]>([]);
+  const [stageAging, setStageAging] = useState<{ id: string; title: string; company: string; stage: string; value: number; days_in_stage: number }[]>([]);
+  const [winProbByStage, setWinProbByStage] = useState<{ stage: string; avg_probability: number; deal_count: number; total_value: number }[]>([]);
+  const [concentrationRisk, setConcentrationRisk] = useState<{ top3_pct: number; risk_level: string; top_deals: { id: string; title: string; company: string; stage: string; value: number; pct_of_pipeline: number }[]; total_pipeline_value: number } | null>(null);
+  const [closeDateAccuracy, setCloseDateAccuracy] = useState<{ id: string; title: string; company: string; expected_close: string; actual_close: string; days_delta: number; outcome: string }[]>([]);
+  const [closeDateSlipped, setCloseDateSlipped] = useState<{ id: string; title: string; company: string; stage: string; value: number; expected_close: string; days_overdue: number }[]>([]);
+  const [activityTrends, setActivityTrends] = useState<{ week_start: string; deals: number; contacts: number; agents: number; messages: number }[]>([]);
+  const [reengagementSummary, setReengagementSummary] = useState<{ week_start: string; reengagement_count: number }[]>([]);
+  const [pipelineContribution, setPipelineContribution] = useState<{ contact_id: string; name: string; email: string | null; company: string; pipeline_value: number; closed_won_value: number; deal_count: number; win_rate: number }[]>([]);
+  const [revenueCohort, setRevenueCohort] = useState<{ cohort_month: string; initial_revenue: number; months: { month_offset: number; revenue: number; deal_count: number; pct_of_initial: number | null }[] }[]>([]);
 
   useEffect(() => {
-    if (DEMO_MODE) {
-      apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
+    const WS = DEMO_MODE ? "demo-workspace-1" : null;
+    const TK = DEMO_MODE ? "demo-token" : null;
+
+    const fetchAll = (workspaceId: string, token: string) => {
+      apiClient.getDealVelocity(workspaceId, token).then((data) => {
         setVelocityData(data.map((v) => ({ ...v, label: stageConfig[v.stage as keyof typeof stageConfig]?.label ?? v.stage })));
       }).catch(() => {});
-      apiClient.getDealFunnel("demo-workspace-1", "demo-token").then((data) => {
+      apiClient.getDealFunnel(workspaceId, token).then((data) => {
         setFunnelData(data.map((r) => ({ ...r, label: stageConfig[r.stage as keyof typeof stageConfig]?.label ?? r.stage })));
       }).catch(() => {});
-      apiClient.getDealOutcomeReasons("demo-workspace-1", "demo-token").then(setOutcomeReasons).catch(() => {});
-      apiClient.getAgentRunStats("demo-workspace-1", "demo-token").then(setAgentRunStats).catch(() => {});
+      apiClient.getDealOutcomeReasons(workspaceId, token).then(setOutcomeReasons).catch(() => {});
+      apiClient.getAgentRunStats(workspaceId, token).then(setAgentRunStats).catch(() => {});
+      apiClient.getDealVelocityTrends(workspaceId, token).then(setVelocityTrends).catch(() => {});
+      apiClient.getDealRevenueForecast(workspaceId, token).then(setRevenueForecast).catch(() => {});
+      apiClient.getDealStageAging(workspaceId, token).then(setStageAging).catch(() => {});
+      apiClient.getDealWinProbabilityByStage(workspaceId, token).then(setWinProbByStage).catch(() => {});
+      apiClient.getDealConcentrationRisk(workspaceId, token).then(setConcentrationRisk).catch(() => {});
+      apiClient.getDealCloseDateAccuracy(workspaceId, token).then(setCloseDateAccuracy).catch(() => {});
+      apiClient.getDealCloseDateSlipped(workspaceId, token).then(setCloseDateSlipped).catch(() => {});
+      apiClient.getActivityTrends(workspaceId, token).then(setActivityTrends).catch(() => {});
+      apiClient.getContactReengagementSummary(workspaceId, token).then(setReengagementSummary).catch(() => {});
+      apiClient.getContactPipelineContribution(workspaceId, token).then(setPipelineContribution).catch(() => {});
+      apiClient.getRevenueCohort(workspaceId, token).then(setRevenueCohort).catch(() => {});
+    };
+
+    if (DEMO_MODE && WS && TK) {
+      fetchAll(WS, TK);
       return;
     }
     const supabase = createBrowserClient();
@@ -78,14 +109,7 @@ export default function ReportsPage() {
       if (!session) return;
       const workspaceId: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
       if (!workspaceId) return;
-      apiClient.getDealVelocity(workspaceId, session.access_token).then((data) => {
-        setVelocityData(data.map((v) => ({ ...v, label: stageConfig[v.stage as keyof typeof stageConfig]?.label ?? v.stage })));
-      }).catch(() => {});
-      apiClient.getDealFunnel(workspaceId, session.access_token).then((data) => {
-        setFunnelData(data.map((r) => ({ ...r, label: stageConfig[r.stage as keyof typeof stageConfig]?.label ?? r.stage })));
-      }).catch(() => {});
-      apiClient.getDealOutcomeReasons(workspaceId, session.access_token).then(setOutcomeReasons).catch(() => {});
-      apiClient.getAgentRunStats(workspaceId, session.access_token).then(setAgentRunStats).catch(() => {});
+      fetchAll(workspaceId, session.access_token);
     });
   }, []);
 
@@ -623,6 +647,392 @@ export default function ReportsPage() {
               <Bar dataKey="failure" name="failure" fill="#F43F5E" radius={[4, 4, 0, 0]} maxBarSize={28} />
             </BarChart>
           </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Deal velocity trends — avg cycle time month-over-month (13d) */}
+      {velocityTrends.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Deal Velocity Trends</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Avg days from creation to close per month</p>
+            </div>
+            <Timer className="h-4 w-4 text-violet-400" />
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={velocityTrends} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis dataKey="month" tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}d`} width={36} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  const d = payload[0]?.payload as { avg_cycle_days: number | null; deal_count: number };
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-1">{label}</p>
+                      <p className="text-zinc-200">Avg: <span className="font-mono text-violet-300">{d.avg_cycle_days !== null ? `${d.avg_cycle_days}d` : "—"}</span></p>
+                      <p className="text-zinc-500">{d.deal_count} deal{d.deal_count !== 1 ? "s" : ""} closed</p>
+                    </div>
+                  );
+                }}
+              />
+              <Line type="monotone" dataKey="avg_cycle_days" stroke="#A78BFA" strokeWidth={2} dot={{ r: 3, fill: "#A78BFA" }} connectNulls />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Expected revenue forecast (12u) */}
+      {revenueForecast.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Expected Revenue Forecast</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Probability-weighted revenue by close month</p>
+            </div>
+            <TrendingUp className="h-4 w-4 text-emerald-400" />
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={revenueForecast} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis dataKey="month" tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v / 1000}k`} width={44} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  const d = payload[0]?.payload as { expected_revenue: number; total_value: number; deal_count: number };
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-1">{label}</p>
+                      <p className="text-emerald-300">Expected: {formatCurrency(d.expected_revenue)}</p>
+                      <p className="text-zinc-400">Pipeline: {formatCurrency(d.total_value)}</p>
+                      <p className="text-zinc-500">{d.deal_count} deal{d.deal_count !== 1 ? "s" : ""}</p>
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="expected_revenue" name="Expected Revenue" fill="#10B981" radius={[4, 4, 0, 0]} maxBarSize={48} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Win probability by stage (12w) + Concentration risk (12y) */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {winProbByStage.length > 0 && (
+          <Card>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Win Probability by Stage</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">Avg ML probability for open deals</p>
+              </div>
+              <Target className="h-4 w-4 text-indigo-400" />
+            </div>
+            <ResponsiveContainer width="100%" height={160}>
+              <BarChart data={winProbByStage.map((d) => ({ ...d, label: stageConfig[d.stage as keyof typeof stageConfig]?.label ?? d.stage }))} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                <XAxis dataKey="label" tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} width={36} />
+                <Tooltip
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null;
+                    const d = payload[0]?.payload as { avg_probability: number; deal_count: number; total_value: number };
+                    return (
+                      <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                        <p className="font-mono text-zinc-400 mb-1">{label}</p>
+                        <p className="text-indigo-300">Avg prob: {d.avg_probability}%</p>
+                        <p className="text-zinc-400">{d.deal_count} deals · {formatCurrency(d.total_value)}</p>
+                      </div>
+                    );
+                  }}
+                />
+                <Bar dataKey="avg_probability" radius={[4, 4, 0, 0]}>
+                  {winProbByStage.map((entry) => (
+                    <Cell key={entry.stage} fill={STAGE_COLORS[entry.stage] ?? "#6366F1"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+        )}
+
+        {concentrationRisk && (
+          <Card>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Pipeline Concentration Risk</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">Top-3 deal share of pipeline</p>
+              </div>
+              <span className={cn(
+                "text-xs font-semibold px-2 py-0.5 rounded-full",
+                concentrationRisk.risk_level === "high"   ? "bg-rose-500/20 text-rose-300" :
+                concentrationRisk.risk_level === "medium" ? "bg-amber-500/20 text-amber-300" :
+                                                            "bg-emerald-500/20 text-emerald-300"
+              )}>
+                {concentrationRisk.risk_level.toUpperCase()} · {concentrationRisk.top3_pct}%
+              </span>
+            </div>
+            <div className="space-y-2 mt-2">
+              {concentrationRisk.top_deals.map((d) => (
+                <div key={d.id} className="flex items-center gap-2">
+                  <div className="w-28 text-xs text-zinc-400 truncate">{d.company}</div>
+                  <div className="flex-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                    <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.min(100, d.pct_of_pipeline)}%` }} />
+                  </div>
+                  <div className="text-xs font-mono text-zinc-400 w-10 text-right">{d.pct_of_pipeline}%</div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-[10px] text-zinc-600 font-mono">Total pipeline: {formatCurrency(concentrationRisk.total_pipeline_value)}</p>
+          </Card>
+        )}
+      </div>
+
+      {/* Deal stage aging (12v) */}
+      {stageAging.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Deal Aging by Stage</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Days each open deal has spent in current stage</p>
+            </div>
+            <Clock className="h-4 w-4 text-amber-400" />
+          </div>
+          <div className="divide-y divide-zinc-800">
+            {stageAging.slice(0, 8).map((d) => (
+              <div key={d.id} className="flex items-center gap-3 py-2">
+                <span className={cn(
+                  "text-xs px-1.5 py-0.5 rounded font-mono",
+                  d.days_in_stage > 30 ? "bg-rose-900/30 text-rose-300" :
+                  d.days_in_stage > 14 ? "bg-amber-900/30 text-amber-300" :
+                                         "bg-emerald-900/20 text-emerald-400"
+                )}>{d.days_in_stage}d</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-zinc-200 truncate">{d.title}</p>
+                  <p className="text-[10px] text-zinc-500">{d.company} · {stageConfig[d.stage as keyof typeof stageConfig]?.label ?? d.stage}</p>
+                </div>
+                <p className="text-xs font-mono text-zinc-400">{formatCurrency(d.value)}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Close date accuracy (12z) + Close date slipped (12q) */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {closeDateAccuracy.length > 0 && (
+          <Card>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Close Date Accuracy</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">Expected vs actual close for won deals</p>
+              </div>
+            </div>
+            <div className="divide-y divide-zinc-800">
+              {closeDateAccuracy.slice(0, 5).map((d) => (
+                <div key={d.id} className="flex items-center gap-3 py-2">
+                  <span className={cn(
+                    "text-xs px-1.5 py-0.5 rounded font-mono min-w-[52px] text-center",
+                    d.outcome === "late"    ? "bg-rose-900/30 text-rose-300"    :
+                    d.outcome === "early"   ? "bg-emerald-900/20 text-emerald-400" :
+                                             "bg-zinc-800 text-zinc-400"
+                  )}>
+                    {d.days_delta > 0 ? `+${d.days_delta}d` : d.days_delta === 0 ? "on time" : `${d.days_delta}d`}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-zinc-200 truncate">{d.title}</p>
+                    <p className="text-[10px] text-zinc-500">{d.expected_close} → {d.actual_close}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        {closeDateSlipped.length > 0 && (
+          <Card>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-sm font-semibold text-zinc-100">Close Date Slipped</p>
+                <p className="text-xs text-zinc-500 mt-0.5 font-mono">Open deals past their expected close date</p>
+              </div>
+              <CalendarOff className="h-4 w-4 text-rose-400" />
+            </div>
+            <div className="divide-y divide-zinc-800">
+              {closeDateSlipped.map((d) => (
+                <div key={d.id} className="flex items-center gap-3 py-2">
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-rose-900/30 text-rose-300 font-mono min-w-[44px] text-center">
+                    +{d.days_overdue}d
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-zinc-200 truncate">{d.title}</p>
+                    <p className="text-[10px] text-zinc-500">{d.company} · due {d.expected_close}</p>
+                  </div>
+                  <p className="text-xs font-mono text-zinc-400">{formatCurrency(d.value)}</p>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+      </div>
+
+      {/* Activity trends (13a) */}
+      {activityTrends.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Activity Trends</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Weekly event counts by category</p>
+            </div>
+            <Activity className="h-4 w-4 text-violet-400" />
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={activityTrends.map((w) => ({ ...w, week: w.week_start.slice(0, 10) }))} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis dataKey="week" tick={{ fill: "#71717A", fontSize: 9 }} axisLine={false} tickLine={false} interval={2} />
+              <YAxis tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-2">{label}</p>
+                      {payload.map((p) => (
+                        <div key={p.name} className="flex items-center gap-2" style={{ color: p.color }}>
+                          <span className="capitalize">{p.name}:</span>
+                          <span className="font-mono font-bold">{p.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="deals"    name="deals"    stackId="a" fill="#6366F1" />
+              <Bar dataKey="contacts" name="contacts" stackId="a" fill="#A78BFA" />
+              <Bar dataKey="agents"   name="agents"   stackId="a" fill="#00C896" />
+              <Bar dataKey="messages" name="messages" stackId="a" fill="#FBBF24" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Contact re-engagement summary (13b) */}
+      {reengagementSummary.length > 0 && reengagementSummary.some((w) => w.reengagement_count > 0) && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Contact Re-engagement</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Contacts re-touched after 30+ day silence, by week</p>
+            </div>
+            <Zap className="h-4 w-4 text-emerald-400" />
+          </div>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={reengagementSummary.map((w) => ({ ...w, week: w.week_start.slice(0, 10) }))} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+              <XAxis dataKey="week" tick={{ fill: "#71717A", fontSize: 9 }} axisLine={false} tickLine={false} interval={2} />
+              <YAxis tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                      <p className="font-mono text-zinc-400 mb-1">{label}</p>
+                      <p className="text-emerald-300">{payload[0]?.value} re-engagement{(payload[0]?.value as number) !== 1 ? "s" : ""}</p>
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="reengagement_count" name="Re-engagements" fill="#10B981" radius={[4, 4, 0, 0]} maxBarSize={32} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Contact pipeline contribution (12x) */}
+      {pipelineContribution.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Contact Pipeline Contribution</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Pipeline and won revenue by contact</p>
+            </div>
+            <Users className="h-4 w-4 text-indigo-400" />
+          </div>
+          <div className="divide-y divide-zinc-800">
+            {pipelineContribution.slice(0, 8).map((c) => (
+              <div key={c.contact_id} className="flex items-center gap-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-zinc-200 truncate">{c.name}</p>
+                  <p className="text-[10px] text-zinc-500">{c.company} · {c.deal_count} deal{c.deal_count !== 1 ? "s" : ""} · {c.win_rate}% win</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-mono text-indigo-300">{formatCurrency(c.pipeline_value)}</p>
+                  {c.closed_won_value > 0 && <p className="text-[10px] font-mono text-emerald-400">{formatCurrency(c.closed_won_value)} won</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Revenue cohort heatmap (13c) */}
+      {revenueCohort.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Revenue Cohort Analysis</p>
+              <p className="text-xs text-zinc-500 mt-0.5 font-mono">Expansion revenue as % of initial by acquisition cohort</p>
+            </div>
+            <BarChart2 className="h-4 w-4 text-indigo-400" />
+          </div>
+          <div className="overflow-x-auto">
+            <table className="text-xs w-full min-w-[480px]">
+              <thead>
+                <tr>
+                  <th className="text-left pr-4 pb-2 text-zinc-500 font-mono">Cohort</th>
+                  <th className="text-right pr-4 pb-2 text-zinc-500 font-mono">Initial</th>
+                  {revenueCohort[0]?.months.map((_, i) => (
+                    <th key={i} className="text-center px-1 pb-2 text-zinc-500 font-mono">M+{i}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {revenueCohort.map((cohort) => (
+                  <tr key={cohort.cohort_month}>
+                    <td className="pr-4 py-1 text-zinc-300">{cohort.cohort_month}</td>
+                    <td className="pr-4 py-1 text-right text-zinc-300">{formatCurrency(cohort.initial_revenue)}</td>
+                    {cohort.months.map((m) => {
+                      const pct = m.pct_of_initial;
+                      const bg =
+                        pct === null ? "bg-zinc-800/30" :
+                        pct === 0   ? "bg-zinc-800/50" :
+                        pct >= 80   ? "bg-emerald-900/70" :
+                        pct >= 50   ? "bg-emerald-900/50" :
+                        pct >= 25   ? "bg-emerald-900/30" :
+                                      "bg-emerald-900/15";
+                      const textColor =
+                        pct === null ? "text-zinc-700" :
+                        pct === 0   ? "text-zinc-600" :
+                        pct >= 50   ? "text-emerald-300" :
+                                      "text-emerald-500";
+                      return (
+                        <td key={m.month_offset} className={`px-1 py-1 text-center rounded ${bg}`}>
+                          <span className={textColor}>
+                            {pct === null ? "—" : pct === 0 ? "0%" : `${pct}%`}
+                          </span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-[10px] text-zinc-600 font-mono">
+            Each row = contacts first acquired that month. Later columns show expansion revenue from those contacts as % of initial.
+          </p>
         </Card>
       )}
 
