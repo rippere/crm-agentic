@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import {
   TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot,
-  CalendarOff, Users, Activity, Zap,
+  CalendarOff, Users, Activity, Zap, ArrowUp, ArrowDown, Minus, Medal,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -73,6 +73,7 @@ export default function ReportsPage() {
   const [reengagementSummary, setReengagementSummary] = useState<{ week_start: string; reengagement_count: number }[]>([]);
   const [pipelineContribution, setPipelineContribution] = useState<{ contact_id: string; name: string; email: string | null; company: string; pipeline_value: number; closed_won_value: number; deal_count: number; win_rate: number }[]>([]);
   const [revenueCohort, setRevenueCohort] = useState<{ cohort_month: string; initial_revenue: number; months: { month_offset: number; revenue: number; deal_count: number; pct_of_initial: number | null }[] }[]>([]);
+  const [leaderboard, setLeaderboard] = useState<Array<{ rank: number; id: string; title: string | null; company: string | null; stage: string; value: number; ml_win_probability: number; score: number; trend: "up" | "neutral" | "down"; health_score: number }>>([]);
 
   useEffect(() => {
     const WS = DEMO_MODE ? "demo-workspace-1" : null;
@@ -98,6 +99,7 @@ export default function ReportsPage() {
       apiClient.getContactReengagementSummary(workspaceId, token).then(setReengagementSummary).catch(() => {});
       apiClient.getContactPipelineContribution(workspaceId, token).then(setPipelineContribution).catch(() => {});
       apiClient.getRevenueCohort(workspaceId, token).then(setRevenueCohort).catch(() => {});
+      apiClient.getDealLeaderboard(workspaceId, token).then(setLeaderboard).catch(() => {});
     };
 
     if (DEMO_MODE && WS && TK) {
@@ -1033,6 +1035,58 @@ export default function ReportsPage() {
           <p className="mt-3 text-[10px] text-zinc-600 font-mono">
             Each row = contacts first acquired that month. Later columns show expansion revenue from those contacts as % of initial.
           </p>
+        </Card>
+      )}
+
+      {/* Deal Scoring Leaderboard — Phase 13e */}
+      {leaderboard.length > 0 && (
+        <Card>
+          <div className="flex items-center gap-2 mb-4">
+            <Medal className="h-4 w-4 text-amber-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Deal Scoring Leaderboard</h3>
+            <span className="ml-auto text-xs text-zinc-500">top open deals · probability × value</span>
+          </div>
+          <table className="w-full text-xs font-mono">
+            <thead>
+              <tr>
+                <th className="text-left text-zinc-500 pb-2 font-normal w-8">#</th>
+                <th className="text-left text-zinc-500 pb-2 font-normal">Deal</th>
+                <th className="text-left text-zinc-500 pb-2 font-normal hidden sm:table-cell">Stage</th>
+                <th className="text-right text-zinc-500 pb-2 font-normal">Value</th>
+                <th className="text-right text-zinc-500 pb-2 font-normal">Win%</th>
+                <th className="text-right text-zinc-500 pb-2 font-normal">Score</th>
+                <th className="text-center text-zinc-500 pb-2 font-normal w-8"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {leaderboard.map((row) => {
+                const rankColor = row.rank === 1 ? "text-amber-400" : row.rank === 2 ? "text-zinc-300" : row.rank === 3 ? "text-amber-700" : "text-zinc-600";
+                const TrendIcon = row.trend === "up" ? ArrowUp : row.trend === "down" ? ArrowDown : Minus;
+                const trendColor = row.trend === "up" ? "text-emerald-400" : row.trend === "down" ? "text-rose-400" : "text-zinc-600";
+                return (
+                  <tr key={row.id} className="border-t border-zinc-800/60">
+                    <td className={`py-2 pr-2 font-bold ${rankColor}`}>{row.rank}</td>
+                    <td className="py-2 pr-3">
+                      <p className="text-zinc-200 truncate max-w-[160px]">{row.title ?? "—"}</p>
+                      <p className="text-zinc-600 text-[10px]">{row.company ?? ""}</p>
+                    </td>
+                    <td className="py-2 pr-3 hidden sm:table-cell">
+                      <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: (STAGE_COLORS[row.stage] ?? "#52525B") + "33", color: STAGE_COLORS[row.stage] ?? "#71717A" }}>
+                        {stageConfig[row.stage as keyof typeof stageConfig]?.label ?? row.stage}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 text-right text-zinc-300">{formatCurrency(row.value)}</td>
+                    <td className="py-2 pr-3 text-right text-indigo-300">{row.ml_win_probability}%</td>
+                    <td className="py-2 pr-3 text-right text-zinc-200 font-semibold">{(row.score / 1_000_000).toFixed(1)}M</td>
+                    <td className="py-2 text-center">
+                      <TrendIcon className={`h-3 w-3 ${trendColor} inline-block`} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="mt-3 text-[10px] text-zinc-600 font-mono">Score = value × win probability. Trend: ↑ active last 7d, ↓ stale or health &lt; 50.</p>
         </Card>
       )}
 

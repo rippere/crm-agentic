@@ -1713,3 +1713,44 @@ async def test_velocity_trends_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong}/deals/velocity-trends")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/leaderboard — Phase 13e
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_leaderboard_ranks_by_composite_score(app_client):
+    """Deals ranked by ml_win_probability × value descending."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Deal A: low probability, moderate value → score = 100 × 20 = 2000
+    d_a = _fake_deal(workspace_id, value=100.0, ml_win_probability=20, stage="discovery")
+    # Deal B: high probability, moderate value → score = 60 × 80 = 4800 (ranked first)
+    d_b = _fake_deal(workspace_id, value=60.0, ml_win_probability=80, stage="qualified")
+    # Mock returns only open deals (DB filters closed_won/lost before Python sees them)
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([d_a, d_b]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/leaderboard", params={"limit": 5})
+
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 2
+    assert rows[0]["rank"] == 1
+    assert rows[0]["ml_win_probability"] == 80  # d_b ranked first (score=4800)
+    assert rows[1]["rank"] == 2
+    assert rows[1]["ml_win_probability"] == 20  # d_a ranked second (score=2000)
+    assert "trend" in rows[0]
+    assert "score" in rows[0]
+
+
+@pytest.mark.asyncio
+async def test_leaderboard_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong = uuid.UUID("55555555-5555-5555-5555-555555555555")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong}/deals/leaderboard")
+    assert resp.status_code == 403

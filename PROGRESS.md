@@ -81,11 +81,13 @@
   - contacts/[id]/page.tsx: Last Touch card (message/note/activity recency + color-coded days-ago badge)
   - test_deals.py: +20 tests → 95 total; test_contacts.py: +9 tests → 79 total; test_events.py: +3 tests → 14 total; 188 tests pass across three files
 
+- [2026-07-02] Phase 13e: Deal scoring leaderboard — GET /workspaces/{id}/deals/leaderboard?limit=10 (open deals ranked by ml_win_probability × value; trend derived from stage_changed_at recency + health_score; returns rank/title/company/stage/value/ml_win_probability/score/trend/health_score); amber Medal leaderboard table on /reports page (gold/silver/bronze rank colors, stage badge, value, win%, score in M, ArrowUp/Down/Minus trend icon); getDealLeaderboard() in api-client with 5-deal demo stub; 2 new tests; 488 tests pass (up from 486)
+
 ## Current Phase
 Phase 13 — Advanced Analytics & Intelligence
 
 ## Next Task
-Phase 13e: Deal scoring leaderboard — GET /workspaces/{id}/deals/leaderboard endpoint (top N deals by composite score: ml_win_probability × value, with rank, trend vs prior week); leaderboard table widget on /reports page (rank badge, value, probability, score column); getDealLeaderboard() in api-client with demo stub; 2 new tests.
+Phase 13f: Contact engagement leaderboard — GET /workspaces/{id}/contacts/engagement-leaderboard?limit=10 (ranks contacts by composite engagement: message_count×2 + note_count×3 + task_completion_rate×20 over last 90 days; returns contact_id/name/email/company/rank/score/message_count/note_count/task_completion_rate); table widget on /reports page (similar style to deal leaderboard but with engagement metrics); getContactEngagementLeaderboard() in api-client with demo stub; 2 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.

@@ -1160,6 +1160,68 @@ async def deals_velocity_trends(
     return out
 
 
+@router.get("/workspaces/{workspace_id}/deals/leaderboard")
+async def deal_leaderboard(
+    workspace_id: uuid.UUID,
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Top open deals ranked by composite score (ml_win_probability × value).
+
+    Trend is derived from recent stage activity:
+      'up'      — stage changed within the last 7 days
+      'down'    — health_score < 50 or stage unchanged for 30+ days
+      'neutral' — otherwise
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = list(result.scalars().all())
+
+    now = datetime.now(timezone.utc)
+
+    def _score(d) -> float:
+        return float(d.value or 0) * float(d.ml_win_probability or 0)
+
+    def _trend(d) -> str:
+        changed = d.stage_changed_at or d.created_at
+        if changed:
+            if changed.tzinfo is None:
+                changed = changed.replace(tzinfo=timezone.utc)
+            days_since = (now - changed).days
+            if days_since <= 7:
+                return "up"
+            if days_since >= 30 or (d.health_score is not None and d.health_score < 50):
+                return "down"
+        return "neutral"
+
+    ranked = sorted(deals, key=_score, reverse=True)[:limit]
+
+    rows: list[dict] = []
+    for rank, deal in enumerate(ranked, start=1):
+        rows.append({
+            "rank": rank,
+            "id": str(deal.id),
+            "title": deal.title,
+            "company": deal.company,
+            "stage": deal.stage,
+            "value": float(deal.value or 0),
+            "ml_win_probability": deal.ml_win_probability,
+            "score": round(_score(deal)),
+            "trend": _trend(deal),
+            "health_score": deal.health_score,
+        })
+
+    return rows
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,

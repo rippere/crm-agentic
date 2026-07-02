@@ -1737,4 +1737,32 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/activity/trends?weeks=${weeks}`, {}, token)
   },
+
+  getDealLeaderboard: (
+    workspaceId: string,
+    token: string,
+    limit = 10,
+  ): Promise<Array<{
+    rank: number;
+    id: string;
+    title: string | null;
+    company: string | null;
+    stage: string;
+    value: number;
+    ml_win_probability: number;
+    score: number;
+    trend: "up" | "neutral" | "down";
+    health_score: number;
+  }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { rank: 1, id: "d-001", title: "Global Expansion Deal", company: "Acme Corp", stage: "negotiation", value: 250000, ml_win_probability: 82, score: 20500000, trend: "up", health_score: 91 },
+        { rank: 2, id: "d-002", title: "Platform Upgrade", company: "TechFlow Inc", stage: "proposal", value: 180000, ml_win_probability: 71, score: 12780000, trend: "neutral", health_score: 76 },
+        { rank: 3, id: "d-003", title: "Enterprise License", company: "Globex Ltd", stage: "qualified", value: 120000, ml_win_probability: 58, score: 6960000, trend: "up", health_score: 83 },
+        { rank: 4, id: "d-004", title: "SMB Bundle", company: "Initech", stage: "discovery", value: 45000, ml_win_probability: 40, score: 1800000, trend: "down", health_score: 42 },
+        { rank: 5, id: "d-005", title: "Consulting Retainer", company: "Umbrella Corp", stage: "qualified", value: 30000, ml_win_probability: 35, score: 1050000, trend: "neutral", health_score: 67 },
+      ].slice(0, limit))
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/leaderboard?limit=${limit}`, {}, token)
+  },
 }
