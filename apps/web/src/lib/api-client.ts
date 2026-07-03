@@ -1765,4 +1765,31 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/leaderboard?limit=${limit}`, {}, token)
   },
+
+  getContactEngagementLeaderboard: (
+    workspaceId: string,
+    token: string,
+    limit = 10,
+  ): Promise<Array<{
+    rank: number;
+    contact_id: string;
+    name: string | null;
+    email: string | null;
+    company: string | null;
+    score: number;
+    message_count: number;
+    note_count: number;
+    task_completion_rate: number;
+  }>> => {
+    if (isDemoMode) {
+      return Promise.resolve([
+        { rank: 1, contact_id: "c-001", name: "Sarah Chen",    email: "sarah@techcorp.io",   company: "TechCorp Solutions", score: 28.0, message_count: 8, note_count: 4, task_completion_rate: 0.8 },
+        { rank: 2, contact_id: "c-003", name: "Marcus Lee",    email: "marcus@cloudtek.ai",  company: "CloudTek AI",        score: 19.0, message_count: 5, note_count: 3, task_completion_rate: 0.5 },
+        { rank: 3, contact_id: "c-002", name: "Jordan Patel",  email: "jordan@acmecorp.com", company: "Acme Corp",          score: 12.0, message_count: 3, note_count: 2, task_completion_rate: 0.4 },
+        { rank: 4, contact_id: "c-004", name: "Aisha Williams",email: "aisha@nexaflow.io",   company: "NexaFlow",           score: 6.0,  message_count: 2, note_count: 0, task_completion_rate: 0.5 },
+        { rank: 5, contact_id: "c-005", name: "Leo Kim",       email: "leo@omnicorp.co",     company: "OmniCorp",           score: 4.0,  message_count: 2, note_count: 0, task_completion_rate: 0.0 },
+      ].slice(0, limit))
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/engagement-leaderboard?limit=${limit}`, {}, token)
+  },
 }

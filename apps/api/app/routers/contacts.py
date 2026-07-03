@@ -683,6 +683,103 @@ async def contacts_reengagement_summary(
     return [{"week_start": ws.isoformat(), "reengagement_count": week_counts[ws.isoformat()]} for ws in week_starts]
 
 
+@router.get("/workspaces/{workspace_id}/contacts/engagement-leaderboard")
+async def contact_engagement_leaderboard(
+    workspace_id: uuid.UUID,
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Rank contacts by composite engagement score (last 90 days).
+
+    Score = message_count × 2 + note_count × 3 + task_completion_rate × 20.
+    NOTE: registered before /{contact_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from datetime import timezone
+    from app.models.message import Message
+    from app.models.task import Task
+
+    cutoff = datetime.utcnow() - timedelta(days=90)
+
+    contacts_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id)
+    )
+    contacts = contacts_result.scalars().all()
+    if not contacts:
+        return []
+
+    contact_ids = [c.id for c in contacts]
+
+    msg_result = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id.in_(contact_ids),
+            Message.received_at >= cutoff,
+        )
+    )
+    msg_counts: dict[str, int] = {}
+    for m in msg_result.scalars().all():
+        cid = str(m.contact_id)
+        msg_counts[cid] = msg_counts.get(cid, 0) + 1
+
+    note_result = await db.execute(
+        select(ContactNote).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id.in_(contact_ids),
+            ContactNote.created_at >= cutoff,
+        )
+    )
+    note_counts: dict[str, int] = {}
+    for n in note_result.scalars().all():
+        cid = str(n.contact_id)
+        note_counts[cid] = note_counts.get(cid, 0) + 1
+
+    task_result = await db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id.in_(contact_ids),
+            Task.created_at >= cutoff,
+        )
+    )
+    task_totals: dict[str, int] = {}
+    task_done_map: dict[str, int] = {}
+    for t in task_result.scalars().all():
+        cid = str(t.contact_id)
+        task_totals[cid] = task_totals.get(cid, 0) + 1
+        if t.status == "done":
+            task_done_map[cid] = task_done_map.get(cid, 0) + 1
+
+    scored = []
+    for c in contacts:
+        cid = str(c.id)
+        msgs = msg_counts.get(cid, 0)
+        notes = note_counts.get(cid, 0)
+        total_tasks = task_totals.get(cid, 0)
+        done_tasks = task_done_map.get(cid, 0)
+        completion_rate = round(done_tasks / total_tasks, 2) if total_tasks > 0 else 0.0
+        score = msgs * 2 + notes * 3 + completion_rate * 20
+        scored.append({
+            "contact_id": cid,
+            "name": c.name,
+            "email": c.email,
+            "company": c.company,
+            "score": round(score, 2),
+            "message_count": msgs,
+            "note_count": notes,
+            "task_completion_rate": completion_rate,
+        })
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    top = scored[:limit]
+    for i, row in enumerate(top):
+        row["rank"] = i + 1
+
+    return top
+
+
 @router.get("/workspaces/{workspace_id}/contacts/{contact_id}", response_model=ContactResponse)
 async def get_contact(
     workspace_id: uuid.UUID,

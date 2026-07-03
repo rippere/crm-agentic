@@ -1515,3 +1515,72 @@ async def test_last_touch_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong}/contacts/{uuid.uuid4()}/last-touch")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/engagement-leaderboard — Phase 13f
+# ---------------------------------------------------------------------------
+
+def _fake_message(workspace_id, contact_id):
+    m = MagicMock()
+    m.contact_id = contact_id
+    m.workspace_id = workspace_id
+    return m
+
+def _fake_note(workspace_id, contact_id):
+    n = MagicMock()
+    n.contact_id = contact_id
+    n.workspace_id = workspace_id
+    return n
+
+def _fake_task(workspace_id, contact_id, status="open"):
+    t = MagicMock()
+    t.contact_id = contact_id
+    t.workspace_id = workspace_id
+    t.status = status
+    return t
+
+
+@pytest.mark.asyncio
+async def test_contact_engagement_leaderboard_ranks_by_score(app_client):
+    """Contacts are ranked by composite score: msgs*2 + notes*3 + completion*20."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    c1 = _fake_contact(workspace_id, name="Alice")
+    c2 = _fake_contact(workspace_id, name="Bob")
+
+    # 3 messages + 1 note for Alice → score = 3*2 + 1*3 = 9
+    # 1 message + 0 notes for Bob  → score = 1*2 + 0*3 = 2
+    msgs = [_fake_message(workspace_id, c1.id)] * 3 + [_fake_message(workspace_id, c2.id)]
+    notes = [_fake_note(workspace_id, c1.id)]
+    tasks = []
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalars_result([c1, c2]),  # contacts
+        _make_scalars_result(msgs),       # messages
+        _make_scalars_result(notes),      # notes
+        _make_scalars_result(tasks),      # tasks
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/engagement-leaderboard")
+
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 2
+    assert rows[0]["name"] == "Alice"
+    assert rows[0]["rank"] == 1
+    assert rows[0]["score"] == 9.0
+    assert rows[1]["name"] == "Bob"
+    assert rows[1]["rank"] == 2
+    assert rows[1]["score"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_contact_engagement_leaderboard_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's engagement leaderboard."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong}/contacts/engagement-leaderboard")
+    assert resp.status_code == 403

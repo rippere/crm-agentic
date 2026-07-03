@@ -74,6 +74,7 @@ export default function ReportsPage() {
   const [pipelineContribution, setPipelineContribution] = useState<{ contact_id: string; name: string; email: string | null; company: string; pipeline_value: number; closed_won_value: number; deal_count: number; win_rate: number }[]>([]);
   const [revenueCohort, setRevenueCohort] = useState<{ cohort_month: string; initial_revenue: number; months: { month_offset: number; revenue: number; deal_count: number; pct_of_initial: number | null }[] }[]>([]);
   const [leaderboard, setLeaderboard] = useState<Array<{ rank: number; id: string; title: string | null; company: string | null; stage: string; value: number; ml_win_probability: number; score: number; trend: "up" | "neutral" | "down"; health_score: number }>>([]);
+  const [contactLeaderboard, setContactLeaderboard] = useState<Array<{ rank: number; contact_id: string; name: string | null; email: string | null; company: string | null; score: number; message_count: number; note_count: number; task_completion_rate: number }>>([]);
 
   useEffect(() => {
     const WS = DEMO_MODE ? "demo-workspace-1" : null;
@@ -100,6 +101,7 @@ export default function ReportsPage() {
       apiClient.getContactPipelineContribution(workspaceId, token).then(setPipelineContribution).catch(() => {});
       apiClient.getRevenueCohort(workspaceId, token).then(setRevenueCohort).catch(() => {});
       apiClient.getDealLeaderboard(workspaceId, token).then(setLeaderboard).catch(() => {});
+      apiClient.getContactEngagementLeaderboard(workspaceId, token).then(setContactLeaderboard).catch(() => {});
     };
 
     if (DEMO_MODE && WS && TK) {
@@ -1087,6 +1089,48 @@ export default function ReportsPage() {
             </tbody>
           </table>
           <p className="mt-3 text-[10px] text-zinc-600 font-mono">Score = value × win probability. Trend: ↑ active last 7d, ↓ stale or health &lt; 50.</p>
+        </Card>
+      )}
+
+      {/* Contact Engagement Leaderboard — Phase 13f */}
+      {contactLeaderboard.length > 0 && (
+        <Card>
+          <div className="flex items-center gap-2 mb-4">
+            <Users className="h-4 w-4 text-emerald-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Contact Engagement Leaderboard</h3>
+            <span className="ml-auto text-xs text-zinc-500">top contacts · last 90 days</span>
+          </div>
+          <table className="w-full text-xs font-mono">
+            <thead>
+              <tr>
+                <th className="text-left text-zinc-500 pb-2 font-normal w-8">#</th>
+                <th className="text-left text-zinc-500 pb-2 font-normal">Contact</th>
+                <th className="text-right text-zinc-500 pb-2 font-normal hidden sm:table-cell">Msgs</th>
+                <th className="text-right text-zinc-500 pb-2 font-normal hidden sm:table-cell">Notes</th>
+                <th className="text-right text-zinc-500 pb-2 font-normal">Tasks</th>
+                <th className="text-right text-zinc-500 pb-2 font-normal">Score</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contactLeaderboard.map((row) => {
+                const rankColor = row.rank === 1 ? "text-amber-400" : row.rank === 2 ? "text-zinc-300" : row.rank === 3 ? "text-amber-700" : "text-zinc-600";
+                return (
+                  <tr key={row.contact_id} className="border-t border-zinc-800/60">
+                    <td className={`py-2 pr-2 font-bold ${rankColor}`}>{row.rank}</td>
+                    <td className="py-2 pr-3">
+                      <p className="text-zinc-200 truncate max-w-[160px]">{row.name ?? "—"}</p>
+                      <p className="text-zinc-600 text-[10px]">{row.company ?? row.email ?? ""}</p>
+                    </td>
+                    <td className="py-2 pr-3 text-right text-zinc-400 hidden sm:table-cell">{row.message_count}</td>
+                    <td className="py-2 pr-3 text-right text-zinc-400 hidden sm:table-cell">{row.note_count}</td>
+                    <td className="py-2 pr-3 text-right text-zinc-400">{Math.round(row.task_completion_rate * 100)}%</td>
+                    <td className="py-2 text-right text-emerald-300 font-semibold">{row.score.toFixed(1)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="mt-3 text-[10px] text-zinc-600 font-mono">Score = messages × 2 + notes × 3 + task completion rate × 20 (last 90 days)</p>
         </Card>
       )}
 
