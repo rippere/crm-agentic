@@ -82,12 +82,13 @@
   - test_deals.py: +20 tests → 95 total; test_contacts.py: +9 tests → 79 total; test_events.py: +3 tests → 14 total; 188 tests pass across three files
 
 - [2026-07-02] Phase 13e: Deal scoring leaderboard — GET /workspaces/{id}/deals/leaderboard?limit=10 (open deals ranked by ml_win_probability × value; trend derived from stage_changed_at recency + health_score; returns rank/title/company/stage/value/ml_win_probability/score/trend/health_score); amber Medal leaderboard table on /reports page (gold/silver/bronze rank colors, stage badge, value, win%, score in M, ArrowUp/Down/Minus trend icon); getDealLeaderboard() in api-client with 5-deal demo stub; 2 new tests; 488 tests pass (up from 486)
+- [2026-07-03] Phase 13f: Contact engagement leaderboard — GET /workspaces/{id}/contacts/engagement-leaderboard?limit=10 (ranks all contacts in workspace by message_count×2 + note_count×3 + task_completion_rate×20 over last 90 days; 4 queries: contacts + messages + notes + tasks; grouped in Python); emerald Users-icon table widget on /reports page (rank colors gold/silver/bronze, name/company, msg count, note count, task%, score columns); getContactEngagementLeaderboard() in api-client with 5-contact demo stub; 2 new tests (ranks-by-score math, 403 guard); 490 tests pass
 
 ## Current Phase
 Phase 13 — Advanced Analytics & Intelligence
 
 ## Next Task
-Phase 13f: Contact engagement leaderboard — GET /workspaces/{id}/contacts/engagement-leaderboard?limit=10 (ranks contacts by composite engagement: message_count×2 + note_count×3 + task_completion_rate×20 over last 90 days; returns contact_id/name/email/company/rank/score/message_count/note_count/task_completion_rate); table widget on /reports page (similar style to deal leaderboard but with engagement metrics); getContactEngagementLeaderboard() in api-client with demo stub; 2 new tests.
+Phase 13g: Agent performance comparison — GET /workspaces/{id}/agents/performance (for each agent name, return total_runs, success_rate, avg_tokens_used if available, last_run_at from activity_events); table or grouped bar chart on /reports page showing agents side by side; getAgentPerformance() in api-client with demo stub; 2 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
