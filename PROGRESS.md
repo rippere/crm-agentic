@@ -92,8 +92,10 @@ Phase 12 — Analytics & Reporting
 - [2026-06-30] Phase 13c: Revenue cohort analysis — GET /workspaces/{id}/deals/revenue-cohort?cohort_months=6&lookforward_months=6 endpoint (groups closed-won deals by contact acquisition cohort = month of contact's first closed-won deal; subsequent deals from same contact counted as expansion revenue; returns matrix of {cohort_month, initial_revenue, months:[{month_offset, revenue, deal_count, pct_of_initial}]}); indigo heatmap table card on /reports page (green cell intensity = % of initial revenue, future months show "—"); getRevenueCohort() in api-client with deterministic decaying-retention demo stub (100%→38%→22%→15%→9%→4%); 3 new tests (contact-cohort-attribution, empty-workspace-zero-fill, 403 guard); 485 tests pass (96 deals tests)
 - [2026-06-30] Push workflow: master branch is protected; using feat/phase-NNN branches + PR merge via mcp__github__ tools instead of direct git push
 
+- [2026-07-04] Phase 13d: Deal velocity trends — GET /workspaces/{id}/deals/velocity-trends?months=6 (groups closed deals by close month, avg cycle time creation→stage_changed_at, won/lost breakdown); indigo LineChart on /reports with dashed avg reference line + MoM delta badge (↓ emerald improving, ↑ rose slowing); getDealVelocityTrends() in api-client with 72→44d demo stub; 2 new tests (monthly bucketing + avg math, 403); 472 tests total; PR #23 merged
+
 ## Next Task
-Phase 13d: Deal velocity trends — track how average deal cycle time (days from creation to close) has changed month-over-month for the last 6 months, broken down by deal stage entry-to-close. Show a line chart on /reports with trend line per stage or overall velocity trend.
+Phase 13e: Contact response time analysis — GET /workspaces/{id}/contacts/{id}/response-time endpoint (for each inbound message from contact, find next outbound message reply, compute hours between; return avg_response_hours, p50, p90, message_pairs_count, trend over last 30 days); compact metric card on /contacts/[id] sidebar below Last Touch; getContactResponseTime() in api-client with demo stub.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
