@@ -1630,6 +1630,40 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/activity/trends?weeks=${weeks}`, {}, token)
   },
 
+  getDealVelocityTrends: (workspaceId: string, token: string, months = 6): Promise<Array<{
+    month: string;
+    avg_cycle_days: number | null;
+    deal_count: number;
+    closed_won: number;
+    closed_lost: number;
+  }>> => {
+    if (isDemoMode) {
+      const now = new Date()
+      const result = []
+      // Deterministic seeded demo: avg cycle time trending downward (improving) over 6 months
+      const baseDays = [72, 65, 58, 54, 49, 44]
+      const wonCounts = [2, 3, 2, 4, 3, 5]
+      const lostCounts = [1, 1, 2, 1, 2, 1]
+      for (let i = months - 1; i >= 0; i--) {
+        let m = now.getMonth() + 1 - i
+        let y = now.getFullYear()
+        while (m <= 0) { m += 12; y -= 1 }
+        const idx = months - 1 - i
+        const won = wonCounts[idx % wonCounts.length]
+        const lost = lostCounts[idx % lostCounts.length]
+        result.push({
+          month: `${y}-${String(m).padStart(2, '0')}`,
+          avg_cycle_days: baseDays[idx % baseDays.length],
+          deal_count: won + lost,
+          closed_won: won,
+          closed_lost: lost,
+        })
+      }
+      return Promise.resolve(result)
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/velocity-trends?months=${months}`, {}, token)
+  },
+
   getContactReengagementSummary: (workspaceId: string, token: string, weeks = 12): Promise<Array<{ week_start: string; reengaged: number }>> => {
     if (isDemoMode) {
       const now = new Date()

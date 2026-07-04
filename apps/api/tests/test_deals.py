@@ -1875,3 +1875,59 @@ async def test_revenue_cohort_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/revenue-cohort")
     assert resp.status_code == 403
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/velocity-trends — Phase 13d
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_velocity_trends_returns_monthly_cycle_times(app_client):
+    """Closed deals are bucketed by close month with avg cycle-time computed."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Two closed_won deals closing in the same month, each with known cycle time
+    now = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+    d1 = _fake_deal(
+        workspace_id,
+        stage="closed_won",
+        created_at=now - timedelta(days=40),
+        stage_changed_at=now - timedelta(days=10),  # cycle = 30d
+    )
+    d2 = _fake_deal(
+        workspace_id,
+        stage="closed_lost",
+        created_at=now - timedelta(days=60),
+        stage_changed_at=now - timedelta(days=5),   # cycle = 55d
+    )
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([d1, d2]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/deals/velocity-trends",
+            params={"months": 3},
+        )
+
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 3
+
+    # The current month row should include both deals
+    current_month = "2026-07"
+    cur = next((r for r in rows if r["month"] == current_month), None)
+    assert cur is not None
+    assert cur["deal_count"] == 2
+    assert cur["closed_won"] == 1
+    assert cur["closed_lost"] == 1
+    # avg of 30d + 55d = 42.5d
+    assert cur["avg_cycle_days"] == 42.5
+
+
+@pytest.mark.asyncio
+async def test_velocity_trends_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's velocity trends."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/velocity-trends")
+    assert resp.status_code == 403
