@@ -1139,6 +1139,90 @@ async def deal_revenue_cohort(
     return rows
 
 
+@router.get("/workspaces/{workspace_id}/deals/velocity-trends")
+async def deal_velocity_trends(
+    workspace_id: uuid.UUID,
+    months: int = Query(default=6, ge=1, le=24),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Month-over-month average deal cycle time (creation → close) for the last N months.
+
+    Returns one row per calendar month with avg_cycle_days, deal_count, closed_won,
+    closed_lost. Only closed deals (closed_won or closed_lost) with a valid
+    stage_changed_at are counted.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.now(timezone.utc)
+
+    # Build ordered list of (year, month) tuples — oldest-first
+    month_keys: list[tuple[int, int]] = []
+    for i in range(months - 1, -1, -1):
+        m = now.month - i
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        month_keys.append((y, m))
+    month_set = set(month_keys)
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at.isnot(None),
+        )
+    )
+    closed_deals = list(result.scalars().all())
+
+    # Accumulate per-month cycle days and won/lost counts
+    month_data: dict[tuple[int, int], dict] = {
+        ym: {"cycle_days": [], "closed_won": 0, "closed_lost": 0}
+        for ym in month_keys
+    }
+
+    for deal in closed_deals:
+        closed_at = deal.stage_changed_at
+        if closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=timezone.utc)
+        ym = (closed_at.year, closed_at.month)
+        if ym not in month_set:
+            continue
+
+        created = deal.created_at
+        if created and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+
+        if created:
+            cycle = max(0.0, (closed_at - created).total_seconds() / 86400)
+            month_data[ym]["cycle_days"].append(cycle)
+
+        if deal.stage == "closed_won":
+            month_data[ym]["closed_won"] += 1
+        else:
+            month_data[ym]["closed_lost"] += 1
+
+    rows: list[dict] = []
+    for ym in month_keys:
+        y, m = ym
+        data = month_data[ym]
+        days_list = data["cycle_days"]
+        avg = round(sum(days_list) / len(days_list), 1) if days_list else None
+        rows.append({
+            "month": f"{y}-{m:02d}",
+            "avg_cycle_days": avg,
+            "deal_count": len(days_list),
+            "closed_won": data["closed_won"],
+            "closed_lost": data["closed_lost"],
+        })
+
+    return rows
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,

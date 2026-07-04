@@ -9,11 +9,11 @@ import { cn, formatCurrency, stageConfig, dealStageOrder } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import {
-  BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
+  BarChart, Bar, LineChart, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
 } from "recharts";
 import {
-  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -82,6 +82,13 @@ export default function ReportsPage() {
     initial_revenue: number;
     months: Array<{ month_offset: number; revenue: number; deal_count: number; pct_of_initial: number | null }>;
   }>>([]);
+  const [velocityTrends, setVelocityTrends] = useState<Array<{
+    month: string;
+    avg_cycle_days: number | null;
+    deal_count: number;
+    closed_won: number;
+    closed_lost: number;
+  }>>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -105,6 +112,7 @@ export default function ReportsPage() {
       apiClient.getActivityTrends("demo-workspace-1", "demo-token").then(setActivityTrends).catch(() => {});
       apiClient.getContactReengagementSummary("demo-workspace-1", "demo-token").then(setReengagementSummary).catch(() => {});
       apiClient.getRevenueCohort("demo-workspace-1", "demo-token").then(setRevenueCohort).catch(() => {});
+      apiClient.getDealVelocityTrends("demo-workspace-1", "demo-token").then(setVelocityTrends).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -132,6 +140,7 @@ export default function ReportsPage() {
       apiClient.getActivityTrends(workspaceId, session.access_token).then(setActivityTrends).catch(() => {});
       apiClient.getContactReengagementSummary(workspaceId, session.access_token).then(setReengagementSummary).catch(() => {});
       apiClient.getRevenueCohort(workspaceId, session.access_token).then(setRevenueCohort).catch(() => {});
+      apiClient.getDealVelocityTrends(workspaceId, session.access_token).then(setVelocityTrends).catch(() => {});
     });
   }, []);
 
@@ -1169,6 +1178,86 @@ export default function ReportsPage() {
           </p>
         </Card>
       )}
+
+      {/* Deal Velocity Trends — Phase 13d */}
+      {velocityTrends.length > 0 && velocityTrends.some((r) => r.avg_cycle_days !== null) && (() => {
+        const first = velocityTrends.find((r) => r.avg_cycle_days !== null)?.avg_cycle_days ?? null;
+        const last  = [...velocityTrends].reverse().find((r) => r.avg_cycle_days !== null)?.avg_cycle_days ?? null;
+        const delta = first !== null && last !== null ? Math.round(last - first) : null;
+        const improved = delta !== null && delta < 0;
+        return (
+          <Card>
+            <div className="flex items-center gap-2 mb-4">
+              {improved
+                ? <TrendingDown className="h-4 w-4 text-emerald-400" />
+                : <TrendingUp className="h-4 w-4 text-indigo-400" />}
+              <h3 className="text-sm font-semibold text-zinc-200">Deal Velocity Trends</h3>
+              <span className="ml-auto text-xs text-zinc-500">avg days to close · last {velocityTrends.length} months</span>
+              {delta !== null && (
+                <span className={`text-xs font-mono font-bold ${improved ? "text-emerald-400" : "text-rose-400"}`}>
+                  {improved ? "↓" : "↑"} {Math.abs(delta)}d MoM
+                </span>
+              )}
+            </div>
+            <ResponsiveContainer width="100%" height={180}>
+              <LineChart data={velocityTrends} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+                <XAxis
+                  dataKey="month"
+                  tick={{ fill: "#71717a", fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: string) => v.slice(5)}
+                />
+                <YAxis
+                  tick={{ fill: "#71717a", fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: number) => `${v}d`}
+                />
+                <Tooltip
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null;
+                    const p = payload[0];
+                    const row = velocityTrends.find((r) => r.month === label);
+                    return (
+                      <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                        <p className="font-mono text-zinc-400 mb-1">{label}</p>
+                        {p.value !== null
+                          ? <p className="text-indigo-300 font-mono font-bold">{p.value}d avg cycle</p>
+                          : <p className="text-zinc-600">No closed deals</p>}
+                        {row && (
+                          <>
+                            <p className="text-emerald-400 mt-1">{row.closed_won} won</p>
+                            <p className="text-rose-400">{row.closed_lost} lost</p>
+                          </>
+                        )}
+                      </div>
+                    );
+                  }}
+                />
+                <ReferenceLine
+                  y={velocityTrends.filter((r) => r.avg_cycle_days !== null).reduce((s, r) => s + (r.avg_cycle_days ?? 0), 0) / Math.max(1, velocityTrends.filter((r) => r.avg_cycle_days !== null).length)}
+                  stroke="#52525b"
+                  strokeDasharray="4 4"
+                  label={{ value: "avg", position: "right", fill: "#52525b", fontSize: 9 }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="avg_cycle_days"
+                  name="Avg cycle days"
+                  stroke="#6366f1"
+                  strokeWidth={2}
+                  dot={{ fill: "#6366f1", r: 3, strokeWidth: 0 }}
+                  activeDot={{ r: 5, fill: "#818cf8" }}
+                  connectNulls={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+            <p className="mt-2 text-[10px] text-zinc-600 font-mono">Days from deal creation to closed_won / closed_lost, averaged per calendar month</p>
+          </Card>
+        );
+      })()}
 
       {/* Stale alert */}
       {stats.stale > 0 && (
