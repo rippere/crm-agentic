@@ -103,6 +103,14 @@ type DealSummary = {
   total_deals: number;
 };
 
+type ResponseTime = {
+  avg_response_hours: number | null;
+  p50_response_hours: number | null;
+  p90_response_hours: number | null;
+  message_pairs_count: number;
+  trend_30d: number | null;
+};
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatusDot({ status }: { status: string }) {
@@ -339,6 +347,7 @@ export default function ContactDetailPage() {
   const [engagementScore, setEngagementScore] = useState<EngagementScore | null>(null);
   const [engagementLoading, setEngagementLoading] = useState(false);
   const [dealSummary, setDealSummary] = useState<DealSummary | null>(null);
+  const [responseTime, setResponseTime] = useState<ResponseTime | null>(null);
 
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -471,6 +480,11 @@ export default function ContactDetailPage() {
       .getContactDealSummary(workspaceId, contactId, token)
       .then((data: DealSummary) => setDealSummary(data))
       .catch(() => setDealSummary(null));
+
+    apiClient
+      .getContactResponseTime(workspaceId, contactId, token)
+      .then((data: ResponseTime) => setResponseTime(data))
+      .catch(() => setResponseTime(null));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -905,6 +919,53 @@ export default function ContactDetailPage() {
                 <p className="text-[10px] text-zinc-600">{dealSummary.total_deals} deal{dealSummary.total_deals !== 1 ? "s" : ""} total</p>
                 <p className="text-[10px] text-zinc-600">{dealSummary.open_deal_count} open</p>
               </div>
+            </Card>
+          )}
+
+          {/* Response Time */}
+          {responseTime !== null && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-indigo-400" />
+                <p className="text-xs font-semibold text-zinc-300">Response Time</p>
+                {responseTime.message_pairs_count > 0 && (
+                  <span className="ml-auto text-[10px] text-zinc-500">{responseTime.message_pairs_count} pairs</span>
+                )}
+              </div>
+
+              {responseTime.message_pairs_count === 0 ? (
+                <p className="text-xs text-zinc-600 italic py-1">No message pairs to analyze yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {[
+                    { label: "Avg", value: responseTime.avg_response_hours },
+                    { label: "Median", value: responseTime.p50_response_hours },
+                    { label: "P90", value: responseTime.p90_response_hours },
+                  ].map(({ label, value }) => {
+                    const hrs = value ?? 0;
+                    const display = hrs < 1 ? `${Math.round(hrs * 60)}m` : hrs < 24 ? `${hrs}h` : `${(hrs / 24).toFixed(1)}d`;
+                    const color = hrs <= 4 ? "text-emerald-400" : hrs <= 24 ? "text-amber-400" : "text-rose-400";
+                    return (
+                      <div key={label} className="flex items-center justify-between">
+                        <span className="text-[11px] text-zinc-500">{label}</span>
+                        <span className={cn("text-sm font-mono font-semibold", color)}>{display}</span>
+                      </div>
+                    );
+                  })}
+                  {responseTime.trend_30d !== null && (
+                    <div className="border-t border-zinc-800 pt-2 flex items-center justify-between">
+                      <span className="text-[10px] text-zinc-600">30-day avg</span>
+                      <span className="text-[11px] font-mono text-zinc-400">
+                        {responseTime.trend_30d < 1
+                          ? `${Math.round(responseTime.trend_30d * 60)}m`
+                          : responseTime.trend_30d < 24
+                          ? `${responseTime.trend_30d}h`
+                          : `${(responseTime.trend_30d / 24).toFixed(1)}d`}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
             </Card>
           )}
         </div>

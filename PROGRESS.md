@@ -94,8 +94,10 @@ Phase 12 — Analytics & Reporting
 
 - [2026-07-04] Phase 13d: Deal velocity trends — GET /workspaces/{id}/deals/velocity-trends?months=6 (groups closed deals by close month, avg cycle time creation→stage_changed_at, won/lost breakdown); indigo LineChart on /reports with dashed avg reference line + MoM delta badge (↓ emerald improving, ↑ rose slowing); getDealVelocityTrends() in api-client with 72→44d demo stub; 2 new tests (monthly bucketing + avg math, 403); 472 tests total; PR #23 merged
 
+- [2026-07-05] Phase 13e: Contact response time analysis — GET /workspaces/{id}/contacts/{id}/response-time endpoint (pairs each inbound message by contact email with next outbound reply, returns avg/p50/p90 response hours + 30d trend); Response Time Card on /contacts/[id] sidebar with color-coded rows (emerald ≤4h, amber ≤24h, rose >24h) and 30-day trend footer; getContactResponseTime() in api-client with 3-contact demo stubs; 2 new tests (math verification + 404); PR #24 merged
+
 ## Next Task
-Phase 13e: Contact response time analysis — GET /workspaces/{id}/contacts/{id}/response-time endpoint (for each inbound message from contact, find next outbound message reply, compute hours between; return avg_response_hours, p50, p90, message_pairs_count, trend over last 30 days); compact metric card on /contacts/[id] sidebar below Last Touch; getContactResponseTime() in api-client with demo stub.
+Phase 13f: Deal response lag heatmap — GET /workspaces/{id}/deals/{id}/response-lag endpoint (for each message linked to the deal's contact, find next outbound reply, bucket by day of week + hour of day into a 7×24 grid showing avg response lag; helps identify when deals go quiet); compact heatmap card on /pipeline/[id] detail page; getDealResponseLag() in api-client with demo stub.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.

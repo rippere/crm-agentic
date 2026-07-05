@@ -1585,3 +1585,63 @@ async def test_reengagement_summary_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/reengagement-summary")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/response-time — Phase 13e
+# ---------------------------------------------------------------------------
+
+
+def _make_all_result(rows):
+    """Mock for execute().all() returning a list of tuples (column-level select)."""
+    r = MagicMock()
+    r.all.return_value = rows
+    return r
+
+
+@pytest.mark.asyncio
+async def test_response_time_computes_avg_p50_p90(app_client):
+    """Returns avg/p50/p90 response hours based on inbound→outbound message pairs."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id, email="alice@example.com")
+    contact_id = contact.id
+
+    now = datetime.utcnow()
+    # 3 inbound messages from contact, each followed by an outbound reply
+    # Reply times: 1h, 2h, 3h
+    messages = [
+        ("alice@example.com", now - timedelta(hours=10), now - timedelta(hours=10)),
+        ("rep@company.com",   now - timedelta(hours=9),  now - timedelta(hours=9)),
+        ("alice@example.com", now - timedelta(hours=6),  now - timedelta(hours=6)),
+        ("rep@company.com",   now - timedelta(hours=4),  now - timedelta(hours=4)),
+        ("alice@example.com", now - timedelta(hours=3),  now - timedelta(hours=3)),
+        ("rep@company.com",   now - timedelta(hours=0),  now - timedelta(hours=0)),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_all_result(messages),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact_id}/response-time")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["message_pairs_count"] == 3
+    assert data["avg_response_hours"] == pytest.approx(2.0, abs=0.2)
+    assert data["p50_response_hours"] is not None
+    assert data["p90_response_hours"] is not None
+
+
+@pytest.mark.asyncio
+async def test_response_time_contact_not_found_returns_404(app_client):
+    """Returns 404 when contact does not exist in the workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    missing_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{missing_id}/response-time")
+
+    assert resp.status_code == 404
