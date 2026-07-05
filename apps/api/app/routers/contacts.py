@@ -1748,3 +1748,87 @@ async def contact_last_touch(
         "most_recent_type": most_recent_type,
         "days_ago": days_ago,
     }
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/response-time")
+async def contact_response_time(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Compute average response time (hours) from inbound to outbound messages for a contact."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+
+    msg_result = await db.execute(
+        select(Message.sender_email, Message.received_at, Message.created_at)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.asc().nullslast())
+    )
+    messages = msg_result.all()
+
+    contact_email = (contact.email or "").lower().strip()
+
+    inbound: list[datetime] = []
+    outbound: list[datetime] = []
+    for sender_email, received_at, created_at in messages:
+        ts = received_at or created_at
+        if ts is None:
+            continue
+        sender = (sender_email or "").lower().strip()
+        if sender == contact_email:
+            inbound.append(ts.replace(tzinfo=None) if ts.tzinfo else ts)
+        else:
+            outbound.append(ts.replace(tzinfo=None) if ts.tzinfo else ts)
+
+    pairs: list[float] = []
+    now = datetime.utcnow()
+    cutoff_30d = now - timedelta(days=30)
+    pairs_recent: list[float] = []
+
+    out_idx = 0
+    for in_ts in inbound:
+        while out_idx < len(outbound) and outbound[out_idx] <= in_ts:
+            out_idx += 1
+        if out_idx < len(outbound):
+            hours = (outbound[out_idx] - in_ts).total_seconds() / 3600
+            pairs.append(hours)
+            if in_ts >= cutoff_30d:
+                pairs_recent.append(hours)
+
+    if not pairs:
+        return {
+            "avg_response_hours": None,
+            "p50_response_hours": None,
+            "p90_response_hours": None,
+            "message_pairs_count": 0,
+            "trend_30d": None,
+        }
+
+    pairs_sorted = sorted(pairs)
+    n = len(pairs_sorted)
+    avg = sum(pairs_sorted) / n
+    p50 = pairs_sorted[n // 2]
+    p90 = pairs_sorted[min(int(n * 0.9), n - 1)]
+
+    trend_30d: float | None = None
+    if pairs_recent:
+        trend_30d = round(sum(pairs_recent) / len(pairs_recent), 1)
+
+    return {
+        "avg_response_hours": round(avg, 1),
+        "p50_response_hours": round(p50, 1),
+        "p90_response_hours": round(p90, 1),
+        "message_pairs_count": n,
+        "trend_30d": trend_30d,
+    }

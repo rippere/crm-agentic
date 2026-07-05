@@ -1512,6 +1512,22 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/last-touch`, {}, token)
   },
 
+  getContactResponseTime: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{ avg_response_hours: number | null; p50_response_hours: number | null; p90_response_hours: number | null; message_pairs_count: number; trend_30d: number | null }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { avg_response_hours: number | null; p50_response_hours: number | null; p90_response_hours: number | null; message_pairs_count: number; trend_30d: number | null }> = {
+        'c-001': { avg_response_hours: 3.2,  p50_response_hours: 2.1,  p90_response_hours: 7.5,  message_pairs_count: 12, trend_30d: 2.8 },
+        'c-002': { avg_response_hours: 18.4, p50_response_hours: 14.0, p90_response_hours: 38.0, message_pairs_count: 5,  trend_30d: 20.1 },
+        'c-003': { avg_response_hours: null,  p50_response_hours: null,  p90_response_hours: null,  message_pairs_count: 0,  trend_30d: null },
+      }
+      return Promise.resolve(stubs[contactId] ?? { avg_response_hours: null, p50_response_hours: null, p90_response_hours: null, message_pairs_count: 0, trend_30d: null })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/response-time`, {}, token)
+  },
+
   getDealRevenueForecast: (workspaceId: string, token: string): Promise<Array<{ month: string; expected_revenue: number; deal_count: number; total_value: number }>> => {
     if (isDemoMode) {
       return Promise.resolve([
