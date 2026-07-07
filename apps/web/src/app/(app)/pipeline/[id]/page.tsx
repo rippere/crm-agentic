@@ -306,6 +306,9 @@ export default function DealDetailPage() {
   const [stageHistory, setStageHistory] = useState<StageHistoryEntry[]>([]);
   const [stageHistoryLoading, setStageHistoryLoading] = useState(false);
 
+  const [responseLag, setResponseLag] = useState<{ cells: { dow: number; hour: number; avg_lag_hours: number; count: number }[]; max_lag_hours: number } | null>(null);
+  const [responseLagLoading, setResponseLagLoading] = useState(false);
+
   const [competitors, setCompetitors] = useState<string[]>([]);
   const [competitorsLoading, setCompetitorsLoading] = useState(false);
   const [competitorInput, setCompetitorInput] = useState("");
@@ -408,6 +411,13 @@ export default function DealDetailPage() {
       .then((data) => setStageHistory(Array.isArray(data) ? (data as StageHistoryEntry[]) : []))
       .catch(() => setStageHistory([]))
       .finally(() => setStageHistoryLoading(false));
+
+    setResponseLagLoading(true);
+    apiClient
+      .getDealResponseLag(workspaceId, dealId, token)
+      .then((data) => setResponseLag(data ?? null))
+      .catch(() => setResponseLag(null))
+      .finally(() => setResponseLagLoading(false));
 
     setCompetitorsLoading(true);
     apiClient
@@ -1156,6 +1166,79 @@ export default function DealDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* Response Lag Heatmap — 7×24 grid by day-of-week × hour */}
+          {(() => {
+            const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+            const HOUR_LABELS = ["12a", "3a", "6a", "9a", "12p", "3p", "6p", "9p"];
+
+            const cellMap = new Map<string, { avg_lag_hours: number; count: number }>();
+            (responseLag?.cells ?? []).forEach((c) => cellMap.set(`${c.dow}-${c.hour}`, c));
+            const maxLag = responseLag?.max_lag_hours ?? 1;
+
+            function lagColor(avgLag: number): string {
+              if (avgLag <= 2) return "bg-emerald-700";
+              if (avgLag <= 8) return "bg-amber-600";
+              if (avgLag <= 24) return "bg-rose-700";
+              return "bg-rose-500";
+            }
+
+            return (
+              <Card className="p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-indigo-400" />
+                  <p className="text-sm font-semibold text-zinc-200">Response Lag</p>
+                  <span className="ml-auto text-[10px] font-mono text-zinc-500">Day × Hour</span>
+                </div>
+                {responseLagLoading ? (
+                  <div className="h-24 rounded-xl bg-zinc-800/50 animate-pulse" />
+                ) : !responseLag || responseLag.cells.length === 0 ? (
+                  <p className="text-xs text-zinc-500 text-center py-3">No message data for this contact.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {/* Hour axis labels */}
+                    <div className="flex ml-8">
+                      {HOUR_LABELS.map((l, i) => (
+                        <span key={i} className="flex-1 text-[9px] text-zinc-600 text-center"
+                          style={{ marginLeft: i === 0 ? 0 : undefined }}>{l}</span>
+                      ))}
+                    </div>
+                    {/* Grid rows */}
+                    {DAYS.map((day, dow) => (
+                      <div key={dow} className="flex items-center gap-1">
+                        <span className="w-7 text-[9px] text-zinc-500 text-right flex-shrink-0">{day}</span>
+                        <div className="flex flex-1 gap-px">
+                          {Array.from({ length: 24 }, (_, h) => {
+                            const cell = cellMap.get(`${dow}-${h}`);
+                            const bg = cell ? lagColor(cell.avg_lag_hours) : "bg-zinc-800";
+                            const tip = cell
+                              ? `${day} ${h}:00 — avg ${cell.avg_lag_hours}h (${cell.count} msg${cell.count !== 1 ? "s" : ""})`
+                              : `${day} ${h}:00 — no data`;
+                            return (
+                              <div
+                                key={h}
+                                title={tip}
+                                className={cn("flex-1 h-4 rounded-sm cursor-default transition-opacity hover:opacity-75", bg)}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                    {/* Legend */}
+                    <div className="flex items-center gap-2 pt-0.5">
+                      <span className="text-[9px] text-zinc-500">Fast</span>
+                      {(["bg-emerald-700", "bg-amber-600", "bg-rose-700", "bg-rose-500"] as const).map((c, i) => (
+                        <span key={i} className={cn("h-2.5 w-2.5 rounded-sm", c)} />
+                      ))}
+                      <span className="text-[9px] text-zinc-500">Slow</span>
+                      <span className="ml-auto text-[9px] text-zinc-600">Max {maxLag.toFixed(1)}h</span>
+                    </div>
+                  </div>
+                )}
+              </Card>
+            );
+          })()}
 
           {/* Stage History */}
           <Card className="p-4 space-y-3">

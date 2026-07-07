@@ -1742,4 +1742,32 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealResponseLag: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{ cells: { dow: number; hour: number; avg_lag_hours: number; count: number }[]; max_lag_hours: number }> => {
+    if (isDemo()) {
+      // Deterministic demo: seed by last char of dealId
+      const seed = dealId.charCodeAt(dealId.length - 1)
+      const cells: { dow: number; hour: number; avg_lag_hours: number; count: number }[] = []
+      // Populate business hours with realistic lags; weekends/nights get high lag
+      for (let dow = 0; dow < 7; dow++) {
+        for (let hour = 8; hour < 19; hour++) {
+          const isWeekend = dow >= 5
+          const isOffHours = hour < 9 || hour > 17
+          const base = isWeekend ? 18 : isOffHours ? 8 : 2
+          const jitter = ((seed + dow * 7 + hour) % 5) * 0.8
+          const avg = parseFloat((base + jitter).toFixed(2))
+          if ((dow + hour + seed) % 4 !== 0) { // ~75% coverage
+            cells.push({ dow, hour, avg_lag_hours: avg, count: Math.max(1, (seed + dow + hour) % 6) })
+          }
+        }
+      }
+      const max_lag_hours = cells.reduce((m, c) => Math.max(m, c.avg_lag_hours), 0)
+      return Promise.resolve({ cells, max_lag_hours })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/response-lag`, {}, token)
+  },
 }

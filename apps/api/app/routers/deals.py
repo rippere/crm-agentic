@@ -18,6 +18,7 @@ from app.models.user import User
 from app.models.deal import Deal
 from app.models.deal_note import DealNote
 from app.models.activity_event import ActivityEvent
+from app.models.message import Message
 
 router = APIRouter()
 
@@ -1839,5 +1840,74 @@ async def deal_stage_history(
             "days_in_stage": max(0, int((end_ts - ts).total_seconds() / 86400)),
             "is_current": is_last,
         })
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/response-lag")
+async def deal_response_lag_heatmap(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """7×24 avg-response-lag heatmap for messages linked to the deal's contact."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.contact_id is None:
+        return {"cells": [], "max_lag_hours": 0.0}
+
+    msgs_result = await db.execute(
+        select(Message)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == deal.contact_id,
+        )
+        .order_by(Message.received_at.asc())
+    )
+    msgs = msgs_result.scalars().all()
+
+    if len(msgs) < 2:
+        return {"cells": [], "max_lag_hours": 0.0}
+
+    def _tz(t: datetime | None) -> datetime | None:
+        if t is None:
+            return None
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+    from collections import defaultdict
+    bucket: dict[tuple[int, int], list[float]] = defaultdict(list)
+
+    for i in range(len(msgs) - 1):
+        t0 = _tz(msgs[i].received_at)
+        t1 = _tz(msgs[i + 1].received_at)
+        if t0 is None or t1 is None:
+            continue
+        lag_hours = (t1 - t0).total_seconds() / 3600
+        # Skip negative or outlier lags (> 1 week)
+        if lag_hours <= 0 or lag_hours > 168:
+            continue
+        bucket[(t0.weekday(), t0.hour)].append(lag_hours)
+
+    if not bucket:
+        return {"cells": [], "max_lag_hours": 0.0}
+
+    cells = [
+        {
+            "dow": dow,
+            "hour": hour,
+            "avg_lag_hours": round(sum(lags) / len(lags), 2),
+            "count": len(lags),
+        }
+        for (dow, hour), lags in bucket.items()
+    ]
+    max_lag = max(c["avg_lag_hours"] for c in cells)
+    return {"cells": cells, "max_lag_hours": round(max_lag, 2)}
 
     return history
