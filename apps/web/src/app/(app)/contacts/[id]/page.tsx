@@ -111,6 +111,12 @@ type ResponseTime = {
   trend_30d: number | null;
 };
 
+type SentimentWeek = {
+  week: string;
+  score: number;
+  message_count: number;
+};
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatusDot({ status }: { status: string }) {
@@ -348,6 +354,8 @@ export default function ContactDetailPage() {
   const [engagementLoading, setEngagementLoading] = useState(false);
   const [dealSummary, setDealSummary] = useState<DealSummary | null>(null);
   const [responseTime, setResponseTime] = useState<ResponseTime | null>(null);
+  const [sentimentTrend, setSentimentTrend] = useState<SentimentWeek[] | null>(null);
+  const [sentimentLoading, setSentimentLoading] = useState(false);
 
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -485,6 +493,13 @@ export default function ContactDetailPage() {
       .getContactResponseTime(workspaceId, contactId, token)
       .then((data: ResponseTime) => setResponseTime(data))
       .catch(() => setResponseTime(null));
+
+    setSentimentLoading(true);
+    apiClient
+      .getSentimentTrend(workspaceId, contactId, token)
+      .then((data) => setSentimentTrend(data?.weeks ?? null))
+      .catch(() => setSentimentTrend(null))
+      .finally(() => setSentimentLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1100,6 +1115,58 @@ export default function ContactDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* Sentiment Trend Sparkline */}
+          {(sentimentLoading || (sentimentTrend !== null && sentimentTrend.length > 0)) && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Sentiment Trend</p>
+                <span className="ml-auto text-[10px] font-mono text-zinc-500">12 weeks</span>
+              </div>
+              {sentimentLoading ? (
+                <div className="flex gap-1 items-end h-8">
+                  {Array.from({ length: 12 }).map((_, i) => (
+                    <div key={i} className="flex-1 rounded-sm bg-zinc-800 animate-pulse" style={{ height: "32px" }} />
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex gap-1 items-end h-10">
+                    {(sentimentTrend ?? []).map((w) => {
+                      const pct = Math.round(((w.score + 1) / 2) * 100);
+                      const color =
+                        w.score > 0.2
+                          ? "bg-emerald-600"
+                          : w.score < -0.2
+                          ? "bg-rose-600"
+                          : "bg-amber-500";
+                      return (
+                        <div
+                          key={w.week}
+                          title={`${w.week}: ${w.score > 0 ? "+" : ""}${w.score.toFixed(2)} (${w.message_count} msg)`}
+                          className={cn("flex-1 rounded-sm cursor-default transition-opacity hover:opacity-75", color)}
+                          style={{ height: `${Math.max(10, pct)}%` }}
+                        />
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[10px] text-zinc-600">{sentimentTrend?.[0]?.week ?? ""}</span>
+                    <span className="text-[10px] text-zinc-600">This week</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-sm bg-rose-600" />
+                    <span className="text-[10px] text-zinc-500">Negative</span>
+                    <span className="h-2 w-2 rounded-sm bg-amber-500 ml-2" />
+                    <span className="text-[10px] text-zinc-500">Neutral</span>
+                    <span className="h-2 w-2 rounded-sm bg-emerald-600 ml-2" />
+                    <span className="text-[10px] text-zinc-500">Positive</span>
+                  </div>
+                </div>
+              )}
+            </Card>
+          )}
 
           {/* 12-Week Activity Heatmap */}
           <Card className="p-4 space-y-3">

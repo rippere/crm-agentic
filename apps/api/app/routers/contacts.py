@@ -1832,3 +1832,75 @@ async def contact_response_time(
         "message_pairs_count": n,
         "trend_30d": trend_30d,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/sentiment-trend  (Phase 13g)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/sentiment-trend")
+async def contact_sentiment_trend(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Weekly average sentiment score (−1 to +1) over last 12 weeks via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+    from datetime import timezone
+    from app.services.sentiment import score_weekly_sentiment
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(weeks=12)
+
+    msgs_result = await db.execute(
+        select(Message.body_plain, Message.received_at)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= cutoff,
+        )
+        .order_by(Message.received_at.asc())
+        .limit(200)
+    )
+    rows = msgs_result.all()
+
+    if not rows:
+        return {"weeks": []}
+
+    week_map: dict[str, list[str]] = {}
+    for body, received_at in rows:
+        if not body or not received_at:
+            continue
+        ts = received_at.replace(tzinfo=timezone.utc) if received_at.tzinfo is None else received_at
+        year, week, _ = ts.isocalendar()
+        key = f"{year}-W{week:02d}"
+        week_map.setdefault(key, []).append(body)
+
+    if not week_map:
+        return {"weeks": []}
+
+    week_batches = sorted(week_map.items())
+    scored = score_weekly_sentiment(week_batches)
+
+    return {
+        "weeks": [
+            {
+                "week": item["week"],
+                "score": item["score"],
+                "message_count": len(week_map.get(item["week"], [])),
+            }
+            for item in scored
+        ]
+    }
