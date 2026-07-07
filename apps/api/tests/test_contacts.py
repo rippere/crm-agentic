@@ -1645,3 +1645,59 @@ async def test_response_time_contact_not_found_returns_404(app_client):
         resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{missing_id}/response-time")
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/sentiment-trend — Phase 13g
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sentiment_trend_returns_weekly_scores(app_client):
+    """Returns per-week sentiment scores bucketed from messages in last 12 weeks."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    now = datetime.utcnow()
+    # Two messages in week A, one in week B (different ISO weeks)
+    week_a_ts = now - timedelta(days=14)
+    week_b_ts = now - timedelta(days=7)
+    messages = [
+        ("Great progress on the deal!", week_a_ts),
+        ("Looking forward to our call.", week_a_ts + timedelta(hours=2)),
+        ("Let me know if you have questions.", week_b_ts),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_all_result(messages),
+    ])
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text='[{"week": "2026-W26", "score": 0.7}, {"week": "2026-W27", "score": 0.4}]')]
+    mock_client_instance = MagicMock()
+    mock_client_instance.messages.create.return_value = mock_response
+
+    with patch("anthropic.Anthropic", return_value=mock_client_instance):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact.id}/sentiment-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "weeks" in data
+    assert len(data["weeks"]) == 2
+    assert all("week" in w and "score" in w and "message_count" in w for w in data["weeks"])
+    assert all(-1.0 <= w["score"] <= 1.0 for w in data["weeks"])
+
+
+@pytest.mark.asyncio
+async def test_sentiment_trend_contact_not_found_returns_404(app_client):
+    """Returns 404 when contact does not exist in the workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    missing_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{missing_id}/sentiment-trend")
+
+    assert resp.status_code == 404

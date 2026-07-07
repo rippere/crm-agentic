@@ -1770,4 +1770,28 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/response-lag`, {}, token)
   },
+
+  getSentimentTrend: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{ weeks: { week: string; score: number; message_count: number }[] }> => {
+    if (isDemoMode) {
+      const seed = contactId.charCodeAt(contactId.length - 1)
+      const weeks: { week: string; score: number; message_count: number }[] = []
+      const now = new Date()
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(now)
+        d.setDate(d.getDate() - i * 7)
+        const jan4 = new Date(d.getFullYear(), 0, 4)
+        const week = Math.ceil(((d.getTime() - jan4.getTime()) / 86400000 + jan4.getDay() + 1) / 7)
+        const weekKey = `${d.getFullYear()}-W${String(week).padStart(2, "0")}`
+        const raw = ((seed + i * 13) % 200 - 100) / 100
+        const score = parseFloat(Math.max(-1, Math.min(1, raw)).toFixed(3))
+        weeks.push({ week: weekKey, score, message_count: 1 + ((seed + i) % 8) })
+      }
+      return Promise.resolve({ weeks })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/sentiment-trend`, {}, token)
+  },
 }
