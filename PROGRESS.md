@@ -77,7 +77,7 @@
 - [2026-06-29] Phase 12t: Contact last-touch summary widget — GET /workspaces/{id}/contacts/{id}/last-touch endpoint (4 DB queries: contact lookup, latest message, latest note, latest activity; returns last_message_date, last_note_date, last_activity_date, most_recent_type, days_ago); compact "Last Touch" Card on /contacts/[id] below engagement score (per-type date rows color-coded indigo/amber/emerald, days-ago header badge, most-recent-type footer); getContactLastTouch() in api-client with per-contact demo stubs; 2 new tests (most-recent-touch + 404); 458 tests pass (74 contacts tests)
 
 ## Current Phase
-Phase 12 — Analytics & Reporting
+Phase 13 — Extended Analytics
 
 - [2026-06-29] Phase 12u: Expected revenue forecast by close month — GET /workspaces/{id}/deals/revenue-forecast endpoint (groups open deals by expected_close month YYYY-MM, computes value × ml_win_probability/100 per deal, returns sorted list of {month, expected_revenue, deal_count, total_value}); emerald BarChart card on /reports page between by-agent and close-date-slippage (y-axis in $k, tooltip shows expected vs total pipeline + deal count); getDealRevenueForecast() in api-client with 3-month demo stub ($125k/$89k/$215k); 2 new tests (groups-by-month + math, 403); 460 tests pass (85 deals tests)
 - [2026-06-29] Phase 12v: Deal time-in-stage aging — GET /workspaces/{id}/deals/stage-aging endpoint (all open deals with days_in_stage since stage_changed_at or created_at, sorted by stage order then oldest-first); "Deal Aging by Stage" card on /reports page with per-stage grouped list (green <14d / amber 14–30d / rose 30d+ color-coded day badges); getDealStageAging() in api-client with 6-deal demo stub; 2 new tests (groups+sorts correctly, 403); 462 tests pass (87 deals tests)
@@ -96,8 +96,10 @@ Phase 12 — Analytics & Reporting
 
 - [2026-07-05] Phase 13e: Contact response time analysis — GET /workspaces/{id}/contacts/{id}/response-time endpoint (pairs each inbound message by contact email with next outbound reply, returns avg/p50/p90 response hours + 30d trend); Response Time Card on /contacts/[id] sidebar with color-coded rows (emerald ≤4h, amber ≤24h, rose >24h) and 30-day trend footer; getContactResponseTime() in api-client with 3-contact demo stubs; 2 new tests (math verification + 404); PR #24 merged
 
+- [2026-07-07] Phase 13f: Deal response lag heatmap — GET /workspaces/{id}/deals/{id}/response-lag endpoint (buckets consecutive message lags for the deal's contact into a 7×24 grid by day-of-week × hour; excludes outliers >168h; returns cells with avg_lag_hours/count + max_lag_hours); compact 7×24 heatmap card on /pipeline/[id] after 12-Week Heatmap (emerald <2h, amber 2-8h, rose 8-24h+; day labels, hour axis, tooltip, Fast→Slow legend); getDealResponseLag() in api-client with deterministic demo stub (business hours low, nights/weekends high); 2 new tests (consecutive-messages dow-bucketed correctly, 403); 489 tests passing (2 pre-existing failures: velocity_trends time-dependent test + agents dispatch test)
+
 ## Next Task
-Phase 13f: Deal response lag heatmap — GET /workspaces/{id}/deals/{id}/response-lag endpoint (for each message linked to the deal's contact, find next outbound reply, bucket by day of week + hour of day into a 7×24 grid showing avg response lag; helps identify when deals go quiet); compact heatmap card on /pipeline/[id] detail page; getDealResponseLag() in api-client with demo stub.
+Phase 13g: Contact sentiment trend — GET /workspaces/{id}/contacts/{id}/sentiment-trend endpoint (runs Claude Haiku sentiment on the last N messages for a contact, returns weekly average sentiment score −1 to +1 over last 12 weeks); sparkline card on /contacts/[id] page (emerald positive, amber neutral, rose negative); getSentimentTrend() in api-client with demo stub.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.

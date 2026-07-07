@@ -1912,9 +1912,9 @@ async def test_velocity_trends_returns_monthly_cycle_times(app_client):
     rows = resp.json()
     assert len(rows) == 3
 
-    # The current month row should include both deals
-    current_month = "2026-07"
-    cur = next((r for r in rows if r["month"] == current_month), None)
+    # Both deals close in June 2026 (10d and 5d before 2026-07-04)
+    close_month = "2026-06"
+    cur = next((r for r in rows if r["month"] == close_month), None)
     assert cur is not None
     assert cur["deal_count"] == 2
     assert cur["closed_won"] == 1
@@ -1930,4 +1930,67 @@ async def test_velocity_trends_wrong_workspace_returns_403(app_client):
     wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/velocity-trends")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/response-lag
+# ---------------------------------------------------------------------------
+
+def _fake_message(workspace_id: uuid.UUID, contact_id: uuid.UUID, **kwargs) -> MagicMock:
+    msg = MagicMock()
+    msg.id = uuid.uuid4()
+    msg.workspace_id = workspace_id
+    msg.contact_id = contact_id
+    msg.external_id = str(uuid.uuid4())
+    msg.sender_email = kwargs.get("sender_email", "contact@example.com")
+    msg.received_at = kwargs.get("received_at", _NOW)
+    msg.body_plain = "test"
+    msg.processed = False
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_response_lag_returns_cells_for_consecutive_messages(app_client):
+    """Consecutive messages produce lag cells bucketed by dow+hour."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact_id = uuid.uuid4()
+
+    deal = _fake_deal(workspace_id, contact_id=contact_id)
+
+    # Three messages at known times: 2h gap, then 5h gap
+    t0 = datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)   # Monday 10:00
+    t1 = t0 + timedelta(hours=2)                                  # Monday 12:00
+    t2 = t1 + timedelta(hours=5)                                  # Monday 17:00
+    m0 = _fake_message(workspace_id, contact_id, received_at=t0)
+    m1 = _fake_message(workspace_id, contact_id, received_at=t1)
+    m2 = _fake_message(workspace_id, contact_id, received_at=t2)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(deal),
+        _make_scalars_result([m0, m1, m2]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/response-lag")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "cells" in body
+    assert "max_lag_hours" in body
+    assert len(body["cells"]) > 0
+    # Both lags land on Monday (dow=0), so all cells have dow=0
+    assert all(c["dow"] == 0 for c in body["cells"])
+    # max lag should be 5h
+    assert body["max_lag_hours"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_response_lag_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's deal response lag."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/{deal_id}/response-lag")
     assert resp.status_code == 403
