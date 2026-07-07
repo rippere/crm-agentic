@@ -1748,7 +1748,7 @@ export const apiClient = {
     dealId: string,
     token: string,
   ): Promise<{ cells: { dow: number; hour: number; avg_lag_hours: number; count: number }[]; max_lag_hours: number }> => {
-    if (isDemo()) {
+    if (isDemoMode) {
       // Deterministic demo: seed by last char of dealId
       const seed = dealId.charCodeAt(dealId.length - 1)
       const cells: { dow: number; hour: number; avg_lag_hours: number; count: number }[] = []

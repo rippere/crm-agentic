@@ -1912,9 +1912,9 @@ async def test_velocity_trends_returns_monthly_cycle_times(app_client):
     rows = resp.json()
     assert len(rows) == 3
 
-    # The current month row should include both deals
-    current_month = "2026-07"
-    cur = next((r for r in rows if r["month"] == current_month), None)
+    # Both deals close in June 2026 (10d and 5d before 2026-07-04)
+    close_month = "2026-06"
+    cur = next((r for r in rows if r["month"] == close_month), None)
     assert cur is not None
     assert cur["deal_count"] == 2
     assert cur["closed_won"] == 1
