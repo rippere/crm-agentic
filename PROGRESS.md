@@ -100,8 +100,10 @@ Phase 13 — Extended Analytics
 
 - [2026-07-07] Phase 13g: Contact sentiment trend — score_weekly_sentiment() added to apps/api/app/services/sentiment.py (single Claude Haiku call for all weeks in one batch, returns [{week, score}]); GET /workspaces/{id}/contacts/{id}/sentiment-trend endpoint added to contacts.py (fetches last 200 messages, groups by ISO week, returns [{week, score, message_count}] for last 12 weeks); sparkline card on /contacts/[id] page between Response Time and 12-Week Activity (bar height proportional to score, emerald >0.2, amber ±0.2, rose <-0.2; legend + week label); getSentimentTrend() in api-client with deterministic demo stub (seeded by contactId); SentimentWeek type; 2 new tests (weekly-scores-returned, 404); 472 tests pass
 
+- [2026-07-08] Phase 13h: Deal predicted close date — GET /workspaces/{id}/deals/{id}/predicted-close endpoint (historical cycle-time mean ± std-dev from closed deals; stage defaults when n=0; confidence: high ≥10, medium ≥3, low ≥1, none=defaults; already-closed deals return actual date); Predicted Close card on /pipeline/[id] after Stage History (predicted date, lower–upper range, confidence badge, avg cycle + sample size, hidden for closed deals); getPredictedClose() in api-client with deterministic demo stub; 2 new tests (cycle-time math, 403 guard); 495 tests pass (up from 489); PR #27 merged
+
 ## Next Task
-Phase 13h (suggested): Deal predicted close date — GET /workspaces/{id}/deals/{id}/predicted-close endpoint (uses deal age, current stage, historical close-time distribution for deals at same stage to predict a close window); confidence interval badge on deal detail page; getPredictedClose() in api-client with demo stub.
+Phase 13i (suggested): Contact win rate trend — GET /workspaces/{id}/contacts/{id}/win-rate-trend endpoint (groups closed deals for the contact by calendar quarter, returns won/total/win_rate per quarter over the past 2 years); line chart card on /contacts/[id] showing quarterly win rate with deal count tooltip; getContactWinRateTrend() in api-client with demo stub.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
