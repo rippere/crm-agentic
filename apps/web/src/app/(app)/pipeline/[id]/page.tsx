@@ -18,7 +18,7 @@ import {
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send, BarChart2, History, Swords, Plus, X, Bell,
+  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -80,6 +80,16 @@ type StageHistoryEntry = {
   entered_at: string;
   days_in_stage: number;
   is_current: boolean;
+};
+
+type PredictedClose = {
+  predicted_date: string;
+  lower_bound: string;
+  upper_bound: string;
+  confidence_level: string;
+  confidence_pct: number;
+  data_points: number;
+  avg_cycle_days: number | null;
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -309,6 +319,9 @@ export default function DealDetailPage() {
   const [responseLag, setResponseLag] = useState<{ cells: { dow: number; hour: number; avg_lag_hours: number; count: number }[]; max_lag_hours: number } | null>(null);
   const [responseLagLoading, setResponseLagLoading] = useState(false);
 
+  const [predictedClose, setPredictedClose] = useState<PredictedClose | null>(null);
+  const [predictedCloseLoading, setPredictedCloseLoading] = useState(false);
+
   const [competitors, setCompetitors] = useState<string[]>([]);
   const [competitorsLoading, setCompetitorsLoading] = useState(false);
   const [competitorInput, setCompetitorInput] = useState("");
@@ -418,6 +431,13 @@ export default function DealDetailPage() {
       .then((data) => setResponseLag(data ?? null))
       .catch(() => setResponseLag(null))
       .finally(() => setResponseLagLoading(false));
+
+    setPredictedCloseLoading(true);
+    apiClient
+      .getPredictedClose(workspaceId, dealId, token)
+      .then((data) => setPredictedClose(data ?? null))
+      .catch(() => setPredictedClose(null))
+      .finally(() => setPredictedCloseLoading(false));
 
     setCompetitorsLoading(true);
     apiClient
@@ -1309,6 +1329,68 @@ export default function DealDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* Predicted Close */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Predicted Close</p>
+                {predictedClose && (
+                  <span className={cn(
+                    "ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded",
+                    predictedClose.confidence_level === "high"
+                      ? "bg-emerald-500/20 text-emerald-300"
+                      : predictedClose.confidence_level === "medium"
+                      ? "bg-amber-500/20 text-amber-300"
+                      : predictedClose.confidence_level === "none"
+                      ? "bg-zinc-700 text-zinc-400"
+                      : "bg-rose-500/20 text-rose-300"
+                  )}>
+                    {predictedClose.confidence_level === "none" ? "estimated" : `${predictedClose.confidence_pct}% conf`}
+                  </span>
+                )}
+              </div>
+              {predictedCloseLoading ? (
+                <div className="h-16 rounded-xl bg-zinc-800/50 animate-pulse" />
+              ) : !predictedClose ? (
+                <p className="text-xs text-zinc-500 text-center py-3">Could not load prediction.</p>
+              ) : (
+                <div className="space-y-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <Calendar className="h-3.5 w-3.5 text-indigo-400 flex-shrink-0" />
+                    <span className="text-xs text-zinc-400">Predicted date</span>
+                    <span className="text-xs font-mono text-zinc-100 ml-auto font-semibold">
+                      {new Date(predictedClose.predicted_date + "T00:00:00").toLocaleDateString("en-US", {
+                        month: "short", day: "numeric", year: "numeric",
+                      })}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <span className="h-3.5 w-3.5 flex-shrink-0" />
+                    <span className="text-xs text-zinc-500">Range</span>
+                    <span className="text-[11px] font-mono text-zinc-400 ml-auto">
+                      {new Date(predictedClose.lower_bound + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                      {" – "}
+                      {new Date(predictedClose.upper_bound + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    </span>
+                  </div>
+                  {predictedClose.avg_cycle_days !== null && (
+                    <div className="flex items-center gap-2.5">
+                      <span className="h-3.5 w-3.5 flex-shrink-0" />
+                      <span className="text-xs text-zinc-500">Avg cycle</span>
+                      <span className="text-[11px] font-mono text-zinc-400 ml-auto">
+                        {predictedClose.avg_cycle_days}d
+                        {predictedClose.data_points > 0 && (
+                          <span className="text-zinc-600"> ({predictedClose.data_points} deals)</span>
+                        )}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
 
           {/* Tasks */}
           <Card className="p-4 space-y-3">

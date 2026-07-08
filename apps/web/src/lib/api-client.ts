@@ -1794,4 +1794,46 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/sentiment-trend`, {}, token)
   },
+
+  getPredictedClose: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    predicted_date: string;
+    lower_bound: string;
+    upper_bound: string;
+    confidence_level: string;
+    confidence_pct: number;
+    data_points: number;
+    avg_cycle_days: number | null;
+  }> => {
+    if (isDemoMode) {
+      // Deterministic stub: seed by last char of dealId
+      const seed = dealId.charCodeAt(dealId.length - 1)
+      const today = new Date()
+      const avgDays = 45 + (seed % 40)  // 45–84 days
+      const std = 10 + (seed % 10)
+      const predicted = new Date(today)
+      predicted.setDate(today.getDate() + avgDays)
+      const lower = new Date(today)
+      lower.setDate(today.getDate() + Math.max(0, avgDays - std))
+      const upper = new Date(today)
+      upper.setDate(today.getDate() + avgDays + std)
+      const n = 4 + (seed % 9)  // 4–12 data points
+      const confidenceLevel = n >= 10 ? "high" : n >= 3 ? "medium" : "low"
+      const confidencePct = n >= 10 ? 85 : n >= 3 ? 65 : 40
+      const fmt = (d: Date) => d.toISOString().slice(0, 10)
+      return Promise.resolve({
+        predicted_date: fmt(predicted),
+        lower_bound: fmt(lower),
+        upper_bound: fmt(upper),
+        confidence_level: confidenceLevel,
+        confidence_pct: confidencePct,
+        data_points: n,
+        avg_cycle_days: avgDays,
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/predicted-close`, {}, token)
+  },
 }

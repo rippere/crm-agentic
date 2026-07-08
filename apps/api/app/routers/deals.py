@@ -1224,6 +1224,123 @@ async def deal_velocity_trends(
     return rows
 
 
+_STAGE_DEFAULT_CYCLE_DAYS: dict[str, int] = {
+    "discovery": 90,
+    "qualified": 60,
+    "proposal": 40,
+    "negotiation": 20,
+}
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/predicted-close")
+async def deal_predicted_close(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Predict close date using historical cycle-time distribution from closed deals.
+
+    Algorithm:
+    1. Fetch all closed (won/lost) deals in the workspace with both created_at and
+       stage_changed_at (which serves as close date).
+    2. Compute cycle time = stage_changed_at − created_at in days.
+    3. Derive mean (μ) and population std-dev (σ).
+    4. predicted_date = deal.created_at + μ days
+    5. lower_bound = deal.created_at + max(0, μ − σ)
+    6. upper_bound = deal.created_at + (μ + σ)
+    7. Confidence: high ≥10 data points, medium ≥3, low ≥1, none → stage defaults.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    import math
+
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    # Short-circuit: if already closed, return actual close date
+    if deal.stage in ("closed_won", "closed_lost") and deal.stage_changed_at:
+        close_dt = deal.stage_changed_at if deal.stage_changed_at.tzinfo else deal.stage_changed_at.replace(tzinfo=timezone.utc)
+        return {
+            "predicted_date": close_dt.date().isoformat(),
+            "lower_bound": close_dt.date().isoformat(),
+            "upper_bound": close_dt.date().isoformat(),
+            "confidence_level": "actual",
+            "confidence_pct": 100,
+            "data_points": 0,
+            "avg_cycle_days": None,
+        }
+
+    hist_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at.isnot(None),
+            Deal.created_at.isnot(None),
+        )
+    )
+    closed_deals = hist_result.scalars().all()
+
+    cycle_days: list[float] = []
+    for d in closed_deals:
+        created = d.created_at if d.created_at.tzinfo else d.created_at.replace(tzinfo=timezone.utc)
+        closed = d.stage_changed_at if d.stage_changed_at.tzinfo else d.stage_changed_at.replace(tzinfo=timezone.utc)
+        days = max(0.0, (closed - created).total_seconds() / 86400)
+        if days <= 730:  # exclude >2-year outliers
+            cycle_days.append(days)
+
+    n = len(cycle_days)
+    now = datetime.now(timezone.utc)
+    deal_created = deal.created_at if deal.created_at.tzinfo else deal.created_at.replace(tzinfo=timezone.utc)
+
+    if n == 0:
+        default_days = _STAGE_DEFAULT_CYCLE_DAYS.get(deal.stage or "discovery", 60)
+        predicted = deal_created + timedelta(days=default_days)
+        lower = deal_created + timedelta(days=max(0, default_days - 14))
+        upper = deal_created + timedelta(days=default_days + 14)
+        confidence_level = "none"
+        confidence_pct = 30
+    else:
+        mean = sum(cycle_days) / n
+        variance = sum((x - mean) ** 2 for x in cycle_days) / n
+        std = math.sqrt(variance)
+
+        predicted = deal_created + timedelta(days=mean)
+        lower = deal_created + timedelta(days=max(0.0, mean - std))
+        upper = deal_created + timedelta(days=mean + std)
+
+        if n >= 10:
+            confidence_level = "high"
+            confidence_pct = 85
+        elif n >= 3:
+            confidence_level = "medium"
+            confidence_pct = 65
+        else:
+            confidence_level = "low"
+            confidence_pct = 40
+
+    # Ensure predicted is always in the future relative to today
+    if predicted.date() < now.date():
+        predicted = now + timedelta(days=7)
+
+    return {
+        "predicted_date": predicted.date().isoformat(),
+        "lower_bound": lower.date().isoformat(),
+        "upper_bound": upper.date().isoformat(),
+        "confidence_level": confidence_level,
+        "confidence_pct": confidence_pct,
+        "data_points": n,
+        "avg_cycle_days": round(sum(cycle_days) / n, 1) if n > 0 else None,
+    }
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
