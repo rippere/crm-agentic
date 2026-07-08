@@ -1994,3 +1994,53 @@ async def test_response_lag_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/{deal_id}/response-lag")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/predicted-close
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_predicted_close_uses_historical_cycle_times(app_client):
+    """With historical closed deals, predicted_date reflects avg cycle time."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    open_deal = _fake_deal(workspace_id, stage="discovery", created_at=_NOW - timedelta(days=10))
+
+    # Two closed deals: 60-day and 80-day cycle → avg 70 days
+    c1 = _fake_deal(workspace_id, stage="closed_won",
+                    created_at=_NOW - timedelta(days=90),
+                    stage_changed_at=_NOW - timedelta(days=30))  # 60-day cycle
+    c2 = _fake_deal(workspace_id, stage="closed_lost",
+                    created_at=_NOW - timedelta(days=100),
+                    stage_changed_at=_NOW - timedelta(days=20))  # 80-day cycle
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(open_deal),
+        _make_scalars_result([c1, c2]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{open_deal.id}/predicted-close")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "predicted_date" in body
+    assert "lower_bound" in body
+    assert "upper_bound" in body
+    assert body["data_points"] == 2
+    assert body["avg_cycle_days"] == 70.0
+    assert body["confidence_level"] == "low"   # 2 data points → low
+    assert body["lower_bound"] <= body["predicted_date"] <= body["upper_bound"]
+
+
+@pytest.mark.asyncio
+async def test_predicted_close_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's deal predicted close."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/{deal_id}/predicted-close")
+    assert resp.status_code == 403
