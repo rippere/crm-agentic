@@ -18,6 +18,10 @@ import {
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
   Star, Calendar, X, Plus, Send, BarChart2, Download,
 } from "lucide-react";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip as RechartTooltip, ResponsiveContainer,
+} from "recharts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -115,6 +119,14 @@ type SentimentWeek = {
   week: string;
   score: number;
   message_count: number;
+};
+
+type WinRateQuarter = {
+  quarter: string;
+  won: number;
+  lost: number;
+  total: number;
+  win_rate: number;
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -356,6 +368,7 @@ export default function ContactDetailPage() {
   const [responseTime, setResponseTime] = useState<ResponseTime | null>(null);
   const [sentimentTrend, setSentimentTrend] = useState<SentimentWeek[] | null>(null);
   const [sentimentLoading, setSentimentLoading] = useState(false);
+  const [winRateTrend, setWinRateTrend] = useState<WinRateQuarter[] | null>(null);
 
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -500,6 +513,11 @@ export default function ContactDetailPage() {
       .then((data) => setSentimentTrend(data?.weeks ?? null))
       .catch(() => setSentimentTrend(null))
       .finally(() => setSentimentLoading(false));
+
+    apiClient
+      .getContactWinRateTrend(workspaceId, contactId, token)
+      .then((data) => setWinRateTrend(data?.quarters ?? null))
+      .catch(() => setWinRateTrend(null));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1165,6 +1183,51 @@ export default function ContactDetailPage() {
                   </div>
                 </div>
               )}
+            </Card>
+          )}
+
+          {/* Quarterly Win Rate Trend */}
+          {winRateTrend !== null && winRateTrend.length > 0 && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Win Rate by Quarter</p>
+                <span className="ml-auto text-[10px] font-mono text-zinc-500">2 years</span>
+              </div>
+              <ResponsiveContainer width="100%" height={110}>
+                <LineChart data={winRateTrend} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis
+                    dataKey="quarter"
+                    tick={{ fontSize: 9, fill: "#71717a" }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    domain={[0, 100]}
+                    tick={{ fontSize: 9, fill: "#71717a" }}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v) => `${v}%`}
+                  />
+                  <RechartTooltip
+                    contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 6, fontSize: 11 }}
+                    labelStyle={{ color: "#e4e4e7", marginBottom: 4 }}
+                    formatter={(v, _n, props) => {
+                      const q = props.payload as WinRateQuarter | undefined;
+                      return [`${v ?? 0}% (${q?.won ?? 0}W / ${q?.total ?? 0} deals)`, "Win rate"];
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="win_rate"
+                    stroke="#6366f1"
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: "#6366f1", strokeWidth: 0 }}
+                    activeDot={{ r: 5 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </Card>
           )}
 
