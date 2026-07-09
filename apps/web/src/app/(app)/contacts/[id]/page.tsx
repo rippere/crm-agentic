@@ -1213,9 +1213,9 @@ export default function ContactDetailPage() {
                   <RechartTooltip
                     contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 6, fontSize: 11 }}
                     labelStyle={{ color: "#e4e4e7", marginBottom: 4 }}
-                    formatter={(value: number, _name: string, props: { payload?: WinRateQuarter }) => {
-                      const q = props.payload;
-                      return [`${value}% (${q?.won ?? 0}W / ${q?.total ?? 0} deals)`, "Win rate"];
+                    formatter={(v, _n, props) => {
+                      const q = props.payload as WinRateQuarter | undefined;
+                      return [`${v ?? 0}% (${q?.won ?? 0}W / ${q?.total ?? 0} deals)`, "Win rate"];
                     }}
                   />
                   <Line
