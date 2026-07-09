@@ -1836,4 +1836,32 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/predicted-close`, {}, token)
   },
+
+  getContactWinRateTrend: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    quarters: { quarter: string; won: number; lost: number; total: number; win_rate: number }[];
+  }> => {
+    if (isDemoMode) {
+      // Deterministic stub seeded by last char of contactId — 8 quarters of data
+      const seed = contactId.charCodeAt(contactId.length - 1)
+      const now = new Date()
+      const quarters: { quarter: string; won: number; lost: number; total: number; win_rate: number }[] = []
+      for (let i = 7; i >= 0; i--) {
+        const d = new Date(now)
+        d.setMonth(d.getMonth() - i * 3)
+        const q = Math.floor(d.getMonth() / 3) + 1
+        const key = `${d.getFullYear()}-Q${q}`
+        const total = 2 + ((seed + i * 7) % 5)  // 2–6 deals
+        const won = Math.round(total * (0.3 + ((seed + i * 3) % 50) / 100))  // 30–80%
+        const lost = total - won
+        const win_rate = parseFloat((won / total * 100).toFixed(1))
+        quarters.push({ quarter: key, won, lost, total, win_rate })
+      }
+      return Promise.resolve({ quarters })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/win-rate-trend`, {}, token)
+  },
 }

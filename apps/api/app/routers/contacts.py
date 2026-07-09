@@ -1904,3 +1904,74 @@ async def contact_sentiment_trend(
             for item in scored
         ]
     }
+
+
+# GET /workspaces/{wid}/contacts/{cid}/win-rate-trend  (Phase 13i)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/win-rate-trend")
+async def contact_win_rate_trend(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Quarterly win-rate trend for closed deals associated with this contact (last 2 years)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.deal import Deal
+    from datetime import timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=730)  # 2 years
+
+    deals_result = await db.execute(
+        select(Deal.stage, Deal.stage_changed_at, Deal.created_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= cutoff,
+        )
+        .order_by(Deal.stage_changed_at.asc())
+    )
+    rows = deals_result.all()
+
+    # Group by calendar quarter using stage_changed_at (fall back to created_at)
+    quarter_map: dict[str, dict[str, int]] = {}
+    for stage, stage_changed_at, created_at in rows:
+        ts = stage_changed_at or created_at
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        q = (ts.month - 1) // 3 + 1
+        key = f"{ts.year}-Q{q}"
+        bucket = quarter_map.setdefault(key, {"won": 0, "lost": 0})
+        if stage == "closed_won":
+            bucket["won"] += 1
+        else:
+            bucket["lost"] += 1
+
+    quarters = []
+    for key in sorted(quarter_map.keys()):
+        b = quarter_map[key]
+        total = b["won"] + b["lost"]
+        win_rate = round(b["won"] / total * 100, 1) if total > 0 else 0.0
+        quarters.append({
+            "quarter": key,
+            "won": b["won"],
+            "lost": b["lost"],
+            "total": total,
+            "win_rate": win_rate,
+        })
+
+    return {"quarters": quarters}

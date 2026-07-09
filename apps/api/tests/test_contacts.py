@@ -1701,3 +1701,63 @@ async def test_sentiment_trend_contact_not_found_returns_404(app_client):
         resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{missing_id}/sentiment-trend")
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/win-rate-trend — Phase 13i
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_win_rate_trend_groups_deals_by_quarter(app_client):
+    """Groups closed deals by calendar quarter and computes per-quarter win rate."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    # Q1 2026: 2 won, 1 lost → 66.7%; Q2 2026: 1 won, 1 lost → 50%
+    q1_ts = datetime(2026, 2, 15)
+    q2_ts = datetime(2026, 5, 10)
+    deals = [
+        ("closed_won",  q1_ts,                         q1_ts),
+        ("closed_won",  q1_ts + timedelta(days=5),     q1_ts + timedelta(days=5)),
+        ("closed_lost", q1_ts + timedelta(days=10),    q1_ts + timedelta(days=10)),
+        ("closed_won",  q2_ts,                         q2_ts),
+        ("closed_lost", q2_ts + timedelta(days=3),     q2_ts + timedelta(days=3)),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_all_result(deals),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact.id}/win-rate-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "quarters" in data
+    quarters = {q["quarter"]: q for q in data["quarters"]}
+
+    assert "2026-Q1" in quarters
+    assert quarters["2026-Q1"]["won"] == 2
+    assert quarters["2026-Q1"]["total"] == 3
+    assert quarters["2026-Q1"]["win_rate"] == pytest.approx(66.7, abs=0.2)
+
+    assert "2026-Q2" in quarters
+    assert quarters["2026-Q2"]["won"] == 1
+    assert quarters["2026-Q2"]["total"] == 2
+    assert quarters["2026-Q2"]["win_rate"] == pytest.approx(50.0, abs=0.2)
+
+
+@pytest.mark.asyncio
+async def test_win_rate_trend_wrong_workspace_returns_403(app_client):
+    """Returns 403 when the contact belongs to a different workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    other_workspace_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact = _fake_contact(other_workspace_id)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(contact))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{other_workspace_id}/contacts/{contact.id}/win-rate-trend")
+
+    assert resp.status_code == 403
