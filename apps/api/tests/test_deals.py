@@ -33,6 +33,7 @@ def _fake_deal(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
     deal.next_action = kwargs.get("next_action", None)
     deal.next_action_date = kwargs.get("next_action_date", None)
     deal.competitors = kwargs.get("competitors", [])
+    deal.mentions = kwargs.get("mentions", [])
     deal.created_at = kwargs.get("created_at", _NOW - timedelta(days=5))
     deal.updated_at = kwargs.get("updated_at", _NOW - timedelta(days=5))
     deal.stage_changed_at = kwargs.get("stage_changed_at", _NOW - timedelta(days=5))
@@ -2043,4 +2044,42 @@ async def test_predicted_close_wrong_workspace_returns_403(app_client):
     deal_id = uuid.uuid4()
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/{deal_id}/predicted-close")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/mentions
+# POST /workspaces/{wid}/deals/{did}/mentions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_deal_mentions_returns_list(app_client):
+    """GET /deals/{id}/mentions returns the stored mention list."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Mention Deal")
+    deal.mentions = [{"name": "@alice", "type": "teammate"}, {"name": "Bob", "type": "contact"}]
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(deal))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/mentions")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "mentions": [{"name": "@alice", "type": "teammate"}, {"name": "Bob", "type": "contact"}]
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_deal_mentions_wrong_workspace_returns_403(app_client):
+    """POST /deals/{id}/mentions returns 403 for a different workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/mentions",
+            json={"mentions": [{"name": "@charlie", "type": "teammate"}]},
+        )
+
     assert resp.status_code == 403

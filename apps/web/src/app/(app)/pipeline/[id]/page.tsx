@@ -18,7 +18,7 @@ import {
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target,
+  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -327,6 +327,13 @@ export default function DealDetailPage() {
   const [competitorInput, setCompetitorInput] = useState("");
   const [competitorSaving, setCompetitorSaving] = useState(false);
 
+  type DealMention = { name: string; type: string };
+  const [mentions, setMentions] = useState<DealMention[]>([]);
+  const [mentionsLoading, setMentionsLoading] = useState(false);
+  const [mentionInput, setMentionInput] = useState("");
+  const [mentionType, setMentionType] = useState<"teammate" | "contact">("teammate");
+  const [mentionSaving, setMentionSaving] = useState(false);
+
   const [nextActionText, setNextActionText] = useState("");
   const [nextActionDate, setNextActionDate] = useState("");
   const [nextActionSaving, setNextActionSaving] = useState(false);
@@ -446,6 +453,13 @@ export default function DealDetailPage() {
       .catch(() => setCompetitors([]))
       .finally(() => setCompetitorsLoading(false));
 
+    setMentionsLoading(true);
+    apiClient
+      .getDealMentions(workspaceId, dealId, token)
+      .then((data) => setMentions(data.mentions ?? []))
+      .catch(() => setMentions([]))
+      .finally(() => setMentionsLoading(false));
+
     if (deal.contact_id) {
       apiClient
         .getTasks(workspaceId, token, { contactId: deal.contact_id })
@@ -529,6 +543,31 @@ export default function DealDetailPage() {
       setCompetitors(data.competitors ?? next);
     } catch { /* revert silently */ }
     finally { setCompetitorSaving(false); }
+  };
+
+  const handleAddMention = async (name: string) => {
+    const label = name.trim();
+    if (!label || !token || !workspaceId || mentionSaving) return;
+    if (mentions.some((m) => m.name === label)) { setMentionInput(""); return; }
+    const next = [...mentions, { name: label, type: mentionType }];
+    setMentionSaving(true);
+    try {
+      const data = await apiClient.updateDealMentions(workspaceId, dealId, next, token);
+      setMentions(data.mentions ?? next);
+      setMentionInput("");
+    } catch { /* revert silently */ }
+    finally { setMentionSaving(false); }
+  };
+
+  const handleRemoveMention = async (name: string) => {
+    if (!token || !workspaceId || mentionSaving) return;
+    const next = mentions.filter((m) => m.name !== name);
+    setMentionSaving(true);
+    try {
+      const data = await apiClient.updateDealMentions(workspaceId, dealId, next, token);
+      setMentions(data.mentions ?? next);
+    } catch { /* revert silently */ }
+    finally { setMentionSaving(false); }
   };
 
   const handleDelete = async () => {
@@ -928,6 +967,93 @@ export default function DealDetailPage() {
                       aria-label="Add competitor"
                     >
                       {competitorSaving
+                        ? <Loader2 className="h-3 w-3 animate-spin" />
+                        : <Plus className="h-3 w-3" />}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {/* Mentions */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-indigo-400" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-200">Mentions</p>
+              {mentions.length > 0 && (
+                <span className="ml-auto text-xs font-mono text-zinc-500">{mentions.length}</span>
+              )}
+            </div>
+
+            {mentionsLoading ? (
+              <div className="h-7 rounded-lg bg-zinc-800/50 animate-pulse" />
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {mentions.map((m) => {
+                  const initials = m.name.replace(/^@/, "").slice(0, 2).toUpperCase();
+                  const isTeammate = m.type === "teammate";
+                  return (
+                    <span
+                      key={m.name}
+                      className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                        isTeammate
+                          ? "border-indigo-500/20 bg-indigo-500/10 text-indigo-300"
+                          : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                      }`}
+                    >
+                      <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${
+                        isTeammate ? "bg-indigo-500/30 text-indigo-200" : "bg-emerald-500/30 text-emerald-200"
+                      }`}>
+                        {initials}
+                      </span>
+                      {m.name}
+                      <button
+                        onClick={() => handleRemoveMention(m.name)}
+                        disabled={mentionSaving}
+                        aria-label={`Remove ${m.name}`}
+                        className={`ml-0.5 hover:opacity-80 disabled:opacity-40 cursor-pointer transition-opacity ${
+                          isTeammate ? "text-indigo-400" : "text-emerald-400"
+                        }`}
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  );
+                })}
+
+                {/* Inline add */}
+                <div className="flex items-center gap-1">
+                  <select
+                    value={mentionType}
+                    onChange={(e) => setMentionType(e.target.value as "teammate" | "contact")}
+                    className="h-6 rounded-full border border-zinc-700 bg-zinc-800 px-1.5 text-[10px] text-zinc-400 outline-none cursor-pointer"
+                    aria-label="Mention type"
+                  >
+                    <option value="teammate">Teammate</option>
+                    <option value="contact">Contact</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={mentionInput}
+                    onChange={(e) => setMentionInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === ",") {
+                        e.preventDefault();
+                        handleAddMention(mentionInput);
+                      }
+                    }}
+                    placeholder="+ Add mention"
+                    className="h-6 rounded-full border border-dashed border-zinc-600 bg-transparent px-2.5 text-[11px] text-zinc-400 placeholder:text-zinc-600 outline-none focus:border-indigo-500/50 focus:text-zinc-200 transition-colors w-28"
+                  />
+                  {mentionInput.trim() && (
+                    <button
+                      onClick={() => handleAddMention(mentionInput)}
+                      disabled={mentionSaving}
+                      className="flex-shrink-0 text-zinc-500 hover:text-indigo-300 disabled:opacity-40 cursor-pointer transition-colors"
+                      aria-label="Add mention"
+                    >
+                      {mentionSaving
                         ? <Loader2 className="h-3 w-3 animate-spin" />
                         : <Plus className="h-3 w-3" />}
                     </button>

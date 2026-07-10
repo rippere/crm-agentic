@@ -1864,4 +1864,35 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/win-rate-trend`, {}, token)
   },
+
+  getDealMentions: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{ mentions: Array<{ name: string; type: string }> }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, Array<{ name: string; type: string }>> = {
+        'd-001': [{ name: '@alice', type: 'teammate' }, { name: '@bob', type: 'teammate' }],
+        'd-002': [{ name: 'Sarah Chen', type: 'contact' }],
+        'd-003': [],
+      }
+      return Promise.resolve({ mentions: stubs[dealId] ?? [] })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/mentions`, {}, token)
+  },
+
+  updateDealMentions: (
+    workspaceId: string,
+    dealId: string,
+    mentions: Array<{ name: string; type: string }>,
+    token: string,
+  ): Promise<{ mentions: Array<{ name: string; type: string }> }> => {
+    if (isDemoMode) {
+      return Promise.resolve({ mentions })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/mentions`, {
+      method: 'POST',
+      body: JSON.stringify({ mentions }),
+    }, token)
+  },
 }
