@@ -104,8 +104,10 @@ Phase 13 — Extended Analytics
 
 - [2026-07-09] Phase 13i: Contact win rate trend — GET /workspaces/{id}/contacts/{id}/win-rate-trend endpoint (groups closed_won/closed_lost deals by calendar quarter, last 2 years, returns won/lost/total/win_rate); indigo recharts LineChart card on /contacts/[id] between Sentiment Trend and 12-Week Activity (0–100% y-axis, tooltip with won/total deals, WinRateQuarter type); getContactWinRateTrend() in api-client with deterministic 8-quarter demo stub seeded by contactId; 2 new tests (quarterly math verification + 403 workspace guard); 497 tests total; PR #28
 
+- [2026-07-10] Phase 13j: Deal team mentions — migration 020_deal_mentions.sql (mentions JSONB on deals); GET+POST /workspaces/{id}/deals/{id}/mentions endpoints (auth+404 guard, max 30, each {name, type}); Mentions card on /pipeline/[id] between Competitors and Next Action (avatar-initial chips, indigo=teammate/emerald=contact, type selector, inline add input, X remove, optimistic update); getDealMentions()/updateDealMentions() in api-client with demo stubs; 2 new tests (GET returns list, POST wrong-workspace 403); 499 tests total; PR #29 merged
+
 ## Next Task
-Phase 13j (suggested): Deal team mentions — GET+POST /workspaces/{id}/deals/{id}/mentions endpoints (stores contact or teammate mentions linked to a deal with mention type; migration 020_deal_mentions.sql); mention chips on deal detail sidebar with avatar initials, add input, and remove button.
+Phase 13k (suggested): Deal health score history — migration to record a daily health_score snapshot per deal; GET /workspaces/{id}/deals/{id}/health-history endpoint returning a 30-day time series; AreaChart on deal detail page showing health trend over time.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
