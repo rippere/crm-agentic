@@ -44,6 +44,7 @@ class DealResponse(BaseModel):
     next_action: str | None = None
     next_action_date: date | None = None
     competitors: list[str] = []
+    mentions: list = []
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -1571,6 +1572,68 @@ async def update_deal_competitors(
     await db.commit()
     await db.refresh(deal)
     return {"competitors": deal.competitors or []}
+
+
+class MentionEntry(BaseModel):
+    name: str
+    type: str = "teammate"  # "teammate" | "contact"
+
+
+class MentionUpdateRequest(BaseModel):
+    mentions: list[MentionEntry]
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/mentions")
+async def get_deal_mentions(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return the mention list for a deal."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    return {"mentions": deal.mentions or []}
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/mentions")
+async def update_deal_mentions(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    body: MentionUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Replace the mention list for a deal (full replace, max 30 entries)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    cleaned = [
+        {"name": m.name.strip(), "type": m.type}
+        for m in body.mentions
+        if m.name.strip()
+    ][:30]
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    deal.mentions = cleaned
+    db.add(deal)
+    await db.commit()
+    await db.refresh(deal)
+    return {"mentions": deal.mentions or []}
 
 
 @router.delete("/workspaces/{workspace_id}/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
