@@ -17,6 +17,7 @@ from app.dependencies import get_current_user, require_admin
 from app.models.user import User
 from app.models.deal import Deal
 from app.models.deal_note import DealNote
+from app.models.deal_health_history import DealHealthHistory
 from app.models.activity_event import ActivityEvent
 from app.models.message import Message
 
@@ -1634,6 +1635,49 @@ async def update_deal_mentions(
     await db.commit()
     await db.refresh(deal)
     return {"mentions": deal.mentions or []}
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/health-score-history")
+async def get_deal_health_score_history(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    limit: int = Query(default=30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return the recorded health-score snapshots for a deal, oldest first.
+
+    Snapshots are written by a periodic Celery beat task. Returns an empty
+    list when no snapshots have been recorded yet.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    history_result = await db.execute(
+        select(DealHealthHistory)
+        .where(
+            DealHealthHistory.deal_id == deal_id,
+            DealHealthHistory.workspace_id == workspace_id,
+        )
+        .order_by(DealHealthHistory.recorded_at.asc())
+        .limit(limit)
+    )
+    rows = history_result.scalars().all()
+
+    return [
+        {
+            "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
+            "score": row.score,
+        }
+        for row in rows
+    ]
 
 
 @router.delete("/workspaces/{workspace_id}/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)

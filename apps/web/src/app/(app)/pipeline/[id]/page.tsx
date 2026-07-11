@@ -322,6 +322,9 @@ export default function DealDetailPage() {
   const [predictedClose, setPredictedClose] = useState<PredictedClose | null>(null);
   const [predictedCloseLoading, setPredictedCloseLoading] = useState(false);
 
+  const [healthHistory, setHealthHistory] = useState<{ recorded_at: string; score: number }[]>([]);
+  const [healthHistoryLoading, setHealthHistoryLoading] = useState(false);
+
   const [competitors, setCompetitors] = useState<string[]>([]);
   const [competitorsLoading, setCompetitorsLoading] = useState(false);
   const [competitorInput, setCompetitorInput] = useState("");
@@ -459,6 +462,13 @@ export default function DealDetailPage() {
       .then((data) => setMentions(data.mentions ?? []))
       .catch(() => setMentions([]))
       .finally(() => setMentionsLoading(false));
+
+    setHealthHistoryLoading(true);
+    apiClient
+      .getDealHealthScoreHistory(workspaceId, dealId, token)
+      .then((data) => setHealthHistory(Array.isArray(data) ? data : []))
+      .catch(() => setHealthHistory([]))
+      .finally(() => setHealthHistoryLoading(false));
 
     if (deal.contact_id) {
       apiClient
@@ -1214,6 +1224,67 @@ export default function DealDetailPage() {
               )}
             </Card>
           )}
+
+          {/* Health score history */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Heart className="h-4 w-4 text-emerald-400" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-200">Health Score History</p>
+              <span className="ml-auto text-[10px] font-mono text-zinc-500">0–100</span>
+            </div>
+            {healthHistoryLoading ? (
+              <div className="h-28 rounded-xl bg-zinc-800/50 animate-pulse" />
+            ) : healthHistory.length > 0 ? (
+              <div className="h-28">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={healthHistory} margin={{ top: 4, right: 4, bottom: 0, left: -24 }}>
+                    <defs>
+                      <linearGradient id="healthGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#10B981" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#10B981" stopOpacity={0}   />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                    <XAxis
+                      dataKey="recorded_at"
+                      tick={{ fill: "#71717A", fontSize: 9 }}
+                      axisLine={false}
+                      tickLine={false}
+                      interval="preserveStartEnd"
+                      tickFormatter={(v) =>
+                        new Date(v).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                      }
+                    />
+                    <YAxis
+                      domain={[0, 100]}
+                      tick={{ fill: "#71717A", fontSize: 9 }}
+                      axisLine={false}
+                      tickLine={false}
+                      width={28}
+                    />
+                    <RechartTooltip
+                      formatter={(v) => [`${v ?? 0}`, "Health"]}
+                      labelFormatter={(l) =>
+                        new Date(l).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                      }
+                      contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="score"
+                      stroke="#10B981"
+                      strokeWidth={2}
+                      fill="url(#healthGrad)"
+                      dot={false}
+                      activeDot={{ r: 4, fill: "#10B981" }}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-500 text-center py-4">No snapshots recorded yet.</p>
+            )}
+          </Card>
 
           {/* Activity sparkline — 12-week event intensity */}
           <Card className="p-4 space-y-3">
