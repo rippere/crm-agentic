@@ -108,8 +108,13 @@ Phase 13 — Extended Analytics (13k complete, 13l next)
 
 - [2026-07-11] Phase 13k: Deal health score history — migration 021_deal_health_score_history.sql (workspace_id/deal_id FK, score 0-100, recorded_at, RLS, 2 indexes); DealHealthHistory SQLAlchemy model; GET /workspaces/{id}/deals/{id}/health-score-history?limit=30 endpoint (auth guard, deal 404 check, oldest-first); emerald AreaChart card on /pipeline/[id] between Win Probability Trend and Activity sparkline (loading skeleton, empty state); getDealHealthScoreHistory() in api-client with 14-point deterministic demo stub; 2 new tests (list returns scores oldest-first, 403 wrong workspace); 501 tests total; PR #30
 
+- [2026-07-12] Phase 13l: Deal engagement score — GET /workspaces/{id}/deals/{id}/engagement-score endpoint (0–100 composite from contact messages×8 max40 + deal notes×10 max30 + task completion max30, last 90 days; auth + 404 guard); SVG progress ring card in /pipeline/[id] left sidebar between Associated Contact and Competitors (scoreColor-coded ring, per-component bar breakdown for Messages/Notes/Tasks); getDealEngagementScore() in api-client with demo stub seeded by dealId; also fixed dead `return history` at EOF of deals.py (response-lag function bug); 2 new tests (score math verification, 403 guard); 502 tests pass (503 total, 1 pre-existing failure)
+
+## Current Phase
+Phase 13 — Extended Analytics
+
 ## Next Task
-Phase 13l (suggested): Deal engagement score — a composite 0–100 score per deal based on recent messages (contact), notes activity, and task completion rate, analogous to the contact engagement score (Phase 12f). GET /workspaces/{id}/deals/{id}/engagement-score endpoint; score ring or gauge on deal detail page.
+Phase 13m (suggested): Contact deal stage progression — GET /workspaces/{id}/contacts/{id}/deal-stage-progression endpoint (for each deal linked to this contact, show their stage progression over time — a combined view of all deal journeys); compact multi-deal stage timeline card on /contacts/[id] page.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.

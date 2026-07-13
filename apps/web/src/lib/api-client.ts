@@ -1896,6 +1896,36 @@ export const apiClient = {
     }, token)
   },
 
+  // Deal engagement score (messages, notes, task completion)
+  getDealEngagementScore: (workspaceId: string, dealId: string, token: string): Promise<{
+    score: number;
+    message_count: number;
+    note_count: number;
+    tasks_total: number;
+    tasks_done: number;
+    components: { messages: number; notes: number; tasks: number };
+  }> => {
+    if (isDemoMode) {
+      const seed = (dealId.charCodeAt(0) + (dealId.charCodeAt(1) ?? 0)) % 50
+      const msgCount = 3 + (seed % 5)
+      const noteCount = 1 + (seed % 3)
+      const tasksTotal = 2 + (seed % 4)
+      const tasksDone = Math.floor(tasksTotal * 0.6)
+      const messagesScore = Math.min(40, msgCount * 8)
+      const notesScore = Math.min(30, noteCount * 10)
+      const tasksScore = Math.round(30 * tasksDone / tasksTotal)
+      return Promise.resolve({
+        score: messagesScore + notesScore + tasksScore,
+        message_count: msgCount,
+        note_count: noteCount,
+        tasks_total: tasksTotal,
+        tasks_done: tasksDone,
+        components: { messages: messagesScore, notes: notesScore, tasks: tasksScore },
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/engagement-score`, {}, token)
+  },
+
   getDealHealthScoreHistory: (
     workspaceId: string,
     dealId: string,

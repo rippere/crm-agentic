@@ -2135,3 +2135,84 @@ async def test_health_score_history_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/engagement-score
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_engagement_score_returns_components(app_client):
+    """Engagement score combines messages × 8, notes × 10, and task completion (0-30)."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact_id = uuid.uuid4()
+    deal = _fake_deal(workspace_id, title="Engaged Deal", contact_id=contact_id)
+
+    # Build mock messages, notes, and tasks
+    def _msg():
+        m = MagicMock()
+        m.workspace_id = workspace_id
+        m.contact_id = contact_id
+        m.received_at = datetime.now(timezone.utc) - timedelta(days=5)
+        return m
+
+    def _note():
+        n = MagicMock()
+        n.workspace_id = workspace_id
+        n.deal_id = deal.id
+        n.created_at = datetime.now(timezone.utc) - timedelta(days=10)
+        return n
+
+    def _task(done=False):
+        t = MagicMock()
+        t.workspace_id = workspace_id
+        t.contact_id = contact_id
+        t.status = "done" if done else "open"
+        t.created_at = datetime.now(timezone.utc) - timedelta(days=15)
+        return t
+
+    messages = [_msg() for _ in range(3)]   # 3 × 8 = 24 pts
+    notes = [_note() for _ in range(2)]      # 2 × 10 = 20 pts
+    tasks = [_task(done=True), _task(done=True), _task(done=False)]  # 2/3 done → 20 pts
+
+    call_count = 0
+
+    async def _side(*a, **kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_scalar_result(deal)
+        if call_count == 2:
+            return _make_scalars_result(messages)
+        if call_count == 3:
+            return _make_scalars_result(notes)
+        return _make_scalars_result(tasks)
+
+    mock_db.execute = AsyncMock(side_effect=_side)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/engagement-score")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["message_count"] == 3
+    assert data["note_count"] == 2
+    assert data["tasks_total"] == 3
+    assert data["tasks_done"] == 2
+    assert data["components"]["messages"] == 24
+    assert data["components"]["notes"] == 20
+    assert data["components"]["tasks"] == 20
+    assert data["score"] == 64
+
+
+@pytest.mark.asyncio
+async def test_deal_engagement_score_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's deal engagement score."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-aaaaaaaaaaaa")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/engagement-score")
+
+    assert resp.status_code == 403

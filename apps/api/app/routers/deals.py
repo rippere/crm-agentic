@@ -2134,4 +2134,80 @@ async def deal_response_lag_heatmap(
     max_lag = max(c["avg_lag_hours"] for c in cells)
     return {"cells": cells, "max_lag_hours": round(max_lag, 2)}
 
-    return history
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/engagement-score")
+async def deal_engagement_score(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Compute a 0–100 engagement score from contact messages, deal notes, and task completion (last 90 days)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    from app.models.task import Task
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+
+    # Messages from the linked contact
+    message_count = 0
+    if deal.contact_id:
+        msg_result = await db.execute(
+            select(Message).where(
+                Message.workspace_id == workspace_id,
+                Message.contact_id == deal.contact_id,
+                Message.received_at >= cutoff,
+            )
+        )
+        message_count = len(msg_result.scalars().all())
+
+    # Notes on this deal
+    note_result = await db.execute(
+        select(DealNote).where(
+            DealNote.workspace_id == workspace_id,
+            DealNote.deal_id == deal_id,
+            DealNote.created_at >= cutoff,
+        )
+    )
+    note_count = len(note_result.scalars().all())
+
+    # Tasks linked to the deal's contact
+    tasks_total = 0
+    tasks_done = 0
+    if deal.contact_id:
+        task_result = await db.execute(
+            select(Task).where(
+                Task.workspace_id == workspace_id,
+                Task.contact_id == deal.contact_id,
+                Task.created_at >= cutoff,
+            )
+        )
+        tasks = task_result.scalars().all()
+        tasks_total = len(tasks)
+        tasks_done = sum(1 for t in tasks if t.status == "done")
+
+    messages_score = min(40, message_count * 8)
+    notes_score = min(30, note_count * 10)
+    tasks_score = round(30 * tasks_done / tasks_total) if tasks_total > 0 else 0
+    total_score = messages_score + notes_score + tasks_score
+
+    return {
+        "score": total_score,
+        "message_count": message_count,
+        "note_count": note_count,
+        "tasks_total": tasks_total,
+        "tasks_done": tasks_done,
+        "components": {
+            "messages": messages_score,
+            "notes": notes_score,
+            "tasks": tasks_score,
+        },
+    }
