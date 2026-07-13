@@ -77,7 +77,7 @@
 - [2026-06-29] Phase 12t: Contact last-touch summary widget — GET /workspaces/{id}/contacts/{id}/last-touch endpoint (4 DB queries: contact lookup, latest message, latest note, latest activity; returns last_message_date, last_note_date, last_activity_date, most_recent_type, days_ago); compact "Last Touch" Card on /contacts/[id] below engagement score (per-type date rows color-coded indigo/amber/emerald, days-ago header badge, most-recent-type footer); getContactLastTouch() in api-client with per-contact demo stubs; 2 new tests (most-recent-touch + 404); 458 tests pass (74 contacts tests)
 
 ## Current Phase
-Phase 13 — Extended Analytics
+Phase 13 — Extended Analytics (13k complete, 13l next)
 
 - [2026-06-29] Phase 12u: Expected revenue forecast by close month — GET /workspaces/{id}/deals/revenue-forecast endpoint (groups open deals by expected_close month YYYY-MM, computes value × ml_win_probability/100 per deal, returns sorted list of {month, expected_revenue, deal_count, total_value}); emerald BarChart card on /reports page between by-agent and close-date-slippage (y-axis in $k, tooltip shows expected vs total pipeline + deal count); getDealRevenueForecast() in api-client with 3-month demo stub ($125k/$89k/$215k); 2 new tests (groups-by-month + math, 403); 460 tests pass (85 deals tests)
 - [2026-06-29] Phase 12v: Deal time-in-stage aging — GET /workspaces/{id}/deals/stage-aging endpoint (all open deals with days_in_stage since stage_changed_at or created_at, sorted by stage order then oldest-first); "Deal Aging by Stage" card on /reports page with per-stage grouped list (green <14d / amber 14–30d / rose 30d+ color-coded day badges); getDealStageAging() in api-client with 6-deal demo stub; 2 new tests (groups+sorts correctly, 403); 462 tests pass (87 deals tests)
@@ -106,8 +106,10 @@ Phase 13 — Extended Analytics
 
 - [2026-07-10] Phase 13j: Deal team mentions — migration 020_deal_mentions.sql (mentions JSONB on deals); GET+POST /workspaces/{id}/deals/{id}/mentions endpoints (auth+404 guard, max 30, each {name, type}); Mentions card on /pipeline/[id] between Competitors and Next Action (avatar-initial chips, indigo=teammate/emerald=contact, type selector, inline add input, X remove, optimistic update); getDealMentions()/updateDealMentions() in api-client with demo stubs; 2 new tests (GET returns list, POST wrong-workspace 403); 499 tests total; PR #29 merged
 
+- [2026-07-11] Phase 13k: Deal health score history — migration 021_deal_health_score_history.sql (workspace_id/deal_id FK, score 0-100, recorded_at, RLS, 2 indexes); DealHealthHistory SQLAlchemy model; GET /workspaces/{id}/deals/{id}/health-score-history?limit=30 endpoint (auth guard, deal 404 check, oldest-first); emerald AreaChart card on /pipeline/[id] between Win Probability Trend and Activity sparkline (loading skeleton, empty state); getDealHealthScoreHistory() in api-client with 14-point deterministic demo stub; 2 new tests (list returns scores oldest-first, 403 wrong workspace); 501 tests total; PR #30
+
 ## Next Task
-Phase 13k (suggested): Deal health score history — migration to record a daily health_score snapshot per deal; GET /workspaces/{id}/deals/{id}/health-history endpoint returning a 30-day time series; AreaChart on deal detail page showing health trend over time.
+Phase 13l (suggested): Deal engagement score — a composite 0–100 score per deal based on recent messages (contact), notes activity, and task completion rate, analogous to the contact engagement score (Phase 12f). GET /workspaces/{id}/deals/{id}/engagement-score endpoint; score ring or gauge on deal detail page.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.

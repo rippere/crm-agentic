@@ -14,6 +14,7 @@ from app.models.kpi_snapshot import KpiSnapshot
 from app.models.commitment import Commitment
 from app.models.deal_note import DealNote
 from app.models.contact_note import ContactNote
+from app.models.deal_health_history import DealHealthHistory
 
 __all__ = [
     "Workspace",
@@ -32,4 +33,5 @@ __all__ = [
     "Commitment",
     "DealNote",
     "ContactNote",
+    "DealHealthHistory",
 ]

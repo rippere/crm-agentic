@@ -1895,4 +1895,30 @@ export const apiClient = {
       body: JSON.stringify({ mentions }),
     }, token)
   },
+
+  getDealHealthScoreHistory: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+    limit = 30,
+  ): Promise<Array<{ recorded_at: string; score: number }>> => {
+    if (isDemoMode) {
+      const seed = dealId.charCodeAt(dealId.length - 1)
+      const now = Date.now()
+      const points = Array.from({ length: 14 }, (_, i) => {
+        const base = 75 - ((seed % 20))
+        const variance = ((seed * (i + 1)) % 25) - 12
+        return {
+          recorded_at: new Date(now - (13 - i) * 2 * 86400000).toISOString(),
+          score: Math.max(10, Math.min(100, base + variance)),
+        }
+      })
+      return Promise.resolve(points)
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/health-score-history?limit=${limit}`,
+      {},
+      token,
+    )
+  },
 }

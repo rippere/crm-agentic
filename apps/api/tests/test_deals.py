@@ -2083,3 +2083,55 @@ async def test_update_deal_mentions_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/health-score-history
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_health_score_history_returns_list(app_client):
+    """GET /deals/{id}/health-score-history returns recorded snapshots oldest-first."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Health History Deal")
+
+    row1 = MagicMock()
+    row1.recorded_at = _NOW - timedelta(days=2)
+    row1.score = 90
+
+    row2 = MagicMock()
+    row2.recorded_at = _NOW - timedelta(days=1)
+    row2.score = 75
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(deal),
+        _make_scalars_result([row1, row2]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/deals/{deal.id}/health-score-history"
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+    assert data[0]["score"] == 90
+    assert data[1]["score"] == 75
+
+
+@pytest.mark.asyncio
+async def test_health_score_history_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's health score history."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/health-score-history"
+        )
+
+    assert resp.status_code == 403
