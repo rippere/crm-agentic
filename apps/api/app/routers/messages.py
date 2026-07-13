@@ -1,5 +1,6 @@
 import uuid
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from app.limiter import limiter
 from app.models.user import User
 from app.models.message import Message
 from app.models.clarity_score import ClarityScore
+from app.models.connector import Connector
 
 router = APIRouter()
 
@@ -136,6 +138,78 @@ async def list_messages(
     )
     messages = result.scalars().all()
     return [MessageResponse.model_validate(m) for m in messages]
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/messages/volume-trends
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/messages/volume-trends")
+async def get_message_volume_trends(
+    workspace_id: uuid.UUID,
+    weeks: int = Query(default=12, ge=4, le=52),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return weekly message counts broken down by connector source (gmail/slack/teams/unknown).
+
+    Each row covers one Mon–Sun calendar week for the last `weeks` weeks.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.now(tz=timezone.utc)
+    # Start of the oldest week (Monday at 00:00 UTC)
+    today_mon = now - timedelta(days=now.weekday())
+    cutoff = (today_mon - timedelta(weeks=weeks - 1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    # Fetch messages with their connector (for service field)
+    msgs_result = await db.execute(
+        select(Message, Connector.service)
+        .outerjoin(Connector, Connector.id == Message.connector_id)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.received_at >= cutoff,
+        )
+        .order_by(Message.received_at.asc())
+    )
+    rows = msgs_result.all()
+
+    # Build {week_start → {service → count}}
+    SERVICES = ("gmail", "slack", "teams")
+    week_data: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+    for msg, service in rows:
+        if msg.received_at is None:
+            continue
+        ts = msg.received_at if msg.received_at.tzinfo else msg.received_at.replace(tzinfo=timezone.utc)
+        week_mon = ts - timedelta(days=ts.weekday())
+        week_key = week_mon.strftime("%Y-%m-%d")
+        bucket = service if service in SERVICES else "unknown"
+        week_data[week_key][bucket] += 1
+
+    # Emit all weeks in the window (even zero-count weeks)
+    result = []
+    for i in range(weeks):
+        d = cutoff + timedelta(weeks=i)
+        wk = d.strftime("%Y-%m-%d")
+        counts = week_data.get(wk, {})
+        row: dict = {"week_start": wk}
+        total = 0
+        for svc in SERVICES:
+            v = counts.get(svc, 0)
+            row[svc] = v
+            total += v
+        unknown = counts.get("unknown", 0)
+        row["unknown"] = unknown
+        total += unknown
+        row["total"] = total
+        result.append(row)
+
+    return result
 
 
 class ReprocessResponse(BaseModel):

@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -89,6 +89,7 @@ export default function ReportsPage() {
     closed_won: number;
     closed_lost: number;
   }>>([]);
+  const [messageVolume, setMessageVolume] = useState<Array<{ week_start: string; gmail: number; slack: number; teams: number; unknown: number; total: number }>>([]);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -113,6 +114,7 @@ export default function ReportsPage() {
       apiClient.getContactReengagementSummary("demo-workspace-1", "demo-token").then(setReengagementSummary).catch(() => {});
       apiClient.getRevenueCohort("demo-workspace-1", "demo-token").then(setRevenueCohort).catch(() => {});
       apiClient.getDealVelocityTrends("demo-workspace-1", "demo-token").then(setVelocityTrends).catch(() => {});
+      apiClient.getMessageVolumeTrends("demo-workspace-1", "demo-token").then(setMessageVolume).catch(() => {});
       return;
     }
     const supabase = createBrowserClient();
@@ -141,6 +143,7 @@ export default function ReportsPage() {
       apiClient.getContactReengagementSummary(workspaceId, session.access_token).then(setReengagementSummary).catch(() => {});
       apiClient.getRevenueCohort(workspaceId, session.access_token).then(setRevenueCohort).catch(() => {});
       apiClient.getDealVelocityTrends(workspaceId, session.access_token).then(setVelocityTrends).catch(() => {});
+      apiClient.getMessageVolumeTrends(workspaceId, session.access_token).then(setMessageVolume).catch(() => {});
     });
   }, []);
 
@@ -1255,6 +1258,48 @@ export default function ReportsPage() {
               </LineChart>
             </ResponsiveContainer>
             <p className="mt-2 text-[10px] text-zinc-600 font-mono">Days from deal creation to closed_won / closed_lost, averaged per calendar month</p>
+          </Card>
+        );
+      })()}
+
+      {/* Message Volume by Source */}
+      {messageVolume.length > 0 && (() => {
+        const hasTeams = messageVolume.some((w) => w.teams > 0);
+        const hasUnknown = messageVolume.some((w) => w.unknown > 0);
+        const display = messageVolume.map((w) => ({
+          ...w,
+          label: w.week_start.slice(5), // MM-DD
+        }));
+        return (
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-indigo-400" />
+              <p className="text-sm font-semibold text-zinc-200">Message Volume by Source</p>
+              <span className="ml-auto text-[10px] font-mono text-zinc-500">Last 12 weeks</span>
+            </div>
+            <div className="flex items-center gap-4 text-[10px]">
+              <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-indigo-400" />Gmail</span>
+              <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-violet-400" />Slack</span>
+              {hasTeams   && <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-sky-400"    />Teams</span>}
+              {hasUnknown && <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-zinc-500"   />Other</span>}
+            </div>
+            <div className="h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={display} margin={{ top: 4, right: 4, bottom: 0, left: -24 }} barSize={8} barGap={1}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fill: "#71717A", fontSize: 9 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                  <YAxis tick={{ fill: "#71717A", fontSize: 9 }} axisLine={false} tickLine={false} width={28} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }}
+                    formatter={(v: number, name: string) => [v, name.charAt(0).toUpperCase() + name.slice(1)]}
+                  />
+                  <Bar dataKey="gmail"   stackId="a" fill="#6366F1" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="slack"   stackId="a" fill="#8B5CF6" radius={[0, 0, 0, 0]} />
+                  {hasTeams   && <Bar dataKey="teams"   stackId="a" fill="#38BDF8" radius={[0, 0, 0, 0]} />}
+                  {hasUnknown && <Bar dataKey="unknown" stackId="a" fill="#52525B" radius={[2, 2, 0, 0]} />}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </Card>
         );
       })()}

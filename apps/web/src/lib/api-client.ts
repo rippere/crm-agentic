@@ -1951,4 +1951,37 @@ export const apiClient = {
       token,
     )
   },
+
+  getMessageVolumeTrends: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ week_start: string; gmail: number; slack: number; teams: number; unknown: number; total: number }>> => {
+    if (isDemoMode) {
+      const today = new Date()
+      const dow = today.getDay()
+      const diffToMon = dow === 0 ? -6 : 1 - dow
+      const mon = new Date(today)
+      mon.setDate(today.getDate() + diffToMon)
+      mon.setHours(0, 0, 0, 0)
+      return Promise.resolve(
+        Array.from({ length: 12 }, (_, i) => {
+          const d = new Date(mon)
+          d.setDate(mon.getDate() - (11 - i) * 7)
+          const gmail   = 4 + Math.round(Math.sin(i * 0.7) * 3 + 3)
+          const slack   = 2 + Math.round(Math.cos(i * 0.5) * 2 + 2)
+          const teams   = i > 6 ? Math.round(Math.abs(Math.sin(i)) + 0.5) : 0
+          const unknown = i % 4 === 0 ? 1 : 0
+          return {
+            week_start: d.toISOString().slice(0, 10),
+            gmail,
+            slack,
+            teams,
+            unknown,
+            total: gmail + slack + teams + unknown,
+          }
+        }),
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/messages/volume-trends`, {}, token)
+  },
 }
