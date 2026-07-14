@@ -112,11 +112,14 @@ Phase 13 — Extended Analytics (13k complete, 13l next)
 - [2026-07-13] Merged PRs #30 (Phase 13k) + #31 (Phase 13l) into master. Phase 13k implementation on master: migration 021_deal_health_score_history.sql, DealHealthHistory model, GET /deals/{id}/health-score-history?limit=30 endpoint, emerald AreaChart card. Phase 13l: deal engagement score endpoint + SVG progress ring.
 - [2026-07-13] Phase 13m: Message volume by source trends — GET /workspaces/{id}/messages/volume-trends?weeks=12 endpoint (JOIN messages with connectors for service type, groups by ISO week × source, fills all 12 week slots; gmail/slack/teams/unknown/total columns); stacked BarChart card on /reports page with per-source legend (indigo=Gmail, violet=Slack, sky=Teams, zinc=Other); getMessageVolumeTrends() in api-client with deterministic 12-week demo stub; MessageSquare icon added to reports imports; 2 new tests (12-week grouping + 403 guard); 7 messages tests pass
 
+- [2026-07-14] Phase 13n: Contact deal stage progression — GET /workspaces/{id}/contacts/{id}/deal-stage-progression endpoint (returns all deals for contact with reconstructed stage history, inferred proportionally from created_at→stage_changed_at span); "Deal Stage Journeys" card on /contacts/[id] after Win Rate by Quarter (per-deal horizontal rail, color-coded stage blocks with days labels, current stage ring-highlighted); DealStageStep + DealProgression types; getContactDealStageProgression() in api-client with demo stub; 2 new tests (stages-up-to-current-stage + 403 guard); also fixed DealResponse.competitors/mentions field_validator coercing None→[] so test_create_deal passes; 506 tests pass (1 pre-existing timing failure in agents test)
+- [2026-07-14] Session: Recovered orphaned commits 13h–13m (deal predicted close, win rate trend, mentions, health history, engagement score, message volume) from detached HEAD via fast-forward merge; all on master and pushed.
+
 ## Current Phase
 Phase 13 — Extended Analytics
 
 ## Next Task
-Phase 13n (suggested): Contact deal stage progression — GET /workspaces/{id}/contacts/{id}/deal-stage-progression endpoint (for each deal linked to this contact, show their stage progression over time — a combined view of all deal journeys); compact multi-deal stage timeline card on /contacts/[id] page.
+Phase 13o (suggested): Contact email open/click engagement tracking — a compact engagement funnel card on /contacts/[id] showing sent/opened/clicked/replied stats from messages; or alternatively Phase 14a: Dashboard summary AI digest — POST /workspaces/{id}/ai/digest endpoint (Claude Haiku weekly summary of workspace activity, top wins, risks, recommended actions); digest card on /dashboard with regenerate button.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
