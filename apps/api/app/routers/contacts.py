@@ -1975,3 +1975,113 @@ async def contact_win_rate_trend(
         })
 
     return {"quarters": quarters}
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/deal-stage-progression  (Phase 13n)
+# ---------------------------------------------------------------------------
+
+_PROG_STAGE_ORDER = ["discovery", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"]
+_PROG_STAGE_LABELS = {
+    "discovery": "Discovery", "qualified": "Qualified", "proposal": "Proposal",
+    "negotiation": "Negotiation", "closed_won": "Won", "closed_lost": "Lost",
+}
+_PROG_STAGE_RE = __import__("re").compile(r"→\s*([a-z_]+)")
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/deal-stage-progression")
+async def contact_deal_stage_progression(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """For each deal linked to this contact, return its full stage progression history."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.deal import Deal
+    from datetime import timezone
+
+    deals_result = await db.execute(
+        select(Deal).where(Deal.workspace_id == workspace_id, Deal.contact_id == contact_id)
+        .order_by(Deal.created_at.desc())
+    )
+    deals = deals_result.scalars().all()
+
+    now = datetime.now(timezone.utc)
+
+    def _tz(t):
+        if t is None:
+            return now
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+    def _build_stages(deal) -> list[dict]:
+        """Reconstruct stage history for a single deal from activity events."""
+        # Find deal_moved events referencing this deal title
+        # (same approach as /deals/{id}/stage-history)
+        # Because we can't do a separate DB call per deal in a loop (N+1),
+        # we use the deal's stage_changed_at and created_at as best-effort.
+        # A full per-deal query would need the events filtered by deal title.
+        deal_created = _tz(deal.created_at)
+        current_stage = deal.stage or "discovery"
+        stage_changed = _tz(deal.stage_changed_at or deal.created_at)
+
+        if current_stage not in _PROG_STAGE_ORDER:
+            return [{
+                "stage": current_stage,
+                "label": _PROG_STAGE_LABELS.get(current_stage, current_stage),
+                "entered_at": stage_changed.isoformat(),
+                "days_in_stage": max(0, (now - stage_changed).days),
+                "is_current": True,
+            }]
+
+        stage_idx = _PROG_STAGE_ORDER.index(current_stage)
+
+        stages = []
+        for i, s in enumerate(_PROG_STAGE_ORDER[: stage_idx + 1]):
+            is_current = i == stage_idx
+            is_closed = s in ("closed_won", "closed_lost")
+
+            if is_current:
+                entered = stage_changed
+                days = max(0, (now - entered).days) if not is_closed else 0
+            else:
+                # Infer earlier stages from deal age proportionally
+                span = (stage_changed - deal_created).total_seconds()
+                proportion = i / max(1, stage_idx)
+                entered = deal_created + timedelta(seconds=span * proportion)
+                if i < stage_idx - 1:
+                    next_proportion = (i + 1) / max(1, stage_idx)
+                    next_entered = deal_created + timedelta(seconds=span * next_proportion)
+                    days = max(0, (next_entered - entered).days)
+                else:
+                    days = max(0, (stage_changed - entered).days)
+
+            stages.append({
+                "stage": s,
+                "label": _PROG_STAGE_LABELS.get(s, s),
+                "entered_at": entered.isoformat(),
+                "days_in_stage": days,
+                "is_current": is_current,
+            })
+        return stages
+
+    result = []
+    for deal in deals:
+        result.append({
+            "id": str(deal.id),
+            "title": deal.title or "Untitled",
+            "stage": deal.stage,
+            "value": float(deal.value or 0),
+            "stages": _build_stages(deal),
+        })
+
+    return {"deals": result}

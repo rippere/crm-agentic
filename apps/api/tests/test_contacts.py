@@ -1761,3 +1761,71 @@ async def test_win_rate_trend_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{other_workspace_id}/contacts/{contact.id}/win-rate-trend")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/deal-stage-progression — Phase 13n
+# ---------------------------------------------------------------------------
+
+
+def _fake_deal_for_contact(workspace_id, contact_id, stage="proposal", **kwargs):
+    d = MagicMock()
+    d.id = uuid.uuid4()
+    d.workspace_id = workspace_id
+    d.contact_id = contact_id
+    d.title = kwargs.get("title", "Acme Deal")
+    d.stage = stage
+    d.value = kwargs.get("value", 25000.0)
+    d.created_at = datetime(2026, 1, 1)
+    d.stage_changed_at = kwargs.get("stage_changed_at", datetime(2026, 3, 15))
+    return d
+
+
+@pytest.mark.asyncio
+async def test_deal_stage_progression_returns_stages(app_client):
+    """Returns a deal list with reconstructed stage history up to current stage."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+    deal = _fake_deal_for_contact(workspace_id, contact.id, stage="proposal")
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_scalars_result([deal]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/contacts/{contact.id}/deal-stage-progression"
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "deals" in data
+    assert len(data["deals"]) == 1
+    deal_data = data["deals"][0]
+    assert deal_data["stage"] == "proposal"
+    stages = deal_data["stages"]
+    stage_names = [s["stage"] for s in stages]
+    assert "discovery" in stage_names
+    assert "qualified" in stage_names
+    assert "proposal" in stage_names
+    # Should NOT include stages after current
+    assert "negotiation" not in stage_names
+    # Exactly one stage marked current
+    assert sum(1 for s in stages if s["is_current"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_deal_stage_progression_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting a contact that belongs to a different workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    other_workspace_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact = _fake_contact(other_workspace_id)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(contact))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{other_workspace_id}/contacts/{contact.id}/deal-stage-progression"
+        )
+
+    assert resp.status_code == 403

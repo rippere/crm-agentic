@@ -1984,4 +1984,54 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/messages/volume-trends`, {}, token)
   },
+
+  getContactDealStageProgression: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    deals: Array<{
+      id: string
+      title: string
+      stage: string
+      value: number
+      stages: Array<{ stage: string; label: string; entered_at: string; days_in_stage: number; is_current: boolean }>
+    }>
+  }> => {
+    if (isDemoMode) {
+      const seed = contactId.charCodeAt(contactId.length - 1)
+      const STAGE_ORDER = ['discovery', 'qualified', 'proposal', 'negotiation', 'closed_won', 'closed_lost']
+      const STAGE_LABELS: Record<string, string> = {
+        discovery: 'Discovery', qualified: 'Qualified', proposal: 'Proposal',
+        negotiation: 'Negotiation', closed_won: 'Won', closed_lost: 'Lost',
+      }
+      const dealCount = 1 + (seed % 3)  // 1–3 deals
+      const deals = Array.from({ length: dealCount }, (_, di) => {
+        const stageIdx = (seed + di * 3) % 5  // 0–4
+        const stage = STAGE_ORDER[stageIdx]
+        const baseDate = new Date('2026-01-01')
+        baseDate.setDate(baseDate.getDate() + di * 30)
+        const stages = STAGE_ORDER.slice(0, stageIdx + 1).map((s, i) => ({
+          stage: s,
+          label: STAGE_LABELS[s],
+          entered_at: new Date(baseDate.getTime() + i * 14 * 86400000).toISOString(),
+          days_in_stage: i === stageIdx ? 7 + (seed % 14) : 10 + i * 5,
+          is_current: i === stageIdx,
+        }))
+        return {
+          id: `d-00${di + 1}`,
+          title: ['Enterprise Expansion', 'Platform License', 'Pro Upgrade'][di % 3],
+          stage,
+          value: 15000 + (seed + di) * 5000,
+          stages,
+        }
+      })
+      return Promise.resolve({ deals })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/contacts/${contactId}/deal-stage-progression`,
+      {},
+      token,
+    )
+  },
 }

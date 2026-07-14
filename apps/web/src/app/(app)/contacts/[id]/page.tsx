@@ -16,7 +16,7 @@ import {
   ArrowLeft, Mail, Brain, Zap, TrendingUp, TrendingDown, Minus,
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
-  Star, Calendar, X, Plus, Send, BarChart2, Download,
+  Star, Calendar, X, Plus, Send, BarChart2, Download, Layers,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -127,6 +127,22 @@ type WinRateQuarter = {
   lost: number;
   total: number;
   win_rate: number;
+};
+
+type DealStageStep = {
+  stage: string;
+  label: string;
+  entered_at: string;
+  days_in_stage: number;
+  is_current: boolean;
+};
+
+type DealProgression = {
+  id: string;
+  title: string;
+  stage: string;
+  value: number;
+  stages: DealStageStep[];
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -369,6 +385,7 @@ export default function ContactDetailPage() {
   const [sentimentTrend, setSentimentTrend] = useState<SentimentWeek[] | null>(null);
   const [sentimentLoading, setSentimentLoading] = useState(false);
   const [winRateTrend, setWinRateTrend] = useState<WinRateQuarter[] | null>(null);
+  const [dealProgression, setDealProgression] = useState<DealProgression[] | null>(null);
 
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -518,6 +535,11 @@ export default function ContactDetailPage() {
       .getContactWinRateTrend(workspaceId, contactId, token)
       .then((data) => setWinRateTrend(data?.quarters ?? null))
       .catch(() => setWinRateTrend(null));
+
+    apiClient
+      .getContactDealStageProgression(workspaceId, contactId, token)
+      .then((data) => setDealProgression(data?.deals ?? null))
+      .catch(() => setDealProgression(null));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1228,6 +1250,71 @@ export default function ContactDetailPage() {
                   />
                 </LineChart>
               </ResponsiveContainer>
+            </Card>
+          )}
+
+          {/* Deal Stage Progression */}
+          {dealProgression !== null && dealProgression.length > 0 && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Layers className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Deal Stage Journeys</p>
+                <span className="ml-auto text-[10px] font-mono text-zinc-500">
+                  {dealProgression.length} deal{dealProgression.length !== 1 ? "s" : ""}
+                </span>
+              </div>
+              <div className="space-y-3">
+                {dealProgression.map((deal) => {
+                  const stageColors: Record<string, string> = {
+                    discovery: "bg-zinc-600",
+                    qualified: "bg-sky-700",
+                    proposal: "bg-indigo-600",
+                    negotiation: "bg-violet-600",
+                    closed_won: "bg-emerald-600",
+                    closed_lost: "bg-rose-700",
+                  };
+                  return (
+                    <div key={deal.id} className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-medium text-zinc-300 truncate max-w-[60%]">{deal.title}</p>
+                        <span className="text-[10px] text-zinc-500">{formatCurrency(deal.value)}</span>
+                      </div>
+                      <div className="flex gap-0.5 items-center">
+                        {deal.stages.map((s, i) => (
+                          <div key={s.stage} className="flex items-center gap-0.5 flex-1 min-w-0">
+                            <div
+                              title={`${s.label}: ${s.days_in_stage}d`}
+                              className={cn(
+                                "h-4 w-full rounded-sm transition-opacity cursor-default",
+                                stageColors[s.stage] ?? "bg-zinc-600",
+                                s.is_current ? "opacity-100 ring-1 ring-white/30" : "opacity-50",
+                              )}
+                            />
+                            {i < deal.stages.length - 1 && (
+                              <ChevronRight className="h-2.5 w-2.5 text-zinc-700 flex-shrink-0" />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-1 flex-wrap">
+                        {deal.stages.map((s) => (
+                          <span
+                            key={s.stage}
+                            className={cn(
+                              "text-[9px] font-mono px-1 rounded",
+                              s.is_current
+                                ? "text-zinc-100 bg-zinc-700"
+                                : "text-zinc-500 bg-zinc-900",
+                            )}
+                          >
+                            {s.label} {s.days_in_stage}d
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </Card>
           )}
 

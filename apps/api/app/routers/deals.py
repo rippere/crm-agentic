@@ -8,7 +8,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,6 +46,11 @@ class DealResponse(BaseModel):
     next_action_date: date | None = None
     competitors: list[str] = []
     mentions: list = []
+
+    @field_validator("competitors", "mentions", mode="before")
+    @classmethod
+    def _none_to_empty_list(cls, v):
+        return v if v is not None else []
     created_at: datetime
 
     model_config = {"from_attributes": True}
