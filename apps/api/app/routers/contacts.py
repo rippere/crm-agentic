@@ -2,6 +2,7 @@ import csv
 import difflib
 import io
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta
 
@@ -23,6 +24,13 @@ from app.models.contact import Contact
 from app.models.contact_note import ContactNote
 from app.models.activity_event import ActivityEvent
 from app.services.supabase_rest import get_row
+from app.services.contact_context import (
+    assemble_contact_context,
+    find_unsupported_claims,
+    safe_generic_draft,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -641,21 +649,51 @@ async def compose_email(
             f"Win probability: {deal.ml_win_probability}%\n"
         )
 
+    # Ground the draft in the same rich context the pre-meeting brief uses
+    # (recent messages, calls, active deals). On the Supabase-REST fallback path
+    # the contact isn't in local Postgres, so there is no message/call/deal
+    # history to assemble — fall back to the shallow fields rather than crash.
+    assembled_context = ""
+    if contact_orm is not None:
+        assembled = await assemble_contact_context(db, workspace_id, contact_id, contact_orm)
+        assembled_context = assembled.text
+
+    if assembled_context:
+        # Rich path: the assembled block already carries name/company/role/status,
+        # so only the fields it doesn't cover are appended (strictly additive
+        # versus the previous shallow prompt).
+        user_content = (
+            f"{assembled_context}\n"
+            f"Semantic tags: {json.dumps(contact_tags)}\n"
+            f"Revenue: {contact_revenue}\n"
+            f"{deal_context}"
+        )
+    else:
+        user_content = (
+            f"Contact name: {contact_name}\n"
+            f"Company: {contact_company}\n"
+            f"Role: {contact_role}\n"
+            f"Status: {contact_status}\n"
+            f"Semantic tags: {json.dumps(contact_tags)}\n"
+            f"Revenue: {contact_revenue}\n"
+            f"{deal_context}"
+        )
+
+    # Everything the model is allowed to assert as fact. The post-generation
+    # guard below checks the draft against exactly this corpus.
+    grounding_corpus = user_content
+
     system_prompt = (
         "You are a sales professional. Write a personalized outreach email for the following contact. "
+        "Ground every specific factual claim ONLY in the context supplied below: names, companies, "
+        "deals, figures, dates, and prior conversations must appear in that context verbatim. "
+        "Never assert, infer, or invent a fact that is not present in the supplied context — "
+        "no fabricated mutual contacts, funding events, metrics, or product details. "
+        "If the context is thin, write a shorter, more general email rather than inventing specifics. "
         'Return JSON only: {"subject": "<subject line>", "body": "<email body>"}'
     )
     if body.tone:
         system_prompt += f" Write the email in a {body.tone} tone."
-    user_content = (
-        f"Contact name: {contact_name}\n"
-        f"Company: {contact_company}\n"
-        f"Role: {contact_role}\n"
-        f"Status: {contact_status}\n"
-        f"Semantic tags: {json.dumps(contact_tags)}\n"
-        f"Revenue: {contact_revenue}\n"
-        f"{deal_context}"
-    )
 
     client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     message = client.messages.create(
@@ -674,12 +712,34 @@ async def compose_email(
 
     try:
         data = json.loads(raw)
-        return EmailDraftResponse(subject=data.get("subject", ""), body=data.get("body", ""))
     except (json.JSONDecodeError, KeyError):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to parse email draft from Claude response",
         )
+
+    draft_subject = data.get("subject", "")
+    draft_body = data.get("body", "")
+
+    # Fact-grounding guard: the system prompt asks the model to stay inside the
+    # supplied context, but prompts are not enforcement. This check catches
+    # specific claims (multi-word proper nouns, $ amounts, percentages) that do
+    # not trace back to grounding_corpus and, rather than send a hallucinated
+    # first-party fact to a prospect, falls back to a safe generic draft built
+    # only from the contact's own name/company.
+    # See app/services/contact_context.py for the guard's honest limitations —
+    # it is a lexical safety net, not a guarantee (single-token invented names
+    # and lowercase prose fabrications can still pass through).
+    unsupported = find_unsupported_claims(draft_subject, draft_body, grounding_corpus)
+    if unsupported:
+        logger.warning(
+            "compose_email guard_tripped contact_id=%s unsupported=%s",
+            contact_id,
+            unsupported,
+        )
+        draft_subject, draft_body = safe_generic_draft(contact_name, contact_company)
+
+    return EmailDraftResponse(subject=draft_subject, body=draft_body)
 
 
 @router.post("/workspaces/{workspace_id}/contacts/{contact_id}/enrich", status_code=202)
@@ -1070,9 +1130,6 @@ async def pre_meeting_brief(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     from app.models.contact import Contact
-    from app.models.message import Message
-    from app.models.call_summary import CallSummary
-    from app.models.deal import Deal
     from app.config import settings
     import anthropic
 
@@ -1083,50 +1140,11 @@ async def pre_meeting_brief(
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
-    # Gather context: recent messages (3), calls (2), active deals (3)
-    msg_result = await db.execute(
-        select(Message).where(
-            Message.workspace_id == workspace_id,
-            Message.contact_id == contact_id,
-        ).order_by(Message.received_at.desc()).limit(3)
-    )
-    messages = msg_result.scalars().all()
-
-    call_result = await db.execute(
-        select(CallSummary).where(
-            CallSummary.workspace_id == workspace_id,
-            CallSummary.contact_id == contact_id,
-        ).order_by(CallSummary.call_date.desc()).limit(2)
-    )
-    calls = call_result.scalars().all()
-
-    deal_result = await db.execute(
-        select(Deal).where(
-            Deal.workspace_id == workspace_id,
-            Deal.contact_id == contact_id,
-            Deal.stage.not_in(["closed_lost"]),
-        ).limit(3)
-    )
-    deals = deal_result.scalars().all()
-
-    context_parts = [
-        f"Contact: {contact.name} ({contact.email}), {contact.role} at {contact.company}",
-        f"Status: {contact.status}",
-    ]
-    if messages:
-        context_parts.append("Recent emails:")
-        for m in messages:
-            context_parts.append(f"  - Subject: {m.subject or '(none)'}")
-    if calls:
-        context_parts.append("Recent calls:")
-        for c in calls:
-            context_parts.append(f"  - {c.title}: {c.summary[:300] if c.summary else '(no summary)'}")
-    if deals:
-        context_parts.append("Active deals:")
-        for d in deals:
-            context_parts.append(f"  - {d.title} | Stage: {d.stage} | Value: ${d.value:,.0f} | Win prob: {d.ml_win_probability}%")
-
-    context = "\n".join(context_parts)
+    # Gather context: recent messages (3), calls (2), active deals (3).
+    # Shared with compose_email via the assemble_contact_context helper so the
+    # two endpoints stay in sync. Behaviour-preserving: same gather + format.
+    assembled = await assemble_contact_context(db, workspace_id, contact_id, contact)
+    context = assembled.text
     prompt = (
         f"You are a senior sales strategist. Generate a concise pre-meeting intelligence brief for the contact below.\n\n"
         f"{context}\n\n"
