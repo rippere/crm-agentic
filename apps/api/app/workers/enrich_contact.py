@@ -60,43 +60,15 @@ def _make_session() -> async_sessionmaker[AsyncSession]:
     )
 
 
-async def _hunter_lookup(email: str | None, name: str | None, company: str | None) -> dict[str, str | None]:
-    """Return dict with 'email', 'role' from Hunter.io — or empty dict if not configured / no result."""
-    from app.config import settings
-    if not settings.HUNTER_API_KEY:
-        return {}
+async def _provider_lookup(email: str | None, name: str | None, company: str | None) -> dict[str, str | None]:
+    """Resolve 'email'/'role' via the enrichment provider waterfall.
 
-    import httpx
-    result: dict[str, str | None] = {}
+    Delegates to app.services.enrichment (Hunter.io today; future sources plug in
+    behind the same interface). Returns an empty dict if nothing is configured.
+    """
+    from app.services.enrichment import enrich_contact_fields
 
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            if not email and name and company:
-                # Email finder
-                parts = (name or "").split()
-                first, last = parts[0] if parts else "", parts[-1] if len(parts) > 1 else ""
-                resp = await client.get(
-                    "https://api.hunter.io/v2/email-finder",
-                    params={"domain": company, "first_name": first, "last_name": last, "api_key": settings.HUNTER_API_KEY},
-                )
-                data = resp.json()
-                found = data.get("data", {})
-                if found.get("email"):
-                    result["email"] = found["email"]
-                    result["role"] = found.get("position")
-            elif email:
-                # Email verifier + enrichment
-                resp = await client.get(
-                    "https://api.hunter.io/v2/email-verifier",
-                    params={"email": email, "api_key": settings.HUNTER_API_KEY},
-                )
-                data = resp.json()
-                found = data.get("data", {})
-                result["role"] = found.get("position") or None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("enrich_contact hunter_lookup_failed email=%s exc=%s", email, exc)
-
-    return result
+    return await enrich_contact_fields(email=email, name=name, company=company)
 
 
 async def _claude_enrich(
@@ -157,12 +129,12 @@ async def _run(contact_id: str) -> dict[str, Any]:
 
         updates: dict[str, Any] = {}
 
-        # Pass 1: Hunter.io
-        hunter = await _hunter_lookup(contact.email, contact.name, contact.company)
-        if hunter.get("email") and not contact.email:
-            updates["email"] = hunter["email"]
-        if hunter.get("role") and not contact.role:
-            updates["role"] = hunter["role"]
+        # Pass 1: enrichment provider waterfall (Hunter.io today)
+        provider = await _provider_lookup(contact.email, contact.name, contact.company)
+        if provider.get("email") and not contact.email:
+            updates["email"] = provider["email"]
+        if provider.get("role") and not contact.role:
+            updates["role"] = provider["role"]
 
         # Pass 2: Claude Haiku (cheap, fast)
         claude = await _claude_enrich(
