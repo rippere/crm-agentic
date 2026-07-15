@@ -2034,4 +2034,28 @@ export const apiClient = {
       token,
     )
   },
+
+  getWorkspaceDigest: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    digest: string
+    generated_at: string
+    contact_count: number
+    active_deal_count: number
+    open_task_count: number
+    message_count: number
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        digest: `**Top Wins**\n- Closed 2 enterprise deals this week totalling $85K, pushing Q3 revenue ahead of forecast.\n- Lead Scorer flagged 3 high-potential contacts from this week's inbound — all added to the pipeline.\n- Email Composer helped the team send 12 personalised follow-ups with an average reply rate of 34%.\n\n**Watch Out**\n- 2 deals in the Negotiation stage have had no activity in 14+ days and health scores below 40.\n- 5 open tasks are overdue — 3 belong to deals in the Proposal stage where timing is critical.\n- Avg clarity score dropped to 61 this week; 4 messages flagged for ambiguous action items.\n\n**Recommended Actions**\n- Run the Pipeline Optimizer agent on the 2 stale Negotiation deals to generate re-engagement suggestions.\n- Use the Task board (/tasks) to triage and reassign the 5 overdue items before end of week.\n- Score the 4 low-clarity messages in /inbox to surface any hidden commitments before they slip.`,
+        generated_at: new Date().toISOString(),
+        contact_count: 48,
+        active_deal_count: 12,
+        open_task_count: 9,
+        message_count: 134,
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/digest`, { method: 'POST' }, token)
+  },
 }

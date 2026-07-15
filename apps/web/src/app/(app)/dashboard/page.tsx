@@ -19,6 +19,7 @@ import {
   DollarSign, Briefcase, Brain, Bot, TrendingUp, TrendingDown,
   Minus, Activity, CheckCircle, AlertTriangle, Info,
   ListTodo, Mail, BarChart2, CheckSquare, ExternalLink, Bell,
+  Sparkles, RefreshCw,
 } from "lucide-react";
 import { cn, SIGNAL } from "@/lib/utils";
 import type { KPI, ActivityEvent, Deal } from "@/lib/types";
@@ -250,6 +251,9 @@ export default function DashboardPage() {
   const [pollToken, setPollToken] = useState<string | null>(null);
   const [pollWorkspaceId, setPollWorkspaceId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [digest, setDigest] = useState<string | null>(null);
+  const [digestGeneratedAt, setDigestGeneratedAt] = useState<string | null>(null);
+  const [digestLoading, setDigestLoading] = useState(false);
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
@@ -273,6 +277,11 @@ export default function DashboardPage() {
       apiClient.getDealForecast("demo-workspace-1", "demo-token", 6).then((data) => {
         if (Array.isArray(data)) setForecastData(data);
       }).catch(() => {});
+      setDigestLoading(true);
+      apiClient.getWorkspaceDigest("demo-workspace-1", "demo-token").then((data) => {
+        setDigest(data.digest);
+        setDigestGeneratedAt(data.generated_at);
+      }).catch(() => {}).finally(() => setDigestLoading(false));
       return;
     }
 
@@ -319,13 +328,18 @@ export default function DashboardPage() {
 
       if (!workspaceId) return;
 
-      // Fetch revenue history + forecast
+      // Fetch revenue history + forecast + initial digest
       apiClient.getDealHistory(workspaceId, session.access_token, 6)
         .then((data) => { if (Array.isArray(data)) setRevenueHistory(data); })
         .catch(() => {});
       apiClient.getDealForecast(workspaceId, session.access_token, 6)
         .then((data) => { if (Array.isArray(data)) setForecastData(data); })
         .catch(() => {});
+      setDigestLoading(true);
+      apiClient.getWorkspaceDigest(workspaceId, session.access_token)
+        .then((data) => { setDigest(data.digest); setDigestGeneratedAt(data.generated_at); })
+        .catch(() => {})
+        .finally(() => setDigestLoading(false));
 
       // Subscribe to Supabase Realtime for live activity feed
       const channel = supabase
@@ -425,6 +439,49 @@ export default function DashboardPage() {
     return () => clearInterval(id);
   }, [pollWorkspaceId, pollToken]);
 
+  async function regenerateDigest() {
+    if (digestLoading) return;
+    setDigestLoading(true);
+    try {
+      if (DEMO_MODE) {
+        const data = await apiClient.getWorkspaceDigest("demo-workspace-1", "demo-token");
+        setDigest(data.digest);
+        setDigestGeneratedAt(data.generated_at);
+      } else {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        const workspaceId: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!workspaceId) return;
+        const data = await apiClient.getWorkspaceDigest(workspaceId, session.access_token);
+        setDigest(data.digest);
+        setDigestGeneratedAt(data.generated_at);
+      }
+    } catch { /* silently ignore */ } finally {
+      setDigestLoading(false);
+    }
+  }
+
+  function renderDigestMarkdown(text: string) {
+    return text.split("\n").map((line, i) => {
+      if (line.startsWith("**") && line.endsWith("**")) {
+        return (
+          <p key={i} className="text-xs font-semibold text-zinc-300 mt-3 first:mt-0">
+            {line.replace(/\*\*/g, "")}
+          </p>
+        );
+      }
+      if (line.startsWith("- ")) {
+        return (
+          <p key={i} className="text-xs text-zinc-400 pl-3 mt-1 leading-relaxed">
+            <span className="text-indigo-500 mr-1.5">•</span>{line.slice(2)}
+          </p>
+        );
+      }
+      return line ? <p key={i} className="text-xs text-zinc-400 mt-1">{line}</p> : null;
+    });
+  }
+
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header
@@ -499,6 +556,56 @@ export default function DashboardPage() {
             />
           </div>
           )}
+        </section>
+      )}
+
+      {/* AI Weekly Digest */}
+      {(digest !== null || digestLoading) && (
+        <section aria-labelledby="digest-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="digest-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Weekly Digest
+            </h2>
+            <Badge variant="indigo" size="sm" dot>Nova AI</Badge>
+            {digestGeneratedAt && (
+              <span className="text-[11px] text-zinc-600 font-mono ml-auto">
+                {new Date(digestGeneratedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+          <Card className="relative">
+            {/* Regenerate button */}
+            <button
+              onClick={regenerateDigest}
+              disabled={digestLoading}
+              className="absolute top-3 right-3 flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] text-zinc-400 hover:text-indigo-400 hover:border-indigo-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Regenerate digest"
+            >
+              <RefreshCw className={cn("h-3 w-3", digestLoading && "animate-spin")} />
+              {digestLoading ? "Generating…" : "Regenerate"}
+            </button>
+
+            {/* Digest header */}
+            <div className="flex items-center gap-2 mb-4 pr-28">
+              <Sparkles className="h-4 w-4 text-indigo-400 flex-shrink-0" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-100">AI Workspace Summary</p>
+            </div>
+
+            {digestLoading && !digest ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-3 bg-zinc-800 rounded w-1/3" />
+                <div className="h-3 bg-zinc-800 rounded w-full" />
+                <div className="h-3 bg-zinc-800 rounded w-5/6" />
+                <div className="h-3 bg-zinc-800 rounded w-1/3 mt-3" />
+                <div className="h-3 bg-zinc-800 rounded w-full" />
+                <div className="h-3 bg-zinc-800 rounded w-4/5" />
+              </div>
+            ) : digest ? (
+              <div className={cn("transition-opacity", digestLoading && "opacity-50")}>
+                {renderDigestMarkdown(digest)}
+              </div>
+            ) : null}
+          </Card>
         </section>
       )}
 
