@@ -115,11 +115,13 @@ Phase 13 — Extended Analytics (13k complete, 13l next)
 - [2026-07-14] Phase 13n: Contact deal stage progression — GET /workspaces/{id}/contacts/{id}/deal-stage-progression endpoint (returns all deals for contact with reconstructed stage history, inferred proportionally from created_at→stage_changed_at span); "Deal Stage Journeys" card on /contacts/[id] after Win Rate by Quarter (per-deal horizontal rail, color-coded stage blocks with days labels, current stage ring-highlighted); DealStageStep + DealProgression types; getContactDealStageProgression() in api-client with demo stub; 2 new tests (stages-up-to-current-stage + 403 guard); also fixed DealResponse.competitors/mentions field_validator coercing None→[] so test_create_deal passes; 506 tests pass (1 pre-existing timing failure in agents test)
 - [2026-07-14] Session: Recovered orphaned commits 13h–13m (deal predicted close, win rate trend, mentions, health history, engagement score, message volume) from detached HEAD via fast-forward merge; all on master and pushed.
 
+- [2026-07-15] Phase 14a: Dashboard AI weekly digest — POST /workspaces/{id}/ai/digest endpoint (Claude Haiku; builds live workspace snapshot: contacts, deals, tasks, messages, recent activity; returns structured 3-section digest: Top Wins / Watch Out / Recommended Actions + metadata); Dashboard "Weekly Digest" card auto-loads on mount (loading skeleton, Regenerate button with spinner, fades while regenerating); getWorkspaceDigest() in api-client with realistic demo stub; 2 new tests (structured response + 403 guard); 6/6 ai tests pass; PR #33 merged
+
 ## Current Phase
-Phase 13 — Extended Analytics
+Phase 14 — AI Summaries & Intelligence
 
 ## Next Task
-Phase 13o (suggested): Contact email open/click engagement tracking — a compact engagement funnel card on /contacts/[id] showing sent/opened/clicked/replied stats from messages; or alternatively Phase 14a: Dashboard summary AI digest — POST /workspaces/{id}/ai/digest endpoint (Claude Haiku weekly summary of workspace activity, top wins, risks, recommended actions); digest card on /dashboard with regenerate button.
+Phase 14b (suggested): Per-deal AI coaching card — POST /workspaces/{id}/deals/{id}/ai/coach endpoint (Claude Haiku analyses deal health, stage velocity, competitor mentions, next-action overdue status; returns 3-bullet coaching advice + urgency level); "AI Coach" card on /pipeline/[id] deal detail with Regenerate button. Alternatively Phase 14c: Contact outreach draft — POST /workspaces/{id}/contacts/{id}/ai/outreach to compose a personalised outreach message seeded from contact name, company, recent messages, clarity scores, open tasks.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
