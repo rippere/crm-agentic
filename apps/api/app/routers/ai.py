@@ -1,3 +1,4 @@
+import datetime
 import uuid
 
 import anthropic as _anthropic
@@ -13,6 +14,7 @@ from app.limiter import limiter
 from app.models.user import User
 from app.models.contact import Contact
 from app.models.deal import Deal
+from app.models.message import Message
 from app.models.task import Task
 from app.models.activity_event import ActivityEvent
 
@@ -127,3 +129,130 @@ async def ai_query(
         ) from exc
 
     return AIQueryResponse(answer=answer)
+
+
+# ---------------------------------------------------------------------------
+# Workspace digest
+# ---------------------------------------------------------------------------
+
+_DIGEST_SYSTEM = """\
+You are Nova, the AI assistant for NovaCRM. Generate a concise weekly digest for a sales/PM team.
+
+Structure your response in exactly three sections using these headers:
+**Top Wins** — 2-3 bullet points of recent successes (deals moved forward, contacts engaged, tasks completed).
+**Watch Out** — 2-3 bullet points of risks or items needing attention (stale deals, overdue tasks, low clarity messages).
+**Recommended Actions** — 2-3 specific, actionable next steps referencing CRM features where helpful.
+
+Keep each bullet to one crisp sentence. No intro or closing paragraphs outside the three sections.\
+"""
+
+
+class DigestResponse(BaseModel):
+    digest: str
+    generated_at: str
+    contact_count: int
+    active_deal_count: int
+    open_task_count: int
+    message_count: int
+
+
+@router.post("/workspaces/{workspace_id}/ai/digest", response_model=DigestResponse)
+@limiter.limit("5/minute")
+async def generate_digest(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DigestResponse:
+    """Generate a Claude Haiku weekly digest for the workspace."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # Gather counts and summaries
+    contact_count = await db.scalar(
+        select(func.count()).where(Contact.workspace_id == workspace_id)
+    ) or 0
+
+    deal_rows = await db.execute(
+        select(Deal.stage, Deal.title, Deal.company, Deal.value, Deal.health_score, Deal.ml_win_probability)
+        .where(Deal.workspace_id == workspace_id)
+        .limit(30)
+    )
+    deals = deal_rows.all()
+    active_deals = [d for d in deals if d.stage not in ("closed_won", "closed_lost")]
+    won_deals = [d for d in deals if d.stage == "closed_won"]
+    stale_deals = [d for d in active_deals if d.health_score < 40]
+
+    open_task_count = await db.scalar(
+        select(func.count()).where(Task.workspace_id == workspace_id, Task.status == "open")
+    ) or 0
+    overdue_task_count = await db.scalar(
+        select(func.count()).where(
+            Task.workspace_id == workspace_id,
+            Task.status == "open",
+            Task.due_date < datetime.date.today(),
+        )
+    ) or 0
+
+    message_count = await db.scalar(
+        select(func.count()).where(Message.workspace_id == workspace_id)
+    ) or 0
+
+    recent_events = await db.execute(
+        select(ActivityEvent.type, ActivityEvent.description, ActivityEvent.agent_name, ActivityEvent.severity)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .order_by(ActivityEvent.created_at.desc())
+        .limit(10)
+    )
+    events = recent_events.all()
+
+    pipeline_value = sum(d.value for d in active_deals)
+    won_value = sum(d.value for d in won_deals)
+
+    context_lines = [
+        f"Workspace snapshot (as of {datetime.date.today().isoformat()}):",
+        f"- Contacts: {contact_count}",
+        f"- Active deals: {len(active_deals)} (pipeline ${pipeline_value:,.0f})",
+        f"- Closed-won deals: {len(won_deals)} (value ${won_value:,.0f})",
+        f"- Stale deals (health < 40): {len(stale_deals)}",
+        f"- Open tasks: {open_task_count} ({overdue_task_count} overdue)",
+        f"- Messages ingested: {message_count}",
+    ]
+    if stale_deals:
+        context_lines.append("- Stale deal details: " + "; ".join(
+            f"{d.title or 'Untitled'} @ {d.company or '?'} health={d.health_score}" for d in stale_deals[:5]
+        ))
+    if won_deals:
+        context_lines.append("- Recent wins: " + "; ".join(
+            f"{d.title or 'Untitled'} @ {d.company or '?'} ${d.value:,.0f}" for d in won_deals[:3]
+        ))
+    if events:
+        context_lines.append("- Recent activity: " + "; ".join(
+            f"[{e.type}/{e.severity}] {e.agent_name}: {e.description}" for e in events[:5]
+        ))
+
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_DIGEST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        digest_text = msg.content[0].text.strip() if msg.content else "Digest unavailable."
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return DigestResponse(
+        digest=digest_text,
+        generated_at=datetime.datetime.utcnow().isoformat() + "Z",
+        contact_count=contact_count,
+        active_deal_count=len(active_deals),
+        open_task_count=open_task_count,
+        message_count=message_count,
+    )

@@ -24,6 +24,7 @@ def _fake_event_row(**kwargs) -> MagicMock:
     row.type = kwargs.get("type", "contact_created")
     row.description = kwargs.get("description", "New contact added")
     row.agent_name = kwargs.get("agent_name", "System")
+    row.severity = kwargs.get("severity", "info")
     return row
 
 
@@ -121,3 +122,54 @@ async def test_ai_query_claude_unavailable_returns_503(app_client):
 
     assert resp.status_code == 503
     assert "AI unavailable" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/digest
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ai_digest_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    deal = _fake_deal_row(stage="closed_won", value=50000.0, health_score=95)
+    event = _fake_event_row(description="Deal closed won", severity="success")
+
+    # scalar() calls: contact_count, open_task_count, overdue_task_count, message_count
+    mock_db.scalar = AsyncMock(side_effect=[12, 5, 2, 88])
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result([deal]),
+        _make_execute_result([event]),
+    ])
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text="**Top Wins**\n- Closed a big deal.\n\n**Watch Out**\n- 2 overdue tasks.\n\n**Recommended Actions**\n- Check /pipeline.")]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_anthropic_cls:
+        mock_client = MagicMock()
+        mock_anthropic_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/ai/digest")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "digest" in body
+    assert "Top Wins" in body["digest"]
+    assert body["contact_count"] == 12
+    assert body["open_task_count"] == 5
+    assert body["message_count"] == 88
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_ai_digest_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/ai/digest")
+
+    assert resp.status_code == 403
