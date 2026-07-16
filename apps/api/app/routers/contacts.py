@@ -27,6 +27,7 @@ from app.services.supabase_rest import get_row
 from app.services.contact_context import (
     assemble_contact_context,
     find_unsupported_claims,
+    humanize_draft,
     safe_generic_draft,
 )
 
@@ -777,6 +778,15 @@ async def compose_email(
             unsupported,
         )
         draft_subject, draft_body = safe_generic_draft(contact_name, contact_company)
+    else:
+        # Only humanize a draft that already passed fact-grounding — never the
+        # deterministic safe_generic_draft fallback, which has no AI-writing
+        # tells to strip. Re-check grounding afterward: humanize_draft is a
+        # rewrite, and a rewrite could in principle introduce an unsupported
+        # claim even though it isn't supposed to.
+        rewritten_subject, rewritten_body = humanize_draft(client, draft_subject, draft_body)
+        if not find_unsupported_claims(rewritten_subject, rewritten_body, grounding_corpus):
+            draft_subject, draft_body = rewritten_subject, rewritten_body
 
     return EmailDraftResponse(subject=draft_subject, body=draft_body)
 
