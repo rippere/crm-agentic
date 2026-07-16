@@ -350,6 +350,7 @@ async def going_dark_contacts(
             Message.workspace_id == workspace_id,
             Message.contact_id.in_(contact_ids),
             Message.received_at >= cutoff_90,
+            Message.graph_only.is_(False),
         )
     )
     messages = msg_result.scalars().all()
@@ -505,6 +506,7 @@ async def contact_reengagement_summary(
             _Message.workspace_id == workspace_id,
             _Message.received_at >= lookback_start,
             _Message.contact_id.is_not(None),
+            _Message.graph_only.is_(False),
         )
     )
     messages = msg_result.scalars().all()
@@ -1115,6 +1117,7 @@ async def contact_timeline(
         select(Message).where(
             Message.workspace_id == workspace_id,
             Message.contact_id == contact_id,
+            Message.graph_only.is_(False),
         )
     )
     for m in msg_result.scalars().all():
@@ -1499,6 +1502,7 @@ async def contact_activity_heatmap(
             Message.workspace_id == workspace_id,
             Message.contact_id == contact_id,
             Message.received_at >= cutoff,
+            Message.graph_only.is_(False),
         )
     )
     messages = msg_result.scalars().all()
@@ -1556,6 +1560,7 @@ async def contact_engagement_score(
             Message.workspace_id == workspace_id,
             Message.contact_id == contact_id,
             Message.received_at >= cutoff,
+            Message.graph_only.is_(False),
         )
     )
     message_count = len(msg_result.scalars().all())
@@ -1670,6 +1675,7 @@ async def export_contact_timeline(
         select(Message).where(
             Message.workspace_id == workspace_id,
             Message.contact_id == contact_id,
+            Message.graph_only.is_(False),
         )
     )
     for m in msg_result.scalars().all():

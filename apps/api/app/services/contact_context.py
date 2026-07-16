@@ -56,11 +56,14 @@ async def assemble_contact_context(
     that ``pre_meeting_brief`` performed inline, so brief output is unchanged.
     """
     # Recent messages (subjects only — bodies are deliberately not surfaced).
+    # graph_only rows are excluded: they exist for the relationship graph, carry
+    # no body, and must never become grounding facts for a generated draft.
     msg_result = await db.execute(
         select(Message)
         .where(
             Message.workspace_id == workspace_id,
             Message.contact_id == contact_id,
+            Message.graph_only.is_(False),
         )
         .order_by(Message.received_at.desc())
         .limit(3)
