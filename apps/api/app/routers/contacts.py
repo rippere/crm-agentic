@@ -1721,6 +1721,7 @@ async def contact_last_touch(
         select(Message.received_at, Message.created_at).where(
             Message.workspace_id == workspace_id,
             Message.contact_id == contact_id,
+            Message.graph_only.is_(False),
         ).order_by(Message.received_at.desc().nullslast()).limit(1)
     )
     msg_row = msg_result.first()

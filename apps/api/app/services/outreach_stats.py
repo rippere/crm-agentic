@@ -61,9 +61,18 @@ async def compute_outreach_stats(
     messages = list(result.scalars().all())
 
     # First outbound per thread inside the window = one outreach attempt.
+    #
+    # The graph_only filter is deliberately ASYMMETRIC — it applies here and not
+    # to replies below. Outbound metadata-only rows are ordinary personal mail the
+    # relevance judge rejected; counting them as outreach would inflate the
+    # denominator with every email you sent a friend. A REPLY, though, is a reply
+    # whatever that judge thought of it, so filtering the inbound side would
+    # silently undercount exactly the outcome this function exists to measure.
     first_sent: dict[str, datetime] = {}
     for m in messages:
         if m.direction != "outbound" or m.received_at is None:
+            continue
+        if getattr(m, "graph_only", False):
             continue
         if m.received_at < since:
             continue
