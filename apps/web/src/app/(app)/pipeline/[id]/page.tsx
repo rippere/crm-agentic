@@ -18,7 +18,7 @@ import {
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users,
+  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users, Sparkles, RefreshCw,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -364,6 +364,11 @@ export default function DealDetailPage() {
   const [outcomePickerOpen, setOutcomePickerOpen] = useState(false);
   const [outcomeSaving, setOutcomeSaving] = useState(false);
 
+  type CoachData = { urgency: "low" | "medium" | "high"; bullets: string[]; generated_at: string };
+  const [coachData, setCoachData] = useState<CoachData | null>(null);
+  const [coachLoading, setCoachLoading] = useState(false);
+  const [coachGenerating, setCoachGenerating] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -487,6 +492,13 @@ export default function DealDetailPage() {
       .then((data) => setHealthHistory(Array.isArray(data) ? data : []))
       .catch(() => setHealthHistory([]))
       .finally(() => setHealthHistoryLoading(false));
+
+    setCoachLoading(true);
+    apiClient
+      .getDealCoaching(workspaceId, dealId, token)
+      .then((data) => setCoachData(data ?? null))
+      .catch(() => setCoachData(null))
+      .finally(() => setCoachLoading(false));
 
     if (deal.contact_id) {
       apiClient
@@ -633,6 +645,16 @@ export default function DealDetailPage() {
       setBannerDismissed(false);
     } catch { /* ignore */ }
     finally { setNextActionSaving(false); }
+  };
+
+  const handleRegenerateCoach = async () => {
+    if (!token || !workspaceId || coachGenerating) return;
+    setCoachGenerating(true);
+    try {
+      const data = await apiClient.getDealCoaching(workspaceId, dealId, token);
+      setCoachData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setCoachGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -1666,6 +1688,69 @@ export default function DealDetailPage() {
                     </div>
                   )}
                 </div>
+              )}
+            </Card>
+          )}
+
+          {/* AI Coach */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">AI Coach</p>
+                {coachData && (() => {
+                  const urgency = coachData.urgency;
+                  const urgencyColor = urgency === "high" ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : urgency === "medium" ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                    : "text-emerald-300 border-emerald-500/30 bg-emerald-500/10";
+                  return (
+                    <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${urgencyColor}`}>
+                      {urgency}
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateCoach}
+                  disabled={coachLoading || coachGenerating}
+                  className="ml-auto text-zinc-500 hover:text-indigo-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate coaching"
+                  title="Regenerate"
+                >
+                  {coachGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {coachLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : coachData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load coaching advice.</p>
+              ) : coachData.bullets.length === 0 ? (
+                <p className="text-xs text-zinc-500 italic py-2">No coaching advice available.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {coachData.bullets.map((bullet, i) => (
+                    <li key={i} className="flex items-start gap-2.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5">
+                      <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-indigo-500/15 text-[10px] font-bold text-indigo-400 mt-0.5">
+                        {i + 1}
+                      </span>
+                      <p className="text-xs text-zinc-300 leading-relaxed">{bullet}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {coachData && (
+                <p className="text-[10px] text-zinc-600 text-right">
+                  Generated {new Date(coachData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </p>
               )}
             </Card>
           )}

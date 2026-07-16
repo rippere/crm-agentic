@@ -1,5 +1,7 @@
 import datetime
+import json
 import uuid
+from datetime import timezone
 
 import anthropic as _anthropic
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -256,3 +258,107 @@ async def generate_digest(
         open_task_count=open_task_count,
         message_count=message_count,
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-deal AI coaching
+# ---------------------------------------------------------------------------
+
+_COACH_SYSTEM = """\
+You are Nova, the AI sales coach in NovaCRM. Analyze the provided deal snapshot and return coaching advice.
+
+Respond in exactly this JSON format (no extra text, no markdown fences):
+{
+  "urgency": "low",
+  "bullets": [
+    "First coaching point — one concise sentence with a specific action.",
+    "Second coaching point — one concise sentence with a specific action.",
+    "Third coaching point — one concise sentence with a specific action."
+  ]
+}
+
+Urgency rules:
+- "high": health < 40, OR win_prob < 30, OR next action overdue by 3+ days, OR stuck in stage > 21 days, OR 2+ active competitors
+- "medium": health 40–69, OR win_prob 30–59, OR stuck in stage 14–21 days, OR next action overdue 1–2 days
+- "low": deal is progressing normally with no red flags
+
+Each bullet must name a specific CRM action the rep can take today to improve this deal.\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/coach")
+@limiter.limit("10/minute")
+async def deal_coaching(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate 3-bullet AI coaching advice for a deal using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    # Days stuck in current stage
+    days_in_stage: int | None = None
+    if deal.stage_changed_at:
+        ref = deal.stage_changed_at
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        days_in_stage = (datetime.datetime.now(timezone.utc) - ref).days
+
+    # Next-action overdue
+    days_overdue = 0
+    if deal.next_action_date:
+        today = datetime.date.today()
+        delta = (today - deal.next_action_date).days
+        days_overdue = max(0, delta)
+
+    competitors = deal.competitors or []
+
+    context = (
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${float(deal.value):,.0f}\n"
+        f"Health score: {deal.health_score}/100\n"
+        f"ML win probability: {deal.ml_win_probability}%\n"
+        f"Days in current stage: {days_in_stage if days_in_stage is not None else 'unknown'}\n"
+        f"Competitors tracked: {', '.join(competitors) if competitors else 'none'}\n"
+        f"Next action: {deal.next_action or 'none set'}\n"
+        f"Next action overdue by: {days_overdue} day{'s' if days_overdue != 1 else ''}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_COACH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        urgency = data.get("urgency", "medium")
+        bullets = data.get("bullets", [])
+        if urgency not in ("low", "medium", "high"):
+            urgency = "medium"
+        bullets = [str(b) for b in bullets[:3]]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "urgency": urgency,
+        "bullets": bullets,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
