@@ -402,6 +402,75 @@ async def test_slack_interactions_approve_updates_contact_last_activity(app_clie
     assert "Email sent" in contact.last_activity
 
 
+async def _approve_and_capture(app_client, send_result):
+    """Drive a HITL approval; return the Message rows written to the session."""
+    from app.models.message import Message
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    hitl_id = str(uuid.uuid4())
+    contact_id = str(uuid.uuid4())
+    event = MagicMock()
+    event.meta = json.dumps({
+        "hitl_id": hitl_id,
+        "workspace_id": str(workspace_id),
+        "to": "CTO@Acme.com",
+        "subject": "Q3 Follow-up",
+        "body": "Just checking in.",
+        "contact_id": contact_id,
+    })
+    connector = MagicMock()
+    connector.external_email = "ben@novacrm.io"
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(event),
+        _make_scalar_result(connector),
+        _make_scalar_result(MagicMock()),
+    ])
+
+    payload = {"actions": [{"action_id": "hitl_approve", "value": hitl_id}]}
+
+    with patch("app.routers.slack_interactions.GmailClient") as MockGmail, \
+         patch("app.routers.slack_interactions.SlackClient.ack_response_url", new_callable=AsyncMock):
+        mock_gmail = AsyncMock()
+        mock_gmail.send_message = AsyncMock(return_value=send_result)
+        MockGmail.return_value = mock_gmail
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post("/slack/interactions", data={"payload": json.dumps(payload)})
+
+    assert resp.status_code == 200
+    rows = [c.args[0] for c in mock_db.add.call_args_list if isinstance(c.args[0], Message)]
+    return rows, contact_id
+
+
+@pytest.mark.asyncio
+async def test_approve_records_the_send_as_an_outbound_message(app_client):
+    """Without this row there is no way to tell whether the email got a reply."""
+    rows, contact_id = await _approve_and_capture(
+        app_client, {"id": "gmail-abc", "threadId": "thread-xyz"}
+    )
+
+    assert len(rows) == 1, "the send must be recorded as a Message"
+    row = rows[0]
+    assert row.external_id == "gmail-abc"
+    assert row.thread_id == "thread-xyz", "thread_id is what a reply is matched on"
+    assert row.direction == "outbound"
+    assert row.sender_email == "ben@novacrm.io"
+    assert row.to_emails == ["cto@acme.com"], "recipient must be normalised lowercase"
+    assert row.graph_only is False
+    assert row.received_at is not None
+    assert str(row.contact_id) == contact_id
+
+
+@pytest.mark.asyncio
+async def test_approve_without_a_send_id_records_no_message(app_client):
+    """A send response with no id can't be deduped or threaded — skip it, don't crash."""
+    rows, _ = await _approve_and_capture(app_client, {})
+
+    assert rows == []
+
+
 # ---------------------------------------------------------------------------
 # SlackClient — new update_message and ack_response_url methods
 # ---------------------------------------------------------------------------

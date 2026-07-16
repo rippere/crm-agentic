@@ -118,10 +118,16 @@ async def _run(contact_id: str) -> dict[str, Any]:
         if contact is None:
             return {"error": "Contact not found"}
 
-        # Fetch last 10 message bodies
+        # Fetch last 10 message bodies. graph_only rows are excluded in SQL rather
+        # than dropped afterwards: they store an empty body, and since the LIMIT
+        # applies before that filtering, ten recent metadata rows would otherwise
+        # starve enrichment of every real body this contact has.
         msg_result = await db.execute(
             select(Message.body_plain)
-            .where(Message.contact_id == contact.id)
+            .where(
+                Message.contact_id == contact.id,
+                Message.graph_only.is_(False),
+            )
             .order_by(Message.received_at.desc())
             .limit(10)
         )

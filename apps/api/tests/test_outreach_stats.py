@@ -15,8 +15,15 @@ WS = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 NOW = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
 
 
-def _msg(direction: str, thread_id: str, at: datetime) -> SimpleNamespace:
-    return SimpleNamespace(direction=direction, thread_id=thread_id, received_at=at)
+def _msg(
+    direction: str, thread_id: str, at: datetime, graph_only: bool = False
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        direction=direction,
+        thread_id=thread_id,
+        received_at=at,
+        graph_only=graph_only,
+    )
 
 
 def _db(messages: list) -> AsyncMock:
@@ -113,6 +120,48 @@ async def test_reply_rate_across_threads():
 
     assert (stats.sent, stats.replied) == (4, 1)
     assert stats.reply_rate == pytest.approx(0.25)
+
+
+@pytest.mark.asyncio
+async def test_personal_sent_mail_is_not_counted_as_outreach():
+    """graph_only outbound is mail to a friend — it must not inflate the denominator."""
+    db = _db([
+        _msg("outbound", "t1", NOW - timedelta(days=5)),
+        _msg("outbound", "personal", NOW - timedelta(days=5), graph_only=True),
+    ])
+    stats = await compute_outreach_stats(db, WS, since=NOW - timedelta(days=30))
+
+    assert stats.sent == 1
+
+
+@pytest.mark.asyncio
+async def test_reply_counts_even_when_judged_irrelevant():
+    """The filter is asymmetric on purpose: a reply is a reply.
+
+    If the relevance judge rejects an inbound reply it is stored graph_only —
+    filtering it here would undercount the very outcome being measured.
+    """
+    db = _db([
+        _msg("outbound", "t1", NOW - timedelta(days=2)),
+        _msg("inbound", "t1", NOW - timedelta(days=1), graph_only=True),
+    ])
+    stats = await compute_outreach_stats(db, WS, since=NOW - timedelta(days=30))
+
+    assert (stats.sent, stats.replied) == (1, 1)
+    assert stats.reply_rate == 1.0
+
+
+@pytest.mark.asyncio
+async def test_legacy_rows_without_graph_only_do_not_crash():
+    """Pre-migration rows lack the attribute entirely."""
+    db = _db([
+        SimpleNamespace(
+            direction="outbound", thread_id="t1", received_at=NOW - timedelta(days=2)
+        ),
+    ])
+    stats = await compute_outreach_stats(db, WS, since=NOW - timedelta(days=30))
+
+    assert stats.sent == 1
 
 
 @pytest.mark.asyncio
