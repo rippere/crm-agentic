@@ -1616,7 +1616,8 @@ async def deal_activity_heatmap(
     events_result = await db.execute(event_q)
     events = events_result.scalars().all()
 
-    # Messages linked to the deal's contact
+    # Messages linked to the deal's contact (graph_only rows carry no body and
+    # are not deal activity)
     messages: list = []
     if deal.contact_id:
         msg_result = await db.execute(
@@ -1624,6 +1625,7 @@ async def deal_activity_heatmap(
                 Message.workspace_id == workspace_id,
                 Message.contact_id == deal.contact_id,
                 Message.received_at >= cutoff,
+                Message.graph_only.is_(False),
             )
         )
         messages = msg_result.scalars().all()

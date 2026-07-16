@@ -125,7 +125,9 @@ async def list_messages(
 
     result = await db.execute(
         select(Message)
-        .where(Message.workspace_id == workspace_id)
+        # graph_only rows are metadata kept for the relationship graph and carry
+        # no body — they are never inbox content.
+        .where(Message.workspace_id == workspace_id, Message.graph_only.is_(False))
         .options(
             selectinload(Message.clarity_score),
             selectinload(Message.tasks),

@@ -23,6 +23,65 @@ def _fake_contact(**kwargs) -> MagicMock:
     return c
 
 
+# ---------------------------------------------------------------------------
+# ingest._parse_addresses — RFC 5322 address headers -> graph nodes
+# ---------------------------------------------------------------------------
+
+
+def test_parse_addresses_bare_address():
+    from app.workers.ingest import _parse_addresses
+
+    assert _parse_addresses("jane@example.com") == ["jane@example.com"]
+
+
+def test_parse_addresses_strips_display_name():
+    from app.workers.ingest import _parse_addresses
+
+    assert _parse_addresses('"Doe, Jane" <jane@example.com>') == ["jane@example.com"]
+
+
+def test_parse_addresses_multiple_recipients_preserve_order():
+    """Order matters: outbound mail is attributed to the FIRST To address."""
+    from app.workers.ingest import _parse_addresses
+
+    raw = "Jane <jane@example.com>, sam@example.com, Bob <bob@example.com>"
+    assert _parse_addresses(raw) == [
+        "jane@example.com",
+        "sam@example.com",
+        "bob@example.com",
+    ]
+
+
+def test_parse_addresses_lowercases():
+    from app.workers.ingest import _parse_addresses
+
+    assert _parse_addresses("Jane@Example.COM") == ["jane@example.com"]
+
+
+def test_parse_addresses_dedupes_case_insensitively():
+    from app.workers.ingest import _parse_addresses
+
+    assert _parse_addresses("jane@example.com, JANE@example.com") == [
+        "jane@example.com"
+    ]
+
+
+def test_parse_addresses_none_and_empty():
+    from app.workers.ingest import _parse_addresses
+
+    assert _parse_addresses(None) == []
+    assert _parse_addresses("") == []
+
+
+def test_parse_addresses_drops_unparseable_entries():
+    """Junk must not become a graph node."""
+    from app.workers.ingest import _parse_addresses
+
+    assert _parse_addresses("not-an-address, jane@example.com") == [
+        "jane@example.com"
+    ]
+
+
 def test_compute_score_base_lead_is_50_warm():
     from app.workers.score_contact import _compute_score
 

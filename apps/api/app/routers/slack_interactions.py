@@ -31,6 +31,7 @@ from app.database import get_db
 from app.models.activity_event import ActivityEvent
 from app.models.connector import Connector
 from app.models.contact import Contact
+from app.models.message import Message
 from app.services.gmail_client import GmailClient
 from app.services.slack_client import SlackClient
 
@@ -126,7 +127,7 @@ async def _handle_approve(
     )
 
     try:
-        await gmail.send_message(
+        send_result = await gmail.send_message(
             to=meta["to"],
             subject=meta["subject"],
             body=meta["body"],
@@ -147,6 +148,42 @@ async def _handle_approve(
             except Exception:
                 pass
         return
+
+    # Record the send as a real Message row. Gmail's send response carries the id
+    # and threadId; discarding them (the previous behavior) meant the workspace
+    # had no record it ever sent anything, which is what made "did that email get
+    # a reply?" unanswerable — a reply is simply a later inbound message sharing
+    # this thread_id. Storing external_id also lets the next Gmail sync dedupe
+    # this exact message instead of inserting it twice now that in:sent is synced.
+    #
+    # Non-fatal by construction: the mail is already sent, so a bookkeeping
+    # failure here must never turn a successful send into an error path.
+    try:
+        sent_id = send_result.get("id") if isinstance(send_result, dict) else None
+        if sent_id:
+            db.add(Message(
+                workspace_id=workspace_id,
+                connector_id=connector.id,
+                external_id=sent_id,
+                subject=meta.get("subject", ""),
+                body_plain=meta.get("body", ""),
+                sender_email=connector.external_email,
+                to_emails=[meta["to"].strip().lower()] if meta.get("to") else [],
+                cc_emails=[],
+                thread_id=send_result.get("threadId"),
+                direction="outbound",
+                # received_at is the message's own timestamp in both directions;
+                # for outbound that is the moment of sending.
+                received_at=datetime.now(timezone.utc),
+                contact_id=(
+                    uuid.UUID(meta["contact_id"]) if meta.get("contact_id") else None
+                ),
+                processed=True,  # composed by us; there is nothing to extract
+                relevant=True,
+                graph_only=False,
+            ))
+    except Exception:
+        pass
 
     # Mark HITL event resolved
     event.type = "hitl_approved"

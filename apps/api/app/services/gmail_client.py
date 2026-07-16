@@ -15,9 +15,16 @@ from app.services.crypto import decrypt_token, encrypt_token
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
-# Default query: Primary inbox only, skip automated senders
+# Default query: Primary inbox + your own sent mail, skipping automated senders.
+#
+# `in:sent` is load-bearing, not a nicety. Reciprocity (do they write back?) and
+# reply latency are the two strongest terms in any relationship-strength score,
+# and both are uncomputable from inbound mail alone — under `category:primary`
+# the workspace has no record that it ever sent anything. Sent mail carries no
+# Gmail category, so it takes an explicit OR rather than a looser category
+# filter. Costs no new OAuth scope: gmail.readonly already covers SENT.
 GMAIL_DEFAULT_QUERY = (
-    "category:primary "
+    "(category:primary OR in:sent) "
     "-from:noreply -from:no-reply -from:no_reply -from:donotreply "
     "-from:notifications -from:newsletter -from:mailer-daemon -from:bounce"
 )
