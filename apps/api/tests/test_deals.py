@@ -1326,6 +1326,39 @@ async def test_deal_stage_history_wrong_workspace_returns_403(app_client):
     assert resp.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_deal_stage_history_with_transitions_returns_full_history(app_client):
+    """GET /deals/{id}/stage-history with recorded transitions returns one entry per stage (regression: was 500)."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Multi Stage Deal", stage="proposal")
+    evt1 = _fake_activity(
+        workspace_id,
+        description="Deal 'Multi Stage Deal' updated → qualified",
+        type="deal_moved",
+        created_at=_NOW - timedelta(days=4),
+    )
+    evt2 = _fake_activity(
+        workspace_id,
+        description="Deal 'Multi Stage Deal' updated → proposal",
+        type="deal_moved",
+        created_at=_NOW - timedelta(days=1),
+    )
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(deal),
+        _make_scalars_result([evt1, evt2]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/stage-history")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) >= 2
+    assert data[-1]["stage"] == "proposal"
+    assert data[-1]["is_current"] is True
+
+
 # ---------------------------------------------------------------------------
 # GET /workspaces/{wid}/deals/{did}/competitors
 # PUT /workspaces/{wid}/deals/{did}/competitors
