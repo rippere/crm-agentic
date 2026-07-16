@@ -860,8 +860,9 @@ async def test_compose_email_supabase_fallback_path(app_client):
 
     assert resp.status_code == 200
     assert resp.json()["subject"] == "Hello Supabase Alice"
-    # Verify the Supabase row fields were used in the prompt
-    call_args = mock_client_instance.messages.create.call_args
+    # Verify the Supabase row fields were used in the prompt. [0] is the
+    # original grounded-draft call; a second call follows for the humanize pass.
+    call_args = mock_client_instance.messages.create.call_args_list[0]
     user_msg = call_args[1]["messages"][0]["content"]
     assert "Supabase Alice" in user_msg
     assert "Remote Corp" in user_msg
@@ -904,7 +905,9 @@ async def test_compose_email_grounds_prompt_in_rich_context(app_client):
             resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{contact.id}/compose")
 
     assert resp.status_code == 200
-    call_args = mock_client_instance.messages.create.call_args
+    # [0] is the original grounded-draft call; a second call follows for the
+    # humanize pass, which call_args (the last call) would otherwise return.
+    call_args = mock_client_instance.messages.create.call_args_list[0]
     user_msg = call_args[1]["messages"][0]["content"]
     # Rich context reached the model
     assert "Re: Q3 Proposal" in user_msg

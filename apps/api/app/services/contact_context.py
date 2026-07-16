@@ -18,6 +18,7 @@ outreach/brief LLM calls in ``app/routers/contacts.py``:
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
@@ -237,3 +238,72 @@ def safe_generic_draft(contact_name: str | None, contact_company: str | None) ->
         f"Best regards"
     )
     return subject, body
+
+
+# ---------------------------------------------------------------------------
+# Humanizer pass
+# ---------------------------------------------------------------------------
+#
+# A lightweight second Claude call that runs a grounded, already-generated draft
+# through the top AI-writing tells documented in the global humanizer skill
+# (~/.claude/skills/humanizer/SKILL.md, github.com/blader/humanizer, based on
+# Wikipedia's "Signs of AI writing" guide) before it reaches Ben for review: em
+# dashes, curly quotes, AI-vocabulary words, filler phrases, rule-of-three padding,
+# inflated-significance language, and collaborative-communication artifacts
+# ("I hope this helps!"). It must never be allowed to make the draft worse or
+# less safe than the input, so it fails soft: any API error, malformed response,
+# or empty output leaves the original subject/body untouched, and the caller is
+# expected to re-run the fact-grounding guard on the result before trusting it
+# (a rewrite could in principle introduce a claim that isn't in the corpus).
+
+_HUMANIZER_SYSTEM_PROMPT = (
+    "You are a lightweight editing pass that removes common AI-writing tells from an "
+    "already-drafted outreach email (see ~/.claude/skills/humanizer/SKILL.md for the full "
+    "pattern reference, based on Wikipedia's 'Signs of AI writing' guide). Rewrite the "
+    "subject and body to fix, when present: em dashes or en dashes (replace with a "
+    "period, comma, or colon instead), curly quotation marks (use straight quotes), "
+    "overused AI vocabulary (e.g. delve, crucial, boasts, testament, underscores, "
+    "tapestry, vibrant, showcase), filler phrases ('in order to', 'due to the fact "
+    "that'), rule-of-three padding, inflated-significance language, and collaborative-"
+    "communication artifacts ('I hope this helps!', 'Let me know if you have any "
+    "questions!'). Preserve every fact, name, figure, and the overall meaning, tone, and "
+    "length -- do not add any claim that is not already present in the input, and do not "
+    "shorten or pad the email. If the draft already reads naturally, return it unchanged. "
+    'Return JSON only: {"subject": "<subject>", "body": "<body>"}'
+)
+
+
+def _strip_code_fence(raw: str) -> str:
+    """Strip a leading/trailing ``` fence if the model wrapped its JSON in one."""
+    stripped = raw.strip()
+    if not stripped.startswith("```"):
+        return raw
+    lines = stripped.splitlines()
+    return "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+
+def humanize_draft(client, subject: str, body: str) -> tuple[str, str]:
+    """Run a grounded draft through the humanizer pattern-cleanup pass.
+
+    Returns the (possibly rewritten) ``(subject, body)``. On any failure -- API
+    error, non-JSON response, missing fields -- returns the original ``subject``/
+    ``body`` unchanged so a humanizer hiccup never blocks a draft from reaching
+    Ben. Callers should re-run ``find_unsupported_claims`` on the result against
+    the same grounding corpus used for the original draft before accepting it.
+    """
+    try:
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=_HUMANIZER_SYSTEM_PROMPT,
+            messages=[
+                {"role": "user", "content": f"Subject: {subject}\n\nBody:\n{body}"}
+            ],
+        )
+        raw = message.content[0].text if message.content else "{}"
+        data = json.loads(_strip_code_fence(raw))
+        new_subject = data.get("subject") or subject
+        new_body = data.get("body") or body
+        return new_subject, new_body
+    except Exception:
+        return subject, body
