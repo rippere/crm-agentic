@@ -397,6 +397,12 @@ export default function ContactDetailPage() {
   const [outreachDraft, setOutreachDraft] = useState<{ subject: string; body: string } | null>(null);
   const [outreachLoading, setOutreachLoading] = useState(false);
 
+  type TaskSuggestion = { title: string; due_days: number; priority: 'high' | 'medium' | 'low' };
+  const [taskSuggestions, setTaskSuggestions] = useState<TaskSuggestion[] | null>(null);
+  const [taskSuggestionsLoading, setTaskSuggestionsLoading] = useState(false);
+  const [taskSuggestionsOpen, setTaskSuggestionsOpen] = useState(false);
+  const [addedSuggestions, setAddedSuggestions] = useState<Set<number>>(new Set());
+
   const scorePoller = useJobPoller();
   const enrichPoller = useJobPoller();
   const [exportLoading, setExportLoading] = useState(false);
@@ -589,6 +595,36 @@ export default function ContactDetailPage() {
     }
   };
 
+  const handleSuggestTasks = async () => {
+    if (!token || !workspaceId) return;
+    setTaskSuggestionsOpen(true);
+    if (taskSuggestions) return;
+    setTaskSuggestionsLoading(true);
+    try {
+      const data = await apiClient.suggestContactTasks(workspaceId, contactId, token);
+      setTaskSuggestions(data.suggestions);
+    } catch {
+      setTaskSuggestions(null);
+    } finally {
+      setTaskSuggestionsLoading(false);
+    }
+  };
+
+  const handleAddSuggestion = async (suggestion: TaskSuggestion, index: number) => {
+    if (!token || !workspaceId || addedSuggestions.has(index)) return;
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + suggestion.due_days);
+    try {
+      await apiClient.createTask(workspaceId, {
+        title: suggestion.title,
+        contact_id: contactId,
+        due_date: dueDate.toISOString().split("T")[0],
+        status: "open",
+      }, token);
+      setAddedSuggestions((prev) => new Set([...prev, index]));
+    } catch { /* ignore */ }
+  };
+
   const handleScoreContact = async () => {
     if (!token || !workspaceId) return;
     try {
@@ -704,6 +740,16 @@ export default function ContactDetailPage() {
         >
           {outreachLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
           Draft Outreach
+        </Button>
+
+        <Button
+          variant="secondary"
+          onClick={handleSuggestTasks}
+          disabled={taskSuggestionsLoading}
+          className="gap-1.5"
+        >
+          {taskSuggestionsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListTodo className="h-3.5 w-3.5" />}
+          Suggest Tasks
         </Button>
 
         <Button
@@ -1496,6 +1542,99 @@ export default function ContactDetailPage() {
                 <Phone className="h-3.5 w-3.5" />
                 Copy to Clipboard
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Task Suggestions Modal ── */}
+      {taskSuggestionsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setTaskSuggestionsOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <ListTodo className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-100">AI Task Suggestions</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setTaskSuggestions(null); setAddedSuggestions(new Set()); handleSuggestTasks(); }}
+                  disabled={taskSuggestionsLoading}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                  title="Regenerate"
+                >
+                  {taskSuggestionsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "↺"}
+                </button>
+                <button
+                  onClick={() => setTaskSuggestionsOpen(false)}
+                  className="text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors"
+                  aria-label="Close"
+                >
+                  <XCircle className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
+              {taskSuggestionsLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-14 rounded-xl bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : taskSuggestions && taskSuggestions.length > 0 ? (
+                taskSuggestions.map((s, i) => {
+                  const added = addedSuggestions.has(i);
+                  const priorityColor =
+                    s.priority === "high"
+                      ? "text-rose-400 bg-rose-500/10 border-rose-500/20"
+                      : s.priority === "medium"
+                      ? "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                      : "text-zinc-400 bg-zinc-700/30 border-zinc-700/50";
+                  return (
+                    <div
+                      key={i}
+                      className="flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2.5"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-xs font-medium ${added ? "text-zinc-500 line-through" : "text-zinc-200"} leading-snug`}>
+                          {s.title}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${priorityColor}`}>
+                            {s.priority}
+                          </span>
+                          <span className="text-[10px] text-zinc-500 flex items-center gap-1">
+                            <Clock className="h-2.5 w-2.5" /> due in {s.due_days}d
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleAddSuggestion(s, i)}
+                        disabled={added}
+                        className={`flex-shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                          added
+                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 cursor-default"
+                            : "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 cursor-pointer"
+                        }`}
+                      >
+                        {added ? (
+                          <><CheckCircle2 className="h-3 w-3" /> Added</>
+                        ) : (
+                          <><Plus className="h-3 w-3" /> Add</>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-sm text-zinc-500 text-center py-8">Failed to generate suggestions.</p>
+              )}
             </div>
           </div>
         </div>

@@ -600,3 +600,127 @@ async def pipeline_summary(
         "risks": risks,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# AI task suggestions for a contact
+# ---------------------------------------------------------------------------
+
+_SUGGEST_TASKS_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Suggest specific, actionable follow-up tasks for a sales rep based on their contact's profile and recent interactions.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "suggestions": [
+    {"title": "Task title — specific and actionable (max 80 chars)", "due_days": 3, "priority": "high"},
+    {"title": "Second task", "due_days": 7, "priority": "medium"},
+    {"title": "Third task", "due_days": 14, "priority": "low"}
+  ]
+}
+
+Rules:
+- Return 3–5 suggestions maximum
+- Each title must be specific and name the contact or deal where relevant (max 80 chars)
+- due_days: how many days from today the task should be due (integer, 1–30)
+- priority: exactly "high", "medium", or "low"
+- Follow up on recent messages, open deals, or relationship gaps visible in the data
+- Avoid vague tasks — always name a concrete action\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/suggest-tasks")
+@limiter.limit("10/minute")
+async def suggest_contact_tasks(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Suggest 3–5 actionable follow-up tasks for a contact using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id, Contact.id == contact_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Last 3 messages
+    msg_result = await db.execute(
+        select(Message.subject, Message.received_at)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    recent_messages = msg_result.all()
+
+    # Open deals linked to this contact
+    deal_result = await db.execute(
+        select(Deal.title, Deal.stage, Deal.value, Deal.health_score)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+        .limit(3)
+    )
+    open_deals = deal_result.all()
+
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} ({contact.role or 'unknown role'} at {contact.company or 'Unknown'})",
+        f"Status: {contact.status}",
+        f"Email: {contact.email or 'unknown'}",
+    ]
+    if recent_messages:
+        lines.append("Recent messages:")
+        for m in recent_messages:
+            ts = m.received_at.strftime("%b %d") if m.received_at else "unknown date"
+            lines.append(f"  - \"{m.subject or '(no subject)'}\" on {ts}")
+    else:
+        lines.append("No prior messages — this is a first-touch contact.")
+    if open_deals:
+        lines.append("Open deals:")
+        for d in open_deals:
+            lines.append(f"  - {d.title or 'Untitled'} ({d.stage}) ${float(d.value):,.0f} health={d.health_score}")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_SUGGEST_TASKS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        raw_suggestions = data.get("suggestions") or []
+        suggestions = []
+        for s in raw_suggestions[:5]:
+            priority = str(s.get("priority", "medium"))
+            if priority not in ("high", "medium", "low"):
+                priority = "medium"
+            try:
+                due_days = max(1, min(30, int(s.get("due_days", 7))))
+            except (TypeError, ValueError):
+                due_days = 7
+            suggestions.append({
+                "title": str(s.get("title", "Follow up"))[:80],
+                "due_days": due_days,
+                "priority": priority,
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "suggestions": suggestions,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
