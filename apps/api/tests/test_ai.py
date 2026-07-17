@@ -373,3 +373,71 @@ async def test_pipeline_summary_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/ai/pipeline-summary")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/contacts/{cid}/suggest-tasks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_suggest_tasks_returns_suggestions(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    contact = _fake_contact(workspace_id)
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(contact),  # contact lookup
+        _make_all_result([]),                 # messages
+        _make_all_result([]),                 # open deals
+    ])
+
+    suggestions_json = (
+        '{"suggestions": ['
+        '{"title": "Send intro email to Jane", "due_days": 2, "priority": "high"},'
+        '{"title": "Schedule discovery call with Jane", "due_days": 5, "priority": "medium"},'
+        '{"title": "Enrich Jane\'s contact record", "due_days": 10, "priority": "low"}'
+        ']}'
+    )
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=suggestions_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/suggest-tasks"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["suggestions"], list)
+    assert len(body["suggestions"]) == 3
+    assert body["suggestions"][0]["priority"] == "high"
+    assert body["suggestions"][0]["due_days"] == 2
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_suggest_tasks_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/suggest-tasks")
+
+    assert resp.status_code == 403

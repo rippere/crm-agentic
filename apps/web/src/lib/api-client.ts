@@ -2125,6 +2125,36 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/outreach`, { method: 'POST' }, token)
   },
 
+  suggestContactTasks: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{ suggestions: Array<{ title: string; due_days: number; priority: 'high' | 'medium' | 'low' }>; contact_id: string; generated_at: string }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, Array<{ title: string; due_days: number; priority: 'high' | 'medium' | 'low' }>> = {
+        'c-001': [
+          { title: "Send follow-up email referencing Alice's Q3 expansion goals", due_days: 2, priority: 'high' },
+          { title: "Schedule product demo with Alice and her engineering lead", due_days: 5, priority: 'high' },
+          { title: "Share ROI case study relevant to TechCorp's industry", due_days: 7, priority: 'medium' },
+          { title: "Add Alice to the Enterprise nurture sequence in /inbox", due_days: 10, priority: 'medium' },
+          { title: "Run Lead Scorer agent on Alice to refresh her ML score", due_days: 14, priority: 'low' },
+        ],
+        'c-002': [
+          { title: "Re-engage Bob with a personalised check-in after 30-day silence", due_days: 1, priority: 'high' },
+          { title: "Score the last 3 messages from Bob for clarity and action items", due_days: 3, priority: 'medium' },
+          { title: "Update Bob's deal stage in /pipeline to reflect recent progress", due_days: 5, priority: 'medium' },
+        ],
+      }
+      const suggestions = stubs[contactId] ?? [
+        { title: 'Send an introductory email and request a discovery call', due_days: 3, priority: 'high' as const },
+        { title: 'Enrich contact record to surface stakeholder info', due_days: 5, priority: 'medium' as const },
+        { title: 'Score this contact with the Lead Scorer agent', due_days: 7, priority: 'low' as const },
+      ]
+      return Promise.resolve({ suggestions, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/suggest-tasks`, { method: 'POST' }, token)
+  },
+
   getPipelineSummary: (
     workspaceId: string,
     token: string,
