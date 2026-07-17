@@ -2099,4 +2099,29 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/coach`, { method: 'POST' }, token)
   },
+
+  getDraftOutreach: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{ subject: string; body: string; contact_id: string; generated_at: string }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { subject: string; body: string }> = {
+        'c-001': {
+          subject: 'Quick intro — helping teams like yours',
+          body: 'Hi Alice,\n\nI noticed your team at TechCorp has been expanding rapidly — congrats on the Series B!\n\nWe have been working with several VP-level contacts in your space to streamline their sales workflows, and I thought NovaCRM might be worth a quick look given your growth trajectory.\n\nWould you have 15 minutes this week for a brief call? I can share how similar teams cut their follow-up time by 40%.\n\nLooking forward to connecting,',
+        },
+        'c-002': {
+          subject: 'Following up on our last conversation',
+          body: 'Hi Bob,\n\nThank you for taking the time to connect last month — I have been thinking about the challenges you mentioned around pipeline visibility.\n\nSince we spoke, we launched a new AI-powered deal health feature that flags at-risk deals before they slip. I think it directly addresses what you described.\n\nWould a 20-minute demo be worthwhile? I can work around your schedule.\n\nBest,',
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        subject: `Quick intro — let’s connect`,
+        body: 'Hi there,\n\nI wanted to reach out and introduce NovaCRM — an AI-native CRM built for modern sales teams.\n\nWould you be open to a brief 15-minute call to explore whether it could be a fit?\n\nBest,',
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/outreach`, { method: 'POST' }, token)
+  },
 }

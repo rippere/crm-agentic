@@ -16,7 +16,7 @@ import {
   ArrowLeft, Mail, Brain, Zap, TrendingUp, TrendingDown, Minus,
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
-  Star, Calendar, X, Plus, Send, BarChart2, Download, Layers,
+  Star, Calendar, X, Plus, Send, BarChart2, Download, Layers, Sparkles,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -394,6 +394,9 @@ export default function ContactDetailPage() {
   const [emailDraft, setEmailDraft] = useState<{ subject: string; body: string } | null>(null);
   const [emailLoading, setEmailLoading] = useState(false);
 
+  const [outreachDraft, setOutreachDraft] = useState<{ subject: string; body: string } | null>(null);
+  const [outreachLoading, setOutreachLoading] = useState(false);
+
   const scorePoller = useJobPoller();
   const enrichPoller = useJobPoller();
   const [exportLoading, setExportLoading] = useState(false);
@@ -573,6 +576,19 @@ export default function ContactDetailPage() {
     }
   };
 
+  const handleDraftOutreach = async () => {
+    if (!token || !workspaceId) return;
+    setOutreachLoading(true);
+    try {
+      const data = await apiClient.getDraftOutreach(workspaceId, contactId, token);
+      setOutreachDraft({ subject: data.subject, body: data.body });
+    } catch {
+      // ignore
+    } finally {
+      setOutreachLoading(false);
+    }
+  };
+
   const handleScoreContact = async () => {
     if (!token || !workspaceId) return;
     try {
@@ -678,6 +694,16 @@ export default function ContactDetailPage() {
         >
           {emailLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
           Compose Email
+        </Button>
+
+        <Button
+          variant="secondary"
+          onClick={handleDraftOutreach}
+          disabled={outreachLoading}
+          className="gap-1.5"
+        >
+          {outreachLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+          Draft Outreach
         </Button>
 
         <Button
@@ -1465,6 +1491,60 @@ export default function ContactDetailPage() {
                 className="w-full justify-center"
                 onClick={() => {
                   navigator.clipboard.writeText(`Subject: ${emailDraft.subject}\n\n${emailDraft.body}`);
+                }}
+              >
+                <Phone className="h-3.5 w-3.5" />
+                Copy to Clipboard
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Outreach Draft Panel ── */}
+      {outreachDraft && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setOutreachDraft(null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-100">Outreach Draft</p>
+              </div>
+              <button
+                onClick={() => setOutreachDraft(null)}
+                className="text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors"
+                aria-label="Close outreach draft"
+              >
+                <XCircle className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Subject</p>
+                <p className="text-sm text-zinc-100 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+                  {outreachDraft.subject}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Body</p>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-3 max-h-64 overflow-y-auto">
+                  <div
+                    className="text-sm text-zinc-200 leading-relaxed [&_strong]:font-semibold [&_ul]:my-1 [&_li]:ml-4 [&_li]:list-disc [&_p]:mt-2 first:[&_p]:mt-0"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(outreachDraft.body) }}
+                  />
+                </div>
+              </div>
+              <Button
+                variant="primary"
+                className="w-full justify-center"
+                onClick={() => {
+                  navigator.clipboard.writeText(`Subject: ${outreachDraft.subject}\n\n${outreachDraft.body}`);
                 }}
               >
                 <Phone className="h-3.5 w-3.5" />

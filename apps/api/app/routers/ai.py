@@ -15,6 +15,7 @@ from app.dependencies import get_current_user
 from app.limiter import limiter
 from app.models.user import User
 from app.models.contact import Contact
+from app.models.clarity_score import ClarityScore
 from app.models.deal import Deal
 from app.models.message import Message
 from app.models.task import Task
@@ -360,5 +361,118 @@ async def deal_coaching(
         "urgency": urgency,
         "bullets": bullets,
         "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Contact outreach draft
+# ---------------------------------------------------------------------------
+
+_OUTREACH_SYSTEM = """\
+You are Nova, the AI writing assistant in NovaCRM. Draft a personalised outreach email for a sales rep.
+
+The email must be:
+- Genuinely personalised — reference the contact's name, role, company, and any recent interaction
+- Concise — subject under 60 chars, body 3–4 short paragraphs maximum
+- Professional but warm in tone, not salesy or generic
+- Action-oriented with a single clear CTA (typically a 15–20 minute call or quick reply)
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "subject": "The email subject line (under 60 chars)",
+  "body": "The email body. Use \\n for line breaks between paragraphs."
+}
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/outreach")
+@limiter.limit("10/minute")
+async def draft_outreach(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a personalised outreach email draft for a contact using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id, Contact.id == contact_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Recent messages from this contact with clarity scores
+    msg_result = await db.execute(
+        select(Message.subject, Message.received_at, ClarityScore.score)
+        .outerjoin(ClarityScore, Message.id == ClarityScore.message_id)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    recent_messages = msg_result.all()
+
+    # Open / in-progress tasks for this contact
+    task_result = await db.execute(
+        select(Task.title, Task.due_date)
+        .where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status.in_(["open", "in_progress"]),
+        )
+        .order_by(Task.due_date.asc())
+        .limit(3)
+    )
+    open_tasks = task_result.all()
+
+    # Build context
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} — {contact.role or 'unknown role'} at {contact.company or 'Unknown Company'}",
+        f"Contact email: {contact.email or 'unknown'}",
+        f"Relationship status: {contact.status}",
+    ]
+    if recent_messages:
+        lines.append("Recent message history:")
+        for msg in recent_messages:
+            clarity = f" (clarity {msg.score}/100)" if msg.score is not None else ""
+            ts = msg.received_at.strftime("%b %d") if msg.received_at else "unknown date"
+            lines.append(f"  - \"{msg.subject or '(no subject)'}\" received {ts}{clarity}")
+    else:
+        lines.append("No prior message history — this is a first-touch outreach.")
+
+    if open_tasks:
+        lines.append("Open tasks linked to this contact:")
+        for task in open_tasks:
+            due = f" (due {task.due_date})" if task.due_date else ""
+            lines.append(f"  - {task.title}{due}")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_OUTREACH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        subject = str(data.get("subject", f"Following up, {contact.name or 'there'}"))
+        body = str(data.get("body", "Hi,\n\nI wanted to reach out and connect.\n\nBest,"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "subject": subject,
+        "body": body,
+        "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
