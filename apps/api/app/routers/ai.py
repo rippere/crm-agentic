@@ -1,6 +1,7 @@
 import datetime
 import json
 import uuid
+from collections import Counter, defaultdict
 from datetime import timezone
 
 import anthropic as _anthropic
@@ -474,5 +475,128 @@ async def draft_outreach(
         "subject": subject,
         "body": body,
         "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pipeline AI summary
+# ---------------------------------------------------------------------------
+
+_PIPELINE_SUMMARY_SYSTEM = """\
+You are Nova, the AI pipeline analyst in NovaCRM. Analyse the provided pipeline snapshot and return a structured summary.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "headline": "One compelling sentence summarising overall pipeline health and momentum (max 120 chars).",
+  "opportunities": [
+    "Specific opportunity the team should act on today — one concise sentence.",
+    "Second opportunity — one concise sentence.",
+    "Third opportunity — one concise sentence."
+  ],
+  "risks": [
+    "Specific risk that needs attention — one concise sentence.",
+    "Second risk — one concise sentence.",
+    "Third risk — one concise sentence."
+  ]
+}
+
+Each opportunity or risk must reference specific deals, stages, or metrics from the data, and recommend a concrete CRM action.\
+"""
+
+_STAGE_ORDER = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.post("/workspaces/{workspace_id}/ai/pipeline-summary")
+@limiter.limit("5/minute")
+async def pipeline_summary(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a pipeline AI summary: headline + opportunities + risks, via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals = deal_result.scalars().all()
+
+    today = datetime.date.today()
+    overdue = [d for d in open_deals if d.next_action_date and d.next_action_date < today]
+    stale = [d for d in open_deals if d.health_score is not None and d.health_score < 40]
+
+    all_competitors: list[str] = []
+    for d in open_deals:
+        if d.competitors:
+            all_competitors.extend(d.competitors)
+    top_competitors = [c for c, _ in Counter(all_competitors).most_common(5)]
+
+    by_stage: dict[str, list] = defaultdict(list)
+    for d in open_deals:
+        by_stage[d.stage].append(d)
+
+    pipeline_value = sum(float(d.value) for d in open_deals)
+
+    lines = [
+        f"Pipeline snapshot ({today.isoformat()}):",
+        f"Total active pipeline: ${pipeline_value:,.0f} across {len(open_deals)} open deals",
+        f"Stale deals (health < 40): {len(stale)}",
+        f"Overdue next actions: {len(overdue)}",
+        f"Top competitors: {', '.join(top_competitors) if top_competitors else 'none'}",
+        "",
+        "Deals by stage:",
+    ]
+    for stage in _STAGE_ORDER:
+        stage_deals = by_stage.get(stage, [])
+        if stage_deals:
+            lines.append(f"  {stage.upper()} ({len(stage_deals)} deals):")
+            for d in stage_deals[:5]:
+                lines.append(
+                    f"    - {d.title or 'Untitled'} @ {d.company or '?'}"
+                    f" | ${float(d.value):,.0f} | health={d.health_score} | win_prob={d.ml_win_probability}%"
+                )
+    if stale:
+        lines.append("")
+        lines.append("Stale deals needing attention:")
+        for d in stale[:5]:
+            lines.append(f"  - {d.title or 'Untitled'} @ {d.company or '?'} health={d.health_score}/100")
+    if overdue:
+        lines.append("")
+        lines.append("Overdue next actions:")
+        for d in overdue[:5]:
+            delta = (today - d.next_action_date).days
+            lines.append(f"  - {d.title or 'Untitled'}: \"{d.next_action or 'unset'}\" ({delta}d overdue)")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_PIPELINE_SUMMARY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        headline = str(data.get("headline", "Pipeline summary unavailable."))
+        opportunities = [str(b) for b in (data.get("opportunities") or [])[:3]]
+        risks = [str(b) for b in (data.get("risks") or [])[:3]]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "headline": headline,
+        "opportunities": opportunities,
+        "risks": risks,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }

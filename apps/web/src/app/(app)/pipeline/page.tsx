@@ -9,7 +9,7 @@ import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import { cn, formatCurrency, stageConfig, dealStageOrder, SIGNAL } from "@/lib/utils";
 import Link from "next/link";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight, Search } from "lucide-react";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight, Search, Sparkles } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
 interface PipelineSuggestion {
@@ -404,6 +404,11 @@ export default function PipelinePage() {
   const [bulkStageTarget, setBulkStageTarget] = useState<DealStage | null>(null);
   const [bulkLoading, setBulkLoading] = useState(false);
 
+  type PipelineSummary = { headline: string; opportunities: string[]; risks: string[]; generated_at: string };
+  const [pipelineSummary, setPipelineSummary] = useState<PipelineSummary | null>(null);
+  const [pipelineSummaryLoading, setPipelineSummaryLoading] = useState(false);
+  const [pipelineSummaryOpen, setPipelineSummaryOpen] = useState(false);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSelectedDeal(null); };
     document.addEventListener("keydown", onKey);
@@ -559,6 +564,27 @@ export default function PipelinePage() {
     } catch { /* silent */ }
     finally { setExportLoading(false); }
   }, [exportLoading]);
+
+  const handleGetPipelineSummary = useCallback(async () => {
+    setPipelineSummaryOpen(true);
+    if (pipelineSummary) return; // already loaded
+    setPipelineSummaryLoading(true);
+    try {
+      const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      let workspaceId = "demo-workspace-1";
+      let token = "demo-token";
+      if (!isDemoMode) {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
+        token = session?.access_token ?? "";
+      }
+      if (!workspaceId || !token) return;
+      const data = await apiClient.getPipelineSummary(workspaceId, token);
+      setPipelineSummary(data);
+    } catch { /* ignore */ }
+    finally { setPipelineSummaryLoading(false); }
+  }, [pipelineSummary]);
 
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6 min-h-screen">
@@ -752,6 +778,15 @@ export default function PipelinePage() {
               {exportLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
               Export CSV
             </button>
+            <button
+              onClick={handleGetPipelineSummary}
+              disabled={pipelineSummaryLoading}
+              className="flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs font-medium text-indigo-400 transition-all hover:border-indigo-500/50 hover:bg-indigo-500/15 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+              title="Get AI pipeline summary"
+            >
+              {pipelineSummaryLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              Pipeline AI
+            </button>
             <Button variant="cta" size="sm" onClick={() => setNewDealStage("discovery")}>
               <Plus className="h-3.5 w-3.5" /> New Deal
             </Button>
@@ -851,6 +886,102 @@ export default function PipelinePage() {
           onClose={() => setNewDealStage(null)}
           onCreate={handleCreate}
         />
+      )}
+
+      {/* Pipeline AI summary slide-over */}
+      {pipelineSummaryOpen && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/40 z-30"
+            onClick={() => setPipelineSummaryOpen(false)}
+          />
+          <aside className="fixed right-0 top-0 h-full w-full max-w-[380px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto">
+            <div className="sticky top-0 flex items-center justify-between border-b border-zinc-800 bg-zinc-950/90 backdrop-blur px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-100">Pipeline AI</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setPipelineSummary(null); handleGetPipelineSummary(); }}
+                  disabled={pipelineSummaryLoading}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                  title="Regenerate"
+                >
+                  {pipelineSummaryLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "↺"}
+                </button>
+                <button
+                  onClick={() => setPipelineSummaryOpen(false)}
+                  className="text-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer"
+                  aria-label="Close Pipeline AI"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {pipelineSummaryLoading ? (
+                <div className="space-y-3">
+                  <div className="h-10 rounded-xl bg-zinc-800/50 animate-pulse" />
+                  <div className="h-24 rounded-xl bg-zinc-800/30 animate-pulse" />
+                  <div className="h-24 rounded-xl bg-zinc-800/30 animate-pulse" />
+                </div>
+              ) : pipelineSummary ? (
+                <>
+                  {/* Headline */}
+                  <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
+                    <p className="text-sm text-indigo-200 leading-relaxed font-medium">
+                      {pipelineSummary.headline}
+                    </p>
+                  </div>
+
+                  {/* Opportunities */}
+                  <div>
+                    <p className="text-[10px] font-mono text-emerald-500/80 uppercase tracking-widest mb-2.5">
+                      Opportunities
+                    </p>
+                    <div className="space-y-2">
+                      {pipelineSummary.opportunities.map((opp, i) => (
+                        <div
+                          key={i}
+                          className="flex gap-2.5 rounded-lg border border-emerald-500/15 bg-emerald-500/5 px-3 py-2.5"
+                        >
+                          <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                          <p className="text-xs text-zinc-300 leading-relaxed">{opp}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Risks */}
+                  <div>
+                    <p className="text-[10px] font-mono text-rose-500/80 uppercase tracking-widest mb-2.5">
+                      Risks
+                    </p>
+                    <div className="space-y-2">
+                      {pipelineSummary.risks.map((risk, i) => (
+                        <div
+                          key={i}
+                          className="flex gap-2.5 rounded-lg border border-rose-500/15 bg-rose-500/5 px-3 py-2.5"
+                        >
+                          <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0" />
+                          <p className="text-xs text-zinc-300 leading-relaxed">{risk}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-600 font-mono text-right">
+                    Generated {new Date(pipelineSummary.generated_at).toLocaleTimeString()}
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-zinc-500 text-center py-8">Failed to generate summary.</p>
+              )}
+            </div>
+          </aside>
+        </>
       )}
 
     </div>

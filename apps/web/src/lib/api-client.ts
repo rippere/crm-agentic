@@ -2124,4 +2124,27 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/outreach`, { method: 'POST' }, token)
   },
+
+  getPipelineSummary: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{ headline: string; opportunities: string[]; risks: string[]; generated_at: string }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        headline: '$285K active pipeline with strong momentum in Proposal — 2 stale deals need urgent attention.',
+        opportunities: [
+          'The 3 Proposal-stage deals total $135K — use Email Composer to send personalised value-summary emails to each contact before month-end.',
+          'Lead Scorer flagged two high-potential discovery contacts this week; promote them to Qualified to keep the funnel healthy.',
+          'Win probability on the Enterprise Expansion deal jumped to 78% — schedule a closing call now while momentum is high.',
+        ],
+        risks: [
+          '2 deals have health scores below 40 and no stage change in 14+ days — run Pipeline Optimizer to generate re-engagement plans.',
+          'CompetitorX appears in 4 open deals; use the Competitors card on each deal to log counter-positioning notes.',
+          '3 next-action dates are overdue — assign them in the Task board (/tasks) to avoid losing timing-sensitive opportunities.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/pipeline-summary`, { method: 'POST' }, token)
+  },
 }
