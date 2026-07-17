@@ -369,6 +369,11 @@ export default function DealDetailPage() {
   const [coachLoading, setCoachLoading] = useState(false);
   const [coachGenerating, setCoachGenerating] = useState(false);
 
+  type WinLossAnalysis = { verdict: "won" | "lost"; narrative: string; key_factors: string[]; lessons: string[]; deal_id: string; generated_at: string };
+  const [winLossData, setWinLossData] = useState<WinLossAnalysis | null>(null);
+  const [winLossLoading, setWinLossLoading] = useState(false);
+  const [winLossGenerating, setWinLossGenerating] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -499,6 +504,15 @@ export default function DealDetailPage() {
       .then((data) => setCoachData(data ?? null))
       .catch(() => setCoachData(null))
       .finally(() => setCoachLoading(false));
+
+    if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
+      setWinLossLoading(true);
+      apiClient
+        .getDealWinLossAnalysis(workspaceId, dealId, token)
+        .then((data) => setWinLossData(data ?? null))
+        .catch(() => setWinLossData(null))
+        .finally(() => setWinLossLoading(false));
+    }
 
     if (deal.contact_id) {
       apiClient
@@ -655,6 +669,16 @@ export default function DealDetailPage() {
       setCoachData(data ?? null);
     } catch { /* ignore */ }
     finally { setCoachGenerating(false); }
+  };
+
+  const handleRegenerateWinLoss = async () => {
+    if (!token || !workspaceId || winLossGenerating) return;
+    setWinLossGenerating(true);
+    try {
+      const data = await apiClient.getDealWinLossAnalysis(workspaceId, dealId, token);
+      setWinLossData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setWinLossGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -1751,6 +1775,92 @@ export default function DealDetailPage() {
                 <p className="text-[10px] text-zinc-600 text-right">
                   Generated {new Date(coachData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </p>
+              )}
+            </Card>
+          )}
+
+          {/* Win/Loss Analysis — closed deals only */}
+          {isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Win/Loss Analysis</p>
+                {winLossData && (
+                  <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${
+                    winLossData.verdict === "won"
+                      ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                      : "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                  }`}>
+                    {winLossData.verdict}
+                  </span>
+                )}
+                <button
+                  onClick={handleRegenerateWinLoss}
+                  disabled={winLossLoading || winLossGenerating}
+                  className="ml-auto text-zinc-500 hover:text-indigo-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate analysis"
+                  title="Regenerate"
+                >
+                  {winLossGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {winLossLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : winLossData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Analysis unavailable for this deal.</p>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs text-zinc-300 leading-relaxed">{winLossData.narrative}</p>
+
+                  {winLossData.key_factors.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Key Factors</p>
+                      <ul className="space-y-1">
+                        {winLossData.key_factors.map((f, i) => (
+                          <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                            <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold mt-0.5 ${
+                              winLossData.verdict === "won"
+                                ? "bg-emerald-500/15 text-emerald-400"
+                                : "bg-rose-500/15 text-rose-400"
+                            }`}>
+                              {i + 1}
+                            </span>
+                            <p className="text-xs text-zinc-300 leading-relaxed">{f}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {winLossData.lessons.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Lessons Learned</p>
+                      <ul className="space-y-1">
+                        {winLossData.lessons.map((l, i) => (
+                          <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-indigo-500/15 text-[9px] font-bold text-indigo-400 mt-0.5">
+                              {i + 1}
+                            </span>
+                            <p className="text-xs text-zinc-300 leading-relaxed">{l}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(winLossData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
               )}
             </Card>
           )}
