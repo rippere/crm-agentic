@@ -2070,6 +2070,8 @@ async def deal_stage_history(
             "is_current": is_last,
         })
 
+    return history
+
 
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}/response-lag")
 async def deal_response_lag_heatmap(
