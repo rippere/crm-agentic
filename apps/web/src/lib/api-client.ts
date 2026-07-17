@@ -2177,4 +2177,30 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/pipeline-summary`, { method: 'POST' }, token)
   },
+
+  getDealWinLossAnalysis: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{ verdict: 'won' | 'lost'; narrative: string; key_factors: string[]; lessons: string[]; deal_id: string; generated_at: string }> => {
+    if (isDemoMode) {
+      const seed = dealId.charCodeAt(dealId.length - 1)
+      const verdict = seed % 2 === 0 ? 'won' : 'lost'
+      return Promise.resolve({
+        verdict,
+        narrative: verdict === 'won'
+          ? 'The deal closed on the strength of a well-engaged champion, competitive pricing, and a fast response to legal concerns in the final week. The prospect had evaluated two alternatives but ranked feature completeness and SLA terms as decisive.'
+          : 'The deal stalled after the primary champion left the company, exposing a lack of executive sponsorship at the decision-making level. Budget was reallocated to a competing priority before a new champion could be identified.',
+        key_factors: verdict === 'won'
+          ? ['Strong internal champion throughout evaluation', 'Matched competitor pricing on enterprise tier', 'SLA uptime guarantee addressed legal blocker']
+          : ['Champion departure mid-cycle removed key sponsor', 'No executive sponsor identified as backup', 'Budget freeze triggered by competing internal priority'],
+        lessons: verdict === 'won'
+          ? ['Multi-thread early to reduce single-champion dependency', 'Involve legal in SLA review two weeks earlier', 'Document competitive positioning for team knowledge base']
+          : ['Identify at least two executive sponsors in discovery', 'Flag champion-departure risk when org changes detected', 'Propose LOI earlier to hold budget commitment'],
+        deal_id: dealId,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/win-loss-analysis`, { method: 'POST' }, token)
+  },
 }

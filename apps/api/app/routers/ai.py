@@ -724,3 +724,132 @@ async def suggest_contact_tasks(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# AI win/loss analysis for closed deals
+# ---------------------------------------------------------------------------
+
+_WIN_LOSS_SYSTEM = """\
+You are Nova, the AI sales analyst in NovaCRM. Analyse the provided closed deal data and return a structured win/loss analysis.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "narrative": "2–3 sentence narrative explaining the outcome — be specific about the deal, company, and the deciding factors.",
+  "key_factors": [
+    "Factor 1 — specific one-sentence insight about what drove the outcome.",
+    "Factor 2 — specific one-sentence insight.",
+    "Factor 3 — specific one-sentence insight."
+  ],
+  "lessons": [
+    "Lesson 1 — actionable takeaway for the team going forward.",
+    "Lesson 2 — actionable takeaway.",
+    "Lesson 3 — actionable takeaway."
+  ]
+}
+
+Rules:
+- narrative: 2–3 sentences, specific to this deal (name the company, stage, value, outcome reason)
+- key_factors: 3 items, each naming a specific data point from the deal that drove the outcome
+- lessons: 3 items, each prescribing a concrete change the team can make for future deals
+- Be honest about the data — if a deal was lost, name the real weakness\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/win-loss-analysis")
+@limiter.limit("10/minute")
+async def deal_win_loss_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a win/loss analysis for a closed deal using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage not in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Win/loss analysis is only available for closed deals",
+        )
+
+    # Fetch deal notes
+    from app.models.deal_note import DealNote
+    notes_result = await db.execute(
+        select(DealNote.body, DealNote.author, DealNote.created_at)
+        .where(DealNote.workspace_id == workspace_id, DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(5)
+    )
+    notes = notes_result.all()
+
+    verdict = "won" if deal.stage == "closed_won" else "lost"
+    competitors = deal.competitors or []
+
+    # Days from creation to close
+    days_to_close: int | None = None
+    if deal.stage_changed_at and deal.created_at:
+        ref = deal.stage_changed_at
+        start = deal.created_at
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        days_to_close = (ref - start).days
+
+    lines = [
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}",
+        f"Outcome: {verdict.upper()} (stage: {deal.stage})",
+        f"Value: ${float(deal.value):,.0f}",
+        f"Win/loss reason on record: {deal.win_loss_reason or 'not recorded'}",
+        f"Final health score: {deal.health_score}/100",
+        f"Final ML win probability: {deal.ml_win_probability}%",
+        f"Days to close: {days_to_close if days_to_close is not None else 'unknown'}",
+        f"Competitors tracked: {', '.join(competitors) if competitors else 'none'}",
+    ]
+    if notes:
+        lines.append("Deal notes:")
+        for n in notes:
+            ts = n.created_at.strftime("%b %d") if n.created_at else "unknown"
+            lines.append(f"  - [{ts}] {n.author or 'Unknown'}: {n.body[:120]}")
+    else:
+        lines.append("No deal notes recorded.")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_WIN_LOSS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        narrative = str(data.get("narrative", "Analysis unavailable."))
+        key_factors = [str(f) for f in (data.get("key_factors") or [])[:3]]
+        lessons = [str(l) for l in (data.get("lessons") or [])[:3]]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "verdict": verdict,
+        "narrative": narrative,
+        "key_factors": key_factors,
+        "lessons": lessons,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

@@ -441,3 +441,84 @@ async def test_suggest_tasks_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/suggest-tasks")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/win-loss-analysis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_win_loss_analysis_returns_verdict_and_factors(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    deal_id = uuid.uuid4()
+    deal = MagicMock()
+    deal.id = deal_id
+    deal.workspace_id = workspace_id
+    deal.stage = "closed_won"
+    deal.title = "Enterprise Expansion"
+    deal.company = "Acme Corp"
+    deal.value = 95000.0
+    deal.win_loss_reason = "Best pricing and champion support"
+    deal.health_score = 88
+    deal.ml_win_probability = 82
+    deal.stage_changed_at = None
+    deal.created_at = None
+    deal.competitors = ["Competitor X"]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(deal),  # deal lookup
+        _make_all_result([]),              # notes
+    ])
+
+    import json as _json
+    analysis_json = _json.dumps({
+        "narrative": "Strong champion and competitive pricing drove the win.",
+        "key_factors": ["Champion support", "Competitive price", "Fast response"],
+        "lessons": ["Engage champion early", "Match competitor pricing", "Fast follow-up"],
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=analysis_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal_id}/ai/win-loss-analysis"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["verdict"] == "won"
+    assert "narrative" in body
+    assert isinstance(body["key_factors"], list)
+    assert len(body["key_factors"]) == 3
+    assert isinstance(body["lessons"], list)
+    assert body["deal_id"] == str(deal_id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_win_loss_analysis_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("33333333-3333-3333-3333-333333333333")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/deals/{deal_id}/ai/win-loss-analysis")
+
+    assert resp.status_code == 403
