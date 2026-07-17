@@ -320,3 +320,56 @@ async def test_contact_outreach_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/outreach")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/pipeline-summary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_summary_returns_headline_and_bullets(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalars_all(rows):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = rows
+        return result
+
+    deal = _fake_deal(workspace_id, title="Big Win", stage="proposal", health_score=45, ml_win_probability=60)
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_all([deal]))
+
+    summary_json = (
+        '{"headline": "Pipeline is trending up with 1 active deal.",'
+        ' "opportunities": ["Follow up on Big Win proposal.", "Run Pipeline Optimizer.", "Score the lead."],'
+        ' "risks": ["Health below 70 on Big Win.", "No competitors tracked.", "Next action unset."]}'
+    )
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=summary_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/ai/pipeline-summary")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "headline" in body
+    assert isinstance(body["opportunities"], list)
+    assert isinstance(body["risks"], list)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_pipeline_summary_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/ai/pipeline-summary")
+
+    assert resp.status_code == 403
