@@ -173,3 +173,77 @@ async def test_ai_digest_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/ai/digest")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/coach
+# ---------------------------------------------------------------------------
+
+
+def _fake_deal(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
+    import datetime
+    from datetime import timezone
+
+    deal = MagicMock()
+    deal.id = uuid.uuid4()
+    deal.workspace_id = workspace_id
+    deal.title = kwargs.get("title", "Enterprise Expansion")
+    deal.company = kwargs.get("company", "Acme Corp")
+    deal.value = kwargs.get("value", 50000.0)
+    deal.stage = kwargs.get("stage", "proposal")
+    deal.health_score = kwargs.get("health_score", 35)
+    deal.ml_win_probability = kwargs.get("ml_win_probability", 25)
+    deal.stage_changed_at = kwargs.get(
+        "stage_changed_at",
+        datetime.datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    deal.next_action = kwargs.get("next_action", "Send pricing sheet")
+    deal.next_action_date = kwargs.get("next_action_date", datetime.date(2026, 6, 1))
+    deal.competitors = kwargs.get("competitors", ["CompetitorX", "CompetitorY"])
+    return deal
+
+
+@pytest.mark.asyncio
+async def test_deal_coaching_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    deal = _fake_deal(workspace_id)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result_local(deal))
+
+    coach_json = '{"urgency": "high", "bullets": ["Schedule a demo.", "Send pricing.", "Involve legal."]}'
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=coach_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal.id}/ai/coach"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["urgency"] == "high"
+    assert len(body["bullets"]) == 3
+    assert "deal_id" in body
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_coaching_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/deals/{deal_id}/ai/coach")
+
+    assert resp.status_code == 403

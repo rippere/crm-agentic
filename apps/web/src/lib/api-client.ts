@@ -2058,4 +2058,45 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/digest`, { method: 'POST' }, token)
   },
+
+  getDealCoaching: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    urgency: 'low' | 'medium' | 'high'
+    bullets: string[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const seed = dealId.charCodeAt(dealId.length - 1)
+      const urgencies = ['low', 'medium', 'high'] as const
+      const urgency = urgencies[seed % 3]
+      const bulletSets = [
+        [
+          'Schedule a follow-up call this week to re-qualify the decision-maker before the proposal window closes.',
+          'Run the Email Composer agent to generate a personalised value-summary email referencing the contact\'s key pain points.',
+          'Add the two named competitors to the Competitors card so the Pipeline Optimizer can factor them into its next recommendation.',
+        ],
+        [
+          'Use the Pipeline Optimizer agent to generate a re-engagement plan — this deal has been in stage for 18 days.',
+          'Check the Clarity Score on the last three messages in /inbox to ensure no commitments were missed.',
+          'Move the next-action date forward and add a concrete follow-up task in /tasks to keep momentum.',
+        ],
+        [
+          'This deal is healthy — send a timely check-in email via the Email Composer to maintain momentum.',
+          'Enrich the associated contact record to surface additional stakeholders who could accelerate sign-off.',
+          'Review the Win Probability Trend on this page; if probability has dipped, run the Lead Scorer for updated signals.',
+        ],
+      ]
+      return Promise.resolve({
+        urgency,
+        bullets: bulletSets[seed % 3],
+        deal_id: dealId,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/coach`, { method: 'POST' }, token)
+  },
 }
