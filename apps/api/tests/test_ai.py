@@ -247,3 +247,76 @@ async def test_deal_coaching_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/deals/{deal_id}/ai/coach")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/contacts/{cid}/outreach
+# ---------------------------------------------------------------------------
+
+
+def _fake_contact(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
+    contact = MagicMock()
+    contact.id = uuid.uuid4()
+    contact.workspace_id = workspace_id
+    contact.name = kwargs.get("name", "Jane Doe")
+    contact.email = kwargs.get("email", "jane@example.com")
+    contact.company = kwargs.get("company", "Acme Corp")
+    contact.role = kwargs.get("role", "VP of Engineering")
+    contact.status = kwargs.get("status", "prospect")
+    return contact
+
+
+@pytest.mark.asyncio
+async def test_contact_outreach_returns_subject_and_body(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    contact = _fake_contact(workspace_id)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(contact),  # contact lookup
+        _make_all_result([]),                 # recent messages
+        _make_all_result([]),                 # open tasks
+    ])
+
+    outreach_json = '{"subject": "Quick chat about Acme Corp?", "body": "Hi Jane,\\n\\nLooking forward to connecting."}'
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=outreach_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/outreach"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "subject" in body
+    assert "body" in body
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_outreach_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/outreach")
+
+    assert resp.status_code == 403
