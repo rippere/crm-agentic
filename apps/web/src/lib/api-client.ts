@@ -2203,4 +2203,51 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/win-loss-analysis`, { method: 'POST' }, token)
   },
+
+  getRelationshipHealth: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{ health_rating: 'strong' | 'neutral' | 'at_risk'; summary: string; action_items: string[]; contact_id: string; generated_at: string }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { health_rating: 'strong' | 'neutral' | 'at_risk'; summary: string; action_items: string[] }> = {
+        'c-001': {
+          health_rating: 'strong',
+          summary: 'Sarah Chen has been highly engaged over the past month with consistent two-way messaging and strong clarity scores. The relationship is on a positive trajectory with no risk signals detected.',
+          action_items: [
+            'Send a personalised check-in via Email Composer to maintain momentum before quarter-end.',
+            'Log your last call outcome in the Notes thread to keep the context fresh for future meetings.',
+            'Review the open Enterprise Expansion deal health score and schedule a closing call while win probability is high.',
+          ],
+        },
+        'c-002': {
+          health_rating: 'at_risk',
+          summary: 'Marcus Johnson has not sent a message in over 35 days, placing this relationship in the at-risk zone. Engagement has dropped sharply and prompt re-engagement is needed to prevent churn.',
+          action_items: [
+            'Draft a re-engagement email via Email Composer referencing the last conversation topic.',
+            'Run Lead Scorer on this contact to check whether the score has declined and adjust your outreach strategy.',
+            'Check /inbox for any unanswered messages that may have caused the silence.',
+          ],
+        },
+        'c-003': {
+          health_rating: 'neutral',
+          summary: 'Priya Patel shows moderate engagement with occasional messages and notes but no strong positive or negative trend. The relationship is stable but would benefit from more consistent touchpoints.',
+          action_items: [
+            'Schedule a monthly check-in task in /tasks to ensure regular contact cadence.',
+            'Use the AI Task Suggestions feature to identify the highest-value follow-up action for this contact.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        health_rating: 'neutral' as const,
+        summary: 'Relationship data is limited for this contact. Increase engagement frequency to build a stronger relationship signal.',
+        action_items: [
+          'Send an introductory message via Email Composer to begin building engagement history.',
+          'Add a note in the Notes thread after your next interaction to track relationship context.',
+        ],
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/relationship-health`, { method: 'POST' }, token)
+  },
 }
