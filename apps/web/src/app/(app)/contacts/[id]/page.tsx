@@ -400,6 +400,10 @@ export default function ContactDetailPage() {
   type TaskSuggestion = { title: string; due_days: number; priority: 'high' | 'medium' | 'low' };
   const [taskSuggestions, setTaskSuggestions] = useState<TaskSuggestion[] | null>(null);
   const [taskSuggestionsLoading, setTaskSuggestionsLoading] = useState(false);
+
+  type RelationshipHealth = { health_rating: 'strong' | 'neutral' | 'at_risk'; summary: string; action_items: string[]; contact_id: string; generated_at: string };
+  const [relationshipHealth, setRelationshipHealth] = useState<RelationshipHealth | null>(null);
+  const [relationshipHealthLoading, setRelationshipHealthLoading] = useState(false);
   const [taskSuggestionsOpen, setTaskSuggestionsOpen] = useState(false);
   const [addedSuggestions, setAddedSuggestions] = useState<Set<number>>(new Set());
 
@@ -549,6 +553,13 @@ export default function ContactDetailPage() {
       .getContactDealStageProgression(workspaceId, contactId, token)
       .then((data) => setDealProgression(data?.deals ?? null))
       .catch(() => setDealProgression(null));
+
+    setRelationshipHealthLoading(true);
+    apiClient
+      .getRelationshipHealth(workspaceId, contactId, token)
+      .then((data) => setRelationshipHealth(data))
+      .catch(() => setRelationshipHealth(null))
+      .finally(() => setRelationshipHealthLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1440,6 +1451,58 @@ export default function ContactDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* Relationship Health */}
+          {(relationshipHealthLoading || relationshipHealth !== null) && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Relationship Health</p>
+                {!relationshipHealthLoading && relationshipHealth && (
+                  <span
+                    className={cn(
+                      "ml-auto text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full",
+                      relationshipHealth.health_rating === "strong"
+                        ? "bg-emerald-900/50 text-emerald-400"
+                        : relationshipHealth.health_rating === "at_risk"
+                        ? "bg-rose-900/50 text-rose-400"
+                        : "bg-amber-900/50 text-amber-400",
+                    )}
+                  >
+                    {relationshipHealth.health_rating === "at_risk" ? "At Risk" : relationshipHealth.health_rating.charAt(0).toUpperCase() + relationshipHealth.health_rating.slice(1)}
+                  </span>
+                )}
+              </div>
+
+              {relationshipHealthLoading ? (
+                <div className="space-y-2">
+                  <div className="h-4 rounded bg-zinc-800 animate-pulse w-full" />
+                  <div className="h-4 rounded bg-zinc-800 animate-pulse w-4/5" />
+                  <div className="h-3 rounded bg-zinc-800 animate-pulse w-2/3 mt-1" />
+                </div>
+              ) : relationshipHealth ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-zinc-300 leading-relaxed">{relationshipHealth.summary}</p>
+                  {relationshipHealth.action_items.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Recommended actions</p>
+                      {relationshipHealth.action_items.map((item, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className={cn(
+                            "flex-shrink-0 h-4 w-4 rounded-full flex items-center justify-center text-[9px] font-bold mt-0.5",
+                            i === 0 ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-400",
+                          )}>
+                            {i + 1}
+                          </span>
+                          <p className="text-xs text-zinc-400 leading-relaxed">{item}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </Card>
+          )}
 
           {/* Notes */}
           {workspaceId && token && (

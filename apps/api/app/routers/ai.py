@@ -21,6 +21,7 @@ from app.models.deal import Deal
 from app.models.message import Message
 from app.models.task import Task
 from app.models.activity_event import ActivityEvent
+from app.models.contact_note import ContactNote
 
 router = APIRouter()
 
@@ -851,5 +852,145 @@ async def deal_win_loss_analysis(
         "key_factors": key_factors,
         "lessons": lessons,
         "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI relationship health summary for contacts
+# ---------------------------------------------------------------------------
+
+_RELATIONSHIP_HEALTH_SYSTEM = """\
+You are Nova, the AI relationship analyst in NovaCRM. Synthesise the provided contact data and return a structured relationship health assessment.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "health_rating": "strong",
+  "summary": "Two-sentence summary of the overall relationship quality and trajectory.",
+  "action_items": [
+    "First specific action the rep should take to maintain or improve this relationship.",
+    "Second specific action — one concise sentence.",
+    "Third specific action — one concise sentence."
+  ]
+}
+
+health_rating rules:
+- "strong": engagement score >= 60, avg response time <= 24h OR no response time data, last contact < 14 days ago, no persistent negative sentiment
+- "at_risk": any of: engagement score < 30, last contact > 30 days, avg response time > 72h, 3+ recent messages with negative sentiment
+- "neutral": everything else
+
+Rules:
+- summary: exactly 2 sentences, specific to this contact's name, company, and the actual data provided
+- action_items: 2–3 items maximum, each naming a specific CRM action (e.g. "use Email Composer", "check /inbox clarity score", "run Lead Scorer")
+- Be honest about the data — if the relationship shows risk signals, name them clearly\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/relationship-health")
+@limiter.limit("10/minute")
+async def contact_relationship_health(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a relationship health summary for a contact using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id, Contact.id == contact_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Last 3 messages with clarity scores
+    msg_result = await db.execute(
+        select(Message.subject, Message.received_at, ClarityScore.score)
+        .outerjoin(ClarityScore, Message.id == ClarityScore.message_id)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    recent_messages = msg_result.all()
+
+    # Message count in last 90 days
+    cutoff_90d = datetime.datetime.now(timezone.utc) - datetime.timedelta(days=90)
+    msg_count_90d = await db.scalar(
+        select(func.count()).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= cutoff_90d,
+        )
+    ) or 0
+
+    # Total contact notes count
+    note_count = await db.scalar(
+        select(func.count()).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+        )
+    ) or 0
+
+    # Days since last message
+    days_since_last_msg: int | None = None
+    if recent_messages:
+        latest_received = recent_messages[0].received_at
+        if latest_received:
+            if latest_received.tzinfo is None:
+                latest_received = latest_received.replace(tzinfo=timezone.utc)
+            days_since_last_msg = (datetime.datetime.now(timezone.utc) - latest_received).days
+
+    # Simple engagement score proxy for context
+    messages_pts = min(40, msg_count_90d * 8)
+    notes_pts = min(30, note_count * 10)
+    engagement_proxy = messages_pts + notes_pts
+
+    # Build context
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} ({contact.role or 'unknown role'} at {contact.company or 'Unknown Company'})",
+        f"Status: {contact.status}",
+        f"Engagement score (proxy, 0–70): {engagement_proxy} (messages in 90d: {msg_count_90d}, notes: {note_count})",
+        f"Days since last inbound message: {days_since_last_msg if days_since_last_msg is not None else 'unknown'}",
+    ]
+    if recent_messages:
+        lines.append("Recent messages:")
+        for msg in recent_messages:
+            clarity = f" [clarity {msg.score}/100]" if msg.score is not None else ""
+            ts = msg.received_at.strftime("%b %d") if msg.received_at else "unknown date"
+            lines.append(f"  - \"{msg.subject or '(no subject)'}\" received {ts}{clarity}")
+    else:
+        lines.append("No messages from this contact on record.")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_RELATIONSHIP_HEALTH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        health_rating = str(data.get("health_rating", "neutral"))
+        if health_rating not in ("strong", "neutral", "at_risk"):
+            health_rating = "neutral"
+        summary = str(data.get("summary", "Relationship data insufficient for a full assessment."))
+        action_items = [str(a) for a in (data.get("action_items") or [])[:3]]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "health_rating": health_rating,
+        "summary": summary,
+        "action_items": action_items,
+        "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
