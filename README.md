@@ -93,7 +93,7 @@ cd apps/web && npm run dev
 - Sentiment analysis per message (Claude Haiku)
 
 ### Calls
-- Audio upload (mp3, m4a, wav, ogg, webm, flac — 50 MB max)
+- Audio upload (mp3, mp4, m4a, wav, ogg, webm, flac — 50 MB max)
 - Whisper transcription → Claude Sonnet summary + action items
 - /calls page with processing indicator, summary drawer, transcript viewer
 
