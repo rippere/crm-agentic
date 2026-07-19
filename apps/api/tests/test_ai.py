@@ -522,3 +522,79 @@ async def test_deal_win_loss_analysis_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/deals/{deal_id}/ai/win-loss-analysis")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/contacts/{cid}/relationship-health
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_relationship_health_returns_rating_and_actions(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    contact = _fake_contact(workspace_id, name="Carol Smith", status="customer")
+
+    # execute: contact lookup; messages with clarity
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(contact),
+        _make_all_result([]),  # recent messages + clarity
+    ])
+    # scalar: msg_count, note_count, tasks_total, tasks_done
+    mock_db.scalar = AsyncMock(side_effect=[7, 3, 5, 3])
+
+    health_json = (
+        '{"health_rating": "strong",'
+        ' "summary": "Carol has been highly engaged with 7 messages and 3 notes in 90 days. '
+        'Sentiment is positive and task completion rate is at 60%.",'
+        ' "action_items": ['
+        '{"priority": "medium", "action": "Schedule a QBR to review progress and expand the account"},'
+        '{"priority": "low", "action": "Run Lead Scorer to refresh ML probability score"}'
+        ']}'
+    )
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=health_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/relationship-health"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["health_rating"] == "strong"
+    assert "summary" in body
+    assert isinstance(body["action_items"], list)
+    assert len(body["action_items"]) == 2
+    assert body["action_items"][0]["priority"] == "medium"
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_relationship_health_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("44444444-4444-4444-4444-444444444444")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/relationship-health"
+        )
+
+    assert resp.status_code == 403

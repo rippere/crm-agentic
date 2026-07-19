@@ -145,6 +145,14 @@ type DealProgression = {
   stages: DealStageStep[];
 };
 
+type RelationshipHealth = {
+  health_rating: 'strong' | 'neutral' | 'at_risk';
+  summary: string;
+  action_items: Array<{ priority: 'high' | 'medium' | 'low'; action: string }>;
+  contact_id: string;
+  generated_at: string;
+};
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatusDot({ status }: { status: string }) {
@@ -386,6 +394,8 @@ export default function ContactDetailPage() {
   const [sentimentLoading, setSentimentLoading] = useState(false);
   const [winRateTrend, setWinRateTrend] = useState<WinRateQuarter[] | null>(null);
   const [dealProgression, setDealProgression] = useState<DealProgression[] | null>(null);
+  const [relHealth, setRelHealth] = useState<RelationshipHealth | null>(null);
+  const [relHealthLoading, setRelHealthLoading] = useState(false);
 
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -549,6 +559,13 @@ export default function ContactDetailPage() {
       .getContactDealStageProgression(workspaceId, contactId, token)
       .then((data) => setDealProgression(data?.deals ?? null))
       .catch(() => setDealProgression(null));
+
+    setRelHealthLoading(true);
+    apiClient
+      .getRelationshipHealth(workspaceId, contactId, token)
+      .then((data: RelationshipHealth) => setRelHealth(data))
+      .catch(() => setRelHealth(null))
+      .finally(() => setRelHealthLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1322,6 +1339,85 @@ export default function ContactDetailPage() {
                   />
                 </LineChart>
               </ResponsiveContainer>
+            </Card>
+          )}
+
+          {/* Relationship Health */}
+          {(relHealthLoading || relHealth !== null) && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Relationship Health</p>
+                {relHealth && !relHealthLoading && (
+                  <button
+                    onClick={() => {
+                      setRelHealth(null);
+                      setRelHealthLoading(true);
+                      apiClient
+                        .getRelationshipHealth(workspaceId!, contactId, token!)
+                        .then((data: RelationshipHealth) => setRelHealth(data))
+                        .catch(() => setRelHealth(null))
+                        .finally(() => setRelHealthLoading(false));
+                    }}
+                    className="ml-auto text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                    title="Regenerate"
+                  >
+                    ↺
+                  </button>
+                )}
+              </div>
+
+              {relHealthLoading ? (
+                <div className="space-y-2">
+                  <div className="h-5 w-24 rounded bg-zinc-800 animate-pulse" />
+                  <div className="h-10 rounded bg-zinc-800 animate-pulse" />
+                  <div className="h-8 rounded bg-zinc-800 animate-pulse" />
+                </div>
+              ) : relHealth ? (
+                <div className="space-y-3">
+                  {/* Rating badge */}
+                  <div className="flex items-center gap-2">
+                    <span className={cn(
+                      "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold border",
+                      relHealth.health_rating === 'strong'
+                        ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                        : relHealth.health_rating === 'at_risk'
+                        ? "bg-rose-500/10 border-rose-500/30 text-rose-300"
+                        : "bg-amber-500/10 border-amber-500/30 text-amber-300"
+                    )}>
+                      {relHealth.health_rating === 'strong' ? '● Strong' : relHealth.health_rating === 'at_risk' ? '● At Risk' : '● Neutral'}
+                    </span>
+                    <span className="text-[10px] text-zinc-600">
+                      {new Date(relHealth.generated_at).toLocaleDateString()}
+                    </span>
+                  </div>
+
+                  {/* Summary */}
+                  <p className="text-xs text-zinc-300 leading-relaxed">{relHealth.summary}</p>
+
+                  {/* Action items */}
+                  {relHealth.action_items.length > 0 && (
+                    <div className="space-y-1.5 border-t border-zinc-800 pt-2.5">
+                      <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Actions</p>
+                      {relHealth.action_items.map((item, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className={cn(
+                            "flex-shrink-0 mt-0.5 text-[9px] font-mono px-1.5 py-0.5 rounded border",
+                            item.priority === 'high'
+                              ? "text-rose-400 bg-rose-500/10 border-rose-500/20"
+                              : item.priority === 'medium'
+                              ? "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                              : "text-zinc-400 bg-zinc-700/30 border-zinc-700/50"
+                          )}>
+                            {item.priority}
+                          </span>
+                          <p className="text-xs text-zinc-400 leading-snug">{item.action}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </Card>
           )}
 

@@ -2203,4 +2203,48 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/win-loss-analysis`, { method: 'POST' }, token)
   },
+
+  getRelationshipHealth: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    health_rating: 'strong' | 'neutral' | 'at_risk';
+    summary: string;
+    action_items: Array<{ priority: 'high' | 'medium' | 'low'; action: string }>;
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { health_rating: 'strong' | 'neutral' | 'at_risk'; summary: string; action_items: Array<{ priority: 'high' | 'medium' | 'low'; action: string }> }> = {
+        'c-001': {
+          health_rating: 'strong',
+          summary: 'Alice has been highly engaged over the past 90 days with 8 messages and a median response time under 4 hours. Sentiment has been consistently positive and all tracked tasks are on schedule.',
+          action_items: [
+            { priority: 'medium', action: 'Schedule a QBR with Alice to review progress and expand the Enterprise deal' },
+            { priority: 'low', action: 'Run Lead Scorer to refresh ML probability before month-end pipeline review' },
+          ],
+        },
+        'c-002': {
+          health_rating: 'at_risk',
+          summary: 'Bob has gone dark for 32 days — the last message had a clarity score of 48/100 and his sentiment trend has turned negative. With 2 overdue tasks and no recent engagement, this relationship needs immediate attention.',
+          action_items: [
+            { priority: 'high', action: 'Send a personalised re-engagement email via Draft Outreach now' },
+            { priority: 'high', action: "Reassign Bob's 2 overdue tasks in /tasks before the pipeline deadline" },
+            { priority: 'medium', action: 'Run Lead Scorer to see if ML probability has dropped below threshold' },
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        health_rating: 'neutral' as const,
+        summary: 'This contact has had moderate engagement with a few touches in the past quarter. There is room to increase touchpoints and improve response time consistency.',
+        action_items: [
+          { priority: 'medium' as const, action: 'Use Draft Outreach to send a personalised check-in email' },
+          { priority: 'low' as const, action: 'Add a note capturing your last conversation to preserve context' },
+        ],
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/relationship-health`, { method: 'POST' }, token)
+  },
 }
