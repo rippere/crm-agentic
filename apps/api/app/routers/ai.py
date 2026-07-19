@@ -16,6 +16,7 @@ from app.dependencies import get_current_user
 from app.limiter import limiter
 from app.models.user import User
 from app.models.contact import Contact
+from app.models.contact_note import ContactNote
 from app.models.clarity_score import ClarityScore
 from app.models.deal import Deal
 from app.models.message import Message
@@ -851,5 +852,174 @@ async def deal_win_loss_analysis(
         "key_factors": key_factors,
         "lessons": lessons,
         "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Contact relationship health summary
+# ---------------------------------------------------------------------------
+
+_RELATIONSHIP_HEALTH_SYSTEM = """\
+You are Nova, the AI relationship intelligence in NovaCRM. Analyse the provided contact relationship data and return a structured health assessment.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "health_rating": "strong",
+  "summary": "Exactly two sentences: first describes the current state of this relationship with specific numbers where available; second identifies the key trend or risk.",
+  "action_items": [
+    {"priority": "high", "action": "Specific, actionable next step — max 80 chars, reference a CRM feature where helpful."},
+    {"priority": "medium", "action": "Second action."},
+    {"priority": "low", "action": "Third action."}
+  ]
+}
+
+Health rating rules (pick exactly one):
+- "strong": 5+ touches (messages + notes) in the last 90 days, AND avg response ≤ 8h or response data unavailable, AND no 30+ day silence
+- "at_risk": 0–1 touches in 90 days, OR avg response > 72h, OR last touch was 30+ days ago
+- "neutral": everything else that doesn't qualify as strong or at_risk
+
+Return 2–3 action_items maximum. Tailor every item specifically to this contact's data — no generic advice.\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/relationship-health")
+@limiter.limit("10/minute")
+async def contact_relationship_health(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate an AI relationship health summary for a contact using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id, Contact.id == contact_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    cutoff_90 = datetime.datetime.now(timezone.utc) - datetime.timedelta(days=90)
+
+    # Message and note counts for last 90 days
+    msg_count = await db.scalar(
+        select(func.count()).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= cutoff_90,
+        )
+    ) or 0
+
+    note_count = await db.scalar(
+        select(func.count()).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+            ContactNote.created_at >= cutoff_90,
+        )
+    ) or 0
+
+    tasks_total = await db.scalar(
+        select(func.count()).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+        )
+    ) or 0
+
+    tasks_done = await db.scalar(
+        select(func.count()).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status == "done",
+        )
+    ) or 0
+
+    # Last 3 messages with clarity scores
+    msg_result = await db.execute(
+        select(Message.subject, Message.received_at, ClarityScore.score)
+        .outerjoin(ClarityScore, Message.id == ClarityScore.message_id)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    recent_messages = msg_result.all()
+
+    # Days since last touch
+    last_touch_days: int | None = None
+    if recent_messages and recent_messages[0].received_at:
+        ref = recent_messages[0].received_at
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        last_touch_days = (datetime.datetime.now(timezone.utc) - ref).days
+
+    total_touches = msg_count + note_count
+    task_rate = f"{tasks_done}/{tasks_total}" if tasks_total > 0 else "no tasks"
+
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} ({contact.role or 'unknown role'} at {contact.company or 'Unknown'})",
+        f"Status: {contact.status}",
+        f"Last activity: {contact.last_activity}",
+        "",
+        f"Engagement last 90 days:",
+        f"  Messages received: {msg_count}",
+        f"  Notes added: {note_count}",
+        f"  Total touches: {total_touches}",
+        f"  Tasks: {task_rate} completed",
+    ]
+
+    if last_touch_days is not None:
+        lines.append(f"  Days since last touch: {last_touch_days}")
+
+    if recent_messages:
+        lines.append("")
+        lines.append("Recent messages (newest first):")
+        for m in recent_messages:
+            clarity = f" — clarity {m.score}/100" if m.score is not None else ""
+            ts = m.received_at.strftime("%b %d") if m.received_at else "unknown"
+            lines.append(f"  - [{ts}] \"{m.subject or '(no subject)'}\"  {clarity}")
+    else:
+        lines.append("")
+        lines.append("No message history on record.")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_RELATIONSHIP_HEALTH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        health_rating = str(data.get("health_rating", "neutral"))
+        if health_rating not in ("strong", "neutral", "at_risk"):
+            health_rating = "neutral"
+        summary = str(data.get("summary", "Relationship health assessment unavailable."))
+        raw_items = data.get("action_items") or []
+        action_items = []
+        for item in raw_items[:3]:
+            priority = str(item.get("priority", "medium"))
+            if priority not in ("high", "medium", "low"):
+                priority = "medium"
+            action_items.append({
+                "priority": priority,
+                "action": str(item.get("action", "Review relationship data"))[:80],
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "health_rating": health_rating,
+        "summary": summary,
+        "action_items": action_items,
+        "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
