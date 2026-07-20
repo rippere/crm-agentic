@@ -124,11 +124,13 @@ Phase 13 — Extended Analytics (13k complete, 13l next)
 
 - [2026-07-19] Phase 14g: AI relationship health summary for contacts — POST /workspaces/{id}/ai/contacts/{cid}/relationship-health (Claude Haiku; 90-day message/note/task counts + last 3 messages with clarity scores; returns health_rating strong/neutral/at_risk + 2-sentence summary + ≤3 prioritised action_items); Relationship Health card on /contacts/[id] auto-loads on mount (emerald/amber/rose badge, summary, priority-labeled actions, Regenerate button); getRelationshipHealth() in api-client with per-contact demo stubs; 2 new tests; 18/18 ai tests pass; PR #43
 
+- [2026-07-20] Phase 14h: AI deal risk narrative — POST /workspaces/{id}/deals/{id}/ai/risk-narrative endpoint (Claude Haiku; synthesises health score, days in stage, competitor count, overdue next-action, win probability, close-date slippage, last 3 deal notes; returns {risk_level:"low"|"medium"|"high", narrative, top_risks[], deal_id, generated_at}; 400 for closed deals); collapsible "Risk Narrative" card on /pipeline/[id] between AI Coach and Win/Loss Analysis (open deals only — risk-level badge, prose narrative, numbered top risks, Regenerate button, auto-loads on mount); getRiskNarrative() in api-client with 3-variant demo stub seeded by dealId; 2 new tests; 20/20 ai tests pass; 522 total pass; PR #45
+
 ## Current Phase
 Phase 14 — AI Summaries & Intelligence
 
 ## Next Task
-Phase 14h: AI deal risk narrative — POST /workspaces/{id}/deals/{id}/ai/risk-narrative endpoint (Claude Haiku; synthesises health score, days in stage, competitor count, overdue next-action, win probability, close-date slippage, and last 3 deal notes; returns {risk_level:"low"|"medium"|"high", narrative (2–3 sentence prose), top_risks:[], deal_id, generated_at}); "Risk Narrative" card on /pipeline/[id] visible for open deals (collapsible, risk-level badge, prose narrative, numbered top risks, Regenerate button, auto-loads on mount); getRiskNarrative() in api-client with 3-variant demo stub seeded by dealId; 2 new tests.
+Phase 14i: AI contact outreach sequence planner — POST /workspaces/{id}/ai/contacts/{cid}/outreach-sequence endpoint (Claude Haiku; reads contact profile, status, last 3 messages with clarity scores, open tasks; returns a 3-step outreach sequence: [{step, channel:"email"|"slack"|"call", timing:"now"|"3d"|"7d"|"14d", subject?, body_preview, goal}]); "Outreach Sequence" card on /contacts/[id] action bar dropdown (step list with channel icon, timing badge, expand for body preview, "+ Add to Tasks" button per step creates a task via createTask()); getSuggestedOutreachSequence() in api-client with per-contact demo stubs; 2 new tests.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
