@@ -598,3 +598,76 @@ async def test_relationship_health_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/risk-narrative
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_risk_narrative_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    deal = _fake_deal(workspace_id, stage="negotiation", health_score=28, ml_win_probability=18)
+    deal.expected_close = None
+    deal.created_at = None
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(deal),  # deal lookup
+        _make_all_result([]),              # deal notes
+    ])
+
+    import json as _json
+    risk_json = _json.dumps({
+        "risk_level": "high",
+        "narrative": "This deal is critically at risk with a health score of 28 and win probability of 18%.",
+        "top_risks": [
+            "Win probability at 18% is critically low — escalate to executive sponsor.",
+            "Deal stalled in Negotiation for 38 days past stage average.",
+            "Two competitors actively engaged with no recent counter-strategy.",
+        ],
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=risk_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal.id}/ai/risk-narrative"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["risk_level"] == "high"
+    assert "narrative" in body
+    assert isinstance(body["top_risks"], list)
+    assert len(body["top_risks"]) == 3
+    assert body["deal_id"] == str(deal.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_risk_narrative_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("55555555-5555-5555-5555-555555555555")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/deals/{deal_id}/ai/risk-narrative")
+
+    assert resp.status_code == 403

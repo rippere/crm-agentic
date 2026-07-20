@@ -857,6 +857,154 @@ async def deal_win_loss_analysis(
 
 
 # ---------------------------------------------------------------------------
+# AI deal risk narrative
+# ---------------------------------------------------------------------------
+
+_RISK_NARRATIVE_SYSTEM = """\
+You are Nova, the AI risk analyst in NovaCRM. Analyse the provided open deal data and return a concise risk narrative.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "risk_level": "medium",
+  "narrative": "2–3 sentence prose describing the specific risk profile of this deal — name the company, stage, and the primary risk driver.",
+  "top_risks": [
+    "Risk 1 — one concise sentence naming a specific risk factor and its potential impact.",
+    "Risk 2 — one concise sentence.",
+    "Risk 3 — one concise sentence."
+  ]
+}
+
+Risk level rules (pick exactly one):
+- "high": health score < 40, OR win probability < 25%, OR close date overdue by 14+ days, OR at least 2 of: competitors > 2, days in stage > 30, next-action overdue
+- "low": health score >= 70 AND win probability >= 60% AND no overdue next-action AND close date not slipped
+- "medium": everything else that does not qualify as high or low
+
+Return 2–3 top_risks. Be specific — reference actual data from the deal, not generic advice.\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/risk-narrative")
+@limiter.limit("10/minute")
+async def deal_risk_narrative(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a risk narrative for an open deal using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Risk narrative is only available for open deals",
+        )
+
+    # Days in current stage
+    now = datetime.datetime.now(timezone.utc)
+    stage_ref = deal.stage_changed_at or deal.created_at
+    if stage_ref and stage_ref.tzinfo is None:
+        stage_ref = stage_ref.replace(tzinfo=timezone.utc)
+    days_in_stage = (now - stage_ref).days if stage_ref else 0
+
+    # Close date slippage
+    close_overdue_days: int | None = None
+    if deal.expected_close:
+        try:
+            expected = datetime.date.fromisoformat(str(deal.expected_close))
+            overdue = (datetime.date.today() - expected).days
+            if overdue > 0:
+                close_overdue_days = overdue
+        except (ValueError, TypeError):
+            pass
+
+    # Overdue next action
+    next_action_overdue = False
+    if deal.next_action_date:
+        try:
+            na_date = deal.next_action_date
+            if hasattr(na_date, "isoformat"):
+                next_action_overdue = na_date < datetime.date.today()
+        except (ValueError, TypeError):
+            pass
+
+    competitors = deal.competitors or []
+
+    # Last 3 deal notes
+    from app.models.deal_note import DealNote
+    notes_result = await db.execute(
+        select(DealNote.body, DealNote.author, DealNote.created_at)
+        .where(DealNote.workspace_id == workspace_id, DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = notes_result.all()
+
+    lines = [
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}",
+        f"Stage: {deal.stage}",
+        f"Value: ${float(deal.value):,.0f}",
+        f"Health score: {deal.health_score}/100",
+        f"ML win probability: {deal.ml_win_probability}%",
+        f"Days in current stage: {days_in_stage}",
+        f"Competitors tracked: {', '.join(competitors) if competitors else 'none'} ({len(competitors)} total)",
+        f"Next action overdue: {'yes' if next_action_overdue else 'no'}",
+    ]
+    if close_overdue_days is not None:
+        lines.append(f"Close date overdue by: {close_overdue_days} days")
+    else:
+        lines.append("Close date: not overdue or not set")
+
+    if notes:
+        lines.append("Recent deal notes:")
+        for n in notes:
+            ts = n.created_at.strftime("%b %d") if n.created_at else "unknown"
+            lines.append(f"  - [{ts}] {n.author or 'Unknown'}: {n.body[:120]}")
+    else:
+        lines.append("No deal notes recorded.")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_RISK_NARRATIVE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        risk_level = str(data.get("risk_level", "medium"))
+        if risk_level not in ("low", "medium", "high"):
+            risk_level = "medium"
+        narrative = str(data.get("narrative", "Risk assessment unavailable."))
+        top_risks = [str(r) for r in (data.get("top_risks") or [])[:3]]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "risk_level": risk_level,
+        "narrative": narrative,
+        "top_risks": top_risks,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Contact relationship health summary
 # ---------------------------------------------------------------------------
 

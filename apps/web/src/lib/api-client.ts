@@ -2247,4 +2247,56 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/relationship-health`, { method: 'POST' }, token)
   },
+
+  getRiskNarrative: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    risk_level: 'low' | 'medium' | 'high';
+    narrative: string;
+    top_risks: string[];
+    deal_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { risk_level: 'low' | 'medium' | 'high'; narrative: string; top_risks: string[] }> = {
+        'd-001': {
+          risk_level: 'medium',
+          narrative: 'The Enterprise CRM deal at TechCorp is in the Proposal stage with a health score of 72 and 58% win probability. While engagement has been consistent, two active competitors and a slightly overdue close date introduce moderate risk that requires attention before month-end.',
+          top_risks: [
+            'Two competitors (Salesforce, HubSpot) are actively engaged — a competitive differentiation call should be scheduled this week.',
+            'Close date slipped by 8 days — re-confirm commitment and update the expected timeline with the champion.',
+            'No deal note recorded in the last 14 days — add a progress update to maintain momentum visibility.',
+          ],
+        },
+        'd-002': {
+          risk_level: 'high',
+          narrative: 'The Platform Upgrade at FinanceFlow is severely at risk: health score of 28 and ML win probability of 18% signal declining buyer engagement. The deal has stalled in Negotiation for 38 days with a next action overdue and three tracked competitors applying pressure.',
+          top_risks: [
+            'Win probability at 18% is critically low — escalate to an executive sponsor call immediately to re-qualify the deal.',
+            'Deal stalled in Negotiation for 38 days, well past the 21-day stage average — confirm if budget approval is the blocker.',
+            'Three competitors tracked with no recent note on competitive positioning — run a competitive analysis or risk losing on value perception.',
+          ],
+        },
+        'd-003': {
+          risk_level: 'low',
+          narrative: 'The Professional Services deal at GrowthCo is progressing well with a health score of 84 and win probability of 73%. The deal is on schedule with no overdue actions, a clear champion, and no competitive threats identified.',
+          top_risks: [
+            'No competitors tracked — confirm with the champion that an internal build option is not being explored.',
+            'Close date is 6 days away — ensure contract redlines are returned and procurement approval is in progress.',
+          ],
+        },
+      }
+      const dealNum = parseInt(dealId.replace(/\D+/g, ''), 10) || 1
+      const keys = Object.keys(stubs)
+      const stub = stubs[dealId] ?? stubs[keys[(dealNum - 1) % keys.length]] ?? {
+        risk_level: 'medium' as const,
+        narrative: 'This deal has a moderate risk profile with several factors requiring monitoring. Review the health score trend and ensure next actions are up to date.',
+        top_risks: ['Verify champion engagement and confirm deal priority before next stage.'],
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/risk-narrative`, { method: 'POST' }, token)
+  },
 }
