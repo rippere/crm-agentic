@@ -374,6 +374,12 @@ export default function DealDetailPage() {
   const [winLossLoading, setWinLossLoading] = useState(false);
   const [winLossGenerating, setWinLossGenerating] = useState(false);
 
+  type RiskNarrative = { risk_level: "low" | "medium" | "high"; narrative: string; top_risks: string[]; deal_id: string; generated_at: string };
+  const [riskNarrative, setRiskNarrative] = useState<RiskNarrative | null>(null);
+  const [riskNarrativeLoading, setRiskNarrativeLoading] = useState(false);
+  const [riskNarrativeGenerating, setRiskNarrativeGenerating] = useState(false);
+  const [riskNarrativeCollapsed, setRiskNarrativeCollapsed] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -504,6 +510,15 @@ export default function DealDetailPage() {
       .then((data) => setCoachData(data ?? null))
       .catch(() => setCoachData(null))
       .finally(() => setCoachLoading(false));
+
+    if (deal.stage !== "closed_won" && deal.stage !== "closed_lost") {
+      setRiskNarrativeLoading(true);
+      apiClient
+        .getRiskNarrative(workspaceId, dealId, token)
+        .then((data) => setRiskNarrative(data ?? null))
+        .catch(() => setRiskNarrative(null))
+        .finally(() => setRiskNarrativeLoading(false));
+    }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
       setWinLossLoading(true);
@@ -679,6 +694,16 @@ export default function DealDetailPage() {
       setWinLossData(data ?? null);
     } catch { /* ignore */ }
     finally { setWinLossGenerating(false); }
+  };
+
+  const handleRegenerateRiskNarrative = async () => {
+    if (!token || !workspaceId || riskNarrativeGenerating) return;
+    setRiskNarrativeGenerating(true);
+    try {
+      const data = await apiClient.getRiskNarrative(workspaceId, dealId, token);
+      setRiskNarrative(data ?? null);
+    } catch { /* ignore */ }
+    finally { setRiskNarrativeGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -1775,6 +1800,87 @@ export default function DealDetailPage() {
                 <p className="text-[10px] text-zinc-600 text-right">
                   Generated {new Date(coachData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </p>
+              )}
+            </Card>
+          )}
+
+          {/* Risk Narrative — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-400" aria-hidden />
+                <button
+                  className="flex-1 flex items-center gap-1.5 text-left cursor-pointer"
+                  onClick={() => setRiskNarrativeCollapsed((c) => !c)}
+                  aria-label={riskNarrativeCollapsed ? "Expand Risk Narrative" : "Collapse Risk Narrative"}
+                >
+                  <p className="text-sm font-semibold text-zinc-200">Risk Narrative</p>
+                  <ChevronRight className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${riskNarrativeCollapsed ? "" : "rotate-90"}`} />
+                </button>
+                {riskNarrative && (() => {
+                  const lvl = riskNarrative.risk_level;
+                  const lvlColor = lvl === "high"
+                    ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : lvl === "low"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : "text-amber-300 border-amber-500/30 bg-amber-500/10";
+                  return (
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${lvlColor}`}>
+                      {lvl}
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateRiskNarrative}
+                  disabled={riskNarrativeLoading || riskNarrativeGenerating}
+                  className="ml-auto text-zinc-500 hover:text-amber-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate risk narrative"
+                  title="Regenerate"
+                >
+                  {riskNarrativeGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {!riskNarrativeCollapsed && (
+                <>
+                  {riskNarrativeLoading ? (
+                    <div className="space-y-2">
+                      {[1, 2].map((i) => (
+                        <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                      ))}
+                    </div>
+                  ) : riskNarrative === null ? (
+                    <p className="text-xs text-zinc-600 italic py-2">Unable to load risk assessment.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="text-xs text-zinc-300 leading-relaxed">{riskNarrative.narrative}</p>
+
+                      {riskNarrative.top_risks.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Top Risks</p>
+                          <ul className="space-y-1.5">
+                            {riskNarrative.top_risks.map((risk, i) => (
+                              <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                                <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-[9px] font-bold text-amber-400 mt-0.5">
+                                  {i + 1}
+                                </span>
+                                <p className="text-xs text-zinc-300 leading-relaxed">{risk}</p>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-zinc-600 text-right">
+                        Generated {new Date(riskNarrative.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </div>
+                  )}
+                </>
               )}
             </Card>
           )}
