@@ -1031,6 +1031,174 @@ Return 2–3 action_items maximum. Tailor every item specifically to this contac
 """
 
 
+# ---------------------------------------------------------------------------
+# AI outreach sequence planner
+# ---------------------------------------------------------------------------
+
+_OUTREACH_SEQUENCE_SYSTEM = """\
+You are Nova, the AI outreach strategist in NovaCRM. Given a contact profile and recent context, \
+design a concise 3-step outreach sequence to re-engage or advance the relationship.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "steps": [
+    {
+      "step": 1,
+      "channel": "email",
+      "timing": "now",
+      "subject": "Quick check-in on <topic>",
+      "body_preview": "Hi <name>, I wanted to follow up on...",
+      "goal": "Re-open the conversation and gauge interest"
+    },
+    {
+      "step": 2,
+      "channel": "call",
+      "timing": "3d",
+      "subject": null,
+      "body_preview": "Call script: confirm receipt of email, ask about timeline and blockers...",
+      "goal": "Qualify urgency and identify decision-maker"
+    },
+    {
+      "step": 3,
+      "channel": "email",
+      "timing": "7d",
+      "subject": "Resources + next steps for <company>",
+      "body_preview": "Hi <name>, sharing the case study we discussed plus a proposal outline...",
+      "goal": "Deliver value and propose a meeting"
+    }
+  ]
+}
+
+Rules:
+- Exactly 3 steps
+- channel must be one of: email, slack, call
+- timing must be one of: now, 3d, 7d, 14d
+- subject is required for email/slack steps; null for call steps
+- body_preview: 1–2 sentences only, personalised with contact name and company
+- goal: one sentence, outcome-focused
+- Base timing on urgency: if last touch > 30 days use "now", otherwise spread across 3d/7d/14d\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/outreach-sequence")
+@limiter.limit("10/minute")
+async def suggest_outreach_sequence(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a 3-step AI outreach sequence for a contact using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id, Contact.id == contact_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Last 3 messages with clarity scores
+    msg_result = await db.execute(
+        select(Message.subject, Message.received_at, ClarityScore.score)
+        .outerjoin(ClarityScore, Message.id == ClarityScore.message_id)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    recent_messages = msg_result.all()
+
+    # Open tasks
+    task_result = await db.execute(
+        select(Task.title, Task.due_date)
+        .where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status.in_(["open", "in_progress"]),
+        )
+        .limit(5)
+    )
+    open_tasks = task_result.all()
+
+    # Days since last touch
+    last_touch_days: int | None = None
+    if recent_messages and recent_messages[0].received_at:
+        ref = recent_messages[0].received_at
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        last_touch_days = (datetime.datetime.now(timezone.utc) - ref).days
+
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} ({contact.role or 'unknown role'} at {contact.company or 'Unknown'})",
+        f"Status: {contact.status}",
+        f"Email: {contact.email or 'unknown'}",
+    ]
+    if last_touch_days is not None:
+        lines.append(f"Days since last touch: {last_touch_days}")
+    else:
+        lines.append("No prior contact history — first-touch sequence.")
+
+    if recent_messages:
+        lines.append("Recent messages (newest first):")
+        for m in recent_messages:
+            clarity = f" — clarity {m.score}/100" if m.score is not None else ""
+            ts = m.received_at.strftime("%b %d") if m.received_at else "unknown"
+            lines.append(f"  - [{ts}] \"{m.subject or '(no subject)'}\"{clarity}")
+    else:
+        lines.append("No messages on record.")
+
+    if open_tasks:
+        lines.append("Open tasks:")
+        for t in open_tasks:
+            due = str(t.due_date) if t.due_date else "no due date"
+            lines.append(f"  - {t.title} (due {due})")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_OUTREACH_SEQUENCE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        raw_steps = data.get("steps") or []
+        valid_channels = {"email", "slack", "call"}
+        valid_timings = {"now", "3d", "7d", "14d"}
+        steps = []
+        for s in raw_steps[:3]:
+            channel = str(s.get("channel", "email"))
+            if channel not in valid_channels:
+                channel = "email"
+            timing = str(s.get("timing", "7d"))
+            if timing not in valid_timings:
+                timing = "7d"
+            steps.append({
+                "step": int(s.get("step", len(steps) + 1)),
+                "channel": channel,
+                "timing": timing,
+                "subject": str(s["subject"])[:120] if s.get("subject") else None,
+                "body_preview": str(s.get("body_preview", ""))[:200],
+                "goal": str(s.get("goal", ""))[:120],
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "steps": steps,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
 @router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/relationship-health")
 @limiter.limit("10/minute")
 async def contact_relationship_health(
