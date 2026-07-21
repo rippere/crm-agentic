@@ -2248,6 +2248,48 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/relationship-health`, { method: 'POST' }, token)
   },
 
+  getSuggestedOutreachSequence: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    steps: Array<{
+      step: number;
+      channel: 'email' | 'slack' | 'call';
+      timing: 'now' | '3d' | '7d' | '14d';
+      subject: string | null;
+      body_preview: string;
+      goal: string;
+    }>;
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, Array<{
+        step: number; channel: 'email' | 'slack' | 'call'; timing: 'now' | '3d' | '7d' | '14d';
+        subject: string | null; body_preview: string; goal: string;
+      }>> = {
+        'c-001': [
+          { step: 1, channel: 'email', timing: 'now', subject: 'QBR agenda for TechCorp — Q3 review', body_preview: 'Hi Alice, I\'d love to walk through our Q3 results together and align on priorities for the Enterprise CRM rollout.', goal: 'Confirm QBR date and set agenda' },
+          { step: 2, channel: 'call', timing: '3d', subject: null, body_preview: 'Call script: confirm receipt of QBR invite, walk through open tasks on the implementation checklist, identify any procurement blockers.', goal: 'Unblock implementation and confirm executive sponsor availability' },
+          { step: 3, channel: 'email', timing: '7d', subject: 'Enterprise CRM — next steps & resources', body_preview: 'Hi Alice, sharing the onboarding playbook and the ROI case study we discussed — plus a draft SLA for review ahead of go-live.', goal: 'Deliver value assets and move toward contract signature' },
+        ],
+        'c-002': [
+          { step: 1, channel: 'email', timing: 'now', subject: 'Checking in — any update on the platform decision?', body_preview: 'Hi Bob, it\'s been a few weeks since we last connected and I wanted to see if there are any questions I can help address on the platform upgrade.', goal: 'Re-open the conversation after 32 days of silence' },
+          { step: 2, channel: 'slack', timing: '3d', subject: 'Quick note on FinanceFlow upgrade', body_preview: 'Hey Bob — just dropping a quick Slack in case email is noisy. Any blockers I can help clear before end of month?', goal: 'Reach Bob on a different channel to increase response rate' },
+          { step: 3, channel: 'call', timing: '7d', subject: null, body_preview: 'Call script: acknowledge the pause, ask what has changed internally, re-qualify budget and timeline, offer a revised proposal if needed.', goal: 'Diagnose reason for dark period and re-qualify deal' },
+        ],
+      }
+      const stub = stubs[contactId] ?? [
+        { step: 1, channel: 'email' as const, timing: 'now' as const, subject: 'Quick check-in', body_preview: `Hi there, I wanted to follow up and see how things are going on your end.`, goal: 'Re-establish contact and gauge interest' },
+        { step: 2, channel: 'call' as const, timing: '3d' as const, subject: null, body_preview: 'Call script: confirm receipt of email, ask about current priorities and timeline, identify decision-making process.', goal: 'Qualify urgency and identify decision-maker' },
+        { step: 3, channel: 'email' as const, timing: '7d' as const, subject: 'Resources + next steps', body_preview: 'Following our call, I\'m sharing relevant resources and a suggested next step to move forward.', goal: 'Deliver value and propose a meeting' },
+      ]
+      return Promise.resolve({ steps: stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/outreach-sequence`, { method: 'POST' }, token)
+  },
+
   getRiskNarrative: (
     workspaceId: string,
     dealId: string,

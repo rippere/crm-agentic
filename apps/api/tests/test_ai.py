@@ -525,6 +525,111 @@ async def test_deal_win_loss_analysis_wrong_workspace_returns_403(app_client):
 
 
 # ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/contacts/{cid}/outreach-sequence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_outreach_sequence_returns_three_steps(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    contact = MagicMock()
+    contact.id = uuid.uuid4()
+    contact.workspace_id = workspace_id
+    contact.name = "Jane Smith"
+    contact.role = "VP Sales"
+    contact.company = "Acme Corp"
+    contact.email = "jane@acme.com"
+    contact.status = "prospect"
+    contact.last_activity = "2026-07-01"
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(contact),  # contact lookup
+        _make_all_result([]),                 # recent messages with clarity
+        _make_all_result([]),                 # open tasks
+    ])
+
+    import json as _json
+    seq_json = _json.dumps({
+        "steps": [
+            {
+                "step": 1,
+                "channel": "email",
+                "timing": "now",
+                "subject": "Quick check-in — Jane at Acme",
+                "body_preview": "Hi Jane, I wanted to reconnect and see if the platform upgrade is still on your radar.",
+                "goal": "Re-open the conversation and gauge current interest",
+            },
+            {
+                "step": 2,
+                "channel": "call",
+                "timing": "3d",
+                "subject": None,
+                "body_preview": "Call script: confirm receipt of email, ask about timeline and blockers.",
+                "goal": "Qualify urgency and identify decision-maker",
+            },
+            {
+                "step": 3,
+                "channel": "slack",
+                "timing": "7d",
+                "subject": "Resources for Acme team",
+                "body_preview": "Hey Jane — sharing our ROI playbook and a proposed next step.",
+                "goal": "Deliver value and propose a follow-up meeting",
+            },
+        ]
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=seq_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/outreach-sequence"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["steps"], list)
+    assert len(body["steps"]) == 3
+    assert body["steps"][0]["channel"] == "email"
+    assert body["steps"][0]["timing"] == "now"
+    assert body["steps"][0]["subject"] == "Quick check-in — Jane at Acme"
+    assert body["steps"][1]["channel"] == "call"
+    assert body["steps"][1]["subject"] is None
+    assert body["steps"][2]["channel"] == "slack"
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_outreach_sequence_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("66666666-6666-6666-6666-666666666666")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/outreach-sequence"
+        )
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
 # POST /workspaces/{wid}/ai/contacts/{cid}/relationship-health
 # ---------------------------------------------------------------------------
 
