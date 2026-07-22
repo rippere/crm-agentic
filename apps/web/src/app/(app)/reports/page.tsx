@@ -1291,7 +1291,7 @@ export default function ReportsPage() {
                   <YAxis tick={{ fill: "#71717A", fontSize: 9 }} axisLine={false} tickLine={false} width={28} allowDecimals={false} />
                   <Tooltip
                     contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }}
-                    formatter={(v: number | undefined, name: string) => [v ?? 0, name.charAt(0).toUpperCase() + name.slice(1)]}
+                    formatter={(v, name) => [v ?? 0, String(name).charAt(0).toUpperCase() + String(name).slice(1)]}
                   />
                   <Bar dataKey="gmail"   stackId="a" fill="#6366F1" radius={[0, 0, 0, 0]} />
                   <Bar dataKey="slack"   stackId="a" fill="#8B5CF6" radius={[0, 0, 0, 0]} />
