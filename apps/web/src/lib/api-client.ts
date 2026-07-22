@@ -2290,6 +2290,42 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/outreach-sequence`, { method: 'POST' }, token)
   },
 
+  getContactHealthOverview: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    at_risk_count: number;
+    strong_count: number;
+    summary_sentence: string;
+    contacts: Array<{
+      id: string;
+      name: string;
+      health: 'strong' | 'neutral' | 'at_risk';
+      days_since_touch: number | null;
+      top_action: string;
+      engagement_score: number;
+    }>;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        at_risk_count: 2,
+        strong_count: 3,
+        summary_sentence: '2 contacts at risk of going dark — focus on re-engagement this week to protect pipeline health.',
+        contacts: [
+          { id: 'c-001', name: 'Sarah Chen', health: 'strong', days_since_touch: 5, top_action: 'Maintain cadence and look for expansion', engagement_score: 74 },
+          { id: 'c-002', name: 'Michael Torres', health: 'at_risk', days_since_touch: 42, top_action: 'Re-engage — no contact in 42 days', engagement_score: 18 },
+          { id: 'c-003', name: 'Emma Rodriguez', health: 'neutral', days_since_touch: 18, top_action: 'Add a note or follow-up task', engagement_score: 45 },
+          { id: 'c-004', name: 'James Liu', health: 'strong', days_since_touch: 3, top_action: 'Maintain cadence and look for expansion', engagement_score: 81 },
+          { id: 'c-005', name: 'Priya Patel', health: 'at_risk', days_since_touch: 35, top_action: 'Re-engage — no contact in 35 days', engagement_score: 22 },
+          { id: 'c-006', name: 'Daniel Kim', health: 'strong', days_since_touch: 7, top_action: 'Maintain cadence and look for expansion', engagement_score: 68 },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/health-overview`, {}, token)
+  },
+
   getRiskNarrative: (
     workspaceId: string,
     dealId: string,

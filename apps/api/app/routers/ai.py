@@ -1339,3 +1339,191 @@ async def contact_relationship_health(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Contact health overview (workspace-level)
+# ---------------------------------------------------------------------------
+
+_HEALTH_OVERVIEW_SYSTEM = """\
+You are Nova, the AI assistant for NovaCRM. Write a single concise summary sentence \
+(max 25 words) describing the overall contact health state for this workspace — \
+mention at-risk count or strong count if notable. No JSON. Plain sentence only.\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/health-overview")
+@limiter.limit("5/minute")
+async def contact_health_overview(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Scan top 10 contacts by pipeline value, compute health, return a structured overview."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # Top 10 contacts by sum of open deal values
+    subq = (
+        select(Deal.contact_id, func.sum(Deal.value).label("pipeline_value"))
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .group_by(Deal.contact_id)
+        .order_by(func.sum(Deal.value).desc())
+        .limit(10)
+        .subquery()
+    )
+    contact_rows = await db.execute(
+        select(Contact, subq.c.pipeline_value)
+        .join(subq, Contact.id == subq.c.contact_id)
+        .where(Contact.workspace_id == workspace_id)
+        .order_by(subq.c.pipeline_value.desc())
+    )
+    contacts_with_value = contact_rows.all()
+
+    if not contacts_with_value:
+        fallback_rows = await db.execute(
+            select(Contact)
+            .where(Contact.workspace_id == workspace_id)
+            .order_by(Contact.created_at.desc())
+            .limit(10)
+        )
+        contacts_with_value = [(c, 0) for c in fallback_rows.scalars().all()]
+
+    cutoff_90 = datetime.datetime.now(timezone.utc) - datetime.timedelta(days=90)
+
+    result_contacts = []
+    for contact, _pipeline_val in contacts_with_value:
+        msg_count = await db.scalar(
+            select(func.count()).where(
+                Message.workspace_id == workspace_id,
+                Message.contact_id == contact.id,
+                Message.received_at >= cutoff_90,
+            )
+        ) or 0
+        note_count = await db.scalar(
+            select(func.count()).where(
+                ContactNote.workspace_id == workspace_id,
+                ContactNote.contact_id == contact.id,
+                ContactNote.created_at >= cutoff_90,
+            )
+        ) or 0
+        tasks_total = await db.scalar(
+            select(func.count()).where(
+                Task.workspace_id == workspace_id,
+                Task.contact_id == contact.id,
+                Task.created_at >= cutoff_90,
+            )
+        ) or 0
+        tasks_done = await db.scalar(
+            select(func.count()).where(
+                Task.workspace_id == workspace_id,
+                Task.contact_id == contact.id,
+                Task.status == "done",
+                Task.created_at >= cutoff_90,
+            )
+        ) or 0
+
+        last_msg_row = await db.execute(
+            select(Message.received_at)
+            .where(Message.workspace_id == workspace_id, Message.contact_id == contact.id)
+            .order_by(Message.received_at.desc())
+            .limit(1)
+        )
+        last_msg_date = last_msg_row.scalar_one_or_none()
+
+        last_note_row = await db.execute(
+            select(ContactNote.created_at)
+            .where(ContactNote.workspace_id == workspace_id, ContactNote.contact_id == contact.id)
+            .order_by(ContactNote.created_at.desc())
+            .limit(1)
+        )
+        last_note_date = last_note_row.scalar_one_or_none()
+
+        dates = [d for d in [last_msg_date, last_note_date] if d is not None]
+        if dates:
+            most_recent = max(
+                d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d for d in dates
+            )
+            days_since_touch = (datetime.datetime.now(timezone.utc) - most_recent).days
+        else:
+            days_since_touch = None
+
+        messages_score = min(40, msg_count * 8)
+        notes_score = min(30, note_count * 10)
+        tasks_score = round(30 * tasks_done / tasks_total) if tasks_total > 0 else 0
+        engagement_score = messages_score + notes_score + tasks_score
+
+        going_dark = days_since_touch is None or days_since_touch > 30
+        if engagement_score >= 60 and not going_dark:
+            health = "strong"
+        elif engagement_score < 40 or going_dark:
+            health = "at_risk"
+        else:
+            health = "neutral"
+
+        if going_dark:
+            if days_since_touch is not None:
+                top_action = f"Re-engage — no contact in {days_since_touch} days"
+            else:
+                top_action = "Re-engage — no contact history found"
+        elif health == "strong":
+            top_action = "Maintain cadence and look for expansion"
+        elif health == "neutral":
+            top_action = "Add a note or follow-up task"
+        else:
+            top_action = "Increase engagement frequency"
+
+        result_contacts.append({
+            "id": str(contact.id),
+            "name": contact.name or "Unknown",
+            "health": health,
+            "days_since_touch": days_since_touch,
+            "top_action": top_action,
+            "engagement_score": engagement_score,
+        })
+
+    at_risk_count = sum(1 for c in result_contacts if c["health"] == "at_risk")
+    strong_count = sum(1 for c in result_contacts if c["health"] == "strong")
+
+    contact_lines = []
+    for c in result_contacts:
+        touch_label = f"{c['days_since_touch']}d ago" if c["days_since_touch"] is not None else "never"
+        contact_lines.append(
+            f"  - {c['name']}: health={c['health']}, last_touch={touch_label}, engagement={c['engagement_score']}/100"
+        )
+    context = (
+        f"Top {len(result_contacts)} contacts by pipeline value:\n"
+        + "\n".join(contact_lines)
+        + f"\n\nSummary: {at_risk_count} at risk, {strong_count} strong, "
+        + f"{len(result_contacts) - at_risk_count - strong_count} neutral."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=60,
+            system=_HEALTH_OVERVIEW_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        summary_sentence = msg.content[0].text.strip() if msg.content else ""
+    except Exception:
+        summary_sentence = ""
+
+    if not summary_sentence:
+        summary_sentence = (
+            f"{at_risk_count} contact{'s' if at_risk_count != 1 else ''} at risk, "
+            f"{strong_count} in strong health."
+        )
+
+    return {
+        "at_risk_count": at_risk_count,
+        "strong_count": strong_count,
+        "summary_sentence": summary_sentence,
+        "contacts": result_contacts,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
