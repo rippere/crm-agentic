@@ -154,6 +154,15 @@ type RelationshipHealth = {
   generated_at: string;
 };
 
+type ContactSummaryData = {
+  relationship_status: 'strong' | 'warm' | 'cold' | 'at_risk';
+  summary: string;
+  next_best_action: string;
+  deal_value: number;
+  contact_id: string;
+  generated_at: string;
+};
+
 type OutreachStep = {
   step: number;
   channel: 'email' | 'slack' | 'call';
@@ -407,6 +416,10 @@ export default function ContactDetailPage() {
   const [relHealth, setRelHealth] = useState<RelationshipHealth | null>(null);
   const [relHealthLoading, setRelHealthLoading] = useState(false);
 
+  const [contactSummary, setContactSummary] = useState<ContactSummaryData | null>(null);
+  const [contactSummaryLoading, setContactSummaryLoading] = useState(false);
+  const [contactSummaryGenerating, setContactSummaryGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -582,6 +595,13 @@ export default function ContactDetailPage() {
       .then((data: RelationshipHealth) => setRelHealth(data))
       .catch(() => setRelHealth(null))
       .finally(() => setRelHealthLoading(false));
+
+    setContactSummaryLoading(true);
+    apiClient
+      .getContactSummary(workspaceId, contactId, token)
+      .then((data: ContactSummaryData) => setContactSummary(data))
+      .catch(() => setContactSummary(null))
+      .finally(() => setContactSummaryLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -705,6 +725,17 @@ export default function ContactDetailPage() {
       const res = await apiClient.enrichContact(workspaceId, contactId, token) as { job_id?: string };
       if (res?.job_id) enrichPoller.start(res.job_id);
     } catch { /* ignore */ }
+  };
+
+  const handleRegenerateContactSummary = async () => {
+    if (!token || !workspaceId || contactSummaryGenerating) return;
+    setContactSummaryGenerating(true);
+    try {
+      const data = await apiClient.getContactSummary(workspaceId, contactId, token);
+      setContactSummary(data as ContactSummaryData);
+    } catch { /* ignore */ } finally {
+      setContactSummaryGenerating(false);
+    }
   };
 
   const handleExportTimeline = async () => {
@@ -1126,6 +1157,63 @@ export default function ContactDetailPage() {
           )}
 
           {/* Response Time */}
+          {/* Contact AI summary card */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Brain className="h-4 w-4 text-sky-400" />
+              <p className="text-xs font-semibold text-zinc-300">Contact AI</p>
+              {contactSummary && (() => {
+                const cfg: Record<string, { label: string; cls: string }> = {
+                  strong: { label: "Strong", cls: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" },
+                  warm:   { label: "Warm",   cls: "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" },
+                  cold:   { label: "Cold",   cls: "bg-amber-500/15 text-amber-400 border border-amber-500/30" },
+                  at_risk:{ label: "At Risk", cls: "bg-rose-500/15 text-rose-400 border border-rose-500/30" },
+                };
+                const s = cfg[contactSummary.relationship_status] ?? cfg.warm;
+                return (
+                  <span className={cn("ml-1 rounded-md px-2 py-0.5 text-[10px] font-semibold tracking-wide", s.cls)}>
+                    {s.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={handleRegenerateContactSummary}
+                disabled={contactSummaryGenerating || contactSummaryLoading}
+                className="ml-auto text-[10px] text-zinc-500 hover:text-zinc-300 disabled:opacity-40 transition-colors flex items-center gap-1"
+              >
+                {contactSummaryGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                Regenerate
+              </button>
+            </div>
+
+            {contactSummaryLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-4 w-4 text-sky-400 animate-spin" />
+              </div>
+            ) : contactSummary === null ? (
+              <p className="text-xs text-zinc-600 italic py-2">Unable to load contact summary.</p>
+            ) : (
+              <div className="space-y-2.5">
+                <p className="text-xs text-zinc-300 leading-relaxed">{contactSummary.summary}</p>
+                {contactSummary.next_best_action && (
+                  <div className="rounded-lg bg-sky-500/10 border border-sky-500/20 px-3 py-2">
+                    <p className="text-[10px] font-mono text-sky-400 uppercase tracking-wider mb-0.5">Next best action</p>
+                    <p className="text-xs text-sky-200">{contactSummary.next_best_action}</p>
+                  </div>
+                )}
+                {contactSummary.deal_value > 0 && (
+                  <p className="text-[10px] text-zinc-500 flex items-center gap-1">
+                    <TrendingUp className="h-3 w-3 text-zinc-600" />
+                    {formatCurrency(contactSummary.deal_value)} open pipeline
+                  </p>
+                )}
+                <p className="text-[10px] text-zinc-600">
+                  Generated {formatRelative(contactSummary.generated_at)}
+                </p>
+              </div>
+            )}
+          </Card>
+
           {responseTime !== null && (
             <Card className="p-4 space-y-3">
               <div className="flex items-center gap-2">

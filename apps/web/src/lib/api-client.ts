@@ -2459,6 +2459,50 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/momentum-check`, { method: 'POST' }, token)
   },
 
+  getContactSummary: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    relationship_status: 'strong' | 'warm' | 'cold' | 'at_risk';
+    summary: string;
+    next_best_action: string;
+    deal_value: number;
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { relationship_status: 'strong' | 'warm' | 'cold' | 'at_risk'; summary: string; next_best_action: string; deal_value: number }> = {
+        'c-001': {
+          relationship_status: 'strong',
+          summary: 'Sarah Chen has been actively engaged over the past 3 weeks, with 5 messages and 2 notes logged. Her Enterprise deal is at proposal stage with a health score of 88, and all tasks are on track.',
+          next_best_action: 'Schedule a QBR call this week to confirm the legal review timeline and lock in the signature date.',
+          deal_value: 95000,
+        },
+        'c-002': {
+          relationship_status: 'at_risk',
+          summary: 'Marcus Rivera has been unresponsive for 22 days after initial interest. The discovery-stage deal has dropped to a health score of 42 and there are 2 overdue tasks.',
+          next_best_action: 'Draft Outreach email with a value-focused re-engagement message, referencing the original pain point from the discovery call.',
+          deal_value: 30000,
+        },
+        'c-003': {
+          relationship_status: 'warm',
+          summary: 'Emily Watson maintains steady engagement with monthly check-ins and a qualified deal progressing well. Clarity scores on recent messages average 78, indicating aligned communication.',
+          next_best_action: 'Add a Contact Note after the next check-in and update the expected close date in the deal to reflect the revised procurement timeline.',
+          deal_value: 45000,
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        relationship_status: 'warm' as const,
+        summary: 'This contact has moderate engagement with some recent activity. Review recent messages and tasks to determine the next best step.',
+        next_best_action: 'Add a Contact Note to capture the latest status and set a follow-up task for next week.',
+        deal_value: 0,
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/summary`, {}, token)
+  },
+
   getDealClosePlan: (
     workspaceId: string,
     dealId: string,
