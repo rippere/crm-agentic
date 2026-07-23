@@ -376,6 +376,64 @@ async def test_pipeline_summary_wrong_workspace_returns_403(app_client):
 
 
 # ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/pipeline-pulse
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_pulse_returns_structured_data(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalars_all(rows):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = rows
+        return result
+
+    deal1 = _fake_deal(workspace_id, title="Big Win", stage="proposal", value=120000.0, health_score=75, ml_win_probability=70)
+    deal2 = _fake_deal(workspace_id, title="At Risk Deal", stage="discovery", value=30000.0, health_score=35, ml_win_probability=25)
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_all([deal1, deal2]))
+
+    import json as _json
+    pulse_json = _json.dumps({
+        "insight": "$150K open pipeline with 1 at-risk deal in discovery. Run Deal Health check on the at-risk deal to generate a targeted re-engagement plan.",
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=pulse_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/pipeline-pulse")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_value"] == pytest.approx(150000.0)
+    assert body["at_risk_count"] == 1
+    assert body["health_avg"] == 55
+    assert isinstance(body["stage_breakdown"], list)
+    assert len(body["stage_breakdown"]) == 2
+    assert body["top_deal"]["title"] == "Big Win"
+    assert body["top_deal"]["value"] == pytest.approx(120000.0)
+    assert "insight" in body
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_pipeline_pulse_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/pipeline-pulse")
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
 # POST /workspaces/{wid}/ai/contacts/{cid}/suggest-tasks
 # ---------------------------------------------------------------------------
 
