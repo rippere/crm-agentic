@@ -385,6 +385,12 @@ export default function DealDetailPage() {
   const [momentumLoading, setMomentumLoading] = useState(false);
   const [momentumGenerating, setMomentumGenerating] = useState(false);
 
+  type ClosePlanData = { phases: { label: string; actions: string[] }[]; recommended_close_date: string; deal_id: string; generated_at: string };
+  const [closePlanData, setClosePlanData] = useState<ClosePlanData | null>(null);
+  const [closePlanLoading, setClosePlanLoading] = useState(false);
+  const [closePlanGenerating, setClosePlanGenerating] = useState(false);
+  const [closePlanOpenPhase, setClosePlanOpenPhase] = useState<number>(0);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -530,6 +536,13 @@ export default function DealDetailPage() {
         .then((data) => setMomentumData(data ?? null))
         .catch(() => setMomentumData(null))
         .finally(() => setMomentumLoading(false));
+
+      setClosePlanLoading(true);
+      apiClient
+        .getDealClosePlan(workspaceId, dealId, token)
+        .then((data) => setClosePlanData(data ?? null))
+        .catch(() => setClosePlanData(null))
+        .finally(() => setClosePlanLoading(false));
     }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
@@ -726,6 +739,16 @@ export default function DealDetailPage() {
       setMomentumData(data ?? null);
     } catch { /* ignore */ }
     finally { setMomentumGenerating(false); }
+  };
+
+  const handleRegenerateClosePlan = async () => {
+    if (!token || !workspaceId || closePlanGenerating) return;
+    setClosePlanGenerating(true);
+    try {
+      const data = await apiClient.getDealClosePlan(workspaceId, dealId, token);
+      setClosePlanData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setClosePlanGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -1830,6 +1853,80 @@ export default function DealDetailPage() {
                   <p className="text-[10px] text-zinc-600 text-right">
                     Generated {new Date(momentumData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Close Plan */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-teal-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Close Plan</p>
+                {closePlanData && (
+                  <span className="ml-1 rounded-full border border-teal-500/30 bg-teal-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-teal-300">
+                    {new Date(closePlanData.recommended_close_date + "T00:00:00").toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                  </span>
+                )}
+                <button
+                  onClick={handleRegenerateClosePlan}
+                  disabled={closePlanLoading || closePlanGenerating}
+                  className="ml-auto text-zinc-500 hover:text-teal-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate close plan"
+                  title="Regenerate"
+                >
+                  {closePlanGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {closePlanLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : closePlanData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load close plan.</p>
+              ) : (
+                <div className="space-y-2">
+                  {closePlanData.phases.map((phase, phaseIdx) => (
+                    <div key={phaseIdx} className="rounded-lg border border-zinc-800 overflow-hidden">
+                      <button
+                        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800/50 transition-colors cursor-pointer"
+                        onClick={() => setClosePlanOpenPhase(closePlanOpenPhase === phaseIdx ? -1 : phaseIdx)}
+                      >
+                        <ChevronRight className={`h-3.5 w-3.5 text-zinc-500 flex-shrink-0 transition-transform ${closePlanOpenPhase === phaseIdx ? "rotate-90" : ""}`} />
+                        <span className="text-xs font-semibold text-zinc-300">{phase.label}</span>
+                        <span className="ml-auto text-[10px] text-zinc-600">{phase.actions.length} action{phase.actions.length !== 1 ? "s" : ""}</span>
+                      </button>
+                      {closePlanOpenPhase === phaseIdx && (
+                        <ul className="px-3 pb-3 space-y-1.5 border-t border-zinc-800">
+                          {phase.actions.map((action, actionIdx) => (
+                            <li key={actionIdx} className="flex items-start gap-2 pt-1.5">
+                              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-teal-500/60 mt-0.5" />
+                              <p className="text-xs text-zinc-300 leading-relaxed">{action}</p>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="flex items-center gap-1.5">
+                      <Calendar className="h-3.5 w-3.5 text-teal-400/70" />
+                      <p className="text-[11px] font-semibold text-teal-300/80">
+                        Target close: {new Date(closePlanData.recommended_close_date + "T00:00:00").toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })}
+                      </p>
+                    </div>
+                    <p className="text-[10px] text-zinc-600">
+                      Generated {new Date(closePlanData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
                 </div>
               )}
             </Card>

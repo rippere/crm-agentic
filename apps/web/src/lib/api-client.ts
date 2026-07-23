@@ -2427,4 +2427,54 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/momentum-check`, { method: 'POST' }, token)
   },
+
+  getDealClosePlan: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    phases: { label: string; actions: string[] }[];
+    recommended_close_date: string;
+    deal_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { phases: { label: string; actions: string[] }[]; recommended_close_date: string }> = {
+        'd-001': {
+          recommended_close_date: '2026-08-15',
+          phases: [
+            { label: 'Next 30 days', actions: ['Schedule a QBR call to confirm legal sign-off timeline and remaining SLA concerns.', 'Add a Deal Note capturing the outcome of the legal review and updated close conditions.', 'Run Deal Health check to confirm score stays above 75.'] },
+            { label: '30–60 days', actions: ['Send final contract draft with agreed SLA uptime terms to procurement.', 'Request exec sponsor approval via champion contact Sarah Chen.'] },
+            { label: '60–90 days', actions: ['Close the deal and log the win in Win/Loss Analysis.', 'Schedule onboarding kickoff call within 7 days of signature.'] },
+          ],
+        },
+        'd-002': {
+          recommended_close_date: '2026-09-30',
+          phases: [
+            { label: 'Next 30 days', actions: ['Draft Outreach email to re-engage champion Marcus after 22-day silence.', 'Run Deal Health check and update ML win probability to reflect current risk level.'] },
+            { label: '30–60 days', actions: ['Present executive summary deck to board sponsor.', 'Propose a 60-day pilot with exit clause to reduce commitment risk.'] },
+            { label: '60–90 days', actions: ['Negotiate final terms and issue contract.', 'If no response in 45 days, escalate to a senior sponsor or re-qualify the deal.'] },
+          ],
+        },
+        'd-003': {
+          recommended_close_date: '2026-08-01',
+          phases: [
+            { label: 'Next 30 days', actions: ['Confirm procurement timeline with champion and align on signature process.', 'Add a Deal Note after each weekly check-in to track progress milestones.'] },
+            { label: '30–60 days', actions: ['Send revised pricing summary with volume discount applied.', 'Schedule final stakeholder demo to confirm requirements are met.'] },
+            { label: '60–90 days', actions: ['Issue contract and set a firm signature date.', 'Log win and initiate onboarding handover within 5 business days.'] },
+          ],
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001'] ?? {
+        recommended_close_date: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        phases: [
+          { label: 'Next 30 days', actions: ['Run Deal Health check to establish a score baseline.', 'Schedule a discovery call to confirm current buying timeline.'] },
+          { label: '30–60 days', actions: ["Send a proposal aligned to the champion's stated requirements.", 'Add a Deal Note after each touchpoint to maintain accurate context.'] },
+          { label: '60–90 days', actions: ['Negotiate final terms with the budget owner.', 'Set a concrete close date and confirm with all stakeholders.'] },
+        ],
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/close-plan`, { method: 'POST' }, token)
+  },
 }
