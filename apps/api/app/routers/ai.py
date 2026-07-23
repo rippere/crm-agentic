@@ -22,6 +22,7 @@ from app.models.deal import Deal
 from app.models.message import Message
 from app.models.task import Task
 from app.models.activity_event import ActivityEvent
+from app.models.deal_health_history import DealHealthHistory
 
 router = APIRouter()
 
@@ -1525,5 +1526,144 @@ async def contact_health_overview(
         "strong_count": strong_count,
         "summary_sentence": summary_sentence,
         "contacts": result_contacts,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI deal momentum check
+# ---------------------------------------------------------------------------
+
+_MOMENTUM_SYSTEM = """\
+You are Nova, the AI deal intelligence in NovaCRM. Assess the current momentum of the provided deal.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "momentum": "gaining",
+  "drivers": [
+    "One sentence — specific data point that justifies this momentum direction.",
+    "Second driver — another concrete data point."
+  ],
+  "recommendation": "One specific action to sustain or reverse this momentum — max 100 chars, reference a CRM feature."
+}
+
+Momentum rules (pick exactly one):
+- "gaining": health score trend is improving across last readings, OR high recent activity (5+ events in 30d) AND last touch within 14 days
+- "declining": health score trend is decreasing across 2+ consecutive readings, OR no activity in 30+ days, OR next action overdue and health < 50
+- "stalling": everything else — deal is present but not clearly moving either direction
+
+drivers: 2–3 items, each citing a specific metric from the provided data (score, days, counts)
+recommendation: 1 sentence naming a specific CRM action — e.g. "Schedule a QBR call", "Add a Deal Note to capture latest discussion", "Run Deal Health check"\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/momentum-check")
+@limiter.limit("10/minute")
+async def deal_momentum_check(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Assess deal momentum using health score trend, activity, and engagement signals via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    # Last 5 health score history entries (oldest first for trend)
+    history_result = await db.execute(
+        select(DealHealthHistory.score, DealHealthHistory.recorded_at)
+        .where(DealHealthHistory.workspace_id == workspace_id, DealHealthHistory.deal_id == deal_id)
+        .order_by(DealHealthHistory.recorded_at.desc())
+        .limit(5)
+    )
+    history_rows = list(reversed(history_result.all()))  # oldest→newest
+
+    # Recent activity count (last 30 days)
+    cutoff_30 = datetime.datetime.now(timezone.utc) - datetime.timedelta(days=30)
+    recent_activity = await db.scalar(
+        select(func.count()).where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.created_at >= cutoff_30,
+        ).correlate(False)
+    ) or 0
+
+    # Days in current stage
+    now = datetime.datetime.now(timezone.utc)
+    stage_ref = deal.stage_changed_at or deal.created_at
+    if stage_ref and stage_ref.tzinfo is None:
+        stage_ref = stage_ref.replace(tzinfo=timezone.utc)
+    days_in_stage = (now - stage_ref).days if stage_ref else 0
+
+    # Next-action overdue
+    next_action_overdue_days = 0
+    if deal.next_action_date:
+        try:
+            na_date = deal.next_action_date
+            delta = (datetime.date.today() - na_date).days
+            next_action_overdue_days = max(0, delta)
+        except (ValueError, TypeError):
+            pass
+
+    competitors = deal.competitors or []
+
+    # Build context lines
+    lines = [
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}",
+        f"Stage: {deal.stage}",
+        f"Value: ${float(deal.value):,.0f}",
+        f"Current health score: {deal.health_score}/100",
+        f"ML win probability: {deal.ml_win_probability}%",
+        f"Days in current stage: {days_in_stage}",
+        f"Competitors tracked: {len(competitors)}",
+        f"Next action overdue by: {next_action_overdue_days} day{'s' if next_action_overdue_days != 1 else ''}",
+        f"Recent workspace activity (last 30d): {recent_activity} events",
+    ]
+
+    if history_rows:
+        score_trail = " → ".join(str(h.score) for h in history_rows)
+        lines.append(f"Health score trend (oldest→newest): {score_trail}")
+        if len(history_rows) >= 2:
+            delta = history_rows[-1].score - history_rows[-2].score
+            trend_label = f"up {delta}" if delta > 0 else (f"down {abs(delta)}" if delta < 0 else "flat")
+            lines.append(f"Latest score change: {trend_label}")
+    else:
+        lines.append("Health score history: no prior readings")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_MOMENTUM_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        momentum = str(data.get("momentum", "stalling"))
+        if momentum not in ("gaining", "stalling", "declining"):
+            momentum = "stalling"
+        drivers = [str(d) for d in (data.get("drivers") or [])[:3]]
+        recommendation = str(data.get("recommendation", "Review deal health and update the next action."))[:100]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "momentum": momentum,
+        "drivers": drivers,
+        "recommendation": recommendation,
+        "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
