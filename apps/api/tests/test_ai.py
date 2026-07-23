@@ -853,3 +853,90 @@ async def test_contact_health_overview_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/health-overview")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/momentum-check
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_momentum_check_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    import datetime as _dt
+
+    deal = _fake_deal(
+        workspace_id,
+        stage="proposal",
+        health_score=78,
+        ml_win_probability=62,
+        next_action_date=_dt.date.today(),
+    )
+
+    history_row1 = MagicMock()
+    history_row1.score = 65
+    history_row1.recorded_at = _dt.datetime(2026, 7, 1, tzinfo=_dt.timezone.utc)
+
+    history_row2 = MagicMock()
+    history_row2.score = 78
+    history_row2.recorded_at = _dt.datetime(2026, 7, 15, tzinfo=_dt.timezone.utc)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(deal),      # deal lookup
+        _make_all_result([history_row2, history_row1]),  # health history (desc → reversed to oldest first)
+    ])
+    mock_db.scalar = AsyncMock(return_value=12)  # recent activity count
+
+    import json as _json
+    momentum_json = _json.dumps({
+        "momentum": "gaining",
+        "drivers": [
+            "Health score rose from 65 to 78 across the last two readings.",
+            "12 activity events in the last 30 days with recent engagement.",
+        ],
+        "recommendation": "Schedule a QBR call to confirm close timeline before month-end.",
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=momentum_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal.id}/ai/momentum-check"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["momentum"] == "gaining"
+    assert isinstance(body["drivers"], list)
+    assert len(body["drivers"]) == 2
+    assert "recommendation" in body
+    assert body["deal_id"] == str(deal.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_momentum_check_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("88888888-8888-8888-8888-888888888888")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/deals/{deal_id}/ai/momentum-check")
+
+    assert resp.status_code == 403

@@ -380,6 +380,11 @@ export default function DealDetailPage() {
   const [riskNarrativeGenerating, setRiskNarrativeGenerating] = useState(false);
   const [riskNarrativeCollapsed, setRiskNarrativeCollapsed] = useState(false);
 
+  type MomentumData = { momentum: "gaining" | "stalling" | "declining"; drivers: string[]; recommendation: string; deal_id: string; generated_at: string };
+  const [momentumData, setMomentumData] = useState<MomentumData | null>(null);
+  const [momentumLoading, setMomentumLoading] = useState(false);
+  const [momentumGenerating, setMomentumGenerating] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -518,6 +523,13 @@ export default function DealDetailPage() {
         .then((data) => setRiskNarrative(data ?? null))
         .catch(() => setRiskNarrative(null))
         .finally(() => setRiskNarrativeLoading(false));
+
+      setMomentumLoading(true);
+      apiClient
+        .getDealMomentum(workspaceId, dealId, token)
+        .then((data) => setMomentumData(data ?? null))
+        .catch(() => setMomentumData(null))
+        .finally(() => setMomentumLoading(false));
     }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
@@ -704,6 +716,16 @@ export default function DealDetailPage() {
       setRiskNarrative(data ?? null);
     } catch { /* ignore */ }
     finally { setRiskNarrativeGenerating(false); }
+  };
+
+  const handleRegenerateMomentum = async () => {
+    if (!token || !workspaceId || momentumGenerating) return;
+    setMomentumGenerating(true);
+    try {
+      const data = await apiClient.getDealMomentum(workspaceId, dealId, token);
+      setMomentumData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setMomentumGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -1736,6 +1758,78 @@ export default function DealDetailPage() {
                       </span>
                     </div>
                   )}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Deal Momentum */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-violet-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Deal Momentum</p>
+                {momentumData && (() => {
+                  const m = momentumData.momentum;
+                  const mColor = m === "gaining"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : m === "declining"
+                    ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : "text-amber-300 border-amber-500/30 bg-amber-500/10";
+                  return (
+                    <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${mColor}`}>
+                      {m}
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateMomentum}
+                  disabled={momentumLoading || momentumGenerating}
+                  className="ml-auto text-zinc-500 hover:text-violet-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate momentum"
+                  title="Regenerate"
+                >
+                  {momentumGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {momentumLoading ? (
+                <div className="space-y-2">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : momentumData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load momentum data.</p>
+              ) : (
+                <div className="space-y-3">
+                  {momentumData.drivers.length > 0 && (
+                    <ul className="space-y-1.5">
+                      {momentumData.drivers.map((driver, i) => (
+                        <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                          <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold mt-0.5 ${
+                            momentumData.momentum === "gaining" ? "bg-emerald-500/15 text-emerald-400"
+                            : momentumData.momentum === "declining" ? "bg-rose-500/15 text-rose-400"
+                            : "bg-amber-500/15 text-amber-400"
+                          }`}>
+                            {i + 1}
+                          </span>
+                          <p className="text-xs text-zinc-300 leading-relaxed">{driver}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
+                    <p className="text-[11px] font-semibold text-violet-300 uppercase tracking-wide mb-0.5">Recommendation</p>
+                    <p className="text-xs text-zinc-300">{momentumData.recommendation}</p>
+                  </div>
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(momentumData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
                 </div>
               )}
             </Card>

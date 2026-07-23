@@ -2377,4 +2377,54 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/risk-narrative`, { method: 'POST' }, token)
   },
+
+  getDealMomentum: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    momentum: 'gaining' | 'stalling' | 'declining';
+    drivers: string[];
+    recommendation: string;
+    deal_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { momentum: 'gaining' | 'stalling' | 'declining'; drivers: string[]; recommendation: string }> = {
+        'd-001': {
+          momentum: 'gaining',
+          drivers: [
+            'Health score has risen from 65 → 72 → 78 across the last three readings, signalling improving deal quality.',
+            'Champion engaged twice in the last 14 days and legal review completed on schedule.',
+          ],
+          recommendation: 'Maintain cadence — add a Deal Note capturing the legal outcome and confirm next milestone.',
+        },
+        'd-002': {
+          momentum: 'declining',
+          drivers: [
+            'Health score has dropped from 60 → 45 → 28 over the last three readings, a clear deteriorating trend.',
+            'No activity recorded in 22 days and next action is overdue by 5 days.',
+          ],
+          recommendation: 'Re-engage immediately — Draft Outreach email to the champion and update the next action date.',
+        },
+        'd-003': {
+          momentum: 'gaining',
+          drivers: [
+            'Current health score of 84 is the highest recorded in the last 5 readings.',
+            '7 activity events logged in the last 30 days with a touch as recently as 3 days ago.',
+          ],
+          recommendation: 'Accelerate close — schedule a final review call and confirm procurement timeline.',
+        },
+      }
+      const dealNum = parseInt(dealId.replace(/\D+/g, ''), 10) || 1
+      const keys = Object.keys(stubs)
+      const stub = stubs[dealId] ?? stubs[keys[(dealNum - 1) % keys.length]] ?? {
+        momentum: 'stalling' as const,
+        drivers: ['Deal health is stable but no significant change in the last 30 days.', 'Activity frequency is below average for this stage.'],
+        recommendation: 'Add a Deal Note and set a concrete next action date to re-energise this deal.',
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/momentum-check`, { method: 'POST' }, token)
+  },
 }
