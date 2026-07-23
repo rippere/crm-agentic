@@ -2155,6 +2155,37 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/suggest-tasks`, { method: 'POST' }, token)
   },
 
+  getPipelinePulse: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    total_value: number;
+    at_risk_count: number;
+    top_deal: { title: string; value: number; stage: string } | null;
+    stage_breakdown: { stage: string; count: number; value: number }[];
+    health_avg: number;
+    insight: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        total_value: 285000,
+        at_risk_count: 2,
+        top_deal: { title: 'TechCorp Platform Expansion', value: 145000, stage: 'negotiation' },
+        stage_breakdown: [
+          { stage: 'discovery', count: 1, value: 32000 },
+          { stage: 'qualified', count: 2, value: 58000 },
+          { stage: 'proposal', count: 3, value: 135000 },
+          { stage: 'negotiation', count: 2, value: 195000 },
+        ],
+        health_avg: 68,
+        insight: '$285K active pipeline with strong momentum in Proposal (3 deals, $135K) and Negotiation (2 deals, $195K). Run Deal Health check on the 2 at-risk deals to generate targeted re-engagement plans before month-end.',
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/pipeline-pulse`, {}, token)
+  },
+
   getPipelineSummary: (
     workspaceId: string,
     token: string,

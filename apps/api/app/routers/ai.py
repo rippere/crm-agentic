@@ -606,6 +606,105 @@ async def pipeline_summary(
 
 
 # ---------------------------------------------------------------------------
+# AI pipeline pulse (structured data + 2-sentence insight)
+# ---------------------------------------------------------------------------
+
+_PIPELINE_PULSE_SYSTEM = """\
+You are Nova, the AI pipeline analyst in NovaCRM. Generate a 2-sentence insight about the provided pipeline.
+
+Respond with exactly this JSON format (no markdown fences, no extra keys):
+{"insight": "First sentence about overall health and momentum. Second sentence with a specific, actionable recommendation referencing a CRM feature."}
+
+Rules:
+- Exactly 2 sentences separated by a period and a space
+- Cite specific numbers from the context (total value, at-risk count, top stage)
+- End with a concrete CRM action: "Run Deal Health check", "Schedule a QBR call", "Draft Outreach email", "Update ML win probability"\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/pipeline-pulse")
+@limiter.limit("10/minute")
+async def pipeline_pulse(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals = deal_result.scalars().all()
+
+    total_value = sum(float(d.value) for d in open_deals)
+    at_risk_count = sum(1 for d in open_deals if (d.health_score or 0) < 50)
+    health_avg = (
+        round(sum(d.health_score or 0 for d in open_deals) / len(open_deals))
+        if open_deals else 0
+    )
+
+    top_deal = None
+    if open_deals:
+        td = max(open_deals, key=lambda d: float(d.value))
+        top_deal = {"title": td.title or "Untitled", "value": float(td.value), "stage": td.stage}
+
+    by_stage: dict[str, dict] = {}
+    for d in open_deals:
+        s = d.stage
+        if s not in by_stage:
+            by_stage[s] = {"stage": s, "count": 0, "value": 0.0}
+        by_stage[s]["count"] += 1
+        by_stage[s]["value"] += float(d.value)
+    stage_breakdown = [by_stage[s] for s in _STAGE_ORDER if s in by_stage]
+
+    lines = [
+        f"Open pipeline: {len(open_deals)} deals, ${total_value:,.0f} total",
+        f"Average health score: {health_avg}/100",
+        f"At-risk deals (health < 50): {at_risk_count}",
+        f"Stage breakdown: " + ", ".join(
+            f"{s['stage'].upper()} {s['count']} deals ${s['value']:,.0f}" for s in stage_breakdown
+        ),
+    ]
+    if top_deal:
+        lines.append(
+            f"Top deal by value: \"{top_deal['title']}\" ${top_deal['value']:,.0f} in {top_deal['stage']}"
+        )
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            system=_PIPELINE_PULSE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        insight = str(data.get("insight", "Pipeline health is nominal. Review at-risk deals and update next actions."))[:300]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "total_value": total_value,
+        "at_risk_count": at_risk_count,
+        "top_deal": top_deal,
+        "stage_breakdown": stage_breakdown,
+        "health_avg": health_avg,
+        "insight": insight,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
 # AI task suggestions for a contact
 # ---------------------------------------------------------------------------
 
