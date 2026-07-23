@@ -940,3 +940,102 @@ async def test_deal_momentum_check_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/deals/{deal_id}/ai/momentum-check")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/close-plan
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_close_plan_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    import datetime as _dt
+
+    deal = _fake_deal(
+        workspace_id,
+        stage="negotiation",
+        health_score=75,
+        ml_win_probability=68,
+        next_action_date=_dt.date.today(),
+    )
+    deal.expected_close = "2026-09-15"
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(deal),  # deal lookup
+        _make_all_result([]),              # deal notes (empty)
+    ])
+
+    import json as _json
+    plan_json = _json.dumps({
+        "phases": [
+            {
+                "label": "Next 30 days",
+                "actions": [
+                    "Schedule a QBR call to confirm close timeline and address remaining concerns.",
+                    "Add a Deal Note capturing the latest negotiation status.",
+                ],
+            },
+            {
+                "label": "30–60 days",
+                "actions": [
+                    "Send the final contract draft to procurement.",
+                    "Request exec sponsor approval.",
+                ],
+            },
+            {
+                "label": "60–90 days",
+                "actions": [
+                    "Close the deal and log the win in Win/Loss Analysis.",
+                    "Schedule onboarding kickoff within 7 days of signature.",
+                ],
+            },
+        ],
+        "recommended_close_date": "2026-09-15",
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=plan_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal.id}/ai/close-plan"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["phases"], list)
+    assert len(body["phases"]) == 3
+    assert body["phases"][0]["label"] == "Next 30 days"
+    assert isinstance(body["phases"][0]["actions"], list)
+    assert len(body["phases"][0]["actions"]) == 2
+    assert body["recommended_close_date"] == "2026-09-15"
+    assert body["deal_id"] == str(deal.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_close_plan_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/deals/{deal_id}/ai/close-plan")
+
+    assert resp.status_code == 403

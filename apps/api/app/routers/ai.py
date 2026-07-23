@@ -19,6 +19,7 @@ from app.models.contact import Contact
 from app.models.contact_note import ContactNote
 from app.models.clarity_score import ClarityScore
 from app.models.deal import Deal
+from app.models.deal_note import DealNote
 from app.models.message import Message
 from app.models.task import Task
 from app.models.activity_event import ActivityEvent
@@ -1664,6 +1665,167 @@ async def deal_momentum_check(
         "momentum": momentum,
         "drivers": drivers,
         "recommendation": recommendation,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI deal close plan
+# ---------------------------------------------------------------------------
+
+_CLOSE_PLAN_SYSTEM = """\
+You are Nova, the AI deal intelligence in NovaCRM. Generate a 3-phase close plan for the provided deal.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "phases": [
+    {
+      "label": "Next 30 days",
+      "actions": [
+        "Specific, concrete action referencing the deal context — e.g. Run Deal Health check to confirm score stabilisation.",
+        "Second action — name a CRM feature or meeting type."
+      ]
+    },
+    {
+      "label": "30–60 days",
+      "actions": [
+        "Action for this timeframe.",
+        "Another action."
+      ]
+    },
+    {
+      "label": "60–90 days",
+      "actions": [
+        "Action to finalise or escalate.",
+        "Final action to close the deal."
+      ]
+    }
+  ],
+  "recommended_close_date": "YYYY-MM-DD"
+}
+
+Rules:
+- phases: exactly 3 items, labels must be "Next 30 days", "30–60 days", "60–90 days" in that order
+- actions: 2–4 items per phase, each citing a specific metric or CRM feature from the deal context
+- recommended_close_date: realistic YYYY-MM-DD target based on current stage and expected_close; if expected_close is set and realistic, lean toward it
+- CRM feature references: "Schedule a QBR call", "Add a Deal Note", "Run Deal Health check", "Draft Outreach email", "Update ML win probability"
+- Keep each action concise (max 120 chars)\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/close-plan")
+@limiter.limit("10/minute")
+async def deal_close_plan(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Close plan is not available for closed deals",
+        )
+
+    # Last 3 deal notes (oldest-first for context ordering)
+    notes_result = await db.execute(
+        select(DealNote)
+        .where(DealNote.deal_id == deal_id, DealNote.workspace_id == workspace_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    recent_notes = list(reversed(notes_result.all()))
+
+    # Days in current stage
+    now = datetime.datetime.now(tz=timezone.utc)
+    stage_ref = deal.stage_changed_at or deal.created_at
+    if stage_ref and stage_ref.tzinfo is None:
+        stage_ref = stage_ref.replace(tzinfo=timezone.utc)
+    days_in_stage = (now - stage_ref).days if stage_ref else 0
+
+    # Next-action overdue
+    next_action_overdue_days = 0
+    if deal.next_action_date:
+        try:
+            delta = (datetime.date.today() - deal.next_action_date).days
+            next_action_overdue_days = max(0, delta)
+        except (ValueError, TypeError):
+            pass
+
+    competitors = deal.competitors or []
+
+    lines = [
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}",
+        f"Stage: {deal.stage}",
+        f"Value: ${float(deal.value):,.0f}",
+        f"Current health score: {deal.health_score}/100",
+        f"ML win probability: {deal.ml_win_probability}%",
+        f"Days in current stage: {days_in_stage}",
+        f"Competitors tracked: {len(competitors)}",
+        f"Next action overdue by: {next_action_overdue_days} day{'s' if next_action_overdue_days != 1 else ''}",
+        f"Expected close date: {deal.expected_close or 'Not set'}",
+        f"Today: {datetime.date.today().isoformat()}",
+    ]
+
+    if recent_notes:
+        lines.append("Recent deal notes (oldest→newest):")
+        for note in recent_notes:
+            body_preview = (note.body or "")[:200]
+            lines.append(f"  - {body_preview}")
+    else:
+        lines.append("Recent deal notes: none")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_CLOSE_PLAN_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        valid_labels = ("Next 30 days", "30–60 days", "60–90 days")
+        phases = []
+        for phase in (data.get("phases") or [])[:3]:
+            label = str(phase.get("label", ""))
+            if label not in valid_labels:
+                continue
+            actions = [str(a)[:120] for a in (phase.get("actions") or [])[:4]]
+            phases.append({"label": label, "actions": actions})
+
+        raw_date = str(data.get("recommended_close_date", ""))
+        try:
+            datetime.date.fromisoformat(raw_date)
+            recommended_close_date = raw_date
+        except (ValueError, TypeError):
+            recommended_close_date = (
+                datetime.date.today() + datetime.timedelta(days=60)
+            ).isoformat()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "phases": phases,
+        "recommended_close_date": recommended_close_date,
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
