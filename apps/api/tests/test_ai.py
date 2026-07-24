@@ -1172,3 +1172,76 @@ async def test_contact_summary_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/summary")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/compare
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compare_deals_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalars_all(rows):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = rows
+        return result
+
+    import json as _json
+
+    deal1 = _fake_deal(workspace_id, title="Big Win", stage="proposal", value=120000.0, health_score=75, ml_win_probability=70)
+    deal2 = _fake_deal(workspace_id, title="At Risk Deal", stage="discovery", value=30000.0, health_score=35, ml_win_probability=25)
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_all([deal1, deal2]))
+
+    compare_json = _json.dumps({
+        "winner_id": str(deal1.id),
+        "rationale": "Big Win should be prioritised — it has a health score of 75 and a 70% win probability. At Risk Deal has been stagnant in discovery with a health score of only 35.",
+        "comparison_points": [
+            {"dimension": "Deal Value", "verdict": "Big Win leads at $120K vs $30K for At Risk Deal."},
+            {"dimension": "Win Probability", "verdict": "Big Win at 70% far outpaces At Risk Deal at 25%."},
+            {"dimension": "Health Score", "verdict": "Big Win health is 75 (strong); At Risk Deal is 35 (stale)."},
+            {"dimension": "Stage Progress", "verdict": "Big Win is in Proposal — closer to close. At Risk Deal is still in Discovery."},
+            {"dimension": "Risk Level", "verdict": "At Risk Deal carries high risk due to low engagement; Big Win is low risk."},
+        ],
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=compare_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(
+                f"/workspaces/{workspace_id}/ai/deals/compare",
+                params={"deal_ids": f"{deal1.id},{deal2.id}"},
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["winner_id"] == str(deal1.id)
+    assert isinstance(body["rationale"], str)
+    assert len(body["rationale"]) > 0
+    assert isinstance(body["comparison_points"], list)
+    assert len(body["comparison_points"]) == 5
+    assert body["comparison_points"][0]["dimension"] == "Deal Value"
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_compare_deals_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
+    deal_id1 = uuid.uuid4()
+    deal_id2 = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{wrong_id}/ai/deals/compare",
+            params={"deal_ids": f"{deal_id1},{deal_id2}"},
+        )
+
+    assert resp.status_code == 403
