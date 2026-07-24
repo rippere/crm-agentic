@@ -254,6 +254,14 @@ export default function DashboardPage() {
   const [digest, setDigest] = useState<string | null>(null);
   const [digestGeneratedAt, setDigestGeneratedAt] = useState<string | null>(null);
   const [digestLoading, setDigestLoading] = useState(false);
+  const [contactHealthOverview, setContactHealthOverview] = useState<{
+    at_risk_count: number;
+    strong_count: number;
+    summary_sentence: string;
+    contacts: Array<{ id: string; name: string; health: 'strong' | 'neutral' | 'at_risk'; days_since_touch: number | null; top_action: string; engagement_score: number }>;
+    generated_at: string;
+  } | null>(null);
+  const [contactHealthLoading, setContactHealthLoading] = useState(false);
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
@@ -282,6 +290,10 @@ export default function DashboardPage() {
         setDigest(data.digest);
         setDigestGeneratedAt(data.generated_at);
       }).catch(() => {}).finally(() => setDigestLoading(false));
+      setContactHealthLoading(true);
+      apiClient.getContactHealthOverview("demo-workspace-1", "demo-token").then((data) => {
+        setContactHealthOverview(data);
+      }).catch(() => {}).finally(() => setContactHealthLoading(false));
       return;
     }
 
@@ -340,6 +352,11 @@ export default function DashboardPage() {
         .then((data) => { setDigest(data.digest); setDigestGeneratedAt(data.generated_at); })
         .catch(() => {})
         .finally(() => setDigestLoading(false));
+      setContactHealthLoading(true);
+      apiClient.getContactHealthOverview(workspaceId, session.access_token)
+        .then((data) => { setContactHealthOverview(data); })
+        .catch(() => {})
+        .finally(() => setContactHealthLoading(false));
 
       // Subscribe to Supabase Realtime for live activity feed
       const channel = supabase
@@ -603,6 +620,106 @@ export default function DashboardPage() {
             ) : digest ? (
               <div className={cn("transition-opacity", digestLoading && "opacity-50")}>
                 {renderDigestMarkdown(digest)}
+              </div>
+            ) : null}
+          </Card>
+        </section>
+      )}
+
+      {/* Contact Health Overview */}
+      {(contactHealthOverview !== null || contactHealthLoading) && (
+        <section aria-labelledby="contact-health-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="contact-health-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Contact Health
+            </h2>
+            <Badge variant="indigo" size="sm" dot>Nova AI</Badge>
+            {contactHealthOverview && (
+              <>
+                {contactHealthOverview.at_risk_count > 0 && (
+                  <Badge variant="rose" size="sm" dot>{contactHealthOverview.at_risk_count} at risk</Badge>
+                )}
+                {contactHealthOverview.strong_count > 0 && (
+                  <Badge variant="emerald" size="sm" dot>{contactHealthOverview.strong_count} strong</Badge>
+                )}
+              </>
+            )}
+          </div>
+          <Card className="p-0 overflow-hidden">
+            {contactHealthLoading && !contactHealthOverview ? (
+              <div className="space-y-2 animate-pulse p-4">
+                <div className="h-3 bg-zinc-800 rounded w-2/3" />
+                <div className="h-3 bg-zinc-800 rounded w-full" />
+                <div className="h-3 bg-zinc-800 rounded w-1/2" />
+              </div>
+            ) : contactHealthOverview ? (
+              <div className={cn("transition-opacity", contactHealthLoading && "opacity-50")}>
+                {/* Summary sentence */}
+                <div className="flex items-start gap-2 px-4 pt-4 pb-3 border-b border-zinc-800">
+                  <Sparkles className="h-4 w-4 text-indigo-400 flex-shrink-0 mt-0.5" aria-hidden />
+                  <p className="text-sm text-zinc-300">{contactHealthOverview.summary_sentence}</p>
+                </div>
+                {/* Contact rows */}
+                <div className="divide-y divide-zinc-800/60">
+                  {contactHealthOverview.contacts.map((c) => (
+                    <div key={c.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800/40 transition-colors">
+                      {/* Health dot */}
+                      <span
+                        className={cn(
+                          "h-2 w-2 rounded-full flex-shrink-0",
+                          c.health === "strong" && "bg-emerald-400",
+                          c.health === "neutral" && "bg-amber-400",
+                          c.health === "at_risk" && "bg-rose-500",
+                        )}
+                        title={c.health.replace("_", " ")}
+                      />
+                      {/* Name + action */}
+                      <div className="flex-1 min-w-0">
+                        <Link
+                          href={`/contacts/${c.id}`}
+                          className="text-sm font-medium text-zinc-100 hover:text-indigo-400 transition-colors truncate block"
+                        >
+                          {c.name}
+                        </Link>
+                        <p className="text-[11px] text-zinc-500 truncate">{c.top_action}</p>
+                      </div>
+                      {/* Days since touch */}
+                      <div className="flex-shrink-0 text-right hidden sm:block">
+                        {c.days_since_touch !== null ? (
+                          <span className={cn(
+                            "text-xs font-mono",
+                            c.days_since_touch > 30 ? "text-rose-400" : c.days_since_touch > 14 ? "text-amber-400" : "text-zinc-400",
+                          )}>
+                            {c.days_since_touch}d ago
+                          </span>
+                        ) : (
+                          <span className="text-xs font-mono text-zinc-600">no touch</span>
+                        )}
+                      </div>
+                      {/* Engagement score */}
+                      <div className="flex items-center gap-1.5 flex-shrink-0 w-16 hidden lg:flex">
+                        <div className="flex-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className={cn(
+                              "h-full rounded-full",
+                              c.engagement_score >= 60 ? "bg-emerald-400" : c.engagement_score >= 40 ? "bg-amber-400" : "bg-rose-500",
+                            )}
+                            style={{ width: `${c.engagement_score}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] font-mono text-zinc-500 w-5 text-right">{c.engagement_score}</span>
+                      </div>
+                      {/* Link */}
+                      <Link
+                        href={`/contacts/${c.id}`}
+                        className="flex-shrink-0 text-zinc-600 hover:text-indigo-400 transition-colors"
+                        title="View contact"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
           </Card>
