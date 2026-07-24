@@ -17,6 +17,7 @@ import {
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
   Star, Calendar, X, Plus, Send, BarChart2, Download, Layers, Sparkles,
+  Route, MessageSquare, PhoneCall,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -151,6 +152,24 @@ type RelationshipHealth = {
   action_items: Array<{ priority: 'high' | 'medium' | 'low'; action: string }>;
   contact_id: string;
   generated_at: string;
+};
+
+type ContactSummaryData = {
+  relationship_status: 'strong' | 'warm' | 'cold' | 'at_risk';
+  summary: string;
+  next_best_action: string;
+  deal_value: number;
+  contact_id: string;
+  generated_at: string;
+};
+
+type OutreachStep = {
+  step: number;
+  channel: 'email' | 'slack' | 'call';
+  timing: 'now' | '3d' | '7d' | '14d';
+  subject: string | null;
+  body_preview: string;
+  goal: string;
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -397,6 +416,16 @@ export default function ContactDetailPage() {
   const [relHealth, setRelHealth] = useState<RelationshipHealth | null>(null);
   const [relHealthLoading, setRelHealthLoading] = useState(false);
 
+  const [contactSummary, setContactSummary] = useState<ContactSummaryData | null>(null);
+  const [contactSummaryLoading, setContactSummaryLoading] = useState(false);
+  const [contactSummaryGenerating, setContactSummaryGenerating] = useState(false);
+
+  const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
+  const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
+  const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
+  const [outreachSeqExpanded, setOutreachSeqExpanded] = useState<number | null>(null);
+  const [addedSeqSteps, setAddedSeqSteps] = useState<Set<number>>(new Set());
+
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
@@ -566,6 +595,13 @@ export default function ContactDetailPage() {
       .then((data: RelationshipHealth) => setRelHealth(data))
       .catch(() => setRelHealth(null))
       .finally(() => setRelHealthLoading(false));
+
+    setContactSummaryLoading(true);
+    apiClient
+      .getContactSummary(workspaceId, contactId, token)
+      .then((data: ContactSummaryData) => setContactSummary(data))
+      .catch(() => setContactSummary(null))
+      .finally(() => setContactSummaryLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -642,6 +678,39 @@ export default function ContactDetailPage() {
     } catch { /* ignore */ }
   };
 
+  const handleSuggestOutreachSeq = async () => {
+    if (!token || !workspaceId) return;
+    setOutreachSeqOpen(true);
+    if (outreachSeq) return;
+    setOutreachSeqLoading(true);
+    try {
+      const data = await apiClient.getSuggestedOutreachSequence(workspaceId, contactId, token);
+      setOutreachSeq(data.steps);
+    } catch {
+      setOutreachSeq(null);
+    } finally {
+      setOutreachSeqLoading(false);
+    }
+  };
+
+  const handleAddSeqStep = async (step: OutreachStep, index: number) => {
+    if (!token || !workspaceId || addedSeqSteps.has(index)) return;
+    const dueDate = new Date();
+    const daysMap: Record<string, number> = { now: 0, "3d": 3, "7d": 7, "14d": 14 };
+    dueDate.setDate(dueDate.getDate() + (daysMap[step.timing] ?? 7));
+    try {
+      await apiClient.createTask(workspaceId, {
+        title: step.subject
+          ? `[${step.channel.toUpperCase()}] ${step.subject}`
+          : `[${step.channel.toUpperCase()}] Step ${step.step}: ${step.goal.slice(0, 60)}`,
+        contact_id: contactId,
+        due_date: dueDate.toISOString().split("T")[0],
+        status: "open",
+      }, token);
+      setAddedSeqSteps((prev) => new Set([...prev, index]));
+    } catch { /* ignore */ }
+  };
+
   const handleScoreContact = async () => {
     if (!token || !workspaceId) return;
     try {
@@ -656,6 +725,17 @@ export default function ContactDetailPage() {
       const res = await apiClient.enrichContact(workspaceId, contactId, token) as { job_id?: string };
       if (res?.job_id) enrichPoller.start(res.job_id);
     } catch { /* ignore */ }
+  };
+
+  const handleRegenerateContactSummary = async () => {
+    if (!token || !workspaceId || contactSummaryGenerating) return;
+    setContactSummaryGenerating(true);
+    try {
+      const data = await apiClient.getContactSummary(workspaceId, contactId, token);
+      setContactSummary(data as ContactSummaryData);
+    } catch { /* ignore */ } finally {
+      setContactSummaryGenerating(false);
+    }
   };
 
   const handleExportTimeline = async () => {
@@ -767,6 +847,16 @@ export default function ContactDetailPage() {
         >
           {taskSuggestionsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListTodo className="h-3.5 w-3.5" />}
           Suggest Tasks
+        </Button>
+
+        <Button
+          variant="secondary"
+          onClick={handleSuggestOutreachSeq}
+          disabled={outreachSeqLoading}
+          className="gap-1.5"
+        >
+          {outreachSeqLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Route className="h-3.5 w-3.5" />}
+          Outreach Sequence
         </Button>
 
         <Button
@@ -1067,6 +1157,63 @@ export default function ContactDetailPage() {
           )}
 
           {/* Response Time */}
+          {/* Contact AI summary card */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Brain className="h-4 w-4 text-sky-400" />
+              <p className="text-xs font-semibold text-zinc-300">Contact AI</p>
+              {contactSummary && (() => {
+                const cfg: Record<string, { label: string; cls: string }> = {
+                  strong: { label: "Strong", cls: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" },
+                  warm:   { label: "Warm",   cls: "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" },
+                  cold:   { label: "Cold",   cls: "bg-amber-500/15 text-amber-400 border border-amber-500/30" },
+                  at_risk:{ label: "At Risk", cls: "bg-rose-500/15 text-rose-400 border border-rose-500/30" },
+                };
+                const s = cfg[contactSummary.relationship_status] ?? cfg.warm;
+                return (
+                  <span className={cn("ml-1 rounded-md px-2 py-0.5 text-[10px] font-semibold tracking-wide", s.cls)}>
+                    {s.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={handleRegenerateContactSummary}
+                disabled={contactSummaryGenerating || contactSummaryLoading}
+                className="ml-auto text-[10px] text-zinc-500 hover:text-zinc-300 disabled:opacity-40 transition-colors flex items-center gap-1"
+              >
+                {contactSummaryGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                Regenerate
+              </button>
+            </div>
+
+            {contactSummaryLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-4 w-4 text-sky-400 animate-spin" />
+              </div>
+            ) : contactSummary === null ? (
+              <p className="text-xs text-zinc-600 italic py-2">Unable to load contact summary.</p>
+            ) : (
+              <div className="space-y-2.5">
+                <p className="text-xs text-zinc-300 leading-relaxed">{contactSummary.summary}</p>
+                {contactSummary.next_best_action && (
+                  <div className="rounded-lg bg-sky-500/10 border border-sky-500/20 px-3 py-2">
+                    <p className="text-[10px] font-mono text-sky-400 uppercase tracking-wider mb-0.5">Next best action</p>
+                    <p className="text-xs text-sky-200">{contactSummary.next_best_action}</p>
+                  </div>
+                )}
+                {contactSummary.deal_value > 0 && (
+                  <p className="text-[10px] text-zinc-500 flex items-center gap-1">
+                    <TrendingUp className="h-3 w-3 text-zinc-600" />
+                    {formatCurrency(contactSummary.deal_value)} open pipeline
+                  </p>
+                )}
+                <p className="text-[10px] text-zinc-600">
+                  Generated {formatRelative(contactSummary.generated_at)}
+                </p>
+              </div>
+            )}
+          </Card>
+
           {responseTime !== null && (
             <Card className="p-4 space-y-3">
               <div className="flex items-center gap-2">
@@ -1638,6 +1785,140 @@ export default function ContactDetailPage() {
                 <Phone className="h-3.5 w-3.5" />
                 Copy to Clipboard
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Outreach Sequence Panel ── */}
+      {outreachSeqOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setOutreachSeqOpen(false)}
+        >
+          <div
+            className="w-full max-w-xl rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Route className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-100">Outreach Sequence</p>
+                <span className="text-[10px] font-mono text-zinc-600 ml-1">3-step plan</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    setOutreachSeq(null);
+                    setAddedSeqSteps(new Set());
+                    setOutreachSeqExpanded(null);
+                    setOutreachSeqLoading(true);
+                    if (token && workspaceId) {
+                      apiClient
+                        .getSuggestedOutreachSequence(workspaceId, contactId, token)
+                        .then((data) => setOutreachSeq(data.steps))
+                        .catch(() => setOutreachSeq(null))
+                        .finally(() => setOutreachSeqLoading(false));
+                    }
+                  }}
+                  disabled={outreachSeqLoading}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                  title="Regenerate"
+                >
+                  {outreachSeqLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "↺"}
+                </button>
+                <button
+                  onClick={() => setOutreachSeqOpen(false)}
+                  className="text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors"
+                  aria-label="Close"
+                >
+                  <XCircle className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="p-5 space-y-3 max-h-[75vh] overflow-y-auto">
+              {outreachSeqLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-20 rounded-xl bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : outreachSeq && outreachSeq.length > 0 ? (
+                outreachSeq.map((step, i) => {
+                  const added = addedSeqSteps.has(i);
+                  const isExpanded = outreachSeqExpanded === i;
+                  const timingLabel: Record<string, string> = { now: "Send now", "3d": "In 3 days", "7d": "In 7 days", "14d": "In 14 days" };
+                  const ChannelIcon = step.channel === "call" ? PhoneCall : step.channel === "slack" ? MessageSquare : Mail;
+                  const channelColor =
+                    step.channel === "call"
+                      ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+                      : step.channel === "slack"
+                      ? "text-violet-400 bg-violet-500/10 border-violet-500/20"
+                      : "text-indigo-400 bg-indigo-500/10 border-indigo-500/20";
+                  const timingColor =
+                    step.timing === "now"
+                      ? "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                      : "text-zinc-400 bg-zinc-700/30 border-zinc-700/50";
+
+                  return (
+                    <div
+                      key={i}
+                      className="rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden"
+                    >
+                      <button
+                        className="w-full text-left px-3.5 py-3 flex items-start gap-3 cursor-pointer hover:bg-zinc-800/30 transition-colors"
+                        onClick={() => setOutreachSeqExpanded(isExpanded ? null : i)}
+                      >
+                        <span className="flex-shrink-0 mt-0.5 w-5 h-5 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-[10px] font-mono text-zinc-400">
+                          {step.step}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={cn("inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border", channelColor)}>
+                              <ChannelIcon className="h-2.5 w-2.5" />
+                              {step.channel}
+                            </span>
+                            <span className={cn("text-[10px] font-mono px-1.5 py-0.5 rounded border", timingColor)}>
+                              {timingLabel[step.timing] ?? step.timing}
+                            </span>
+                          </div>
+                          {step.subject && (
+                            <p className="text-xs font-medium text-zinc-200 mt-1.5 leading-snug truncate">
+                              {step.subject}
+                            </p>
+                          )}
+                          <p className="text-[11px] text-zinc-500 mt-0.5 leading-snug">{step.goal}</p>
+                        </div>
+                        <ChevronRight className={cn("h-3.5 w-3.5 text-zinc-600 flex-shrink-0 mt-1 transition-transform", isExpanded && "rotate-90")} />
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t border-zinc-800 px-3.5 py-2.5 space-y-2.5">
+                          <p className="text-xs text-zinc-400 leading-relaxed italic">{step.body_preview}</p>
+                          <button
+                            onClick={() => handleAddSeqStep(step, i)}
+                            disabled={added}
+                            className={cn(
+                              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all",
+                              added
+                                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 cursor-default"
+                                : "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 cursor-pointer"
+                            )}
+                          >
+                            {added ? (
+                              <><CheckCircle2 className="h-3 w-3" /> Added to Tasks</>
+                            ) : (
+                              <><Plus className="h-3 w-3" /> Add to Tasks</>
+                            )}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-sm text-zinc-500 text-center py-8">Failed to generate sequence.</p>
+              )}
             </div>
           </div>
         </div>

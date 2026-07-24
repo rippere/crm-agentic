@@ -2155,6 +2155,37 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/suggest-tasks`, { method: 'POST' }, token)
   },
 
+  getPipelinePulse: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    total_value: number;
+    at_risk_count: number;
+    top_deal: { title: string; value: number; stage: string } | null;
+    stage_breakdown: { stage: string; count: number; value: number }[];
+    health_avg: number;
+    insight: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        total_value: 285000,
+        at_risk_count: 2,
+        top_deal: { title: 'TechCorp Platform Expansion', value: 145000, stage: 'negotiation' },
+        stage_breakdown: [
+          { stage: 'discovery', count: 1, value: 32000 },
+          { stage: 'qualified', count: 2, value: 58000 },
+          { stage: 'proposal', count: 3, value: 135000 },
+          { stage: 'negotiation', count: 2, value: 195000 },
+        ],
+        health_avg: 68,
+        insight: '$285K active pipeline with strong momentum in Proposal (3 deals, $135K) and Negotiation (2 deals, $195K). Run Deal Health check on the 2 at-risk deals to generate targeted re-engagement plans before month-end.',
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/pipeline-pulse`, {}, token)
+  },
+
   getPipelineSummary: (
     workspaceId: string,
     token: string,
@@ -2246,5 +2277,279 @@ export const apiClient = {
       return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/relationship-health`, { method: 'POST' }, token)
+  },
+
+  getSuggestedOutreachSequence: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    steps: Array<{
+      step: number;
+      channel: 'email' | 'slack' | 'call';
+      timing: 'now' | '3d' | '7d' | '14d';
+      subject: string | null;
+      body_preview: string;
+      goal: string;
+    }>;
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, Array<{
+        step: number; channel: 'email' | 'slack' | 'call'; timing: 'now' | '3d' | '7d' | '14d';
+        subject: string | null; body_preview: string; goal: string;
+      }>> = {
+        'c-001': [
+          { step: 1, channel: 'email', timing: 'now', subject: 'QBR agenda for TechCorp — Q3 review', body_preview: 'Hi Alice, I\'d love to walk through our Q3 results together and align on priorities for the Enterprise CRM rollout.', goal: 'Confirm QBR date and set agenda' },
+          { step: 2, channel: 'call', timing: '3d', subject: null, body_preview: 'Call script: confirm receipt of QBR invite, walk through open tasks on the implementation checklist, identify any procurement blockers.', goal: 'Unblock implementation and confirm executive sponsor availability' },
+          { step: 3, channel: 'email', timing: '7d', subject: 'Enterprise CRM — next steps & resources', body_preview: 'Hi Alice, sharing the onboarding playbook and the ROI case study we discussed — plus a draft SLA for review ahead of go-live.', goal: 'Deliver value assets and move toward contract signature' },
+        ],
+        'c-002': [
+          { step: 1, channel: 'email', timing: 'now', subject: 'Checking in — any update on the platform decision?', body_preview: 'Hi Bob, it\'s been a few weeks since we last connected and I wanted to see if there are any questions I can help address on the platform upgrade.', goal: 'Re-open the conversation after 32 days of silence' },
+          { step: 2, channel: 'slack', timing: '3d', subject: 'Quick note on FinanceFlow upgrade', body_preview: 'Hey Bob — just dropping a quick Slack in case email is noisy. Any blockers I can help clear before end of month?', goal: 'Reach Bob on a different channel to increase response rate' },
+          { step: 3, channel: 'call', timing: '7d', subject: null, body_preview: 'Call script: acknowledge the pause, ask what has changed internally, re-qualify budget and timeline, offer a revised proposal if needed.', goal: 'Diagnose reason for dark period and re-qualify deal' },
+        ],
+      }
+      const stub = stubs[contactId] ?? [
+        { step: 1, channel: 'email' as const, timing: 'now' as const, subject: 'Quick check-in', body_preview: `Hi there, I wanted to follow up and see how things are going on your end.`, goal: 'Re-establish contact and gauge interest' },
+        { step: 2, channel: 'call' as const, timing: '3d' as const, subject: null, body_preview: 'Call script: confirm receipt of email, ask about current priorities and timeline, identify decision-making process.', goal: 'Qualify urgency and identify decision-maker' },
+        { step: 3, channel: 'email' as const, timing: '7d' as const, subject: 'Resources + next steps', body_preview: 'Following our call, I\'m sharing relevant resources and a suggested next step to move forward.', goal: 'Deliver value and propose a meeting' },
+      ]
+      return Promise.resolve({ steps: stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/outreach-sequence`, { method: 'POST' }, token)
+  },
+
+  getContactHealthOverview: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    at_risk_count: number;
+    strong_count: number;
+    summary_sentence: string;
+    contacts: Array<{
+      id: string;
+      name: string;
+      health: 'strong' | 'neutral' | 'at_risk';
+      days_since_touch: number | null;
+      top_action: string;
+      engagement_score: number;
+    }>;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        at_risk_count: 2,
+        strong_count: 3,
+        summary_sentence: '2 contacts at risk of going dark — focus on re-engagement this week to protect pipeline health.',
+        contacts: [
+          { id: 'c-001', name: 'Sarah Chen', health: 'strong', days_since_touch: 5, top_action: 'Maintain cadence and look for expansion', engagement_score: 74 },
+          { id: 'c-002', name: 'Michael Torres', health: 'at_risk', days_since_touch: 42, top_action: 'Re-engage — no contact in 42 days', engagement_score: 18 },
+          { id: 'c-003', name: 'Emma Rodriguez', health: 'neutral', days_since_touch: 18, top_action: 'Add a note or follow-up task', engagement_score: 45 },
+          { id: 'c-004', name: 'James Liu', health: 'strong', days_since_touch: 3, top_action: 'Maintain cadence and look for expansion', engagement_score: 81 },
+          { id: 'c-005', name: 'Priya Patel', health: 'at_risk', days_since_touch: 35, top_action: 'Re-engage — no contact in 35 days', engagement_score: 22 },
+          { id: 'c-006', name: 'Daniel Kim', health: 'strong', days_since_touch: 7, top_action: 'Maintain cadence and look for expansion', engagement_score: 68 },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/health-overview`, {}, token)
+  },
+
+  getRiskNarrative: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    risk_level: 'low' | 'medium' | 'high';
+    narrative: string;
+    top_risks: string[];
+    deal_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { risk_level: 'low' | 'medium' | 'high'; narrative: string; top_risks: string[] }> = {
+        'd-001': {
+          risk_level: 'medium',
+          narrative: 'The Enterprise CRM deal at TechCorp is in the Proposal stage with a health score of 72 and 58% win probability. While engagement has been consistent, two active competitors and a slightly overdue close date introduce moderate risk that requires attention before month-end.',
+          top_risks: [
+            'Two competitors (Salesforce, HubSpot) are actively engaged — a competitive differentiation call should be scheduled this week.',
+            'Close date slipped by 8 days — re-confirm commitment and update the expected timeline with the champion.',
+            'No deal note recorded in the last 14 days — add a progress update to maintain momentum visibility.',
+          ],
+        },
+        'd-002': {
+          risk_level: 'high',
+          narrative: 'The Platform Upgrade at FinanceFlow is severely at risk: health score of 28 and ML win probability of 18% signal declining buyer engagement. The deal has stalled in Negotiation for 38 days with a next action overdue and three tracked competitors applying pressure.',
+          top_risks: [
+            'Win probability at 18% is critically low — escalate to an executive sponsor call immediately to re-qualify the deal.',
+            'Deal stalled in Negotiation for 38 days, well past the 21-day stage average — confirm if budget approval is the blocker.',
+            'Three competitors tracked with no recent note on competitive positioning — run a competitive analysis or risk losing on value perception.',
+          ],
+        },
+        'd-003': {
+          risk_level: 'low',
+          narrative: 'The Professional Services deal at GrowthCo is progressing well with a health score of 84 and win probability of 73%. The deal is on schedule with no overdue actions, a clear champion, and no competitive threats identified.',
+          top_risks: [
+            'No competitors tracked — confirm with the champion that an internal build option is not being explored.',
+            'Close date is 6 days away — ensure contract redlines are returned and procurement approval is in progress.',
+          ],
+        },
+      }
+      const dealNum = parseInt(dealId.replace(/\D+/g, ''), 10) || 1
+      const keys = Object.keys(stubs)
+      const stub = stubs[dealId] ?? stubs[keys[(dealNum - 1) % keys.length]] ?? {
+        risk_level: 'medium' as const,
+        narrative: 'This deal has a moderate risk profile with several factors requiring monitoring. Review the health score trend and ensure next actions are up to date.',
+        top_risks: ['Verify champion engagement and confirm deal priority before next stage.'],
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/risk-narrative`, { method: 'POST' }, token)
+  },
+
+  getDealMomentum: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    momentum: 'gaining' | 'stalling' | 'declining';
+    drivers: string[];
+    recommendation: string;
+    deal_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { momentum: 'gaining' | 'stalling' | 'declining'; drivers: string[]; recommendation: string }> = {
+        'd-001': {
+          momentum: 'gaining',
+          drivers: [
+            'Health score has risen from 65 → 72 → 78 across the last three readings, signalling improving deal quality.',
+            'Champion engaged twice in the last 14 days and legal review completed on schedule.',
+          ],
+          recommendation: 'Maintain cadence — add a Deal Note capturing the legal outcome and confirm next milestone.',
+        },
+        'd-002': {
+          momentum: 'declining',
+          drivers: [
+            'Health score has dropped from 60 → 45 → 28 over the last three readings, a clear deteriorating trend.',
+            'No activity recorded in 22 days and next action is overdue by 5 days.',
+          ],
+          recommendation: 'Re-engage immediately — Draft Outreach email to the champion and update the next action date.',
+        },
+        'd-003': {
+          momentum: 'gaining',
+          drivers: [
+            'Current health score of 84 is the highest recorded in the last 5 readings.',
+            '7 activity events logged in the last 30 days with a touch as recently as 3 days ago.',
+          ],
+          recommendation: 'Accelerate close — schedule a final review call and confirm procurement timeline.',
+        },
+      }
+      const dealNum = parseInt(dealId.replace(/\D+/g, ''), 10) || 1
+      const keys = Object.keys(stubs)
+      const stub = stubs[dealId] ?? stubs[keys[(dealNum - 1) % keys.length]] ?? {
+        momentum: 'stalling' as const,
+        drivers: ['Deal health is stable but no significant change in the last 30 days.', 'Activity frequency is below average for this stage.'],
+        recommendation: 'Add a Deal Note and set a concrete next action date to re-energise this deal.',
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/momentum-check`, { method: 'POST' }, token)
+  },
+
+  getContactSummary: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    relationship_status: 'strong' | 'warm' | 'cold' | 'at_risk';
+    summary: string;
+    next_best_action: string;
+    deal_value: number;
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { relationship_status: 'strong' | 'warm' | 'cold' | 'at_risk'; summary: string; next_best_action: string; deal_value: number }> = {
+        'c-001': {
+          relationship_status: 'strong',
+          summary: 'Sarah Chen has been actively engaged over the past 3 weeks, with 5 messages and 2 notes logged. Her Enterprise deal is at proposal stage with a health score of 88, and all tasks are on track.',
+          next_best_action: 'Schedule a QBR call this week to confirm the legal review timeline and lock in the signature date.',
+          deal_value: 95000,
+        },
+        'c-002': {
+          relationship_status: 'at_risk',
+          summary: 'Marcus Rivera has been unresponsive for 22 days after initial interest. The discovery-stage deal has dropped to a health score of 42 and there are 2 overdue tasks.',
+          next_best_action: 'Draft Outreach email with a value-focused re-engagement message, referencing the original pain point from the discovery call.',
+          deal_value: 30000,
+        },
+        'c-003': {
+          relationship_status: 'warm',
+          summary: 'Emily Watson maintains steady engagement with monthly check-ins and a qualified deal progressing well. Clarity scores on recent messages average 78, indicating aligned communication.',
+          next_best_action: 'Add a Contact Note after the next check-in and update the expected close date in the deal to reflect the revised procurement timeline.',
+          deal_value: 45000,
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        relationship_status: 'warm' as const,
+        summary: 'This contact has moderate engagement with some recent activity. Review recent messages and tasks to determine the next best step.',
+        next_best_action: 'Add a Contact Note to capture the latest status and set a follow-up task for next week.',
+        deal_value: 0,
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/summary`, {}, token)
+  },
+
+  getDealClosePlan: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    phases: { label: string; actions: string[] }[];
+    recommended_close_date: string;
+    deal_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { phases: { label: string; actions: string[] }[]; recommended_close_date: string }> = {
+        'd-001': {
+          recommended_close_date: '2026-08-15',
+          phases: [
+            { label: 'Next 30 days', actions: ['Schedule a QBR call to confirm legal sign-off timeline and remaining SLA concerns.', 'Add a Deal Note capturing the outcome of the legal review and updated close conditions.', 'Run Deal Health check to confirm score stays above 75.'] },
+            { label: '30–60 days', actions: ['Send final contract draft with agreed SLA uptime terms to procurement.', 'Request exec sponsor approval via champion contact Sarah Chen.'] },
+            { label: '60–90 days', actions: ['Close the deal and log the win in Win/Loss Analysis.', 'Schedule onboarding kickoff call within 7 days of signature.'] },
+          ],
+        },
+        'd-002': {
+          recommended_close_date: '2026-09-30',
+          phases: [
+            { label: 'Next 30 days', actions: ['Draft Outreach email to re-engage champion Marcus after 22-day silence.', 'Run Deal Health check and update ML win probability to reflect current risk level.'] },
+            { label: '30–60 days', actions: ['Present executive summary deck to board sponsor.', 'Propose a 60-day pilot with exit clause to reduce commitment risk.'] },
+            { label: '60–90 days', actions: ['Negotiate final terms and issue contract.', 'If no response in 45 days, escalate to a senior sponsor or re-qualify the deal.'] },
+          ],
+        },
+        'd-003': {
+          recommended_close_date: '2026-08-01',
+          phases: [
+            { label: 'Next 30 days', actions: ['Confirm procurement timeline with champion and align on signature process.', 'Add a Deal Note after each weekly check-in to track progress milestones.'] },
+            { label: '30–60 days', actions: ['Send revised pricing summary with volume discount applied.', 'Schedule final stakeholder demo to confirm requirements are met.'] },
+            { label: '60–90 days', actions: ['Issue contract and set a firm signature date.', 'Log win and initiate onboarding handover within 5 business days.'] },
+          ],
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001'] ?? {
+        recommended_close_date: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        phases: [
+          { label: 'Next 30 days', actions: ['Run Deal Health check to establish a score baseline.', 'Schedule a discovery call to confirm current buying timeline.'] },
+          { label: '30–60 days', actions: ["Send a proposal aligned to the champion's stated requirements.", 'Add a Deal Note after each touchpoint to maintain accurate context.'] },
+          { label: '60–90 days', actions: ['Negotiate final terms with the budget owner.', 'Set a concrete close date and confirm with all stakeholders.'] },
+        ],
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/close-plan`, { method: 'POST' }, token)
   },
 }

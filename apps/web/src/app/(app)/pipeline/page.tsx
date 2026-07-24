@@ -409,6 +409,14 @@ export default function PipelinePage() {
   const [pipelineSummaryLoading, setPipelineSummaryLoading] = useState(false);
   const [pipelineSummaryOpen, setPipelineSummaryOpen] = useState(false);
 
+  type PulseDeal = { title: string; value: number; stage: string };
+  type PulseStage = { stage: string; count: number; value: number };
+  type PulseData = { total_value: number; at_risk_count: number; top_deal: PulseDeal | null; stage_breakdown: PulseStage[]; health_avg: number; insight: string; generated_at: string };
+  const [pulseData, setPulseData] = useState<PulseData | null>(null);
+  const [pulseLoading, setPulseLoading] = useState(false);
+  const [pulseGenerating, setPulseGenerating] = useState(false);
+  const [pulseOpen, setPulseOpen] = useState(true);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSelectedDeal(null); };
     document.addEventListener("keydown", onKey);
@@ -452,6 +460,48 @@ export default function PipelinePage() {
         .catch(() => {});
     });
   }, []);
+
+  useEffect(() => {
+    setPulseLoading(true);
+    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+    if (isDemoMode) {
+      apiClient.getPipelinePulse("demo-workspace-1", "demo-token")
+        .then((data) => setPulseData(data))
+        .catch(() => setPulseData(null))
+        .finally(() => setPulseLoading(false));
+      return;
+    }
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) { setPulseLoading(false); return; }
+      const workspaceId: string | undefined = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id);
+      if (!workspaceId) { setPulseLoading(false); return; }
+      apiClient.getPipelinePulse(workspaceId, session.access_token)
+        .then((data) => setPulseData(data))
+        .catch(() => setPulseData(null))
+        .finally(() => setPulseLoading(false));
+    });
+  }, []);
+
+  const handleRegeneratePulse = async () => {
+    if (pulseGenerating) return;
+    setPulseGenerating(true);
+    try {
+      const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      let workspaceId = "demo-workspace-1";
+      let token = "demo-token";
+      if (!isDemoMode) {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
+        token = session?.access_token ?? "";
+      }
+      if (!workspaceId || !token) return;
+      const data = await apiClient.getPipelinePulse(workspaceId, token);
+      setPulseData(data);
+    } catch { /* ignore */ }
+    finally { setPulseGenerating(false); }
+  };
 
   // Persist search to localStorage
   useEffect(() => { localStorage.setItem(LS_PIPELINE_SEARCH_KEY, dealSearch); }, [dealSearch]);
@@ -744,6 +794,91 @@ export default function PipelinePage() {
           </div>
         </Card>
       </div>
+
+      {/* Pipeline Pulse */}
+      <Card className="p-0 overflow-hidden">
+        <button
+          className="w-full flex items-center gap-2 px-4 py-3 hover:bg-zinc-800/30 transition-colors cursor-pointer"
+          onClick={() => setPulseOpen((o) => !o)}
+        >
+          <Zap className="h-4 w-4 text-teal-400 flex-shrink-0" aria-hidden />
+          <p className="text-sm font-semibold text-zinc-200">Pipeline Pulse</p>
+          {pulseData && (
+            <span className="ml-1 rounded-full border border-teal-500/30 bg-teal-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-teal-300">
+              avg health {pulseData.health_avg}
+            </span>
+          )}
+          {pulseData && pulseData.at_risk_count > 0 && (
+            <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-rose-300">
+              {pulseData.at_risk_count} at risk
+            </span>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); handleRegeneratePulse(); }}
+            disabled={pulseLoading || pulseGenerating}
+            className="ml-auto text-zinc-500 hover:text-teal-400 disabled:opacity-40 transition-colors cursor-pointer"
+            aria-label="Regenerate pipeline pulse"
+            title="Regenerate"
+          >
+            {pulseGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronRight className={`h-3.5 w-3.5 transition-transform ${pulseOpen ? "rotate-90" : ""}`} />}
+          </button>
+        </button>
+
+        {pulseOpen && (
+          <div className="border-t border-zinc-800 px-4 pb-4 pt-3">
+            {pulseLoading ? (
+              <div className="flex gap-4">
+                {[1, 2, 3].map((i) => <div key={i} className="h-8 flex-1 rounded-lg bg-zinc-800/50 animate-pulse" />)}
+              </div>
+            ) : pulseData === null ? (
+              <p className="text-xs text-zinc-600 italic">Unable to load pipeline pulse.</p>
+            ) : (
+              <div className="space-y-3">
+                {/* Stage breakdown bars */}
+                {pulseData.stage_breakdown.length > 0 && (
+                  <div className="flex gap-2 flex-wrap">
+                    {(() => {
+                      const maxVal = Math.max(...pulseData.stage_breakdown.map((s) => s.value), 1);
+                      return pulseData.stage_breakdown.map((s) => (
+                        <div key={s.stage} className="flex-1 min-w-[80px]">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-mono text-zinc-500 uppercase">{s.stage.slice(0, 5)}</span>
+                            <span className="text-[10px] font-mono text-zinc-400">{s.count}</span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-teal-500/60"
+                              style={{ width: `${Math.round((s.value / maxVal) * 100)}%` }}
+                            />
+                          </div>
+                          <p className="text-[10px] font-mono text-zinc-600 mt-0.5">{formatCurrency(s.value)}</p>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                )}
+                {/* Insight */}
+                <p className="text-xs text-zinc-300 leading-relaxed">{pulseData.insight}</p>
+                {/* Top deal + meta row */}
+                <div className="flex items-center justify-between">
+                  {pulseData.top_deal && (
+                    <Link
+                      href={`/pipeline`}
+                      className="flex items-center gap-1 text-[11px] text-teal-400/80 hover:text-teal-300 transition-colors"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Top: {pulseData.top_deal.title} · {formatCurrency(pulseData.top_deal.value)}
+                    </Link>
+                  )}
+                  <p className="text-[10px] text-zinc-600 ml-auto">
+                    Generated {new Date(pulseData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
 
       {/* Pipeline Board */}
       <div className="flex-1">

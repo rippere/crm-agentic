@@ -1333,9 +1333,12 @@ async def deal_predicted_close(
             confidence_level = "low"
             confidence_pct = 40
 
-    # Ensure predicted is always in the future relative to today
+    # Ensure predicted is always in the future relative to today; shift bounds with it
     if predicted.date() < now.date():
+        shift = (now + timedelta(days=7)) - predicted
         predicted = now + timedelta(days=7)
+        lower = lower + shift
+        upper = upper + shift
 
     return {
         "predicted_date": predicted.date().isoformat(),

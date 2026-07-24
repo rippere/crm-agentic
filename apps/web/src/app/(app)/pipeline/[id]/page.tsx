@@ -374,6 +374,23 @@ export default function DealDetailPage() {
   const [winLossLoading, setWinLossLoading] = useState(false);
   const [winLossGenerating, setWinLossGenerating] = useState(false);
 
+  type RiskNarrative = { risk_level: "low" | "medium" | "high"; narrative: string; top_risks: string[]; deal_id: string; generated_at: string };
+  const [riskNarrative, setRiskNarrative] = useState<RiskNarrative | null>(null);
+  const [riskNarrativeLoading, setRiskNarrativeLoading] = useState(false);
+  const [riskNarrativeGenerating, setRiskNarrativeGenerating] = useState(false);
+  const [riskNarrativeCollapsed, setRiskNarrativeCollapsed] = useState(false);
+
+  type MomentumData = { momentum: "gaining" | "stalling" | "declining"; drivers: string[]; recommendation: string; deal_id: string; generated_at: string };
+  const [momentumData, setMomentumData] = useState<MomentumData | null>(null);
+  const [momentumLoading, setMomentumLoading] = useState(false);
+  const [momentumGenerating, setMomentumGenerating] = useState(false);
+
+  type ClosePlanData = { phases: { label: string; actions: string[] }[]; recommended_close_date: string; deal_id: string; generated_at: string };
+  const [closePlanData, setClosePlanData] = useState<ClosePlanData | null>(null);
+  const [closePlanLoading, setClosePlanLoading] = useState(false);
+  const [closePlanGenerating, setClosePlanGenerating] = useState(false);
+  const [closePlanOpenPhase, setClosePlanOpenPhase] = useState<number>(0);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -504,6 +521,29 @@ export default function DealDetailPage() {
       .then((data) => setCoachData(data ?? null))
       .catch(() => setCoachData(null))
       .finally(() => setCoachLoading(false));
+
+    if (deal.stage !== "closed_won" && deal.stage !== "closed_lost") {
+      setRiskNarrativeLoading(true);
+      apiClient
+        .getRiskNarrative(workspaceId, dealId, token)
+        .then((data) => setRiskNarrative(data ?? null))
+        .catch(() => setRiskNarrative(null))
+        .finally(() => setRiskNarrativeLoading(false));
+
+      setMomentumLoading(true);
+      apiClient
+        .getDealMomentum(workspaceId, dealId, token)
+        .then((data) => setMomentumData(data ?? null))
+        .catch(() => setMomentumData(null))
+        .finally(() => setMomentumLoading(false));
+
+      setClosePlanLoading(true);
+      apiClient
+        .getDealClosePlan(workspaceId, dealId, token)
+        .then((data) => setClosePlanData(data ?? null))
+        .catch(() => setClosePlanData(null))
+        .finally(() => setClosePlanLoading(false));
+    }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
       setWinLossLoading(true);
@@ -679,6 +719,36 @@ export default function DealDetailPage() {
       setWinLossData(data ?? null);
     } catch { /* ignore */ }
     finally { setWinLossGenerating(false); }
+  };
+
+  const handleRegenerateRiskNarrative = async () => {
+    if (!token || !workspaceId || riskNarrativeGenerating) return;
+    setRiskNarrativeGenerating(true);
+    try {
+      const data = await apiClient.getRiskNarrative(workspaceId, dealId, token);
+      setRiskNarrative(data ?? null);
+    } catch { /* ignore */ }
+    finally { setRiskNarrativeGenerating(false); }
+  };
+
+  const handleRegenerateMomentum = async () => {
+    if (!token || !workspaceId || momentumGenerating) return;
+    setMomentumGenerating(true);
+    try {
+      const data = await apiClient.getDealMomentum(workspaceId, dealId, token);
+      setMomentumData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setMomentumGenerating(false); }
+  };
+
+  const handleRegenerateClosePlan = async () => {
+    if (!token || !workspaceId || closePlanGenerating) return;
+    setClosePlanGenerating(true);
+    try {
+      const data = await apiClient.getDealClosePlan(workspaceId, dealId, token);
+      setClosePlanData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setClosePlanGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -1716,6 +1786,152 @@ export default function DealDetailPage() {
             </Card>
           )}
 
+          {/* Deal Momentum */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-violet-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Deal Momentum</p>
+                {momentumData && (() => {
+                  const m = momentumData.momentum;
+                  const mColor = m === "gaining"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : m === "declining"
+                    ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : "text-amber-300 border-amber-500/30 bg-amber-500/10";
+                  return (
+                    <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${mColor}`}>
+                      {m}
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateMomentum}
+                  disabled={momentumLoading || momentumGenerating}
+                  className="ml-auto text-zinc-500 hover:text-violet-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate momentum"
+                  title="Regenerate"
+                >
+                  {momentumGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {momentumLoading ? (
+                <div className="space-y-2">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : momentumData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load momentum data.</p>
+              ) : (
+                <div className="space-y-3">
+                  {momentumData.drivers.length > 0 && (
+                    <ul className="space-y-1.5">
+                      {momentumData.drivers.map((driver, i) => (
+                        <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                          <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold mt-0.5 ${
+                            momentumData.momentum === "gaining" ? "bg-emerald-500/15 text-emerald-400"
+                            : momentumData.momentum === "declining" ? "bg-rose-500/15 text-rose-400"
+                            : "bg-amber-500/15 text-amber-400"
+                          }`}>
+                            {i + 1}
+                          </span>
+                          <p className="text-xs text-zinc-300 leading-relaxed">{driver}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
+                    <p className="text-[11px] font-semibold text-violet-300 uppercase tracking-wide mb-0.5">Recommendation</p>
+                    <p className="text-xs text-zinc-300">{momentumData.recommendation}</p>
+                  </div>
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(momentumData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Close Plan */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-teal-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Close Plan</p>
+                {closePlanData && (
+                  <span className="ml-1 rounded-full border border-teal-500/30 bg-teal-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-teal-300">
+                    {new Date(closePlanData.recommended_close_date + "T00:00:00").toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                  </span>
+                )}
+                <button
+                  onClick={handleRegenerateClosePlan}
+                  disabled={closePlanLoading || closePlanGenerating}
+                  className="ml-auto text-zinc-500 hover:text-teal-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate close plan"
+                  title="Regenerate"
+                >
+                  {closePlanGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {closePlanLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : closePlanData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load close plan.</p>
+              ) : (
+                <div className="space-y-2">
+                  {closePlanData.phases.map((phase, phaseIdx) => (
+                    <div key={phaseIdx} className="rounded-lg border border-zinc-800 overflow-hidden">
+                      <button
+                        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800/50 transition-colors cursor-pointer"
+                        onClick={() => setClosePlanOpenPhase(closePlanOpenPhase === phaseIdx ? -1 : phaseIdx)}
+                      >
+                        <ChevronRight className={`h-3.5 w-3.5 text-zinc-500 flex-shrink-0 transition-transform ${closePlanOpenPhase === phaseIdx ? "rotate-90" : ""}`} />
+                        <span className="text-xs font-semibold text-zinc-300">{phase.label}</span>
+                        <span className="ml-auto text-[10px] text-zinc-600">{phase.actions.length} action{phase.actions.length !== 1 ? "s" : ""}</span>
+                      </button>
+                      {closePlanOpenPhase === phaseIdx && (
+                        <ul className="px-3 pb-3 space-y-1.5 border-t border-zinc-800">
+                          {phase.actions.map((action, actionIdx) => (
+                            <li key={actionIdx} className="flex items-start gap-2 pt-1.5">
+                              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-teal-500/60 mt-0.5" />
+                              <p className="text-xs text-zinc-300 leading-relaxed">{action}</p>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="flex items-center gap-1.5">
+                      <Calendar className="h-3.5 w-3.5 text-teal-400/70" />
+                      <p className="text-[11px] font-semibold text-teal-300/80">
+                        Target close: {new Date(closePlanData.recommended_close_date + "T00:00:00").toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })}
+                      </p>
+                    </div>
+                    <p className="text-[10px] text-zinc-600">
+                      Generated {new Date(closePlanData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </Card>
+          )}
+
           {/* AI Coach */}
           {!isClosedStage && (
             <Card className="p-4 space-y-3">
@@ -1775,6 +1991,87 @@ export default function DealDetailPage() {
                 <p className="text-[10px] text-zinc-600 text-right">
                   Generated {new Date(coachData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </p>
+              )}
+            </Card>
+          )}
+
+          {/* Risk Narrative — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-400" aria-hidden />
+                <button
+                  className="flex-1 flex items-center gap-1.5 text-left cursor-pointer"
+                  onClick={() => setRiskNarrativeCollapsed((c) => !c)}
+                  aria-label={riskNarrativeCollapsed ? "Expand Risk Narrative" : "Collapse Risk Narrative"}
+                >
+                  <p className="text-sm font-semibold text-zinc-200">Risk Narrative</p>
+                  <ChevronRight className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${riskNarrativeCollapsed ? "" : "rotate-90"}`} />
+                </button>
+                {riskNarrative && (() => {
+                  const lvl = riskNarrative.risk_level;
+                  const lvlColor = lvl === "high"
+                    ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : lvl === "low"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : "text-amber-300 border-amber-500/30 bg-amber-500/10";
+                  return (
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${lvlColor}`}>
+                      {lvl}
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateRiskNarrative}
+                  disabled={riskNarrativeLoading || riskNarrativeGenerating}
+                  className="ml-auto text-zinc-500 hover:text-amber-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate risk narrative"
+                  title="Regenerate"
+                >
+                  {riskNarrativeGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {!riskNarrativeCollapsed && (
+                <>
+                  {riskNarrativeLoading ? (
+                    <div className="space-y-2">
+                      {[1, 2].map((i) => (
+                        <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                      ))}
+                    </div>
+                  ) : riskNarrative === null ? (
+                    <p className="text-xs text-zinc-600 italic py-2">Unable to load risk assessment.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="text-xs text-zinc-300 leading-relaxed">{riskNarrative.narrative}</p>
+
+                      {riskNarrative.top_risks.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Top Risks</p>
+                          <ul className="space-y-1.5">
+                            {riskNarrative.top_risks.map((risk, i) => (
+                              <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                                <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-[9px] font-bold text-amber-400 mt-0.5">
+                                  {i + 1}
+                                </span>
+                                <p className="text-xs text-zinc-300 leading-relaxed">{risk}</p>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-zinc-600 text-right">
+                        Generated {new Date(riskNarrative.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </div>
+                  )}
+                </>
               )}
             </Card>
           )}
