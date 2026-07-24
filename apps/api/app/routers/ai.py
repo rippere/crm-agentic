@@ -2073,3 +2073,112 @@ async def contact_summary(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# AI deal comparison
+# ---------------------------------------------------------------------------
+
+_COMPARE_SYSTEM = """\
+You are Nova, the AI sales strategist in NovaCRM. Compare the provided deals and identify which one to prioritise.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "winner_id": "uuid-string of the highest-priority deal",
+  "rationale": "2-sentence explanation of why this deal wins — name the company and reference specific data.",
+  "comparison_points": [
+    {"dimension": "Deal Value", "verdict": "1-sentence comparison across all deals on this dimension."},
+    {"dimension": "Win Probability", "verdict": "1-sentence comparison."},
+    {"dimension": "Health Score", "verdict": "1-sentence comparison."},
+    {"dimension": "Stage Progress", "verdict": "1-sentence comparison."},
+    {"dimension": "Risk Level", "verdict": "1-sentence comparison."}
+  ]
+}
+
+Provide exactly 5 comparison_points. Base winner_id on which deal is most likely to close soon with the highest ROI.\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/compare")
+@limiter.limit("10/minute")
+async def compare_deals(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_ids: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Compare 2–3 deals using Claude Haiku and return a structured analysis."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    raw_ids = [s.strip() for s in deal_ids.split(",") if s.strip()]
+    if len(raw_ids) < 2 or len(raw_ids) > 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide 2–3 deal IDs as comma-separated deal_ids query param",
+        )
+
+    parsed_ids: list[uuid.UUID] = []
+    for raw in raw_ids:
+        try:
+            parsed_ids.append(uuid.UUID(raw))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid deal ID: {raw}",
+            )
+
+    deal_result = await db.execute(
+        select(Deal)
+        .where(Deal.id.in_(parsed_ids), Deal.workspace_id == workspace_id)
+    )
+    deals = deal_result.scalars().all()
+
+    if len(deals) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or more deals not found in this workspace",
+        )
+
+    lines = ["Deals to compare:"]
+    for d in deals:
+        lines.append(
+            f"- ID={d.id} | Title={d.title or 'Untitled'} | Company={d.company or 'Unknown'}"
+            f" | Stage={d.stage} | Value=${float(d.value):,.0f}"
+            f" | Health={d.health_score}/100 | WinProb={d.ml_win_probability}%"
+        )
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_COMPARE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        winner_id = str(data.get("winner_id", str(deals[0].id)))
+        if winner_id not in [str(d.id) for d in deals]:
+            winner_id = str(deals[0].id)
+        rationale = str(data.get("rationale", ""))[:600]
+        comparison_points = [
+            {"dimension": str(p.get("dimension", "")), "verdict": str(p.get("verdict", ""))}
+            for p in (data.get("comparison_points") or [])[:5]
+        ]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "winner_id": winner_id,
+        "rationale": rationale,
+        "comparison_points": comparison_points,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

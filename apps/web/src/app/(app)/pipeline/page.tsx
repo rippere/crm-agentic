@@ -9,7 +9,7 @@ import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import { cn, formatCurrency, stageConfig, dealStageOrder, SIGNAL } from "@/lib/utils";
 import Link from "next/link";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight, Search, Sparkles } from "lucide-react";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight, Search, Sparkles, GitCompare, Trophy } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
 interface PipelineSuggestion {
@@ -409,6 +409,12 @@ export default function PipelinePage() {
   const [pipelineSummaryLoading, setPipelineSummaryLoading] = useState(false);
   const [pipelineSummaryOpen, setPipelineSummaryOpen] = useState(false);
 
+  type ComparisonPoint = { dimension: string; verdict: string };
+  type CompareResult = { winner_id: string; rationale: string; comparison_points: ComparisonPoint[]; generated_at: string };
+  const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
+
   type PulseDeal = { title: string; value: number; stage: string };
   type PulseStage = { stage: string; count: number; value: number };
   type PulseData = { total_value: number; at_risk_count: number; top_deal: PulseDeal | null; stage_breakdown: PulseStage[]; health_avg: number; insight: string; generated_at: string };
@@ -635,6 +641,28 @@ export default function PipelinePage() {
     } catch { /* ignore */ }
     finally { setPipelineSummaryLoading(false); }
   }, [pipelineSummary]);
+
+  const handleCompareDeals = useCallback(async () => {
+    if (selectedIds.size < 2 || selectedIds.size > 3 || compareLoading) return;
+    setCompareResult(null);
+    setCompareOpen(true);
+    setCompareLoading(true);
+    try {
+      const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      let workspaceId = "demo-workspace-1";
+      let token = "demo-token";
+      if (!isDemoMode) {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
+        token = session?.access_token ?? "";
+      }
+      if (!workspaceId || !token) return;
+      const data = await apiClient.getDealsComparison(workspaceId, Array.from(selectedIds), token);
+      setCompareResult(data);
+    } catch { /* ignore */ }
+    finally { setCompareLoading(false); }
+  }, [selectedIds, compareLoading]);
 
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6 min-h-screen">
@@ -996,6 +1024,17 @@ export default function PipelinePage() {
             {bulkLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
             Delete
           </button>
+          {selectedIds.size >= 2 && selectedIds.size <= 3 && (
+            <button
+              onClick={handleCompareDeals}
+              disabled={compareLoading}
+              className="flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs text-indigo-400 hover:bg-indigo-500/20 transition-all disabled:opacity-50"
+              title="AI deal comparison"
+            >
+              {compareLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitCompare className="h-3 w-3" />}
+              Compare
+            </button>
+          )}
           <button
             onClick={handleClearSelection}
             className="text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -1021,6 +1060,144 @@ export default function PipelinePage() {
           onClose={() => setNewDealStage(null)}
           onCreate={handleCreate}
         />
+      )}
+
+      {/* Deal compare modal */}
+      {compareOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+          onClick={() => setCompareOpen(false)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <GitCompare className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-100">AI Deal Comparison</p>
+                <span className="text-[10px] text-zinc-500 font-mono">{selectedIds.size} deals</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCompareDeals}
+                  disabled={compareLoading}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                  title="Regenerate"
+                >
+                  {compareLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "↺"}
+                </button>
+                <button
+                  onClick={() => setCompareOpen(false)}
+                  className="text-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer"
+                  aria-label="Close comparison"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {/* Side-by-side deal cards */}
+              <div className={`grid gap-3 ${selectedIds.size === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+                {Array.from(selectedIds).map((id) => {
+                  const d = deals.find((deal) => deal.id === id);
+                  if (!d) return null;
+                  const isWinner = compareResult?.winner_id === id;
+                  return (
+                    <div
+                      key={id}
+                      className={cn(
+                        "rounded-xl border p-3.5 space-y-2.5 relative",
+                        isWinner
+                          ? "border-indigo-500/50 bg-indigo-500/5"
+                          : "border-zinc-800 bg-zinc-900/60",
+                      )}
+                    >
+                      {isWinner && (
+                        <div className="absolute -top-2.5 left-3 flex items-center gap-1 rounded-full border border-indigo-500/40 bg-indigo-500/20 px-2 py-0.5">
+                          <Trophy className="h-2.5 w-2.5 text-indigo-300" />
+                          <span className="text-[9px] font-semibold text-indigo-300 uppercase tracking-wide">Priority</span>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-xs font-semibold text-zinc-100 leading-snug truncate">{d.title}</p>
+                        <p className="text-[10px] text-zinc-500 truncate">{d.company}</p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between text-[10px]">
+                          <span className="text-zinc-500">Value</span>
+                          <span className="font-mono text-zinc-200">{formatCurrency(d.value)}</span>
+                        </div>
+                        <div className="flex justify-between text-[10px]">
+                          <span className="text-zinc-500">Stage</span>
+                          <span className={cn("font-mono", stageConfig[d.stage]?.color ?? "text-zinc-400")}>{stageConfig[d.stage]?.label ?? d.stage}</span>
+                        </div>
+                        <div className="flex justify-between text-[10px]">
+                          <span className="text-zinc-500">Health</span>
+                          <span className={cn("font-mono font-semibold",
+                            d.healthScore >= 70 ? "text-emerald-400" : d.healthScore >= 40 ? "text-amber-400" : "text-rose-400"
+                          )}>{d.healthScore}/100</span>
+                        </div>
+                        <div className="flex justify-between text-[10px]">
+                          <span className="text-zinc-500">Win Prob</span>
+                          <span className={cn("font-mono font-semibold",
+                            d.mlWinProbability >= 60 ? "text-indigo-300" : d.mlWinProbability >= 35 ? "text-amber-400" : "text-rose-400"
+                          )}>{d.mlWinProbability}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {compareLoading && (
+                <div className="space-y-2">
+                  <div className="h-12 rounded-xl bg-zinc-800/50 animate-pulse" />
+                  <div className="h-28 rounded-xl bg-zinc-800/30 animate-pulse" />
+                </div>
+              )}
+
+              {!compareLoading && compareResult && (
+                <>
+                  {/* AI Rationale */}
+                  <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Sparkles className="h-3.5 w-3.5 text-indigo-400 flex-shrink-0" />
+                      <span className="text-[10px] font-mono text-indigo-400/80 uppercase tracking-widest">Nova&apos;s Verdict</span>
+                    </div>
+                    <p className="text-xs text-zinc-200 leading-relaxed">{compareResult.rationale}</p>
+                  </div>
+
+                  {/* Comparison points table */}
+                  {compareResult.comparison_points.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-2">Comparison Breakdown</p>
+                      <div className="rounded-xl border border-zinc-800 overflow-hidden">
+                        {compareResult.comparison_points.map((pt, i) => (
+                          <div
+                            key={i}
+                            className={cn(
+                              "grid grid-cols-[110px_1fr] gap-3 px-3 py-2.5 text-xs",
+                              i !== 0 && "border-t border-zinc-800/80",
+                            )}
+                          >
+                            <span className="text-zinc-400 font-medium flex-shrink-0">{pt.dimension}</span>
+                            <span className="text-zinc-300 leading-relaxed">{pt.verdict}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(compareResult.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Pipeline AI summary slide-over */}

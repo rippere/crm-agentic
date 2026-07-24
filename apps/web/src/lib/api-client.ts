@@ -2552,4 +2552,50 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/close-plan`, { method: 'POST' }, token)
   },
+
+  getDealsComparison: (
+    workspaceId: string,
+    dealIds: string[],
+    token: string,
+  ): Promise<{
+    winner_id: string;
+    rationale: string;
+    comparison_points: { dimension: string; verdict: string }[];
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const key = dealIds.slice().sort().join(',')
+      const stubs: Record<string, { winner_id: string; rationale: string; comparison_points: { dimension: string; verdict: string }[] }> = {
+        'd-001,d-002': {
+          winner_id: 'd-001',
+          rationale:
+            'TechCorp Platform Expansion should be prioritised — it has the highest health score (78) and is already in negotiation with legal review nearly complete, giving a clear short-term path to close. The Global Finance Enterprise Suite carries more risk due to 22-day contact silence and a stalled health score of 35.',
+          comparison_points: [
+            { dimension: 'Deal Value', verdict: 'Global Finance ($250K) leads on raw value, but TechCorp ($145K) has better downside protection given its healthier engagement signals.' },
+            { dimension: 'Win Probability', verdict: 'TechCorp scores 72% ML win probability versus Global Finance at 31%, a significant gap driven by active champion engagement.' },
+            { dimension: 'Health Score', verdict: 'TechCorp health is 78 (strong); Global Finance is 35 (stale) — the stall since the custom proposal is the key risk driver.' },
+            { dimension: 'Stage Progress', verdict: 'TechCorp is in Negotiation — one stage from close. Global Finance is stuck in Proposal with no stakeholder response in 22 days.' },
+            { dimension: 'Risk Level', verdict: 'Global Finance carries high risk (board dependency, radio silence); TechCorp risk is low, gated only on finalising SLA language.' },
+          ],
+        },
+      }
+      const stub = stubs[key] ?? stubs['d-001,d-002'] ?? {
+        winner_id: dealIds[0],
+        rationale: 'The first deal is recommended based on a combination of higher health score, better win probability, and clearer near-term close path compared to the other deals.',
+        comparison_points: [
+          { dimension: 'Deal Value', verdict: 'Deal values are comparable across the selected deals; no single deal dominates on size alone.' },
+          { dimension: 'Win Probability', verdict: 'Win probabilities vary — prioritise the deal with the highest ML score for near-term revenue certainty.' },
+          { dimension: 'Health Score', verdict: 'Health scores reflect recent engagement; deals scoring above 70 have the strongest closing momentum.' },
+          { dimension: 'Stage Progress', verdict: 'Stage progression favours deals already in Proposal or Negotiation over those still in Discovery.' },
+          { dimension: 'Risk Level', verdict: 'Risk is lowest for deals with an active champion, a clear next action, and a close date within 30 days.' },
+        ],
+      }
+      return Promise.resolve({ ...stub, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/deals/compare?deal_ids=${dealIds.join(',')}`,
+      {},
+      token,
+    )
+  },
 }
