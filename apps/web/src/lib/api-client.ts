@@ -2552,4 +2552,46 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/close-plan`, { method: 'POST' }, token)
   },
+
+  getDealsComparison: (workspaceId: string, dealIds: string[], token: string): Promise<{
+    winner_id: string
+    rationale: string
+    comparison_points: { dimension: string; verdict: string }[]
+    deal_ids: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const key = dealIds.slice().sort().join(',')
+      type CompareStub = { winner_id: string; rationale: string; comparison_points: { dimension: string; verdict: string }[] }
+      const stubs: Record<string, CompareStub> = {
+        'd-001,d-002': {
+          winner_id: 'd-001',
+          rationale: 'TechFlow Solutions leads with a higher health score and stronger win probability at the proposal stage. Momentum Corp carries more competitor risk and a lower deal value, making TechFlow the stronger near-term opportunity.',
+          comparison_points: [
+            { dimension: 'Deal Value', verdict: 'TechFlow ($95K) outpaces Momentum ($42K) by 2.3×' },
+            { dimension: 'Health Score', verdict: 'TechFlow 78 vs Momentum 52 — TechFlow significantly healthier' },
+            { dimension: 'Win Probability', verdict: 'TechFlow 65% vs Momentum 38%' },
+            { dimension: 'Competitor Risk', verdict: 'Momentum has 3 active competitors vs TechFlow\'s 1' },
+          ],
+        },
+      }
+      const fallback: CompareStub = {
+        winner_id: dealIds[0] ?? 'd-001',
+        rationale: 'The first deal shows stronger health metrics and a higher win probability. Prioritising it offers the best return on current sales effort.',
+        comparison_points: [
+          { dimension: 'Deal Value', verdict: 'Deal 1 leads on total pipeline value' },
+          { dimension: 'Health Score', verdict: 'Deal 1 scores higher across health dimensions' },
+          { dimension: 'Win Probability', verdict: 'Deal 1 carries a stronger ML probability' },
+          { dimension: 'Competitor Risk', verdict: 'Comparable competitive landscape across both deals' },
+        ],
+      }
+      const stub = stubs[key] ?? fallback
+      return Promise.resolve({ ...stub, deal_ids: dealIds, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/deals/compare`,
+      { method: 'POST', body: JSON.stringify({ deal_ids: dealIds }) },
+      token,
+    )
+  },
 }
