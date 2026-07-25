@@ -2073,3 +2073,110 @@ async def contact_summary(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/deals/compare
+# ---------------------------------------------------------------------------
+
+_DEAL_COMPARE_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Compare 2–3 CRM deals and identify which offers the
+strongest sales opportunity. Return ONLY valid JSON in this exact format:
+{"winner_id": "<uuid string of winning deal>",
+ "rationale": "<2-sentence explanation of why this deal should be prioritised>",
+ "comparison_points": [
+   {"dimension": "<dimension name>", "verdict": "<brief comparison verdict>"}
+ ]}
+Include 3–4 comparison_points covering dimensions such as: Deal Value, Health Score,
+Win Probability, Stage Progress, Competitor Risk.
+"""
+
+
+class _DealCompareRequest(BaseModel):
+    deal_ids: list[uuid.UUID]
+
+
+@router.post("/workspaces/{workspace_id}/ai/deals/compare")
+@limiter.limit("10/minute")
+async def compare_deals(
+    request: Request,
+    workspace_id: uuid.UUID,
+    body: _DealCompareRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    if len(body.deal_ids) < 2 or len(body.deal_ids) > 3:
+        raise HTTPException(status_code=400, detail="Provide 2 or 3 deal IDs to compare")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.id.in_(body.deal_ids),
+            Deal.workspace_id == workspace_id,
+        )
+    )
+    deals = result.scalars().all()
+
+    if len(deals) < 2:
+        raise HTTPException(status_code=404, detail="Could not find enough deals in this workspace")
+
+    lines: list[str] = ["Compare these deals and identify the strongest opportunity:"]
+    for deal in deals:
+        comp_names: list[str] = []
+        if deal.competitors:
+            try:
+                comp_names = [
+                    c.get("name", str(c)) if isinstance(c, dict) else str(c)
+                    for c in deal.competitors
+                ]
+            except Exception:
+                pass
+        lines.append(
+            f"\nDeal ID: {deal.id}"
+            f"\n  Title: {deal.title}"
+            f"\n  Company: {deal.company}"
+            f"\n  Value: ${deal.value:,.0f}"
+            f"\n  Stage: {deal.stage}"
+            f"\n  Health Score: {deal.health_score}/100"
+            f"\n  Win Probability: {deal.ml_win_probability}%"
+            f"\n  Competitors: {', '.join(comp_names) if comp_names else 'none'}"
+        )
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_COMPARE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        winner_id = str(data.get("winner_id", str(deals[0].id)))
+        rationale = str(data.get("rationale", ""))[:400]
+        raw_points = data.get("comparison_points") or []
+        comparison_points = [
+            {
+                "dimension": str(p.get("dimension", ""))[:60],
+                "verdict": str(p.get("verdict", ""))[:120],
+            }
+            for p in raw_points[:5]
+        ]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "winner_id": winner_id,
+        "rationale": rationale,
+        "comparison_points": comparison_points,
+        "deal_ids": [str(d.id) for d in deals],
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

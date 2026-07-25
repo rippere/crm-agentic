@@ -1172,3 +1172,71 @@ async def test_contact_summary_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/summary")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/deals/compare
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compare_deals_returns_winner_and_comparison_points(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalars_all(rows):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = rows
+        return result
+
+    deal1 = _fake_deal(workspace_id, title="Big Win", value=95000.0, health_score=78, ml_win_probability=65)
+    deal2 = _fake_deal(workspace_id, title="Small Deal", value=42000.0, health_score=52, ml_win_probability=38)
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_all([deal1, deal2]))
+
+    compare_json = (
+        '{"winner_id": "' + str(deal1.id) + '", '
+        '"rationale": "Big Win leads on all fronts.", '
+        '"comparison_points": ['
+        '{"dimension": "Deal Value", "verdict": "Big Win is 2.3x larger"}, '
+        '{"dimension": "Health Score", "verdict": "Big Win scores 78 vs 52"}]}'
+    )
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=compare_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/deals/compare",
+                json={"deal_ids": [str(deal1.id), str(deal2.id)]},
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["winner_id"] == str(deal1.id)
+    assert isinstance(body["rationale"], str)
+    assert len(body["rationale"]) > 0
+    assert isinstance(body["comparison_points"], list)
+    assert len(body["comparison_points"]) >= 2
+    assert body["comparison_points"][0]["dimension"] == "Deal Value"
+    assert isinstance(body["deal_ids"], list)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_compare_deals_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
+    deal_id1 = uuid.uuid4()
+    deal_id2 = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/deals/compare",
+            json={"deal_ids": [str(deal_id1), str(deal_id2)]},
+        )
+
+    assert resp.status_code == 403
