@@ -2180,3 +2180,86 @@ async def compare_deals(
         "deal_ids": [str(d.id) for d in deals],
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+_TRIAGE_SYSTEM = """\
+You are a CRM inbox triage assistant. Given a list of email messages, assign each a priority and recommend a one-sentence action.
+Respond ONLY with valid JSON in this exact shape:
+{"triaged": [{"message_id": "<id>", "priority": "urgent|high|normal|low", "action": "<one sentence>", "rationale": "<one sentence>"}]}
+
+Priority guide:
+- urgent: needs same-day response (deal-blockers, exec escalations, SLA threats, contract issues)
+- high: important, respond within 24h (active deal stakeholders, warm inbound leads, customer requests)
+- normal: standard business correspondence that can wait a day or two
+- low: newsletters, automated notifications, FYIs requiring no direct reply\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/messages/triage")
+@limiter.limit("5/minute")
+async def triage_messages(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Message)
+        .where(Message.workspace_id == workspace_id, Message.processed == False)  # noqa: E712
+        .order_by(Message.received_at.desc())
+        .limit(20)
+    )
+    messages = result.scalars().all()
+
+    if not messages:
+        return {
+            "triaged": [],
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    msg_summaries = "\n".join(
+        f"- id:{str(m.id)} from:{m.sender_email or 'unknown'} "
+        f"subject:{(m.subject or '(no subject)')[:80]} "
+        f"body_snippet:{(m.body_plain or '')[:150]}"
+        for m in messages
+    )
+    context = f"Triage these {len(messages)} inbox messages:\n{msg_summaries}"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_TRIAGE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        valid_priorities = {"urgent", "high", "normal", "low"}
+        triaged = [
+            {
+                "message_id": str(item.get("message_id", ""))[:36],
+                "priority": (
+                    item.get("priority", "normal")
+                    if item.get("priority", "normal") in valid_priorities
+                    else "normal"
+                ),
+                "action": str(item.get("action", ""))[:200],
+                "rationale": str(item.get("rationale", ""))[:200],
+            }
+            for item in (data.get("triaged") or [])[:20]
+        ]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "triaged": triaged,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

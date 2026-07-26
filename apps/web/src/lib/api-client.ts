@@ -2594,4 +2594,28 @@ export const apiClient = {
       token,
     )
   },
+
+  triageInboxMessages: (workspaceId: string, token: string): Promise<{
+    triaged: { message_id: string; priority: 'urgent' | 'high' | 'normal' | 'low'; action: string; rationale: string }[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        triaged: [
+          { message_id: 'm-001', priority: 'urgent', action: 'Reply immediately — executive stakeholder requesting contract changes before quarter close.', rationale: 'CEO-level contact; deal-blocking contract amendment at risk.' },
+          { message_id: 'm-002', priority: 'high', action: 'Schedule a discovery call within 24h to qualify the inbound interest.', rationale: 'VP-level warm inbound at a target account needs timely follow-up.' },
+          { message_id: 'm-003', priority: 'normal', action: 'Acknowledge receipt and send a formal proposal timeline.', rationale: 'Active negotiation with no immediate urgency signal.' },
+          { message_id: 'm-004', priority: 'low', action: 'File for reference — no direct reply required.', rationale: 'Automated billing notification; purely informational.' },
+          { message_id: 'm-005', priority: 'high', action: 'Follow up on the demo request before the lead goes cold.', rationale: 'Demo request submitted 48h ago with no response yet.' },
+          { message_id: 'm-006', priority: 'normal', action: 'Route to support team for resolution.', rationale: 'Standard support inquiry; not sales-critical.' },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/messages/triage`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
