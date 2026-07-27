@@ -2180,3 +2180,111 @@ async def compare_deals(
         "deal_ids": [str(d.id) for d in deals],
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/messages/triage
+# ---------------------------------------------------------------------------
+
+_TRIAGE_SYSTEM = """\
+You are an AI inbox triage assistant for NovaCRM. Given a list of messages, assign each a priority \
+and one-sentence recommended action.
+
+Respond with a JSON array only — no other text, no markdown fences.
+
+Each item must follow this schema exactly:
+{"message_id": "<id>", "priority": "urgent"|"high"|"normal"|"low", "action": "<one-sentence recommended action>", "rationale": "<one short reason for this priority>"}
+
+Priority guidance:
+- urgent: requires same-day response; hard deadlines, escalations, or deal-blocking issues
+- high: important, should be addressed within 24h; active prospects, upsell signals, or specific asks
+- normal: standard follow-up or informational; can be addressed in 2-3 days
+- low: FYI, newsletters, or no clear action needed\
+"""
+
+
+class _TriageItem(BaseModel):
+    message_id: str
+    priority: str
+    action: str
+    rationale: str
+
+
+class TriageResponse(BaseModel):
+    items: list[_TriageItem]
+    message_count: int
+    generated_at: str
+
+
+_VALID_PRIORITIES = {"urgent", "high", "normal", "low"}
+
+
+@router.post("/workspaces/{workspace_id}/ai/messages/triage", response_model=TriageResponse)
+@limiter.limit("5/minute")
+async def triage_messages(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TriageResponse:
+    """Batch-triage up to 20 inbox messages with Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Message)
+        .where(Message.workspace_id == workspace_id)
+        .order_by(Message.received_at.desc())
+        .limit(20)
+    )
+    msgs = result.scalars().all()
+
+    if not msgs:
+        return TriageResponse(
+            items=[],
+            message_count=0,
+            generated_at=datetime.datetime.utcnow().isoformat() + "Z",
+        )
+
+    lines: list[str] = ["Triage these inbox messages. Return a JSON array only.\n"]
+    for m in msgs:
+        snippet = (m.body_plain or "")[:300].replace("\n", " ")
+        lines.append(
+            f"- id: {m.id}"
+            f"  subject: {m.subject or '(no subject)'}"
+            f"  sender: {m.sender_email or 'unknown'}"
+            f"  preview: {snippet}"
+        )
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=_TRIAGE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "[]"
+        items_data = json.loads(raw)
+        items = [
+            _TriageItem(
+                message_id=str(i.get("message_id", "")),
+                priority=i.get("priority", "normal") if i.get("priority") in _VALID_PRIORITIES else "normal",
+                action=str(i.get("action", "Review and respond as needed."))[:200],
+                rationale=str(i.get("rationale", ""))[:200],
+            )
+            for i in items_data
+            if isinstance(i, dict)
+        ]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return TriageResponse(
+        items=items,
+        message_count=len(msgs),
+        generated_at=datetime.datetime.utcnow().isoformat() + "Z",
+    )

@@ -2594,4 +2594,26 @@ export const apiClient = {
       token,
     )
   },
+
+  triageInboxMessages: (workspaceId: string, token: string): Promise<{
+    items: Array<{ message_id: string; priority: 'urgent' | 'high' | 'normal' | 'low'; action: string; rationale: string }>
+    message_count: number
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        message_count: 6,
+        generated_at: new Date().toISOString(),
+        items: [
+          { message_id: 'm-001', priority: 'high', action: 'Review revised SLA draft and send updated terms by Friday.', rationale: 'Contract negotiation with hard Friday deadline.' },
+          { message_id: 'm-002', priority: 'high', action: 'Schedule a 30-minute intro call with Marcus Rivera for Thursday or Friday.', rationale: 'Warm inbound lead with specific availability windows provided.' },
+          { message_id: 'm-003', priority: 'urgent', action: 'Confirm CSV import capability and provide a timeline to unblock BuildRight procurement sign-off.', rationale: 'Blocking procurement sign-off — deal cannot progress without this answer.' },
+          { message_id: 'm-004', priority: 'normal', action: 'Investigate webhook latency and reply with findings or ETA.', rationale: 'Technical issue noted but positive relationship — not blocking.' },
+          { message_id: 'm-005', priority: 'urgent', action: 'Send revised quote for analytics module, seat expansion, and premier support before May 8th.', rationale: 'Hard board deadline May 10th; contract must be signed by May 8th.' },
+          { message_id: 'm-006', priority: 'low', action: 'Read Japan trial update and log any action items in deal notes.', rationale: 'Status update with no immediate action required.' },
+        ],
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/messages/triage`, { method: 'POST' }, token)
+  },
 }
