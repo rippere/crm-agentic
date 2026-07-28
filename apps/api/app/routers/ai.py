@@ -2288,3 +2288,165 @@ async def triage_messages(
         message_count=len(msgs),
         generated_at=datetime.datetime.utcnow().isoformat() + "Z",
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/contacts/reengagement-plan
+# ---------------------------------------------------------------------------
+
+_REENGAGEMENT_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Generate a personalised re-engagement plan for contacts who have gone silent.
+
+For each contact provided, return one plan item with:
+- "contact_id": the exact ID string provided
+- "contact_name": the contact's name
+- "days_silent": number of days since last contact (integer)
+- "channel": best outreach channel — exactly one of "email", "slack", or "call"
+- "message_template": a 2-3 sentence personalised outreach draft (warm, professional, not generic)
+- "urgency": exactly one of "low", "medium", or "high"
+
+Urgency rules:
+- high: silent 60+ days or is a customer with open deals
+- medium: silent 30-59 days, prospect or warm lead
+- low: silent 30-45 days, early-stage or low-value contact
+
+Respond with a JSON array only — no markdown fences, no extra keys:
+[{"contact_id": "...", "contact_name": "...", "days_silent": 45, "channel": "email", "message_template": "...", "urgency": "medium"}]
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/reengagement-plan")
+@limiter.limit("5/minute")
+async def contact_reengagement_plan(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a prioritised re-engagement plan for up to 10 going-dark contacts."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_30 = now - datetime.timedelta(days=30)
+    cutoff_90 = now - datetime.timedelta(days=90)
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+        )
+    )
+    contacts = contact_result.scalars().all()
+    if not contacts:
+        return {"plan": [], "generated_at": datetime.datetime.utcnow().isoformat() + "Z"}
+
+    contact_ids = [c.id for c in contacts]
+
+    msg_result = await db.execute(
+        select(Message.contact_id, Message.received_at)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id.in_(contact_ids),
+            Message.received_at >= cutoff_90,
+        )
+    )
+    messages = msg_result.all()
+
+    note_result = await db.execute(
+        select(ContactNote.contact_id, ContactNote.created_at)
+        .where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id.in_(contact_ids),
+            ContactNote.created_at >= cutoff_90,
+        )
+    )
+    notes = note_result.all()
+
+    last_touch: dict = {}
+    for m in messages:
+        if m.contact_id and m.received_at:
+            ts = m.received_at
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
+            if m.contact_id not in last_touch or ts > last_touch[m.contact_id]:
+                last_touch[m.contact_id] = ts
+    for n in notes:
+        if n.contact_id and n.created_at:
+            ts = n.created_at
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
+            if n.contact_id not in last_touch or ts > last_touch[n.contact_id]:
+                last_touch[n.contact_id] = ts
+
+    dark_contacts = []
+    for c in contacts:
+        lt = last_touch.get(c.id)
+        if lt and lt >= cutoff_30:
+            continue
+        days_silent = int((now - lt).total_seconds() / 86400) if lt else 90
+        dark_contacts.append((c, days_silent))
+
+    dark_contacts.sort(key=lambda x: x[1], reverse=True)
+    dark_contacts = dark_contacts[:10]
+
+    if not dark_contacts:
+        return {"plan": [], "generated_at": datetime.datetime.utcnow().isoformat() + "Z"}
+
+    lines: list[str] = ["Generate a re-engagement plan for these contacts:"]
+    for c, days in dark_contacts:
+        lines.append(
+            f"\nID: {c.id}"
+            f"\nName: {c.name or 'Unknown'}"
+            f"\nEmail: {c.email or 'unknown'}"
+            f"\nCompany: {c.company or 'unknown'}"
+            f"\nRole: {c.role or 'unknown'}"
+            f"\nStatus: {c.status}"
+            f"\nDays silent: {days}"
+        )
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1500,
+            system=_REENGAGEMENT_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "[]"
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            data = []
+
+        _valid_channels = {"email", "slack", "call"}
+        _valid_urgencies = {"low", "medium", "high"}
+        plan = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            channel = str(item.get("channel", "email"))
+            if channel not in _valid_channels:
+                channel = "email"
+            urgency = str(item.get("urgency", "medium"))
+            if urgency not in _valid_urgencies:
+                urgency = "medium"
+            plan.append({
+                "contact_id": str(item.get("contact_id", ""))[:64],
+                "contact_name": str(item.get("contact_name", "Unknown"))[:100],
+                "days_silent": int(item.get("days_silent", 30)),
+                "channel": channel,
+                "message_template": str(item.get("message_template", ""))[:500],
+                "urgency": urgency,
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "plan": plan,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
