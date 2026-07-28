@@ -2658,4 +2658,34 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealObjectionHandler: (workspaceId: string, dealId: string, token: string): Promise<{
+    objections: { objection: string; response: string; strategy: 'empathize' | 'redirect' | 'prove' | 'challenge' }[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { objection: string; response: string; strategy: 'empathize' | 'redirect' | 'prove' | 'challenge' }[]> = {
+        'd-001': [
+          { objection: "Your pricing is significantly higher than the other vendors we've been evaluating.", response: "That's a fair concern, and I appreciate you raising it directly. When we factor in implementation time, support costs, and churn reduction, our three-year TCO is consistently 20% lower — I can share the comparison our last three enterprise customers ran.", strategy: 'prove' },
+          { objection: "We're not sure now is the right time to switch platforms mid-year.", response: "Timing feels challenging, I get that. What's interesting is that Q3 transitions typically see the fastest ROI because teams build momentum for the rest of the year. Would a phased rollout ease the concern?", strategy: 'redirect' },
+          { objection: "We haven't seen enough evidence this works for our specific industry vertical.", response: "That's completely reasonable to ask for. We work with four companies in your sector — I'll connect you directly with two of the closest comparables so you can hear it in their own words.", strategy: 'prove' },
+          { objection: "Our team is already stretched thin and can't take on another implementation right now.", response: "Capacity is a real constraint, and I hear you. Our white-glove onboarding handles the heavy lifting on our side — the average time commitment from your team is under four hours total during setup.", strategy: 'empathize' },
+        ],
+        'd-002': [
+          { objection: "We're already using a competitor solution and the switching costs feel prohibitive.", response: "Switching costs are real, and I want to be transparent: we'll run a full data migration for you at no additional charge. The breakeven on migration cost is typically under 60 days given the efficiency gains.", strategy: 'prove' },
+          { objection: "I'm not convinced your solution can scale to our enterprise requirements.", response: "That's a critical question at this deal size. Let me arrange a technical deep-dive with our engineering lead — we can walk through exactly how we support companies five times your current scale.", strategy: 'redirect' },
+          { objection: "The ROI timeline you're projecting seems optimistic.", response: "You're right to scrutinize that — healthy skepticism leads to better outcomes. Would it help to walk through the calculation line by line with your CFO? I can adjust every assumption to your actuals.", strategy: 'challenge' },
+          { objection: "We need sign-off from multiple stakeholders and that process could take months.", response: "Multi-stakeholder decisions are common at this level, and we have a dedicated process for it. I'll prepare a tailored business case for each decision-maker and set up individual briefings on their schedules.", strategy: 'empathize' },
+        ],
+      }
+      const objections = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ objections, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/objection-handler`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }

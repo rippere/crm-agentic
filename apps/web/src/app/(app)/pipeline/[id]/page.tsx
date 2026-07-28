@@ -18,7 +18,7 @@ import {
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users, Sparkles, RefreshCw,
+  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users, Sparkles, RefreshCw, Shield,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -380,6 +380,13 @@ export default function DealDetailPage() {
   const [riskNarrativeGenerating, setRiskNarrativeGenerating] = useState(false);
   const [riskNarrativeCollapsed, setRiskNarrativeCollapsed] = useState(false);
 
+  type ObjectionItem = { objection: string; response: string; strategy: "empathize" | "redirect" | "prove" | "challenge" };
+  type ObjectionHandlerData = { objections: ObjectionItem[]; deal_id: string; generated_at: string };
+  const [objectionData, setObjectionData] = useState<ObjectionHandlerData | null>(null);
+  const [objectionLoading, setObjectionLoading] = useState(false);
+  const [objectionGenerating, setObjectionGenerating] = useState(false);
+  const [objectionExpandedIdx, setObjectionExpandedIdx] = useState<number | null>(null);
+
   type MomentumData = { momentum: "gaining" | "stalling" | "declining"; drivers: string[]; recommendation: string; deal_id: string; generated_at: string };
   const [momentumData, setMomentumData] = useState<MomentumData | null>(null);
   const [momentumLoading, setMomentumLoading] = useState(false);
@@ -543,6 +550,13 @@ export default function DealDetailPage() {
         .then((data) => setClosePlanData(data ?? null))
         .catch(() => setClosePlanData(null))
         .finally(() => setClosePlanLoading(false));
+
+      setObjectionLoading(true);
+      apiClient
+        .getDealObjectionHandler(workspaceId, dealId, token)
+        .then((data) => setObjectionData(data ?? null))
+        .catch(() => setObjectionData(null))
+        .finally(() => setObjectionLoading(false));
     }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
@@ -749,6 +763,17 @@ export default function DealDetailPage() {
       setClosePlanData(data ?? null);
     } catch { /* ignore */ }
     finally { setClosePlanGenerating(false); }
+  };
+
+  const handleRegenerateObjections = async () => {
+    if (!token || !workspaceId || objectionGenerating) return;
+    setObjectionGenerating(true);
+    try {
+      const data = await apiClient.getDealObjectionHandler(workspaceId, dealId, token);
+      setObjectionData(data ?? null);
+      setObjectionExpandedIdx(null);
+    } catch { /* ignore */ }
+    finally { setObjectionGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -2072,6 +2097,77 @@ export default function DealDetailPage() {
                     </div>
                   )}
                 </>
+              )}
+            </Card>
+          )}
+
+          {/* Objection Handler — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Shield className="h-4 w-4 text-rose-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Objection Handler</p>
+                <button
+                  onClick={handleRegenerateObjections}
+                  disabled={objectionLoading || objectionGenerating}
+                  className="ml-auto text-zinc-500 hover:text-rose-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate objection handler"
+                  title="Regenerate"
+                >
+                  {objectionGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {objectionLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : objectionData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load objection handler.</p>
+              ) : objectionData.objections.length === 0 ? (
+                <p className="text-xs text-zinc-500 italic py-2">No objections generated.</p>
+              ) : (
+                <div className="space-y-2">
+                  {objectionData.objections.map((item, i) => {
+                    const strategyColor: Record<string, string> = {
+                      empathize: "text-violet-300 border-violet-500/30 bg-violet-500/10",
+                      redirect: "text-sky-300 border-sky-500/30 bg-sky-500/10",
+                      prove: "text-emerald-300 border-emerald-500/30 bg-emerald-500/10",
+                      challenge: "text-rose-300 border-rose-500/30 bg-rose-500/10",
+                    };
+                    const isOpen = objectionExpandedIdx === i;
+                    return (
+                      <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+                        <button
+                          className="w-full flex items-start gap-2.5 px-3 py-2.5 text-left cursor-pointer hover:bg-zinc-800/40 transition-colors"
+                          onClick={() => setObjectionExpandedIdx(isOpen ? null : i)}
+                          aria-expanded={isOpen}
+                        >
+                          <span className={`mt-0.5 rounded-full border px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wide flex-shrink-0 ${strategyColor[item.strategy] ?? strategyColor.empathize}`}>
+                            {item.strategy}
+                          </span>
+                          <p className="text-xs text-zinc-300 italic leading-relaxed line-clamp-2 flex-1">{item.objection}</p>
+                          <ChevronRight className={`h-3.5 w-3.5 text-zinc-600 flex-shrink-0 mt-0.5 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                        </button>
+                        {isOpen && (
+                          <div className="px-3 pb-3 pt-1 border-t border-zinc-800">
+                            <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">Response</p>
+                            <p className="text-xs text-zinc-300 leading-relaxed">{item.response}</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(objectionData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
               )}
             </Card>
           )}
