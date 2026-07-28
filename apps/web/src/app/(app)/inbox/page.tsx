@@ -7,7 +7,7 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Avatar from "@/components/ui/Avatar";
 import { apiClient } from "@/lib/api-client";
-import { Search, Mail, X, CheckCircle, Brain, ListTodo, Sparkles, AlertTriangle, RefreshCw } from "lucide-react";
+import { Search, Mail, X, CheckCircle, Brain, ListTodo, Sparkles, AlertTriangle, RefreshCw, Zap } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useJobPoller } from "@/hooks/useJobPoller";
 
@@ -55,6 +55,31 @@ function ClarityBadge({ score }: { score: number }) {
   );
 }
 
+type TriagePriority = "urgent" | "high" | "normal" | "low";
+
+interface TriageResult {
+  message_id: string;
+  priority: TriagePriority;
+  action: string;
+  rationale: string;
+}
+
+function PriorityBadge({ priority }: { priority: TriagePriority }) {
+  const configs: Record<TriagePriority, { variant: "rose" | "amber" | "indigo" | "zinc"; label: string }> = {
+    urgent: { variant: "rose", label: "Urgent" },
+    high: { variant: "amber", label: "High" },
+    normal: { variant: "indigo", label: "Normal" },
+    low: { variant: "zinc", label: "Low" },
+  };
+  const { variant, label } = configs[priority];
+  return (
+    <Badge variant={variant} size="sm">
+      <Zap className="h-2.5 w-2.5 mr-1" />
+      {label}
+    </Badge>
+  );
+}
+
 function MessageSkeleton() {
   return (
     <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800 animate-pulse">
@@ -74,12 +99,14 @@ function MessageDrawer({
   workspaceId,
   token,
   onClarityScored,
+  triageResult,
 }: {
   message: Message;
   onClose: () => void;
   workspaceId: string | null;
   token: string | null;
   onClarityScored: (messageId: string, score: { score: number; rationale: string }) => void;
+  triageResult?: TriageResult;
 }) {
   const [scoring, setScoring] = useState(false);
 
@@ -127,6 +154,19 @@ function MessageDrawer({
             </Badge>
           )}
         </div>
+
+        {/* AI Triage result */}
+        {triageResult && (
+          <Card className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-violet-400" />
+              <p className="text-xs font-semibold text-zinc-300">AI Triage</p>
+              <PriorityBadge priority={triageResult.priority as TriagePriority} />
+            </div>
+            <p className="text-xs text-zinc-300 leading-snug">{triageResult.action}</p>
+            <p className="text-[10px] text-zinc-500 leading-snug">{triageResult.rationale}</p>
+          </Card>
+        )}
 
         {/* Clarity score */}
         {message.clarity_score ? (
@@ -211,6 +251,8 @@ export default function InboxPage() {
   const [selected, setSelected] = useState<Message | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [triageMap, setTriageMap] = useState<Record<string, TriageResult>>({});
+  const [triaging, setTriaging] = useState(false);
 
   const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
   const reprocessJob = useJobPoller();
@@ -278,6 +320,25 @@ export default function InboxPage() {
 
   const reprocessing = reprocessJob.state === "pending" || reprocessJob.state === "started";
 
+  async function handleTriage() {
+    const wsId = isDemoMode ? 'demo-workspace-1' : workspaceId;
+    const tok = isDemoMode ? 'demo-token' : token;
+    if (!wsId || !tok) return;
+    setTriaging(true);
+    try {
+      const result = await apiClient.triageInboxMessages(wsId, tok);
+      const map: Record<string, TriageResult> = {};
+      for (const item of result.items) {
+        map[item.message_id] = item;
+      }
+      setTriageMap(map);
+    } catch {
+      // silently fail — API may not be running
+    } finally {
+      setTriaging(false);
+    }
+  }
+
   const filtered = useMemo(() => {
     let list = messages;
     if (filterMode === "relevant") {
@@ -335,6 +396,18 @@ export default function InboxPage() {
               </button>
             ))}
           </div>
+
+          {/* AI Triage */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleTriage}
+            disabled={triaging}
+            className="text-xs text-violet-400 hover:text-violet-300"
+          >
+            <Sparkles className={`h-3.5 w-3.5 mr-1.5 ${triaging ? "animate-pulse" : ""}`} />
+            {triaging ? "Triaging…" : "AI Triage"}
+          </Button>
 
           {/* Re-run enrichment */}
           <Button
@@ -408,6 +481,9 @@ export default function InboxPage() {
                   <p className="text-sm text-zinc-200 truncate font-medium">{msg.subject ?? "(No subject)"}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
+                  {triageMap[msg.id] && (
+                    <PriorityBadge priority={triageMap[msg.id].priority as TriagePriority} />
+                  )}
                   {msg.clarity_score && <ClarityBadge score={msg.clarity_score.score} />}
                   {msg.processed && (
                     <CheckCircle className="h-3.5 w-3.5 text-emerald-500" aria-label="Processed" />
@@ -436,6 +512,7 @@ export default function InboxPage() {
             onClose={() => setSelected(null)}
             workspaceId={workspaceId}
             token={token}
+            triageResult={triageMap[selected.id]}
             onClarityScored={(msgId, score) => {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, clarity_score: score } : m)
