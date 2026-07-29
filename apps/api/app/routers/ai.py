@@ -2577,3 +2577,124 @@ async def deal_objection_handler(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# POST /workspaces/{workspace_id}/deals/{deal_id}/ai/stakeholder-analysis
+# ---------------------------------------------------------------------------
+
+_STAKEHOLDER_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Analyse the provided deal context and identify 3-5 key stakeholders.
+
+For each stakeholder return:
+- "name": full name (infer from context; use "Champion", "Economic Buyer", etc. if unknown)
+- "role": their role or title (e.g. "VP of Engineering", "CFO", "End User")
+- "influence": exactly one of "high", "medium", "low"
+- "status": exactly one of "champion", "blocker", "evaluator", "economic_buyer"
+- "engagement_tip": one specific, actionable sentence on how to engage this stakeholder
+
+Respond with a JSON array of 3-5 items — no markdown fences, no extra keys:
+[{"name": "...", "role": "...", "influence": "high", "status": "champion", "engagement_tip": "..."}]
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/stakeholder-analysis")
+@limiter.limit("5/minute")
+async def deal_stakeholder_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Identify and profile key stakeholders for an open deal using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in {"closed_won", "closed_lost"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Stakeholder analysis is only available for open deals",
+        )
+
+    contact_name = "Unknown"
+    contact_role = ""
+    if deal.contact_id:
+        contact_result = await db.execute(
+            select(Contact.name, Contact.role).where(Contact.id == deal.contact_id)
+        )
+        c = contact_result.fetchone()
+        if c:
+            contact_name, contact_role = c[0] or "Unknown", c[1] or ""
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(5)
+    )
+    notes = [r[0] for r in notes_result.fetchall()]
+
+    competitors = deal.competitors or []
+    context = (
+        f"Deal: {deal.title}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${deal.value or 0:,.0f}\n"
+        f"Primary contact: {contact_name} ({contact_role or 'role unknown'})\n"
+        f"Competitors: {', '.join(str(c) for c in competitors) if competitors else 'None known'}\n"
+    )
+    if notes:
+        context += "Deal notes (look for stakeholder names/roles mentioned):\n" + "\n".join(
+            f"- {n}" for n in notes
+        )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            system=_STAKEHOLDER_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "[]"
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            data = []
+
+        _valid_influence = {"high", "medium", "low"}
+        _valid_status = {"champion", "blocker", "evaluator", "economic_buyer"}
+        stakeholders = []
+        for item in data[:5]:
+            if not isinstance(item, dict):
+                continue
+            influence = str(item.get("influence", "medium"))
+            if influence not in _valid_influence:
+                influence = "medium"
+            s_status = str(item.get("status", "evaluator"))
+            if s_status not in _valid_status:
+                s_status = "evaluator"
+            stakeholders.append({
+                "name": str(item.get("name", "Unknown"))[:100],
+                "role": str(item.get("role", ""))[:100],
+                "influence": influence,
+                "status": s_status,
+                "engagement_tip": str(item.get("engagement_tip", ""))[:300],
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "stakeholders": stakeholders,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

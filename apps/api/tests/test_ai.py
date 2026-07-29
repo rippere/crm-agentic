@@ -1474,3 +1474,84 @@ async def test_deal_objection_handler_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/stakeholder-analysis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_stakeholder_analysis_returns_stakeholders(app_client):
+    """stakeholder-analysis returns 3-5 stakeholders with valid influence and status."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_fetchone_result(row):
+        result = MagicMock()
+        result.fetchone.return_value = row
+        return result
+
+    def _make_fetchall_result(rows):
+        result = MagicMock()
+        result.fetchall.return_value = rows
+        return result
+
+    deal = _fake_deal(workspace_id, stage="proposal", health_score=72, ml_win_probability=55)
+    deal.contact_id = uuid.uuid4()
+
+    stakeholders_json = _json.dumps([
+        {"name": "Sarah Chen", "role": "VP Engineering", "influence": "high", "status": "champion", "engagement_tip": "Send technical deep-dive."},
+        {"name": "Marcus Williams", "role": "CFO", "influence": "high", "status": "economic_buyer", "engagement_tip": "Prepare ROI model."},
+        {"name": "Priya Patel", "role": "Developer", "influence": "medium", "status": "evaluator", "engagement_tip": "Offer sandbox access."},
+    ])
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=stakeholders_json)]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(deal),         # deal lookup
+        _make_fetchone_result(("Sarah Chen", "VP Engineering")),  # contact lookup
+        _make_fetchall_result([]),                # deal notes
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal.id}/ai/stakeholder-analysis"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "stakeholders" in body
+    assert "deal_id" in body
+    assert "generated_at" in body
+    assert 3 <= len(body["stakeholders"]) <= 5
+    for s in body["stakeholders"]:
+        assert s["influence"] in {"high", "medium", "low"}
+        assert s["status"] in {"champion", "blocker", "evaluator", "economic_buyer"}
+        assert isinstance(s["name"], str) and len(s["name"]) > 0
+        assert isinstance(s["engagement_tip"], str) and len(s["engagement_tip"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_deal_stakeholder_analysis_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/ai/stakeholder-analysis"
+        )
+
+    assert resp.status_code == 403

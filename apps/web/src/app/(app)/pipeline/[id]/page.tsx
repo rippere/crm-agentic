@@ -387,6 +387,13 @@ export default function DealDetailPage() {
   const [objectionGenerating, setObjectionGenerating] = useState(false);
   const [objectionExpandedIdx, setObjectionExpandedIdx] = useState<number | null>(null);
 
+  type StakeholderItem = { name: string; role: string; influence: "high" | "medium" | "low"; status: "champion" | "blocker" | "evaluator" | "economic_buyer"; engagement_tip: string };
+  type StakeholderData = { stakeholders: StakeholderItem[]; deal_id: string; generated_at: string };
+  const [stakeholderData, setStakeholderData] = useState<StakeholderData | null>(null);
+  const [stakeholderLoading, setStakeholderLoading] = useState(false);
+  const [stakeholderGenerating, setStakeholderGenerating] = useState(false);
+  const [stakeholderExpandedIdx, setStakeholderExpandedIdx] = useState<number | null>(null);
+
   type MomentumData = { momentum: "gaining" | "stalling" | "declining"; drivers: string[]; recommendation: string; deal_id: string; generated_at: string };
   const [momentumData, setMomentumData] = useState<MomentumData | null>(null);
   const [momentumLoading, setMomentumLoading] = useState(false);
@@ -557,6 +564,13 @@ export default function DealDetailPage() {
         .then((data) => setObjectionData(data ?? null))
         .catch(() => setObjectionData(null))
         .finally(() => setObjectionLoading(false));
+
+      setStakeholderLoading(true);
+      apiClient
+        .getDealStakeholderAnalysis(workspaceId, dealId, token)
+        .then((data) => setStakeholderData(data ?? null))
+        .catch(() => setStakeholderData(null))
+        .finally(() => setStakeholderLoading(false));
     }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
@@ -774,6 +788,17 @@ export default function DealDetailPage() {
       setObjectionExpandedIdx(null);
     } catch { /* ignore */ }
     finally { setObjectionGenerating(false); }
+  };
+
+  const handleRegenerateStakeholders = async () => {
+    if (!token || !workspaceId || stakeholderGenerating) return;
+    setStakeholderGenerating(true);
+    try {
+      const data = await apiClient.getDealStakeholderAnalysis(workspaceId, dealId, token);
+      setStakeholderData(data ?? null);
+      setStakeholderExpandedIdx(null);
+    } catch { /* ignore */ }
+    finally { setStakeholderGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -2166,6 +2191,88 @@ export default function DealDetailPage() {
                   })}
                   <p className="text-[10px] text-zinc-600 text-right">
                     Generated {new Date(objectionData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Stakeholder Map — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-cyan-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Stakeholder Map</p>
+                <button
+                  onClick={handleRegenerateStakeholders}
+                  disabled={stakeholderLoading || stakeholderGenerating}
+                  className="ml-auto text-zinc-500 hover:text-cyan-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate stakeholder map"
+                  title="Regenerate"
+                >
+                  {stakeholderGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {stakeholderLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-12 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : stakeholderData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load stakeholder map.</p>
+              ) : stakeholderData.stakeholders.length === 0 ? (
+                <p className="text-xs text-zinc-500 italic py-2">No stakeholders identified.</p>
+              ) : (
+                <div className="space-y-2">
+                  {stakeholderData.stakeholders.map((s, i) => {
+                    const isOpen = stakeholderExpandedIdx === i;
+                    const statusColors: Record<string, string> = {
+                      champion: "text-emerald-300 border-emerald-500/30 bg-emerald-500/10",
+                      economic_buyer: "text-violet-300 border-violet-500/30 bg-violet-500/10",
+                      blocker: "text-rose-300 border-rose-500/30 bg-rose-500/10",
+                      evaluator: "text-amber-300 border-amber-500/30 bg-amber-500/10",
+                    };
+                    const influenceColors: Record<string, string> = {
+                      high: "text-cyan-400",
+                      medium: "text-amber-400",
+                      low: "text-zinc-500",
+                    };
+                    return (
+                      <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+                        <button
+                          onClick={() => setStakeholderExpandedIdx(isOpen ? null : i)}
+                          className="w-full flex items-start gap-2.5 px-3 py-2.5 text-left hover:bg-zinc-800/40 transition-colors"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-semibold text-zinc-200">{s.name}</span>
+                              <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${statusColors[s.status] ?? statusColors.evaluator}`}>
+                                {s.status.replace("_", " ")}
+                              </span>
+                            </div>
+                            <p className={`text-[11px] mt-0.5 ${influenceColors[s.influence]}`}>
+                              {s.role || "Unknown role"} · <span className="font-medium">{s.influence} influence</span>
+                            </p>
+                          </div>
+                          <ChevronRight className={`h-3.5 w-3.5 text-zinc-600 flex-shrink-0 mt-1 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                        </button>
+                        {isOpen && (
+                          <div className="px-3 pb-3 pt-1 border-t border-zinc-800">
+                            <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">Engagement Tip</p>
+                            <p className="text-xs text-zinc-300 leading-relaxed">{s.engagement_tip}</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(stakeholderData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 </div>
               )}

@@ -2692,4 +2692,33 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealStakeholderAnalysis: (workspaceId: string, dealId: string, token: string): Promise<{
+    stakeholders: { name: string; role: string; influence: 'high' | 'medium' | 'low'; status: 'champion' | 'blocker' | 'evaluator' | 'economic_buyer'; engagement_tip: string }[]
+    deal_id: string
+    generated_at: string
+  } | null> => {
+    if (isDemoMode()) {
+      const stubs: Record<string, { name: string; role: string; influence: 'high' | 'medium' | 'low'; status: 'champion' | 'blocker' | 'evaluator' | 'economic_buyer'; engagement_tip: string }[]> = {
+        'd-001': [
+          { name: 'Sarah Chen', role: 'VP of Engineering', influence: 'high', status: 'champion', engagement_tip: 'Send a technical deep-dive addressing scalability concerns — she directly influences budget sign-off.' },
+          { name: 'Marcus Williams', role: 'CFO', influence: 'high', status: 'economic_buyer', engagement_tip: 'Prepare a 3-year TCO comparison with ROI projections to secure final budget approval.' },
+          { name: 'Priya Patel', role: 'Senior Developer', influence: 'medium', status: 'evaluator', engagement_tip: 'Offer a hands-on sandbox environment so Priya can evaluate integration complexity first-hand.' },
+          { name: 'Tom Hudson', role: 'IT Security', influence: 'medium', status: 'evaluator', engagement_tip: 'Share the SOC 2 Type II report and schedule a security Q&A to address compliance requirements.' },
+        ],
+        'd-002': [
+          { name: 'David Kim', role: 'CTO', influence: 'high', status: 'economic_buyer', engagement_tip: 'Request a CTO-to-CTO call to align on technical roadmap fit — David holds final sign-off.' },
+          { name: 'Lisa Park', role: 'Product Manager', influence: 'medium', status: 'champion', engagement_tip: 'Equip Lisa with a business case template she can present to her leadership team.' },
+          { name: 'Carlos Reyes', role: 'Head of Sales Ops', influence: 'medium', status: 'evaluator', engagement_tip: 'Run a live CRM workflow demo with Carlos to reduce adoption risk concerns.' },
+        ],
+      }
+      const stakeholders = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ stakeholders, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/stakeholder-analysis`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
