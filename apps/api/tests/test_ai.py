@@ -1314,3 +1314,88 @@ async def test_triage_messages_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/ai/messages/triage")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/contacts/reengagement-plan
+# ---------------------------------------------------------------------------
+
+
+def _fake_contact_row(workspace_id, **kwargs) -> MagicMock:
+    row = MagicMock()
+    row.id = kwargs.get("id", uuid.uuid4())
+    row.workspace_id = workspace_id
+    row.name = kwargs.get("name", "Test Contact")
+    row.email = kwargs.get("email", "test@example.com")
+    row.company = kwargs.get("company", "Acme Corp")
+    row.role = kwargs.get("role", "Head of Sales")
+    row.status = kwargs.get("status", "prospect")
+    return row
+
+
+@pytest.mark.asyncio
+async def test_reengagement_plan_returns_prioritised_plan(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    c1_id = uuid.uuid4()
+    c2_id = uuid.uuid4()
+
+    c1 = _fake_contact_row(workspace_id, id=c1_id, name="Alice Smith", status="customer")
+    c2 = _fake_contact_row(workspace_id, id=c2_id, name="Bob Jones", status="prospect")
+
+    def _make_scalars_result(rows):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = rows
+        return result
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalars_result([c1, c2]),  # contacts query
+        _make_all_result([]),            # messages query (none recent)
+        _make_all_result([]),            # notes query (none recent)
+    ])
+
+    plan_json = (
+        '[{"contact_id": "' + str(c1_id) + '", "contact_name": "Alice Smith", "days_silent": 65, '
+        '"channel": "email", "message_template": "Hi Alice, checking in!", "urgency": "high"}, '
+        '{"contact_id": "' + str(c2_id) + '", "contact_name": "Bob Jones", "days_silent": 42, '
+        '"channel": "call", "message_template": "Hey Bob, let\'s reconnect soon.", "urgency": "medium"}]'
+    )
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=plan_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/ai/contacts/reengagement-plan")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "plan" in body
+    assert "generated_at" in body
+    plan = body["plan"]
+    assert len(plan) == 2
+    high = next(p for p in plan if p["urgency"] == "high")
+    assert high["contact_id"] == str(c1_id)
+    assert high["channel"] == "email"
+    assert isinstance(high["message_template"], str) and len(high["message_template"]) > 0
+    medium = next(p for p in plan if p["urgency"] == "medium")
+    assert medium["channel"] == "call"
+
+
+@pytest.mark.asyncio
+async def test_reengagement_plan_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/ai/contacts/reengagement-plan")
+
+    assert resp.status_code == 403

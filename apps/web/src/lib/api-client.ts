@@ -2620,4 +2620,46 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/messages/triage`, { method: 'POST' }, token)
   },
+
+  getReengagementPlan: (workspaceId: string, token: string): Promise<{
+    plan: { contact_id: string; contact_name: string; days_silent: number; channel: 'email' | 'slack' | 'call'; message_template: string; urgency: 'low' | 'medium' | 'high' }[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        plan: [
+          {
+            contact_id: 'c-001',
+            contact_name: 'Sarah Chen',
+            days_silent: 68,
+            channel: 'email',
+            message_template: "Hi Sarah, I wanted to reach out — it's been a while since we last connected. I'd love to hear how things are progressing at TechFlow Solutions and share a few new ideas that might be relevant to your Q4 goals. Would you have 20 minutes this week for a quick catch-up?",
+            urgency: 'high',
+          },
+          {
+            contact_id: 'c-002',
+            contact_name: 'Marcus Johnson',
+            days_silent: 45,
+            channel: 'call',
+            message_template: "Marcus, hope things are going well at Momentum Corp! I noticed we haven't spoken in a while and wanted to reconnect — I have some thoughts on how we can accelerate your enterprise rollout that I'd love to share. Are you free for a quick call later this week?",
+            urgency: 'medium',
+          },
+          {
+            contact_id: 'c-003',
+            contact_name: 'Emily Rodriguez',
+            days_silent: 33,
+            channel: 'email',
+            message_template: "Hi Emily, just checking in from NovaCRM — we've released some new features around task automation that I think would fit well with how your team works. Happy to put together a short summary if that would be useful. Let me know!",
+            urgency: 'low',
+          },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/reengagement-plan`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
