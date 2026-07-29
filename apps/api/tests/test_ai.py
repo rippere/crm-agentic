@@ -1245,3 +1245,72 @@ async def test_compare_deals_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/messages/triage
+# ---------------------------------------------------------------------------
+
+
+def _fake_message(**kwargs) -> MagicMock:
+    m = MagicMock()
+    m.id = kwargs.get("id", uuid.uuid4())
+    m.subject = kwargs.get("subject", "Test Subject")
+    m.sender_email = kwargs.get("sender_email", "sender@example.com")
+    m.body_plain = kwargs.get("body_plain", "Hello, please respond urgently.")
+    m.received_at = None
+    return m
+
+
+@pytest.mark.asyncio
+async def test_triage_messages_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    msg = _fake_message(subject="Urgent: SLA deadline", sender_email="client@corp.com")
+
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [msg]
+    mock_db.execute = AsyncMock(return_value=result)
+
+    triage_json = _json.dumps([
+        {
+            "message_id": str(msg.id),
+            "priority": "urgent",
+            "action": "Reply immediately to avoid deal loss.",
+            "rationale": "Hard deadline mentioned in subject.",
+        }
+    ])
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=triage_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/ai/messages/triage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["message_count"] == 1
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["priority"] == "urgent"
+    assert item["message_id"] == str(msg.id)
+    assert isinstance(item["action"], str) and len(item["action"]) > 0
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_triage_messages_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/ai/messages/triage")
+
+    assert resp.status_code == 403
