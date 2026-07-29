@@ -1399,3 +1399,78 @@ async def test_reengagement_plan_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/ai/contacts/reengagement-plan")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/objection-handler
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_objection_handler_returns_four_objections(app_client):
+    """objection-handler returns exactly 4 objections covering all strategies."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_fetchall_result(rows):
+        result = MagicMock()
+        result.fetchall.return_value = rows
+        return result
+
+    deal = _fake_deal(workspace_id, stage="proposal", health_score=65, ml_win_probability=45)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(deal),   # deal lookup
+        _make_fetchall_result([]),          # deal notes (none)
+    ])
+
+    objections_json = _json.dumps([
+        {"objection": "Your price is too high.", "response": "We offer great long-term value.", "strategy": "prove"},
+        {"objection": "The timing isn't right for us.", "response": "Let me show you the ROI curve.", "strategy": "redirect"},
+        {"objection": "We trust our current vendor deeply.", "response": "That loyalty is admirable; let me offer data.", "strategy": "empathize"},
+        {"objection": "We don't think you can scale with us.", "response": "Let me challenge that assumption directly.", "strategy": "challenge"},
+    ])
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=objections_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal.id}/ai/objection-handler"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "objections" in body
+    assert "deal_id" in body
+    assert "generated_at" in body
+    assert len(body["objections"]) == 4
+    strategies = {o["strategy"] for o in body["objections"]}
+    assert strategies == {"prove", "redirect", "empathize", "challenge"}
+    for obj in body["objections"]:
+        assert isinstance(obj["objection"], str) and len(obj["objection"]) > 0
+        assert isinstance(obj["response"], str) and len(obj["response"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_deal_objection_handler_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/ai/objection-handler"
+        )
+
+    assert resp.status_code == 403

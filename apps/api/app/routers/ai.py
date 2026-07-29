@@ -2452,3 +2452,128 @@ async def contact_reengagement_plan(
         "plan": plan,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/deals/{deal_id}/ai/objection-handler
+# ---------------------------------------------------------------------------
+
+_OBJECTION_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Generate exactly 4 realistic sales objections this deal might face and concise rep responses.
+
+For each objection return:
+- "objection": the specific concern the buyer might raise (1-2 sentences, realistic and specific to this deal context)
+- "response": a confident, consultative reply the sales rep can use verbatim or adapt (2-3 sentences)
+- "strategy": exactly one of "empathize", "redirect", "prove", or "challenge"
+
+Strategy definitions:
+- empathize: acknowledge the concern, validate it, then reframe toward value
+- redirect: pivot away from the objection toward a stronger value point
+- prove: use evidence, benchmarks, or social proof to overcome the concern
+- challenge: politely question the assumption behind the objection
+
+Respond with a JSON array of exactly 4 items — no markdown fences, no extra keys:
+[{"objection": "...", "response": "...", "strategy": "empathize"}]
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/objection-handler")
+@limiter.limit("5/minute")
+async def deal_objection_handler(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate common objections and tailored responses for an open deal."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in {"closed_won", "closed_lost"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Objection handler is only available for open deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = [r[0] for r in notes_result.fetchall()]
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stage_changed = deal.stage_changed_at
+    if stage_changed and stage_changed.tzinfo is None:
+        stage_changed = stage_changed.replace(tzinfo=datetime.timezone.utc)
+    days_in_stage = (now - stage_changed).days if stage_changed else 0
+
+    competitors = deal.competitors or []
+    next_action_overdue = False
+    if deal.next_action_date:
+        try:
+            nad = datetime.date.fromisoformat(str(deal.next_action_date))
+            next_action_overdue = nad < now.date()
+        except (ValueError, TypeError):
+            pass
+
+    context = (
+        f"Deal: {deal.title}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${deal.value or 0:,.0f}\n"
+        f"Health score: {deal.health_score}/100\n"
+        f"Win probability: {deal.ml_win_probability or 0:.0f}%\n"
+        f"Days in current stage: {days_in_stage}\n"
+        f"Competitors: {', '.join(str(c) for c in competitors) if competitors else 'None known'}\n"
+        f"Next action overdue: {'Yes' if next_action_overdue else 'No'}\n"
+    )
+    if notes:
+        context += "Recent deal notes:\n" + "\n".join(f"- {n}" for n in notes)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            system=_OBJECTION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "[]"
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            data = []
+
+        _valid_strategies = {"empathize", "redirect", "prove", "challenge"}
+        objections = []
+        for item in data[:4]:
+            if not isinstance(item, dict):
+                continue
+            strategy = str(item.get("strategy", "empathize"))
+            if strategy not in _valid_strategies:
+                strategy = "empathize"
+            objections.append({
+                "objection": str(item.get("objection", ""))[:300],
+                "response": str(item.get("response", ""))[:500],
+                "strategy": strategy,
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "objections": objections,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
