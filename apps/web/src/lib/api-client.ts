@@ -2598,4 +2598,127 @@ export const apiClient = {
       token,
     )
   },
+
+  triageInboxMessages: (workspaceId: string, token: string): Promise<{
+    items: Array<{ message_id: string; priority: 'urgent' | 'high' | 'normal' | 'low'; action: string; rationale: string }>
+    message_count: number
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        message_count: 6,
+        generated_at: new Date().toISOString(),
+        items: [
+          { message_id: 'm-001', priority: 'high', action: 'Review revised SLA draft and send updated terms by Friday.', rationale: 'Contract negotiation with hard Friday deadline.' },
+          { message_id: 'm-002', priority: 'high', action: 'Schedule a 30-minute intro call with Marcus Rivera for Thursday or Friday.', rationale: 'Warm inbound lead with specific availability windows provided.' },
+          { message_id: 'm-003', priority: 'urgent', action: 'Confirm CSV import capability and provide a timeline to unblock BuildRight procurement sign-off.', rationale: 'Blocking procurement sign-off — deal cannot progress without this answer.' },
+          { message_id: 'm-004', priority: 'normal', action: 'Investigate webhook latency and reply with findings or ETA.', rationale: 'Technical issue noted but positive relationship — not blocking.' },
+          { message_id: 'm-005', priority: 'urgent', action: 'Send revised quote for analytics module, seat expansion, and premier support before May 8th.', rationale: 'Hard board deadline May 10th; contract must be signed by May 8th.' },
+          { message_id: 'm-006', priority: 'low', action: 'Read Japan trial update and log any action items in deal notes.', rationale: 'Status update with no immediate action required.' },
+        ],
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/messages/triage`, { method: 'POST' }, token)
+  },
+
+  getReengagementPlan: (workspaceId: string, token: string): Promise<{
+    plan: { contact_id: string; contact_name: string; days_silent: number; channel: 'email' | 'slack' | 'call'; message_template: string; urgency: 'low' | 'medium' | 'high' }[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        plan: [
+          {
+            contact_id: 'c-001',
+            contact_name: 'Sarah Chen',
+            days_silent: 68,
+            channel: 'email',
+            message_template: "Hi Sarah, I wanted to reach out — it's been a while since we last connected. I'd love to hear how things are progressing at TechFlow Solutions and share a few new ideas that might be relevant to your Q4 goals. Would you have 20 minutes this week for a quick catch-up?",
+            urgency: 'high',
+          },
+          {
+            contact_id: 'c-002',
+            contact_name: 'Marcus Johnson',
+            days_silent: 45,
+            channel: 'call',
+            message_template: "Marcus, hope things are going well at Momentum Corp! I noticed we haven't spoken in a while and wanted to reconnect — I have some thoughts on how we can accelerate your enterprise rollout that I'd love to share. Are you free for a quick call later this week?",
+            urgency: 'medium',
+          },
+          {
+            contact_id: 'c-003',
+            contact_name: 'Emily Rodriguez',
+            days_silent: 33,
+            channel: 'email',
+            message_template: "Hi Emily, just checking in from NovaCRM — we've released some new features around task automation that I think would fit well with how your team works. Happy to put together a short summary if that would be useful. Let me know!",
+            urgency: 'low',
+          },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/reengagement-plan`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDealObjectionHandler: (workspaceId: string, dealId: string, token: string): Promise<{
+    objections: { objection: string; response: string; strategy: 'empathize' | 'redirect' | 'prove' | 'challenge' }[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { objection: string; response: string; strategy: 'empathize' | 'redirect' | 'prove' | 'challenge' }[]> = {
+        'd-001': [
+          { objection: "Your pricing is significantly higher than the other vendors we've been evaluating.", response: "That's a fair concern, and I appreciate you raising it directly. When we factor in implementation time, support costs, and churn reduction, our three-year TCO is consistently 20% lower — I can share the comparison our last three enterprise customers ran.", strategy: 'prove' },
+          { objection: "We're not sure now is the right time to switch platforms mid-year.", response: "Timing feels challenging, I get that. What's interesting is that Q3 transitions typically see the fastest ROI because teams build momentum for the rest of the year. Would a phased rollout ease the concern?", strategy: 'redirect' },
+          { objection: "We haven't seen enough evidence this works for our specific industry vertical.", response: "That's completely reasonable to ask for. We work with four companies in your sector — I'll connect you directly with two of the closest comparables so you can hear it in their own words.", strategy: 'prove' },
+          { objection: "Our team is already stretched thin and can't take on another implementation right now.", response: "Capacity is a real constraint, and I hear you. Our white-glove onboarding handles the heavy lifting on our side — the average time commitment from your team is under four hours total during setup.", strategy: 'empathize' },
+        ],
+        'd-002': [
+          { objection: "We're already using a competitor solution and the switching costs feel prohibitive.", response: "Switching costs are real, and I want to be transparent: we'll run a full data migration for you at no additional charge. The breakeven on migration cost is typically under 60 days given the efficiency gains.", strategy: 'prove' },
+          { objection: "I'm not convinced your solution can scale to our enterprise requirements.", response: "That's a critical question at this deal size. Let me arrange a technical deep-dive with our engineering lead — we can walk through exactly how we support companies five times your current scale.", strategy: 'redirect' },
+          { objection: "The ROI timeline you're projecting seems optimistic.", response: "You're right to scrutinize that — healthy skepticism leads to better outcomes. Would it help to walk through the calculation line by line with your CFO? I can adjust every assumption to your actuals.", strategy: 'challenge' },
+          { objection: "We need sign-off from multiple stakeholders and that process could take months.", response: "Multi-stakeholder decisions are common at this level, and we have a dedicated process for it. I'll prepare a tailored business case for each decision-maker and set up individual briefings on their schedules.", strategy: 'empathize' },
+        ],
+      }
+      const objections = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ objections, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/objection-handler`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDealStakeholderAnalysis: (workspaceId: string, dealId: string, token: string): Promise<{
+    stakeholders: { name: string; role: string; influence: 'high' | 'medium' | 'low'; status: 'champion' | 'blocker' | 'evaluator' | 'economic_buyer'; engagement_tip: string }[]
+    deal_id: string
+    generated_at: string
+  } | null> => {
+    if (isDemoMode()) {
+      const stubs: Record<string, { name: string; role: string; influence: 'high' | 'medium' | 'low'; status: 'champion' | 'blocker' | 'evaluator' | 'economic_buyer'; engagement_tip: string }[]> = {
+        'd-001': [
+          { name: 'Sarah Chen', role: 'VP of Engineering', influence: 'high', status: 'champion', engagement_tip: 'Send a technical deep-dive addressing scalability concerns — she directly influences budget sign-off.' },
+          { name: 'Marcus Williams', role: 'CFO', influence: 'high', status: 'economic_buyer', engagement_tip: 'Prepare a 3-year TCO comparison with ROI projections to secure final budget approval.' },
+          { name: 'Priya Patel', role: 'Senior Developer', influence: 'medium', status: 'evaluator', engagement_tip: 'Offer a hands-on sandbox environment so Priya can evaluate integration complexity first-hand.' },
+          { name: 'Tom Hudson', role: 'IT Security', influence: 'medium', status: 'evaluator', engagement_tip: 'Share the SOC 2 Type II report and schedule a security Q&A to address compliance requirements.' },
+        ],
+        'd-002': [
+          { name: 'David Kim', role: 'CTO', influence: 'high', status: 'economic_buyer', engagement_tip: 'Request a CTO-to-CTO call to align on technical roadmap fit — David holds final sign-off.' },
+          { name: 'Lisa Park', role: 'Product Manager', influence: 'medium', status: 'champion', engagement_tip: 'Equip Lisa with a business case template she can present to her leadership team.' },
+          { name: 'Carlos Reyes', role: 'Head of Sales Ops', influence: 'medium', status: 'evaluator', engagement_tip: 'Run a live CRM workflow demo with Carlos to reduce adoption risk concerns.' },
+        ],
+      }
+      const stakeholders = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ stakeholders, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/stakeholder-analysis`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
