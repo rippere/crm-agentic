@@ -1469,3 +1469,66 @@ async def test_deal_objection_handler_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/team-performance
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ai_team_performance_returns_structured_data(app_client):
+    """team-performance returns top_performer, team_stats list, and narrative."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_mapping_result(rows):
+        result = MagicMock()
+        result.mappings.return_value = rows
+        return result
+
+    open_rows = [
+        {"assigned_agent": "Sarah Chen",  "open_count": 4, "avg_health": 82.0, "open_value": 125000.0},
+        {"assigned_agent": "Marcus Webb", "open_count": 3, "avg_health": 71.0, "open_value": 95000.0},
+    ]
+    won_rows = [
+        {"assigned_agent": "Sarah Chen",  "won_count": 3, "won_revenue": 87500.0},
+        {"assigned_agent": "Marcus Webb", "won_count": 2, "won_revenue": 62000.0},
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_mapping_result(open_rows),
+        _make_mapping_result(won_rows),
+    ])
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text="Sarah leads with strong conversion rates. Marcus is consistent. Focus Marcus on the negotiation stage.")]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/team-performance")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["top_performer"] == "Sarah Chen"
+    assert isinstance(body["team_stats"], list)
+    assert len(body["team_stats"]) == 2
+    sarah = next(s for s in body["team_stats"] if s["name"] == "Sarah Chen")
+    assert sarah["open_deal_count"] == 4
+    assert sarah["won_revenue"] == 87500.0
+    assert "narrative" in body
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_ai_team_performance_wrong_workspace_returns_403(app_client):
+    fastapi_app, _mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/team-performance")
+
+    assert resp.status_code == 403

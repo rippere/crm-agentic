@@ -2575,3 +2575,128 @@ async def deal_objection_handler(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{workspace_id}/ai/team-performance
+# ---------------------------------------------------------------------------
+
+_TEAM_PERF_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Analyse the sales team performance data provided and produce a concise, \
+actionable 2-3 sentence narrative for a CRM dashboard. Highlight the standout performer, note any concerning trends, \
+and suggest one concrete action the team manager should take this week. \
+Plain prose only — no markdown, no lists, no headers.\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/team-performance")
+@limiter.limit("5/minute")
+async def ai_team_performance(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """AI-generated team performance summary grouped by assigned agent."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # Aggregate open and won deals by assigned_agent
+    open_rows = await db.execute(
+        select(
+            Deal.assigned_agent,
+            func.count(Deal.id).label("open_count"),
+            func.avg(Deal.health_score).label("avg_health"),
+            func.sum(Deal.value).label("open_value"),
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .group_by(Deal.assigned_agent)
+    )
+    won_rows = await db.execute(
+        select(
+            Deal.assigned_agent,
+            func.count(Deal.id).label("won_count"),
+            func.sum(Deal.value).label("won_revenue"),
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+        .group_by(Deal.assigned_agent)
+    )
+
+    open_by_agent: dict[str, dict] = {}
+    for row in open_rows.mappings():
+        name = row["assigned_agent"] or "Unassigned"
+        open_by_agent[name] = {
+            "open_count": int(row["open_count"] or 0),
+            "avg_health": float(row["avg_health"] or 0),
+            "open_value": float(row["open_value"] or 0),
+        }
+
+    won_by_agent: dict[str, dict] = {}
+    for row in won_rows.mappings():
+        name = row["assigned_agent"] or "Unassigned"
+        won_by_agent[name] = {
+            "won_count": int(row["won_count"] or 0),
+            "won_revenue": float(row["won_revenue"] or 0),
+        }
+
+    all_agents = sorted(set(open_by_agent) | set(won_by_agent))
+    if not all_agents:
+        return {
+            "top_performer": None,
+            "team_stats": [],
+            "narrative": "No deal data found for this workspace.",
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    team_stats = []
+    for agent in all_agents:
+        o = open_by_agent.get(agent, {"open_count": 0, "avg_health": 0.0, "open_value": 0.0})
+        w = won_by_agent.get(agent, {"won_count": 0, "won_revenue": 0.0})
+        team_stats.append({
+            "name": agent,
+            "open_deal_count": o["open_count"],
+            "avg_health_score": round(o["avg_health"], 1),
+            "open_pipeline_value": round(o["open_value"], 2),
+            "won_deal_count": w["won_count"],
+            "won_revenue": round(w["won_revenue"], 2),
+        })
+
+    top_performer = max(team_stats, key=lambda s: s["won_revenue"] + s["open_pipeline_value"] * 0.3)["name"]
+
+    context_lines = [f"Workspace team performance summary:"]
+    for s in team_stats:
+        context_lines.append(
+            f"- {s['name']}: {s['open_deal_count']} open deals "
+            f"(${s['open_pipeline_value']:,.0f} pipeline), "
+            f"avg health {s['avg_health_score']:.0f}/100, "
+            f"{s['won_deal_count']} deals won (${s['won_revenue']:,.0f} revenue)"
+        )
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_TEAM_PERF_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        narrative = msg.content[0].text.strip() if msg.content else "Team performance data loaded."
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "top_performer": top_performer,
+        "team_stats": team_stats,
+        "narrative": narrative,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
