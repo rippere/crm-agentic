@@ -90,6 +90,11 @@ export default function ReportsPage() {
     closed_lost: number;
   }>>([]);
   const [messageVolume, setMessageVolume] = useState<Array<{ week_start: string; gmail: number; slack: number; teams: number; unknown: number; total: number }>>([]);
+  type TeamStatRow = { name: string; open_deal_count: number; avg_health_score: number; open_pipeline_value: number; won_deal_count: number; won_revenue: number };
+  type TeamPerfData = { top_performer: string | null; team_stats: TeamStatRow[]; narrative: string; generated_at: string };
+  const [teamPerf, setTeamPerf] = useState<TeamPerfData | null>(null);
+  const [teamPerfLoading, setTeamPerfLoading] = useState(false);
+  const [teamPerfRegen, setTeamPerfRegen] = useState(false);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -115,6 +120,8 @@ export default function ReportsPage() {
       apiClient.getRevenueCohort("demo-workspace-1", "demo-token").then(setRevenueCohort).catch(() => {});
       apiClient.getDealVelocityTrends("demo-workspace-1", "demo-token").then(setVelocityTrends).catch(() => {});
       apiClient.getMessageVolumeTrends("demo-workspace-1", "demo-token").then(setMessageVolume).catch(() => {});
+      setTeamPerfLoading(true);
+      apiClient.getTeamPerformance("demo-workspace-1", "demo-token").then((d) => setTeamPerf(d)).catch(() => {}).finally(() => setTeamPerfLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -144,6 +151,8 @@ export default function ReportsPage() {
       apiClient.getRevenueCohort(workspaceId, session.access_token).then(setRevenueCohort).catch(() => {});
       apiClient.getDealVelocityTrends(workspaceId, session.access_token).then(setVelocityTrends).catch(() => {});
       apiClient.getMessageVolumeTrends(workspaceId, session.access_token).then(setMessageVolume).catch(() => {});
+      setTeamPerfLoading(true);
+      apiClient.getTeamPerformance(workspaceId, session.access_token).then((d) => setTeamPerf(d)).catch(() => {}).finally(() => setTeamPerfLoading(false));
     });
   }, []);
 
@@ -1303,6 +1312,107 @@ export default function ReportsPage() {
           </Card>
         );
       })()}
+
+      {/* AI Team Performance */}
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Bot className="h-4 w-4 text-violet-400" aria-hidden />
+          <p className="text-sm font-semibold text-zinc-200">AI Team Performance</p>
+          {teamPerf?.top_performer && (
+            <span className="ml-1 rounded-full bg-violet-500/15 border border-violet-500/30 px-2 py-0.5 text-[10px] font-semibold text-violet-300">
+              Top: {teamPerf.top_performer}
+            </span>
+          )}
+          <button
+            onClick={async () => {
+              if (teamPerfRegen) return;
+              setTeamPerfRegen(true);
+              try {
+                let data;
+                if (DEMO_MODE) {
+                  data = await apiClient.getTeamPerformance("demo-workspace-1", "demo-token");
+                } else {
+                  const supabase = createBrowserClient();
+                  const { data: { session } } = await supabase.auth.getSession();
+                  if (!session) return;
+                  const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+                  if (!wid) return;
+                  data = await apiClient.getTeamPerformance(wid, session.access_token);
+                }
+                setTeamPerf(data);
+              } finally {
+                setTeamPerfRegen(false);
+              }
+            }}
+            disabled={teamPerfLoading || teamPerfRegen}
+            className="ml-auto text-zinc-500 hover:text-violet-400 disabled:opacity-40 transition-colors cursor-pointer"
+            title="Regenerate"
+          >
+            {teamPerfRegen ? (
+              <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M21 12a9 9 0 11-6.219-8.56" /></svg>
+            ) : (
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 12a9 9 0 009 9 9 9 0 006.354-2.649M21 12a9 9 0 00-9-9 9 9 0 00-6.354 2.649M3 3v5h5M21 21v-5h-5" /></svg>
+            )}
+          </button>
+        </div>
+
+        {teamPerfLoading ? (
+          <div className="space-y-2">
+            <div className="h-4 rounded bg-zinc-800/60 animate-pulse w-3/4" />
+            <div className="h-4 rounded bg-zinc-800/60 animate-pulse w-1/2" />
+          </div>
+        ) : !teamPerf ? (
+          <p className="text-xs text-zinc-600 italic">No team data available.</p>
+        ) : (
+          <>
+            {/* AI narrative */}
+            <p className="text-xs text-zinc-400 leading-relaxed border-l-2 border-violet-500/40 pl-3">{teamPerf.narrative}</p>
+
+            {/* Per-rep table */}
+            {teamPerf.team_stats.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px] border-collapse">
+                  <thead>
+                    <tr className="text-zinc-500 text-left">
+                      <th className="pb-2 pr-4 font-medium">Rep</th>
+                      <th className="pb-2 pr-4 font-medium text-right">Open</th>
+                      <th className="pb-2 pr-4 font-medium text-right">Pipeline</th>
+                      <th className="pb-2 pr-4 font-medium text-right">Won</th>
+                      <th className="pb-2 pr-4 font-medium text-right">Revenue</th>
+                      <th className="pb-2 font-medium text-right">Avg Health</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {teamPerf.team_stats.map((rep) => (
+                      <tr key={rep.name} className="border-t border-zinc-800/60 hover:bg-zinc-800/20 transition-colors">
+                        <td className="py-2 pr-4 text-zinc-200 font-medium">
+                          {rep.name}
+                          {rep.name === teamPerf.top_performer && (
+                            <span className="ml-1.5 text-[9px] font-semibold text-violet-400 uppercase tracking-wide">★ top</span>
+                          )}
+                        </td>
+                        <td className="py-2 pr-4 text-zinc-400 text-right font-mono">{rep.open_deal_count}</td>
+                        <td className="py-2 pr-4 text-indigo-300 text-right font-mono">{formatCurrency(rep.open_pipeline_value)}</td>
+                        <td className="py-2 pr-4 text-zinc-400 text-right font-mono">{rep.won_deal_count}</td>
+                        <td className="py-2 pr-4 text-emerald-400 text-right font-mono">{formatCurrency(rep.won_revenue)}</td>
+                        <td className="py-2 text-right">
+                          <span className={`font-mono ${rep.avg_health_score >= 70 ? "text-emerald-400" : rep.avg_health_score >= 40 ? "text-amber-400" : "text-rose-400"}`}>
+                            {rep.avg_health_score.toFixed(0)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <p className="text-[10px] text-zinc-600 text-right">
+              Generated {new Date(teamPerf.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </p>
+          </>
+        )}
+      </Card>
 
       {/* Stale alert */}
       {stats.stale > 0 && (

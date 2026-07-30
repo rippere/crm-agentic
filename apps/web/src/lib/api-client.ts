@@ -2688,4 +2688,37 @@ export const apiClient = {
       token,
     )
   },
+
+  getTeamPerformance: (workspaceId: string, token: string): Promise<{
+    top_performer: string | null
+    team_stats: {
+      name: string
+      open_deal_count: number
+      avg_health_score: number
+      open_pipeline_value: number
+      won_deal_count: number
+      won_revenue: number
+    }[]
+    narrative: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        top_performer: 'Sarah Chen',
+        team_stats: [
+          { name: 'Sarah Chen',    open_deal_count: 4, avg_health_score: 82, open_pipeline_value: 125000, won_deal_count: 3, won_revenue: 87500 },
+          { name: 'Marcus Webb',   open_deal_count: 3, avg_health_score: 71, open_pipeline_value: 95000,  won_deal_count: 2, won_revenue: 62000 },
+          { name: 'Priya Sharma',  open_deal_count: 5, avg_health_score: 65, open_pipeline_value: 145000, won_deal_count: 1, won_revenue: 30000 },
+          { name: 'Unassigned',    open_deal_count: 2, avg_health_score: 58, open_pipeline_value: 40000,  won_deal_count: 0, won_revenue: 0 },
+        ],
+        narrative: "Sarah Chen leads the team with $87,500 in closed revenue and the highest average deal health at 82/100, signalling strong pipeline discipline. Priya Sharma has the most open pipeline ($145K across 5 deals) but only one closed deal this period — a coaching conversation around conversion strategy would be valuable. Consider assigning the 2 unassigned deals to Marcus, who has capacity and a solid close rate.",
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/team-performance`,
+      { method: 'GET' },
+      token,
+    )
+  },
 }
