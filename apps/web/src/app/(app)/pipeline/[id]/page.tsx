@@ -387,6 +387,12 @@ export default function DealDetailPage() {
   const [objectionGenerating, setObjectionGenerating] = useState(false);
   const [objectionExpandedIdx, setObjectionExpandedIdx] = useState<number | null>(null);
 
+  type StakeholderItem = { name: string; role: "decision_maker" | "champion" | "blocker" | "influencer"; engagement: "high" | "medium" | "low"; recommended_action: string };
+  type StakeholderMapData = { stakeholders: StakeholderItem[]; deal_id: string; generated_at: string };
+  const [stakeholderData, setStakeholderData] = useState<StakeholderMapData | null>(null);
+  const [stakeholderLoading, setStakeholderLoading] = useState(false);
+  const [stakeholderGenerating, setStakeholderGenerating] = useState(false);
+
   type MomentumData = { momentum: "gaining" | "stalling" | "declining"; drivers: string[]; recommendation: string; deal_id: string; generated_at: string };
   const [momentumData, setMomentumData] = useState<MomentumData | null>(null);
   const [momentumLoading, setMomentumLoading] = useState(false);
@@ -557,6 +563,13 @@ export default function DealDetailPage() {
         .then((data) => setObjectionData(data ?? null))
         .catch(() => setObjectionData(null))
         .finally(() => setObjectionLoading(false));
+
+      setStakeholderLoading(true);
+      apiClient
+        .getDealStakeholderMap(workspaceId, dealId, token)
+        .then((data) => setStakeholderData(data ?? null))
+        .catch(() => setStakeholderData(null))
+        .finally(() => setStakeholderLoading(false));
     }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
@@ -774,6 +787,16 @@ export default function DealDetailPage() {
       setObjectionExpandedIdx(null);
     } catch { /* ignore */ }
     finally { setObjectionGenerating(false); }
+  };
+
+  const handleRegenerateStakeholders = async () => {
+    if (!token || !workspaceId || stakeholderGenerating) return;
+    setStakeholderGenerating(true);
+    try {
+      const data = await apiClient.getDealStakeholderMap(workspaceId, dealId, token);
+      setStakeholderData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setStakeholderGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -2166,6 +2189,77 @@ export default function DealDetailPage() {
                   })}
                   <p className="text-[10px] text-zinc-600 text-right">
                     Generated {new Date(objectionData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Stakeholder Map — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-sky-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Stakeholder Map</p>
+                <button
+                  onClick={handleRegenerateStakeholders}
+                  disabled={stakeholderLoading || stakeholderGenerating}
+                  className="ml-auto text-zinc-500 hover:text-sky-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate stakeholder map"
+                  title="Regenerate"
+                >
+                  {stakeholderGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {stakeholderLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="h-14 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : stakeholderData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load stakeholder map.</p>
+              ) : stakeholderData.stakeholders.length === 0 ? (
+                <p className="text-xs text-zinc-500 italic py-2">No stakeholders identified.</p>
+              ) : (
+                <div className="space-y-2">
+                  {stakeholderData.stakeholders.map((s, i) => {
+                    const roleColor: Record<string, string> = {
+                      decision_maker: "text-amber-300 border-amber-500/30 bg-amber-500/10",
+                      champion: "text-emerald-300 border-emerald-500/30 bg-emerald-500/10",
+                      blocker: "text-rose-300 border-rose-500/30 bg-rose-500/10",
+                      influencer: "text-sky-300 border-sky-500/30 bg-sky-500/10",
+                    };
+                    const engagementDot: Record<string, string> = {
+                      high: "bg-emerald-400",
+                      medium: "bg-amber-400",
+                      low: "bg-zinc-500",
+                    };
+                    return (
+                      <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="h-5 w-5 rounded-full bg-zinc-800 flex items-center justify-center text-[9px] font-bold text-zinc-400 flex-shrink-0">
+                            {s.name.charAt(0).toUpperCase()}
+                          </span>
+                          <p className="text-xs font-medium text-zinc-200 flex-1 truncate">{s.name}</p>
+                          <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wide flex-shrink-0 ${roleColor[s.role] ?? roleColor.influencer}`}>
+                            {s.role.replace("_", " ")}
+                          </span>
+                          <span className={`h-2 w-2 rounded-full flex-shrink-0 ${engagementDot[s.engagement] ?? engagementDot.medium}`} title={`${s.engagement} engagement`} />
+                        </div>
+                        {s.recommended_action && (
+                          <p className="text-[11px] text-zinc-500 leading-relaxed pl-7">{s.recommended_action}</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(stakeholderData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 </div>
               )}

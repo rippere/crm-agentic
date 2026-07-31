@@ -2688,4 +2688,34 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealStakeholderMap: (workspaceId: string, dealId: string, token: string): Promise<{
+    stakeholders: { name: string; role: 'decision_maker' | 'champion' | 'blocker' | 'influencer'; engagement: 'high' | 'medium' | 'low'; recommended_action: string }[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { name: string; role: 'decision_maker' | 'champion' | 'blocker' | 'influencer'; engagement: 'high' | 'medium' | 'low'; recommended_action: string }[]> = {
+        'd-001': [
+          { name: 'Sarah Chen', role: 'champion', engagement: 'high', recommended_action: 'Schedule weekly syncs to maintain momentum through legal review' },
+          { name: 'David Park', role: 'decision_maker', engagement: 'medium', recommended_action: 'Prepare exec summary with ROI data for final sign-off meeting' },
+          { name: 'IT Security Team', role: 'blocker', engagement: 'low', recommended_action: 'Send security questionnaire responses and SOC 2 report proactively' },
+          { name: 'Engineering Lead', role: 'influencer', engagement: 'medium', recommended_action: 'Offer a technical deep-dive session to address integration questions' },
+        ],
+        'd-002': [
+          { name: 'Marcus Rivera', role: 'decision_maker', engagement: 'medium', recommended_action: 'Re-engage with a board-ready executive summary and case studies' },
+          { name: 'Procurement Lead', role: 'blocker', engagement: 'high', recommended_action: 'Address contract redlines directly with legal team this week' },
+          { name: 'Operations Director', role: 'champion', engagement: 'medium', recommended_action: 'Arm champion with internal talking points to move board decision' },
+          { name: 'Finance Controller', role: 'influencer', engagement: 'low', recommended_action: 'Send detailed pricing breakdown with multi-year savings projection' },
+        ],
+      }
+      const stakeholders = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ stakeholders, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/stakeholder-map`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }

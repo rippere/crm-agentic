@@ -2575,3 +2575,137 @@ async def deal_objection_handler(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/deals/{deal_id}/ai/stakeholder-map
+# ---------------------------------------------------------------------------
+
+_STAKEHOLDER_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Analyze this deal and generate a stakeholder map with exactly 4 key people involved in the buying process.
+
+For each stakeholder return:
+- "name": the person's name (infer from mentions or use placeholders like "Economic Buyer", "Technical Evaluator" if names are unknown)
+- "role": exactly one of "decision_maker", "champion", "blocker", or "influencer"
+- "engagement": exactly one of "high", "medium", or "low"
+- "recommended_action": one specific CRM action the rep should take with this person (max 100 chars, e.g. "Schedule exec briefing", "Send ROI case study")
+
+Role definitions:
+- decision_maker: holds budget authority and final sign-off
+- champion: internal advocate who wants the deal to succeed
+- blocker: person raising objections or slowing progress
+- influencer: shapes opinion without final authority (e.g. IT, legal, end users)
+
+Respond with a JSON array of exactly 4 items — no markdown fences, no extra keys:
+[{"name": "...", "role": "decision_maker", "engagement": "high", "recommended_action": "..."}]
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/stakeholder-map")
+@limiter.limit("5/minute")
+async def deal_stakeholder_map(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a stakeholder map for an open deal using deal context and mentions."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in {"closed_won", "closed_lost"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Stakeholder map is only available for open deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = [r[0] for r in notes_result.fetchall()]
+
+    mentions = deal.mentions or []
+    competitors = deal.competitors or []
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stage_changed = deal.stage_changed_at
+    if stage_changed and stage_changed.tzinfo is None:
+        stage_changed = stage_changed.replace(tzinfo=datetime.timezone.utc)
+    days_in_stage = (now - stage_changed).days if stage_changed else 0
+
+    mention_lines = ""
+    if mentions:
+        mention_lines = "Known stakeholders (name, type):\n" + "\n".join(
+            f"- {m.get('name', 'Unknown')} ({m.get('type', 'unknown')})"
+            for m in mentions
+            if isinstance(m, dict)
+        )
+
+    context = (
+        f"Deal: {deal.title}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${deal.value or 0:,.0f}\n"
+        f"Health score: {deal.health_score}/100\n"
+        f"Win probability: {deal.ml_win_probability or 0:.0f}%\n"
+        f"Days in current stage: {days_in_stage}\n"
+        f"Competitors: {', '.join(str(c) for c in competitors) if competitors else 'None known'}\n"
+    )
+    if mention_lines:
+        context += f"\n{mention_lines}\n"
+    if notes:
+        context += "\nRecent deal notes:\n" + "\n".join(f"- {n}" for n in notes)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            system=_STAKEHOLDER_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "[]"
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            data = []
+
+        _valid_roles = {"decision_maker", "champion", "blocker", "influencer"}
+        _valid_engagements = {"high", "medium", "low"}
+        stakeholders = []
+        for item in data[:4]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", "influencer"))
+            if role not in _valid_roles:
+                role = "influencer"
+            engagement = str(item.get("engagement", "medium"))
+            if engagement not in _valid_engagements:
+                engagement = "medium"
+            stakeholders.append({
+                "name": str(item.get("name", "Unknown"))[:80],
+                "role": role,
+                "engagement": engagement,
+                "recommended_action": str(item.get("recommended_action", ""))[:120],
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "stakeholders": stakeholders,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
