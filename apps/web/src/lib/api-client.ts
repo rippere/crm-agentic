@@ -2718,4 +2718,46 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealNegotiationScript: (workspaceId: string, dealId: string, token: string): Promise<{
+    opening_move: string
+    concessions: { offer: string; condition: string; limit: string }[]
+    walk_away_signal: string
+    closing_line: string
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type NegotiationStub = { opening_move: string; concessions: { offer: string; condition: string; limit: string }[]; walk_away_signal: string; closing_line: string }
+      const stubs: Record<string, NegotiationStub> = {
+        'd-001': {
+          opening_move: "We've invested significant time understanding your environment — let's talk final terms so we can move quickly.",
+          concessions: [
+            { offer: '10% first-year discount', condition: 'Sign by end of quarter', limit: 'Max 10% — below this margin we cannot sustain enterprise SLA' },
+            { offer: 'Free premium onboarding package ($8K value)', condition: '3-year commitment', limit: 'Year-one inclusion only — not a perpetual benefit' },
+            { offer: 'Dedicated Customer Success Manager year one', condition: 'Full-suite subscription at list price', limit: 'Year-one only — standard CSM model from year two onward' },
+          ],
+          walk_away_signal: "Buyer demands >15% discount, refuses multi-year commitment, and requests removal of audit logging",
+          closing_line: "Let's lock this in today — I'll send the countersigned paperwork over in the next 30 minutes.",
+        },
+        'd-002': {
+          opening_move: "Given how long we've been in conversation, I want to come to the table with something that makes this easy to say yes to.",
+          concessions: [
+            { offer: 'Free data migration from current platform', condition: 'Sign within 2 weeks', limit: 'Standard connectors only — no custom ETL work' },
+            { offer: '90-day money-back guarantee', condition: 'Pilot with 10 seats before full rollout', limit: 'Guarantee covers license fees only, not implementation services' },
+            { offer: 'Lock in current pricing for 2 years', condition: 'Annual pre-payment on both years', limit: 'Cannot extend beyond 2 years — pricing review required after' },
+          ],
+          walk_away_signal: "Buyer insists on monthly rolling contract with no minimum term and a 60-day exit clause",
+          closing_line: "I can hold these terms until Friday — after that we go back to standard pricing. Want me to send the agreement now?",
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/negotiation-script`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
