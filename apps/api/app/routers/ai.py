@@ -2709,3 +2709,136 @@ async def deal_stakeholder_map(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/deals/{deal_id}/ai/negotiation-script
+# ---------------------------------------------------------------------------
+
+_NEGOTIATION_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Generate a tailored negotiation script for closing this deal.
+
+Return a JSON object with:
+- "opening_move": a 1-2 sentence opening that anchors value and sets a collaborative tone (max 200 chars)
+- "concessions": exactly 3 concession tactics in escalating order of generosity — each has:
+  - "offer": what you are offering (max 120 chars)
+  - "condition": the condition the buyer must meet to receive this (max 120 chars)
+  - "limit": the hard floor you will not cross (max 100 chars)
+- "walk_away_signal": one specific buyer behaviour that tells you to end negotiations (max 150 chars)
+- "closing_line": a single confident sentence that creates urgency and asks for commitment (max 200 chars)
+
+Respond with valid JSON only — no markdown fences, no extra keys:
+{"opening_move": "...", "concessions": [...], "walk_away_signal": "...", "closing_line": "..."}
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/negotiation-script")
+@limiter.limit("5/minute")
+async def deal_negotiation_script(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a negotiation script for a deal in the proposal or negotiation stage."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage not in {"proposal", "negotiation"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Negotiation script is only available for deals in proposal or negotiation stage",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = [r[0] for r in notes_result.fetchall()]
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stage_changed = deal.stage_changed_at
+    if stage_changed and stage_changed.tzinfo is None:
+        stage_changed = stage_changed.replace(tzinfo=datetime.timezone.utc)
+    days_in_stage = (now - stage_changed).days if stage_changed else 0
+
+    competitors = deal.competitors or []
+    next_action_overdue = False
+    if deal.next_action_date:
+        try:
+            nad = datetime.date.fromisoformat(str(deal.next_action_date))
+            next_action_overdue = nad < now.date()
+        except (ValueError, TypeError):
+            pass
+
+    context = (
+        f"Deal: {deal.title}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${deal.value or 0:,.0f}\n"
+        f"Health score: {deal.health_score}/100\n"
+        f"Win probability: {deal.ml_win_probability or 0:.0f}%\n"
+        f"Days in current stage: {days_in_stage}\n"
+        f"Competitors: {', '.join(str(c) for c in competitors) if competitors else 'None known'}\n"
+        f"Next action overdue: {'Yes' if next_action_overdue else 'No'}\n"
+    )
+    if notes:
+        context += "Recent deal notes:\n" + "\n".join(f"- {n}" for n in notes)
+
+    opening_move = ""
+    concessions: list[dict] = []
+    walk_away_signal = ""
+    closing_line = ""
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            system=_NEGOTIATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        opening_move = str(data.get("opening_move", ""))[:200]
+        walk_away_signal = str(data.get("walk_away_signal", ""))[:150]
+        closing_line = str(data.get("closing_line", ""))[:200]
+
+        raw_concessions = data.get("concessions", [])
+        if not isinstance(raw_concessions, list):
+            raw_concessions = []
+        for item in raw_concessions[:3]:
+            if not isinstance(item, dict):
+                continue
+            concessions.append({
+                "offer": str(item.get("offer", ""))[:120],
+                "condition": str(item.get("condition", ""))[:120],
+                "limit": str(item.get("limit", ""))[:100],
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "opening_move": opening_move,
+        "concessions": concessions,
+        "walk_away_signal": walk_away_signal,
+        "closing_line": closing_line,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

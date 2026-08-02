@@ -1827,26 +1827,47 @@ async def test_close_date_accuracy_wrong_workspace_returns_403(app_client):
 @pytest.mark.asyncio
 async def test_revenue_cohort_groups_by_contact_acquisition_month(app_client):
     """Deals from the same contact are attributed to that contact's first closed-won cohort."""
+    import calendar
+    from datetime import datetime as _dt
+
     fastapi_app, mock_db, workspace_id = app_client
 
     contact_id = uuid.uuid4()
-    now = datetime(2026, 6, 30, 12, 0, 0, tzinfo=timezone.utc)
 
-    # First deal for this contact — closed May 2026 (cohort month)
+    # Use dates relative to today so the test stays within the cohort_months=3 window
+    today = _dt.now(timezone.utc)
+    # cohort month = 2 months ago (always within 3-month window)
+    cm2 = today.month - 2
+    cy2 = today.year
+    while cm2 <= 0:
+        cm2 += 12
+        cy2 -= 1
+    # expansion month = 1 month ago
+    cm1 = today.month - 1
+    cy1 = today.year
+    while cm1 <= 0:
+        cm1 += 12
+        cy1 -= 1
+
+    cohort_label = f"{cy2}-{cm2:02d}"
+    cohort_day = datetime(cy2, cm2, 15, 12, 0, 0, tzinfo=timezone.utc)
+    expansion_day = datetime(cy1, cm1, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    # First deal for this contact — cohort month
     first_deal = _fake_deal(
         workspace_id,
         stage="closed_won",
         value=100000.0,
         contact_id=contact_id,
-        stage_changed_at=datetime(2026, 5, 15, 12, 0, 0, tzinfo=timezone.utc),
+        stage_changed_at=cohort_day,
     )
-    # Expansion deal from same contact — closed June 2026 (month +1)
+    # Expansion deal from same contact — month +1
     expansion_deal = _fake_deal(
         workspace_id,
         stage="closed_won",
         value=40000.0,
         contact_id=contact_id,
-        stage_changed_at=datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc),
+        stage_changed_at=expansion_day,
     )
 
     mock_db.execute = AsyncMock(return_value=_make_scalars_result([first_deal, expansion_deal]))
@@ -1861,20 +1882,20 @@ async def test_revenue_cohort_groups_by_contact_acquisition_month(app_client):
     rows = resp.json()
     assert len(rows) == 3
 
-    # Find the May cohort row
-    may_row = next((r for r in rows if r["cohort_month"] == "2026-05"), None)
-    assert may_row is not None
-    assert may_row["initial_revenue"] == 100000.0
+    # Find the cohort row for the month 2 months ago
+    cohort_row = next((r for r in rows if r["cohort_month"] == cohort_label), None)
+    assert cohort_row is not None
+    assert cohort_row["initial_revenue"] == 100000.0
 
-    # Month +0 (May) should have the first deal
-    assert may_row["months"][0]["month_offset"] == 0
-    assert may_row["months"][0]["revenue"] == 100000.0
-    assert may_row["months"][0]["pct_of_initial"] == 100.0
+    # Month +0 should have the first deal
+    assert cohort_row["months"][0]["month_offset"] == 0
+    assert cohort_row["months"][0]["revenue"] == 100000.0
+    assert cohort_row["months"][0]["pct_of_initial"] == 100.0
 
-    # Month +1 (June) should have the expansion deal attributed to May cohort
-    assert may_row["months"][1]["month_offset"] == 1
-    assert may_row["months"][1]["revenue"] == 40000.0
-    assert may_row["months"][1]["pct_of_initial"] == 40.0
+    # Month +1 should have the expansion deal attributed to the cohort month
+    assert cohort_row["months"][1]["month_offset"] == 1
+    assert cohort_row["months"][1]["revenue"] == 40000.0
+    assert cohort_row["months"][1]["pct_of_initial"] == 40.0
 
 
 @pytest.mark.asyncio

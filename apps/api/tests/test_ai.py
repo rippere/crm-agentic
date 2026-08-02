@@ -1546,3 +1546,81 @@ async def test_deal_stakeholder_map_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/negotiation-script
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_negotiation_script_returns_structured_response(app_client):
+    """negotiation-script returns opening_move, 3 concessions, walk_away_signal, closing_line."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_fetchall_result(rows):
+        result = MagicMock()
+        result.fetchall.return_value = rows
+        return result
+
+    deal = _fake_deal(workspace_id, stage="negotiation", health_score=65, ml_win_probability=55)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(deal),    # deal lookup
+        _make_fetchall_result([]),           # deal notes (none)
+    ])
+
+    script_json = _json.dumps({
+        "opening_move": "We've built this product to solve exactly the challenges TechCorp faces — let's close this today.",
+        "concessions": [
+            {"offer": "Free onboarding for 60 days", "condition": "Sign by end of month", "limit": "Cannot extend beyond 60 days"},
+            {"offer": "10% discount on annual contract", "condition": "Commit to 2-year term", "limit": "Floor is 5% discount"},
+            {"offer": "Dedicated CSM for 3 months", "condition": "Expand to 20+ seats at signing", "limit": "CSM support capped at 3 months"},
+        ],
+        "walk_away_signal": "Buyer requests >25% discount AND month-to-month terms simultaneously.",
+        "closing_line": "Given your Q3 launch date, signing today gives your team the runway they need — shall we proceed?",
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=script_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal.id}/ai/negotiation-script"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "opening_move" in body and len(body["opening_move"]) > 0
+    assert "concessions" in body and len(body["concessions"]) == 3
+    assert "walk_away_signal" in body and len(body["walk_away_signal"]) > 0
+    assert "closing_line" in body and len(body["closing_line"]) > 0
+    assert "deal_id" in body
+    assert "generated_at" in body
+    for c in body["concessions"]:
+        assert "offer" in c and "condition" in c and "limit" in c
+
+
+@pytest.mark.asyncio
+async def test_deal_negotiation_script_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/ai/negotiation-script"
+        )
+
+    assert resp.status_code == 403
