@@ -2718,4 +2718,46 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealNegotiationScript: (workspaceId: string, dealId: string, token: string): Promise<{
+    opening_move: string
+    concessions: { offer: string; condition: string; limit: string }[]
+    walk_away_signal: string
+    closing_line: string
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type NegotiationStub = { opening_move: string; concessions: { offer: string; condition: string; limit: string }[]; walk_away_signal: string; closing_line: string }
+      const stubs: Record<string, NegotiationStub> = {
+        'd-001': {
+          opening_move: "We've built NovaCRM specifically to eliminate the manual overhead slowing Acme Corp's sales team — let's talk about how we make this a no-brainer decision today.",
+          concessions: [
+            { offer: 'Extended 90-day free trial with full feature access', condition: 'Sign LOI by end of quarter', limit: 'Cannot extend beyond 90 days without exec approval' },
+            { offer: '15% discount on annual contract', condition: 'Commit to 2-year term and pay upfront', limit: 'Floor is 10% — below that we revisit scope' },
+            { offer: 'Free onboarding + dedicated CSM for 6 months', condition: 'Expand seat count to 25+ users at signing', limit: 'CSM support limited to 6 months regardless of seat count' },
+          ],
+          walk_away_signal: 'Buyer requests >30% discount AND insists on month-to-month with no commitment after two rounds of concessions.',
+          closing_line: "Given the Q3 deadline you mentioned, locking in today saves you the onboarding ramp time — shall we move to contract?",
+        },
+        'd-002': {
+          opening_move: "TechStart's growth trajectory is exactly the use case NovaCRM was designed for — let's make sure the terms reflect a partnership that scales with you.",
+          concessions: [
+            { offer: 'Waive implementation fee ($5,000 value)', condition: 'Sign before month end', limit: 'Implementation fee waiver is one-time only' },
+            { offer: 'Lock in current pricing for 3 years', condition: 'Annual contract with auto-renewal clause', limit: 'Cannot lock pricing beyond 3 years' },
+            { offer: 'Add 5 free admin seats', condition: 'Refer two qualified leads within 90 days', limit: 'Referral seats capped at 5 regardless of referrals' },
+          ],
+          walk_away_signal: 'Procurement insists on net-90 payment terms AND requests source code escrow — combined risk exceeds acceptable threshold.',
+          closing_line: "With the board meeting next week, getting this signed now means your team hits the ground running on day one — ready to move forward?",
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/negotiation-script`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
