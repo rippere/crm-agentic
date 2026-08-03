@@ -393,6 +393,12 @@ export default function DealDetailPage() {
   const [stakeholderLoading, setStakeholderLoading] = useState(false);
   const [stakeholderGenerating, setStakeholderGenerating] = useState(false);
 
+  type NegotiationConcession = { offer: string; condition: string; limit: string };
+  type NegotiationScriptData = { opening_move: string; concessions: NegotiationConcession[]; walk_away_signal: string; closing_line: string; deal_id: string; generated_at: string };
+  const [negotiationData, setNegotiationData] = useState<NegotiationScriptData | null>(null);
+  const [negotiationLoading, setNegotiationLoading] = useState(false);
+  const [negotiationGenerating, setNegotiationGenerating] = useState(false);
+
   type MomentumData = { momentum: "gaining" | "stalling" | "declining"; drivers: string[]; recommendation: string; deal_id: string; generated_at: string };
   const [momentumData, setMomentumData] = useState<MomentumData | null>(null);
   const [momentumLoading, setMomentumLoading] = useState(false);
@@ -570,6 +576,15 @@ export default function DealDetailPage() {
         .then((data) => setStakeholderData(data ?? null))
         .catch(() => setStakeholderData(null))
         .finally(() => setStakeholderLoading(false));
+
+      if (deal.stage === "proposal" || deal.stage === "negotiation") {
+        setNegotiationLoading(true);
+        apiClient
+          .getDealNegotiationScript(workspaceId, dealId, token)
+          .then((data) => setNegotiationData(data ?? null))
+          .catch(() => setNegotiationData(null))
+          .finally(() => setNegotiationLoading(false));
+      }
     }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
@@ -797,6 +812,16 @@ export default function DealDetailPage() {
       setStakeholderData(data ?? null);
     } catch { /* ignore */ }
     finally { setStakeholderGenerating(false); }
+  };
+
+  const handleRegenerateNegotiationScript = async () => {
+    if (!token || !workspaceId || negotiationGenerating) return;
+    setNegotiationGenerating(true);
+    try {
+      const data = await apiClient.getDealNegotiationScript(workspaceId, dealId, token);
+      setNegotiationData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setNegotiationGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -2260,6 +2285,84 @@ export default function DealDetailPage() {
                   })}
                   <p className="text-[10px] text-zinc-600 text-right">
                     Generated {new Date(stakeholderData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Negotiation Script — proposal/negotiation stage only */}
+          {(deal.stage === "proposal" || deal.stage === "negotiation") && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Swords className="h-4 w-4 text-indigo-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Negotiation Script</p>
+                <button
+                  onClick={handleRegenerateNegotiationScript}
+                  disabled={negotiationLoading || negotiationGenerating}
+                  className="ml-auto text-zinc-500 hover:text-indigo-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate negotiation script"
+                  title="Regenerate"
+                >
+                  {negotiationGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {negotiationLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : negotiationData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load negotiation script.</p>
+              ) : (
+                <div className="space-y-3">
+                  {/* Opening move */}
+                  <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-400 mb-1">Opening Move</p>
+                    <p className="text-xs text-zinc-300 leading-relaxed">{negotiationData.opening_move}</p>
+                  </div>
+
+                  {/* Concessions */}
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 mb-2">Concessions</p>
+                    <div className="space-y-2">
+                      {negotiationData.concessions.map((c, i) => (
+                        <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 space-y-1">
+                          <div className="flex items-start gap-2">
+                            <span className="h-4 w-4 rounded-full bg-indigo-500/20 flex items-center justify-center text-[9px] font-bold text-indigo-400 flex-shrink-0 mt-0.5">
+                              {i + 1}
+                            </span>
+                            <div className="flex-1 space-y-1">
+                              <p className="text-xs text-zinc-200 font-medium leading-snug">{c.offer}</p>
+                              <p className="text-[11px] text-zinc-500"><span className="text-zinc-400">If:</span> {c.condition}</p>
+                              <p className="text-[11px] text-rose-400/80"><span className="text-zinc-400">Limit:</span> {c.limit}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Walk-away signal */}
+                  <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-400 mb-1">Walk Away If</p>
+                    <p className="text-xs text-zinc-400 leading-relaxed">{negotiationData.walk_away_signal}</p>
+                  </div>
+
+                  {/* Closing line */}
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400 mb-1">Closing Line</p>
+                    <p className="text-xs text-zinc-300 italic leading-relaxed">&ldquo;{negotiationData.closing_line}&rdquo;</p>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(negotiationData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 </div>
               )}
