@@ -1625,3 +1625,73 @@ async def test_deal_negotiation_script_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/messages/{mid}/ai/reply
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_draft_message_reply_returns_structured_response(app_client):
+    """draft_message_reply returns subject, body, tone, message_id, generated_at."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    msg = _fake_message(
+        subject="Partnership opportunity",
+        sender_email="partner@acme.com",
+        body_plain="Hi, we would love to explore a partnership with your team.",
+    )
+    msg.contact_id = None  # no linked contact — single DB query
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result_local(msg))
+
+    reply_json = _json.dumps({
+        "subject": "Re: Partnership opportunity",
+        "body": "Thank you for reaching out. We would be delighted to explore this further.",
+        "tone": "professional",
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=reply_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/messages/{msg.id}/ai/reply"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "subject" in body
+    assert "body" in body
+    assert "tone" in body
+    assert "message_id" in body
+    assert "generated_at" in body
+    assert body["tone"] == "professional"
+    assert body["message_id"] == str(msg.id)
+    assert body["subject"].startswith("Re:")
+
+
+@pytest.mark.asyncio
+async def test_draft_message_reply_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    message_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/messages/{message_id}/ai/reply"
+        )
+
+    assert resp.status_code == 403

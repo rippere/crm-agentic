@@ -2839,3 +2839,106 @@ async def deal_negotiation_script(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# POST /workspaces/{workspace_id}/messages/{message_id}/ai/reply
+# ---------------------------------------------------------------------------
+
+_REPLY_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Draft a professional email reply to the provided message.
+
+Return a JSON object with exactly these keys:
+- "subject": reply subject line (prefix with "Re: " if not already, keep under 80 chars)
+- "body": the full reply body (2-4 paragraphs, professional, warm, action-oriented)
+- "tone": exactly one of "professional", "friendly", or "urgent" based on the message context
+
+Return valid JSON only — no markdown fences, no extra keys:
+{"subject": "...", "body": "...", "tone": "professional"}
+"""
+
+
+@router.post("/workspaces/{workspace_id}/messages/{message_id}/ai/reply")
+@limiter.limit("10/minute")
+async def draft_message_reply(
+    request: Request,
+    workspace_id: uuid.UUID,
+    message_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Draft an AI email reply for a given inbox message."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    msg_result = await db.execute(
+        select(Message).where(Message.id == message_id, Message.workspace_id == workspace_id)
+    )
+    message = msg_result.scalar_one_or_none()
+    if message is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+
+    contact: Contact | None = None
+    if message.contact_id:
+        contact_result = await db.execute(
+            select(Contact).where(Contact.id == message.contact_id)
+        )
+        contact = contact_result.scalar_one_or_none()
+
+    deal_notes: list[str] = []
+    if contact:
+        notes_result = await db.execute(
+            select(DealNote.body)
+            .join(Deal, DealNote.deal_id == Deal.id)
+            .where(Deal.contact_id == contact.id)
+            .order_by(DealNote.created_at.desc())
+            .limit(2)
+        )
+        deal_notes = [r[0] for r in notes_result.fetchall()]
+
+    context = (
+        f"From: {message.sender_email or 'Unknown'}\n"
+        f"Subject: {message.subject or '(No subject)'}\n"
+        f"Message:\n{(message.body_plain or '')[:1200]}\n"
+    )
+    if contact:
+        context += (
+            f"\nContact profile:\n"
+            f"  Name: {contact.name}\n"
+            f"  Company: {contact.company or 'Unknown'}\n"
+            f"  Role: {contact.role or 'Unknown'}\n"
+        )
+    if deal_notes:
+        context += "\nRecent deal notes:\n" + "\n".join(f"- {n}" for n in deal_notes)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_REPLY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        tone = str(data.get("tone", "professional"))
+        if tone not in {"professional", "friendly", "urgent"}:
+            tone = "professional"
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    subject = str(data.get("subject", f"Re: {message.subject or ''}")[:80])
+    body = str(data.get("body", ""))[:2000]
+
+    return {
+        "subject": subject,
+        "body": body,
+        "tone": tone,
+        "message_id": str(message_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
