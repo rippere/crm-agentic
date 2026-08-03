@@ -2760,4 +2760,34 @@ export const apiClient = {
       token,
     )
   },
+
+  getDraftEmailReply: (workspaceId: string, messageId: string, token: string): Promise<{
+    subject: string
+    body: string
+    tone: 'professional' | 'friendly' | 'urgent'
+    message_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { subject: string; body: string; tone: 'professional' | 'friendly' | 'urgent' }> = {
+        'm-001': {
+          subject: 'Re: Q3 Partnership Proposal',
+          body: "Hi Sarah,\n\nThank you for sending over the Q3 Partnership Proposal — I've had a chance to review it in detail and I'm excited about the potential here.\n\nThe proposed structure aligns well with our current roadmap, particularly the co-marketing component for Q4. I do have a few questions on the revenue-share model that I'd like to clarify before we move forward.\n\nWould you be available for a 30-minute call this week? I have Thursday afternoon or Friday morning open.\n\nLooking forward to connecting.",
+          tone: 'professional',
+        },
+        'm-002': {
+          subject: 'Re: Urgent: Contract Redlines',
+          body: "Hi Marcus,\n\nI've received the redlines from your legal team and I want to address these as quickly as possible — I understand the urgency and I'm fully aligned on getting this resolved before end of week.\n\nI've reviewed all three flagged clauses. Two are straightforward adjustments we can accept immediately. The indemnification clause (Section 8.4) requires a brief check with our counsel but I expect to have a response within 24 hours.\n\nI'll send a revised contract by tomorrow morning. Please let me know if you need anything in the meantime.",
+          tone: 'urgent',
+        },
+      }
+      const stub = stubs[messageId] ?? stubs['m-001']
+      return Promise.resolve({ ...stub, message_id: messageId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/messages/${messageId}/ai/reply`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }

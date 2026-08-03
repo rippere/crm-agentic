@@ -7,7 +7,7 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Avatar from "@/components/ui/Avatar";
 import { apiClient } from "@/lib/api-client";
-import { Search, Mail, X, CheckCircle, Brain, ListTodo, Sparkles, AlertTriangle, RefreshCw, Zap } from "lucide-react";
+import { Search, Mail, X, CheckCircle, Brain, ListTodo, Sparkles, AlertTriangle, RefreshCw, Zap, Loader2, Copy } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useJobPoller } from "@/hooks/useJobPoller";
 
@@ -109,6 +109,9 @@ function MessageDrawer({
   triageResult?: TriageResult;
 }) {
   const [scoring, setScoring] = useState(false);
+  const [replyDraft, setReplyDraft] = useState<{ subject: string; body: string; tone: string } | null>(null);
+  const [replyLoading, setReplyLoading] = useState(false);
+  const [copiedReply, setCopiedReply] = useState(false);
 
   async function handleScoreClarity() {
     if (!workspaceId || !token) return;
@@ -121,6 +124,23 @@ function MessageDrawer({
     } finally {
       setScoring(false);
     }
+  }
+
+  async function handleDraftReply() {
+    if (!workspaceId || !token || replyLoading) return;
+    setReplyLoading(true);
+    try {
+      const draft = await apiClient.getDraftEmailReply(workspaceId, message.id, token);
+      setReplyDraft({ subject: draft.subject, body: draft.body, tone: draft.tone });
+    } catch { /* silently fail */ }
+    finally { setReplyLoading(false); }
+  }
+
+  function handleCopyReply() {
+    if (!replyDraft) return;
+    navigator.clipboard.writeText(`Subject: ${replyDraft.subject}\n\n${replyDraft.body}`);
+    setCopiedReply(true);
+    setTimeout(() => setCopiedReply(false), 2000);
   }
 
   return (
@@ -201,6 +221,57 @@ function MessageDrawer({
             <Sparkles className="h-3.5 w-3.5 mr-2" />
             {scoring ? "Scoring clarity…" : "Score Clarity"}
           </Button>
+        )}
+
+        {/* AI Reply */}
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleDraftReply}
+          disabled={replyLoading}
+          className="w-full"
+        >
+          {replyLoading ? (
+            <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+          ) : (
+            <Sparkles className="h-3.5 w-3.5 mr-2" />
+          )}
+          {replyLoading ? "Drafting reply…" : "Draft AI Reply"}
+        </Button>
+
+        {/* Reply draft */}
+        {replyDraft && (
+          <Card className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Mail className="h-4 w-4 text-violet-400" />
+              <p className="text-xs font-semibold text-zinc-300">AI Draft Reply</p>
+              <Badge
+                variant={replyDraft.tone === "urgent" ? "rose" : replyDraft.tone === "friendly" ? "emerald" : "indigo"}
+                size="sm"
+                className="ml-auto"
+              >
+                {replyDraft.tone}
+              </Badge>
+            </div>
+            <div className="space-y-1">
+              <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest">Subject</p>
+              <p className="text-xs text-zinc-300 font-medium">{replyDraft.subject}</p>
+            </div>
+            <div className="space-y-1">
+              <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest">Body</p>
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 max-h-52 overflow-y-auto">
+                <pre className="text-xs text-zinc-300 whitespace-pre-wrap font-sans leading-relaxed">{replyDraft.body}</pre>
+              </div>
+            </div>
+            <Button variant="ghost" size="sm" onClick={handleCopyReply} className="w-full text-xs">
+              {copiedReply ? (
+                <CheckCircle className="h-3.5 w-3.5 mr-2 text-emerald-400" />
+              ) : (
+                <Copy className="h-3.5 w-3.5 mr-2" />
+              )}
+              {copiedReply ? "Copied!" : "Copy to clipboard"}
+            </Button>
+          </Card>
         )}
 
         {/* Linked contact */}
