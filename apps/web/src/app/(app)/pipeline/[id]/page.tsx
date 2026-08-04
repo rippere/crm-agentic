@@ -404,6 +404,11 @@ export default function DealDetailPage() {
   const [momentumLoading, setMomentumLoading] = useState(false);
   const [momentumGenerating, setMomentumGenerating] = useState(false);
 
+  type SentimentDigestData = { overall_sentiment: "positive" | "neutral" | "negative"; key_signals: string[]; sentiment_trend: "improving" | "stable" | "declining"; deal_id: string; generated_at: string };
+  const [sentimentDigest, setSentimentDigest] = useState<SentimentDigestData | null>(null);
+  const [sentimentDigestLoading, setSentimentDigestLoading] = useState(false);
+  const [sentimentDigestGenerating, setSentimentDigestGenerating] = useState(false);
+
   type ClosePlanData = { phases: { label: string; actions: string[] }[]; recommended_close_date: string; deal_id: string; generated_at: string };
   const [closePlanData, setClosePlanData] = useState<ClosePlanData | null>(null);
   const [closePlanLoading, setClosePlanLoading] = useState(false);
@@ -555,6 +560,13 @@ export default function DealDetailPage() {
         .then((data) => setMomentumData(data ?? null))
         .catch(() => setMomentumData(null))
         .finally(() => setMomentumLoading(false));
+
+      setSentimentDigestLoading(true);
+      apiClient
+        .getDealSentimentDigest(workspaceId, dealId, token)
+        .then((data) => setSentimentDigest(data ?? null))
+        .catch(() => setSentimentDigest(null))
+        .finally(() => setSentimentDigestLoading(false));
 
       setClosePlanLoading(true);
       apiClient
@@ -781,6 +793,16 @@ export default function DealDetailPage() {
       setMomentumData(data ?? null);
     } catch { /* ignore */ }
     finally { setMomentumGenerating(false); }
+  };
+
+  const handleRegenerateSentimentDigest = async () => {
+    if (!token || !workspaceId || sentimentDigestGenerating) return;
+    setSentimentDigestGenerating(true);
+    try {
+      const data = await apiClient.getDealSentimentDigest(workspaceId, dealId, token);
+      setSentimentDigest(data ?? null);
+    } catch { /* ignore */ }
+    finally { setSentimentDigestGenerating(false); }
   };
 
   const handleRegenerateClosePlan = async () => {
@@ -1925,6 +1947,80 @@ export default function DealDetailPage() {
                   </div>
                   <p className="text-[10px] text-zinc-600 text-right">
                     Generated {new Date(momentumData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Sentiment Digest */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm" aria-hidden>💬</span>
+                <p className="text-sm font-semibold text-zinc-200">Sentiment Digest</p>
+                {sentimentDigest && (() => {
+                  const s = sentimentDigest.overall_sentiment;
+                  const sColor = s === "positive"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : s === "negative"
+                    ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : "text-zinc-400 border-zinc-600/30 bg-zinc-700/20";
+                  return (
+                    <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${sColor}`}>
+                      {s}
+                    </span>
+                  );
+                })()}
+                {sentimentDigest && (() => {
+                  const t = sentimentDigest.sentiment_trend;
+                  const tColor = t === "improving"
+                    ? "text-emerald-400"
+                    : t === "declining"
+                    ? "text-rose-400"
+                    : "text-zinc-500";
+                  const tIcon = t === "improving" ? "↑" : t === "declining" ? "↓" : "→";
+                  return (
+                    <span className={`text-xs font-semibold ${tColor}`} title={`Trend: ${t}`}>{tIcon} {t}</span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateSentimentDigest}
+                  disabled={sentimentDigestLoading || sentimentDigestGenerating}
+                  className="ml-auto text-zinc-500 hover:text-indigo-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate sentiment digest"
+                  title="Regenerate"
+                >
+                  {sentimentDigestGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {sentimentDigestLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-8 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : sentimentDigest === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load sentiment data.</p>
+              ) : (
+                <div className="space-y-3">
+                  {sentimentDigest.key_signals.length > 0 && (
+                    <ul className="space-y-1.5">
+                      {sentimentDigest.key_signals.map((signal, i) => (
+                        <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                          <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-indigo-500" />
+                          <p className="text-xs text-zinc-300 leading-relaxed">{signal}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(sentimentDigest.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 </div>
               )}
