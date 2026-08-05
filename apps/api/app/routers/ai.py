@@ -2841,6 +2841,140 @@ async def deal_negotiation_script(
     }
 
 
+# POST /workspaces/{workspace_id}/deals/{deal_id}/ai/sentiment-digest
+# ---------------------------------------------------------------------------
+
+_SENTIMENT_DIGEST_SYSTEM = """\
+You are Nova, the AI deal intelligence in NovaCRM. Analyse the sentiment signals from recent deal notes \
+and contact messages and return a structured sentiment digest.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "overall_sentiment": "positive",
+  "key_signals": [
+    "One sentence — specific quote or behaviour that signals this sentiment.",
+    "Second signal — another concrete example.",
+    "Third signal — optional third data point."
+  ],
+  "sentiment_trend": "improving"
+}
+
+Rules:
+- "overall_sentiment": exactly one of "positive", "neutral", "negative"
+- "key_signals": 2–4 items, each a concise sentence citing a specific quote or observed behaviour
+- "sentiment_trend": exactly one of "improving", "stable", "declining" — compare earlier vs later signals\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/sentiment-digest")
+@limiter.limit("5/minute")
+async def deal_sentiment_digest(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return an AI sentiment digest for a deal using deal notes and contact messages via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sentiment digest is only available for open deals",
+        )
+
+    # Last 5 deal note bodies (oldest → newest for chronological context)
+    notes_result = await db.execute(
+        select(DealNote.body, DealNote.created_at)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(5)
+    )
+    note_rows = list(reversed(notes_result.all()))  # oldest → newest
+
+    # Last 3 messages from the deal's contact (if any)
+    messages: list[str] = []
+    if deal.contact_id:
+        msg_result = await db.execute(
+            select(Message.body_plain, Message.sender_email, Message.received_at)
+            .where(
+                Message.workspace_id == workspace_id,
+                Message.contact_id == deal.contact_id,
+            )
+            .order_by(Message.received_at.desc())
+            .limit(3)
+        )
+        messages = [
+            f"[{r.sender_email or 'unknown'}] {(r.body_plain or '')[:300]}"
+            for r in reversed(msg_result.all())
+        ]
+
+    context = (
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${float(deal.value):,.0f}\n"
+        f"Health score: {deal.health_score}/100\n"
+    )
+
+    if note_rows:
+        context += "\nDeal notes (oldest→newest):\n"
+        for row in note_rows:
+            ts = row.created_at.strftime("%Y-%m-%d") if row.created_at else "unknown date"
+            context += f"  [{ts}] {(row.body or '')[:300]}\n"
+    else:
+        context += "\nDeal notes: none recorded\n"
+
+    if messages:
+        context += "\nRecent contact messages (oldest→newest):\n"
+        for m in messages:
+            context += f"  {m}\n"
+    else:
+        context += "\nRecent contact messages: none available\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_SENTIMENT_DIGEST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        overall_sentiment = str(data.get("overall_sentiment", "neutral"))
+        if overall_sentiment not in ("positive", "neutral", "negative"):
+            overall_sentiment = "neutral"
+
+        key_signals = [str(s)[:200] for s in (data.get("key_signals") or [])[:4]]
+
+        sentiment_trend = str(data.get("sentiment_trend", "stable"))
+        if sentiment_trend not in ("improving", "stable", "declining"):
+            sentiment_trend = "stable"
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "overall_sentiment": overall_sentiment,
+        "key_signals": key_signals,
+        "sentiment_trend": sentiment_trend,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
 # POST /workspaces/{workspace_id}/messages/{message_id}/ai/reply
 # ---------------------------------------------------------------------------
 

@@ -2761,6 +2761,52 @@ export const apiClient = {
     )
   },
 
+  getDealSentimentDigest: (workspaceId: string, dealId: string, token: string): Promise<{
+    overall_sentiment: 'positive' | 'neutral' | 'negative'
+    key_signals: string[]
+    sentiment_trend: 'improving' | 'stable' | 'declining'
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type SentimentStub = { overall_sentiment: 'positive' | 'neutral' | 'negative'; key_signals: string[]; sentiment_trend: 'improving' | 'stable' | 'declining' }
+      const stubs: Record<string, SentimentStub> = {
+        'd-001': {
+          overall_sentiment: 'positive',
+          key_signals: [
+            "Sarah confirmed legal review is complete and the SLA language 'looks good overall'.",
+            "She responded to 8 of the last 10 emails — consistent high engagement.",
+            "Most recent message expressed eagerness to close before the May 15 deadline.",
+          ],
+          sentiment_trend: 'improving',
+        },
+        'd-002': {
+          overall_sentiment: 'negative',
+          key_signals: [
+            "Marcus has not replied to 2 follow-up emails in 21 days — radio silence is a churn signal.",
+            "His last message stated 'I need to bring it to the board' without committing to a timeline.",
+            "No inbound messages in over three weeks indicates disengagement.",
+          ],
+          sentiment_trend: 'declining',
+        },
+      }
+      const stub = stubs[dealId] ?? {
+        overall_sentiment: 'neutral' as const,
+        key_signals: [
+          'Recent notes indicate the conversation is progressing without strong positive or negative signals.',
+          'No major objections raised, but no explicit buying signals either.',
+        ],
+        sentiment_trend: 'stable' as const,
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/sentiment-digest`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
   getDraftEmailReply: (workspaceId: string, messageId: string, token: string): Promise<{
     subject: string
     body: string

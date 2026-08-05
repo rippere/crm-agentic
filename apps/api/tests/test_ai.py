@@ -1695,3 +1695,87 @@ async def test_draft_message_reply_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/sentiment-digest
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_sentiment_digest_returns_structured_response(app_client):
+    """deal_sentiment_digest returns overall_sentiment, key_signals, sentiment_trend, deal_id, generated_at."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    deal = _fake_deal(workspace_id, stage="proposal", health_score=62, ml_win_probability=48)
+    deal.contact_id = None  # no linked contact — simplifies mock setup
+
+    note_row1 = MagicMock()
+    note_row1.body = "Customer expressed excitement about the timeline and confirmed budget availability."
+    note_row1.created_at = None
+
+    note_row2 = MagicMock()
+    note_row2.body = "Follow-up call went well; champion reiterated strong internal support."
+    note_row2.created_at = None
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(deal),            # deal lookup
+        _make_all_result([note_row2, note_row1]),   # deal notes (desc → reversed in handler)
+    ])
+
+    digest_json = _json.dumps({
+        "overall_sentiment": "positive",
+        "key_signals": [
+            "Customer explicitly confirmed budget availability in the latest note.",
+            "Champion reiterated strong internal support — no objections raised.",
+            "Excitement expressed about the proposed timeline.",
+        ],
+        "sentiment_trend": "improving",
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=digest_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal.id}/ai/sentiment-digest"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["overall_sentiment"] == "positive"
+    assert isinstance(body["key_signals"], list)
+    assert len(body["key_signals"]) == 3
+    assert body["sentiment_trend"] == "improving"
+    assert body["deal_id"] == str(deal.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_sentiment_digest_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/ai/sentiment-digest"
+        )
+
+    assert resp.status_code == 403
