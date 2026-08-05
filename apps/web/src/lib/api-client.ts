@@ -2503,6 +2503,63 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/summary`, {}, token)
   },
 
+  getCommunicationStyle: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    style: 'direct' | 'analytical' | 'relational' | 'expressive';
+    preferred_channel: 'email' | 'slack' | 'call';
+    best_time: 'morning' | 'afternoon' | 'end_of_day';
+    tone_tips: string[];
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { style: 'direct' | 'analytical' | 'relational' | 'expressive'; preferred_channel: 'email' | 'slack' | 'call'; best_time: 'morning' | 'afternoon' | 'end_of_day'; tone_tips: string[] }> = {
+        'c-001': {
+          style: 'analytical',
+          preferred_channel: 'email',
+          best_time: 'morning',
+          tone_tips: [
+            'Lead with data and ROI metrics before any emotional appeal.',
+            'Include agenda items and structured bullet points in every email.',
+            'Avoid vague language — cite specific figures and timelines.',
+            'Follow up in writing after every call to confirm key decisions.',
+          ],
+        },
+        'c-002': {
+          style: 'relational',
+          preferred_channel: 'call',
+          best_time: 'afternoon',
+          tone_tips: [
+            'Open with personal rapport before diving into business topics.',
+            'Reference shared context or previous conversations to build trust.',
+            'Avoid coming across as transactional — show genuine interest.',
+          ],
+        },
+        'c-003': {
+          style: 'direct',
+          preferred_channel: 'slack',
+          best_time: 'end_of_day',
+          tone_tips: [
+            'Keep messages concise — get to the ask within the first two sentences.',
+            'Use Slack for quick check-ins; reserve email for formal updates.',
+            'Offer clear options rather than open-ended questions.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        style: 'relational' as const,
+        preferred_channel: 'email' as const,
+        best_time: 'morning' as const,
+        tone_tips: ['Match their tone in your opening line.', 'Keep follow-ups brief and action-oriented.'],
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/communication-style`, { method: 'POST' }, token)
+  },
+
   getDealClosePlan: (
     workspaceId: string,
     dealId: string,

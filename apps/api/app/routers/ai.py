@@ -3076,3 +3076,125 @@ async def draft_message_reply(
         "message_id": str(message_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/contacts/{contact_id}/communication-style
+# ---------------------------------------------------------------------------
+
+_COMMS_STYLE_SYSTEM = """\
+You are Nova, the AI communications analyst in NovaCRM. Analyse the provided contact profile \
+and recent messages to determine how this contact prefers to communicate, and return a structured profile.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "style": "direct",
+  "preferred_channel": "email",
+  "best_time": "morning",
+  "tone_tips": ["...", "..."]
+}
+
+Rules:
+- style must be exactly one of: "direct", "analytical", "relational", "expressive"
+  direct = brief, action-oriented; analytical = data-driven, detail-heavy;
+  relational = warm, rapport-first; expressive = enthusiastic, story-driven
+- preferred_channel must be exactly one of: "email", "slack", "call"
+- best_time must be exactly one of: "morning", "afternoon", "end_of_day"
+- tone_tips: 2-4 practical tips for how to communicate effectively with this contact
+- Base conclusions on the message content, response patterns, phrasing choices, and tone
+
+Output only the JSON object, nothing else.\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/communication-style")
+@limiter.limit("5/minute")
+async def contact_communication_style(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return an AI communication style profile for a contact using their recent messages."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    messages_result = await db.execute(
+        select(Message)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(5)
+    )
+    messages = messages_result.scalars().all()
+
+    context = (
+        f"Contact: {contact.name}\n"
+        f"Company: {contact.company or 'Unknown'}\n"
+        f"Role: {contact.role or 'Unknown'}\n"
+        f"Email: {contact.email or 'Unknown'}\n\n"
+    )
+
+    if messages:
+        context += "Recent messages (newest first):\n"
+        for i, msg in enumerate(messages, 1):
+            context += (
+                f"\n[Message {i}]\n"
+                f"Subject: {msg.subject or '(No subject)'}\n"
+                f"From: {msg.sender_email or 'Unknown'}\n"
+                f"Body: {(msg.body_plain or '')[:500]}\n"
+            )
+    else:
+        context += "No recent messages available.\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_COMMS_STYLE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        style = str(data.get("style", "relational"))
+        if style not in {"direct", "analytical", "relational", "expressive"}:
+            style = "relational"
+
+        preferred_channel = str(data.get("preferred_channel", "email"))
+        if preferred_channel not in {"email", "slack", "call"}:
+            preferred_channel = "email"
+
+        best_time = str(data.get("best_time", "morning"))
+        if best_time not in {"morning", "afternoon", "end_of_day"}:
+            best_time = "morning"
+
+        raw_tips = data.get("tone_tips", [])
+        tone_tips = [str(t) for t in raw_tips if isinstance(t, str)][:4]
+        if not tone_tips:
+            tone_tips = ["Adapt your messaging to their preferred communication style."]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "style": style,
+        "preferred_channel": preferred_channel,
+        "best_time": best_time,
+        "tone_tips": tone_tips,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
