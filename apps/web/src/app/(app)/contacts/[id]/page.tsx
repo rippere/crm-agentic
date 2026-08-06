@@ -17,7 +17,7 @@ import {
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
   Star, Calendar, X, Plus, Send, BarChart2, Download, Layers, Sparkles,
-  Route, MessageSquare, PhoneCall,
+  Route, MessageSquare, PhoneCall, RefreshCw, Radio,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -420,6 +420,11 @@ export default function ContactDetailPage() {
   const [contactSummaryLoading, setContactSummaryLoading] = useState(false);
   const [contactSummaryGenerating, setContactSummaryGenerating] = useState(false);
 
+  type CommsStyleData = { style: 'direct' | 'analytical' | 'relational' | 'expressive'; preferred_channel: 'email' | 'slack' | 'call'; best_time: 'morning' | 'afternoon' | 'end_of_day'; tone_tips: string[]; contact_id: string; generated_at: string };
+  const [commsStyle, setCommsStyle] = useState<CommsStyleData | null>(null);
+  const [commsStyleLoading, setCommsStyleLoading] = useState(false);
+  const [commsStyleGenerating, setCommsStyleGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -602,6 +607,13 @@ export default function ContactDetailPage() {
       .then((data: ContactSummaryData) => setContactSummary(data))
       .catch(() => setContactSummary(null))
       .finally(() => setContactSummaryLoading(false));
+
+    setCommsStyleLoading(true);
+    apiClient
+      .getCommunicationStyle(workspaceId, contactId, token)
+      .then((data) => setCommsStyle(data ?? null))
+      .catch(() => setCommsStyle(null))
+      .finally(() => setCommsStyleLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -735,6 +747,17 @@ export default function ContactDetailPage() {
       setContactSummary(data as ContactSummaryData);
     } catch { /* ignore */ } finally {
       setContactSummaryGenerating(false);
+    }
+  };
+
+  const handleRegenerateCommsStyle = async () => {
+    if (!token || !workspaceId || commsStyleGenerating) return;
+    setCommsStyleGenerating(true);
+    try {
+      const data = await apiClient.getCommunicationStyle(workspaceId, contactId, token);
+      setCommsStyle(data ?? null);
+    } catch { /* ignore */ } finally {
+      setCommsStyleGenerating(false);
     }
   };
 
@@ -1210,6 +1233,69 @@ export default function ContactDetailPage() {
                 <p className="text-[10px] text-zinc-600">
                   Generated {formatRelative(contactSummary.generated_at)}
                 </p>
+              </div>
+            )}
+          </Card>
+
+          {/* Comms Style card */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Radio className="h-4 w-4 text-violet-400" />
+              <p className="text-xs font-semibold text-zinc-300">Comms Style</p>
+              <button
+                onClick={handleRegenerateCommsStyle}
+                disabled={commsStyleGenerating || commsStyleLoading}
+                className="ml-auto p-1 rounded text-zinc-500 hover:text-violet-400 disabled:opacity-40 transition-colors"
+              >
+                {commsStyleGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              </button>
+            </div>
+            {commsStyleLoading ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-3 bg-zinc-800 rounded w-1/2" />
+                <div className="h-3 bg-zinc-800 rounded w-3/4" />
+                <div className="h-3 bg-zinc-800 rounded w-2/3" />
+              </div>
+            ) : commsStyle === null ? (
+              <p className="text-xs text-zinc-600 italic py-2">Unable to load comms style.</p>
+            ) : (
+              <div className="space-y-3 opacity-100 transition-opacity" style={{ opacity: commsStyleGenerating ? 0.5 : 1 }}>
+                {/* Style + channel + best time badges */}
+                <div className="flex flex-wrap gap-1.5">
+                  {(() => {
+                    const styleColors: Record<string, string> = {
+                      direct: 'bg-rose-500/15 text-rose-300 border-rose-500/25',
+                      analytical: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/25',
+                      relational: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/25',
+                      expressive: 'bg-amber-500/15 text-amber-300 border-amber-500/25',
+                    };
+                    return (
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${styleColors[commsStyle.style] ?? 'bg-zinc-700 text-zinc-300 border-zinc-600'}`}>
+                        {commsStyle.style.charAt(0).toUpperCase() + commsStyle.style.slice(1)}
+                      </span>
+                    );
+                  })()}
+                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full border bg-zinc-800 text-zinc-300 border-zinc-700 flex items-center gap-1">
+                    {commsStyle.preferred_channel === 'email' && <Mail className="h-2.5 w-2.5" />}
+                    {commsStyle.preferred_channel === 'slack' && <MessageSquare className="h-2.5 w-2.5" />}
+                    {commsStyle.preferred_channel === 'call' && <Phone className="h-2.5 w-2.5" />}
+                    {commsStyle.preferred_channel}
+                  </span>
+                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full border bg-zinc-800 text-zinc-300 border-zinc-700 flex items-center gap-1">
+                    <Clock className="h-2.5 w-2.5" />
+                    {commsStyle.best_time.replace('_', ' ')}
+                  </span>
+                </div>
+                {/* Tone tips */}
+                <ul className="space-y-1.5">
+                  {commsStyle.tone_tips.map((tip, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-4 w-4 shrink-0 rounded-full bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-[9px] font-bold text-violet-300">{i + 1}</span>
+                      {tip}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(commsStyle.generated_at)}</p>
               </div>
             )}
           </Card>

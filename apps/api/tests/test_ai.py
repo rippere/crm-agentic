@@ -1779,3 +1779,81 @@ async def test_deal_sentiment_digest_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_contact_communication_style_returns_structured_response(app_client):
+    """communication-style returns style, preferred_channel, best_time, tone_tips, contact_id, generated_at."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_scalar_result_local(obj):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = obj
+        return result
+
+    def _make_scalars_result(rows):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = rows
+        return result
+
+    contact = _fake_contact(workspace_id, name="Sarah Chen", company="TechCorp")
+
+    msg1 = MagicMock()
+    msg1.subject = "Q3 Review"
+    msg1.sender_email = "sarah@techcorp.com"
+    msg1.body_plain = "Hi, please send over the detailed metrics and ROI breakdown before our call. I need the numbers."
+    msg1.received_at = None
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result_local(contact),   # contact lookup
+        _make_scalars_result([msg1]),          # last 5 messages
+    ])
+
+    style_json = _json.dumps({
+        "style": "analytical",
+        "preferred_channel": "email",
+        "best_time": "morning",
+        "tone_tips": [
+            "Lead with data and ROI figures before any narrative.",
+            "Use structured bullet points — avoid rambling paragraphs.",
+            "Always confirm next steps in writing after each call.",
+        ],
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=style_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/communication-style"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["style"] == "analytical"
+    assert body["preferred_channel"] == "email"
+    assert body["best_time"] == "morning"
+    assert isinstance(body["tone_tips"], list)
+    assert len(body["tone_tips"]) == 3
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_communication_style_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/communication-style"
+        )
+
+    assert resp.status_code == 403
