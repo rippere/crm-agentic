@@ -1857,3 +1857,70 @@ async def test_contact_communication_style_wrong_workspace_returns_403(app_clien
         )
 
     assert resp.status_code == 403
+
+
+# ── Win Probability Explainer ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_deal_win_probability_explainer_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, stage="proposal", ml_win_probability=65, health_score=72)
+
+    def _make_scalar_result(obj):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = obj
+        return r
+
+    def _make_scalars_all(rows):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = rows
+        return r
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(deal),   # deal lookup
+        _make_scalars_all([]),       # deal notes (none)
+    ])
+
+    import json as _json
+    explainer_json = _json.dumps({
+        "probability_assessment": "overestimated",
+        "key_drivers": ["Strong champion engagement", "Clear budget confirmed"],
+        "risk_factors": ["Competitor pricing pressure", "Decision delayed twice"],
+        "recommended_adjustment": -10,
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=explainer_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal.id}/ai/win-probability-explainer"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["probability_assessment"] == "overestimated"
+    assert isinstance(body["key_drivers"], list)
+    assert len(body["key_drivers"]) == 2
+    assert isinstance(body["risk_factors"], list)
+    assert body["recommended_adjustment"] == -10
+    assert body["deal_id"] == str(deal.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_win_probability_explainer_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/ai/win-probability-explainer"
+        )
+
+    assert resp.status_code == 403
