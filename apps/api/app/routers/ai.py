@@ -3198,3 +3198,135 @@ async def contact_communication_style(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ── Win Probability Explainer ──────────────────────────────────────────────────
+
+_WIN_PROB_SYSTEM = """\
+You are a sales intelligence assistant analyzing deal win probability accuracy.
+Given deal data, assess whether the ML-predicted win probability is accurate,
+identify key drivers and risk factors, and suggest an adjustment if warranted.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "probability_assessment": "on_track" | "overestimated" | "underestimated",
+  "key_drivers": ["driver1", "driver2", "driver3"],
+  "risk_factors": ["risk1", "risk2"],
+  "recommended_adjustment": <integer -30 to 30, or null if on_track>
+}
+
+Rules:
+- probability_assessment: "on_track" if ML probability seems accurate, "overestimated" if deal is riskier than score suggests, "underestimated" if stronger than score suggests
+- key_drivers: 2-4 specific factors positively influencing the deal
+- risk_factors: 1-3 specific concerns (empty array if none)
+- recommended_adjustment: integer points to add/subtract from ML probability, or null if assessment is "on_track"
+- Be data-driven and specific; reference the actual numbers provided\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/win-probability-explainer")
+@limiter.limit("5/minute")
+async def deal_win_probability_explainer(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Win probability analysis is not available for closed deals.",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote)
+        .where(DealNote.deal_id == deal_id, DealNote.workspace_id == workspace_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = notes_result.scalars().all()
+
+    days_in_stage = 0
+    if deal.stage_changed_at:
+        delta = datetime.datetime.utcnow() - deal.stage_changed_at.replace(tzinfo=None)
+        days_in_stage = max(0, delta.days)
+
+    next_action_overdue = False
+    if deal.next_action_date:
+        next_action_overdue = deal.next_action_date < datetime.date.today()
+
+    competitor_count = len(deal.competitors or [])
+
+    context = (
+        f"Deal Stage: {deal.stage}\n"
+        f"ML Win Probability: {deal.ml_win_probability or 0}%\n"
+        f"Health Score: {deal.health_score or 0}\n"
+        f"Days in Current Stage: {days_in_stage}\n"
+        f"Competitor Count: {competitor_count}\n"
+        f"Next Action Overdue: {'Yes' if next_action_overdue else 'No'}\n"
+    )
+
+    if notes:
+        context += "\nRecent Deal Notes:\n"
+        for i, note in enumerate(notes, 1):
+            context += f"{i}. {(note.body or '')[:300]}\n"
+    else:
+        context += "\nNo recent deal notes available.\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_WIN_PROB_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        assessment = str(data.get("probability_assessment", "on_track"))
+        if assessment not in {"on_track", "overestimated", "underestimated"}:
+            assessment = "on_track"
+
+        raw_drivers = data.get("key_drivers", [])
+        key_drivers = [str(d) for d in raw_drivers if isinstance(d, str)][:4]
+        if not key_drivers:
+            key_drivers = ["Insufficient data for analysis."]
+
+        raw_risks = data.get("risk_factors", [])
+        risk_factors = [str(r) for r in raw_risks if isinstance(r, str)][:3]
+
+        raw_adj = data.get("recommended_adjustment")
+        recommended_adjustment: int | None = None
+        if isinstance(raw_adj, (int, float)) and not isinstance(raw_adj, bool):
+            adj = int(raw_adj)
+            if adj != 0:
+                recommended_adjustment = max(-30, min(30, adj))
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "probability_assessment": assessment,
+        "key_drivers": key_drivers,
+        "risk_factors": risk_factors,
+        "recommended_adjustment": recommended_adjustment,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

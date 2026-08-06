@@ -2864,6 +2864,44 @@ export const apiClient = {
     )
   },
 
+  getWinProbabilityExplainer: (workspaceId: string, dealId: string, token: string): Promise<{
+    probability_assessment: 'on_track' | 'overestimated' | 'underestimated'
+    key_drivers: string[]
+    risk_factors: string[]
+    recommended_adjustment: number | null
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        probability_assessment: 'on_track' | 'overestimated' | 'underestimated'
+        key_drivers: string[]
+        risk_factors: string[]
+        recommended_adjustment: number | null
+      }> = {
+        'd-001': {
+          probability_assessment: 'on_track',
+          key_drivers: ['Champion actively engaged in evaluation', 'Budget confirmed in Q3 planning', 'Timeline aligns with procurement cycle'],
+          risk_factors: ['Legal review may extend timeline'],
+          recommended_adjustment: null,
+        },
+        'd-002': {
+          probability_assessment: 'overestimated',
+          key_drivers: ['Initial enthusiasm from champion', 'Strong product fit for stated requirements'],
+          risk_factors: ['Decision maker not yet engaged', 'Competing vendor offered 20% lower price', 'Next action overdue by 12 days'],
+          recommended_adjustment: -15,
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/win-probability-explainer`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
   getDraftEmailReply: (workspaceId: string, messageId: string, token: string): Promise<{
     subject: string
     body: string

@@ -415,6 +415,11 @@ export default function DealDetailPage() {
   const [closePlanGenerating, setClosePlanGenerating] = useState(false);
   const [closePlanOpenPhase, setClosePlanOpenPhase] = useState<number>(0);
 
+  type WinProbExplainerData = { probability_assessment: 'on_track' | 'overestimated' | 'underestimated'; key_drivers: string[]; risk_factors: string[]; recommended_adjustment: number | null; deal_id: string; generated_at: string };
+  const [winProbExplainer, setWinProbExplainer] = useState<WinProbExplainerData | null>(null);
+  const [winProbExplainerLoading, setWinProbExplainerLoading] = useState(false);
+  const [winProbExplainerGenerating, setWinProbExplainerGenerating] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -567,6 +572,13 @@ export default function DealDetailPage() {
         .then((data) => setSentimentDigest(data ?? null))
         .catch(() => setSentimentDigest(null))
         .finally(() => setSentimentDigestLoading(false));
+
+      setWinProbExplainerLoading(true);
+      apiClient
+        .getWinProbabilityExplainer(workspaceId, dealId, token)
+        .then((data) => setWinProbExplainer(data ?? null))
+        .catch(() => setWinProbExplainer(null))
+        .finally(() => setWinProbExplainerLoading(false));
 
       setClosePlanLoading(true);
       apiClient
@@ -803,6 +815,16 @@ export default function DealDetailPage() {
       setSentimentDigest(data ?? null);
     } catch { /* ignore */ }
     finally { setSentimentDigestGenerating(false); }
+  };
+
+  const handleRegenerateWinProbExplainer = async () => {
+    if (!token || !workspaceId || winProbExplainerGenerating) return;
+    setWinProbExplainerGenerating(true);
+    try {
+      const data = await apiClient.getWinProbabilityExplainer(workspaceId, dealId, token);
+      setWinProbExplainer(data ?? null);
+    } catch { /* ignore */ }
+    finally { setWinProbExplainerGenerating(false); }
   };
 
   const handleRegenerateClosePlan = async () => {
@@ -2021,6 +2043,93 @@ export default function DealDetailPage() {
                   )}
                   <p className="text-[10px] text-zinc-600 text-right">
                     Generated {new Date(sentimentDigest.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Win Probability Explainer */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <BarChart2 className="h-4 w-4 text-emerald-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Win Probability Explainer</p>
+                {winProbExplainer && (() => {
+                  const a = winProbExplainer.probability_assessment;
+                  const aColor = a === "on_track"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : a === "overestimated"
+                    ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : "text-amber-300 border-amber-500/30 bg-amber-500/10";
+                  const aLabel = a === "on_track" ? "On Track" : a === "overestimated" ? "Overestimated" : "Underestimated";
+                  return (
+                    <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${aColor}`}>
+                      {aLabel}
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateWinProbExplainer}
+                  disabled={winProbExplainerLoading || winProbExplainerGenerating}
+                  className="ml-auto text-zinc-500 hover:text-emerald-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate win probability explainer"
+                  title="Regenerate"
+                >
+                  {winProbExplainerGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {winProbExplainerLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-8 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : winProbExplainer === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load win probability data.</p>
+              ) : (
+                <div className="space-y-3">
+                  {winProbExplainer.key_drivers.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">Key Drivers</p>
+                      <ul className="space-y-1.5">
+                        {winProbExplainer.key_drivers.map((driver, i) => (
+                          <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                            <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500" />
+                            <p className="text-xs text-zinc-300 leading-relaxed">{driver}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {winProbExplainer.risk_factors.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">Risk Factors</p>
+                      <ul className="space-y-1.5">
+                        {winProbExplainer.risk_factors.map((risk, i) => (
+                          <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                            <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-500" />
+                            <p className="text-xs text-zinc-300 leading-relaxed">{risk}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {winProbExplainer.recommended_adjustment !== null && (
+                    <div className={`rounded-lg border px-3 py-2 ${winProbExplainer.recommended_adjustment > 0 ? "border-emerald-500/20 bg-emerald-500/5" : "border-rose-500/20 bg-rose-500/5"}`}>
+                      <p className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wide mb-0.5">Suggested Adjustment</p>
+                      <p className={`text-sm font-mono font-bold ${winProbExplainer.recommended_adjustment > 0 ? "text-emerald-300" : "text-rose-300"}`}>
+                        {winProbExplainer.recommended_adjustment > 0 ? "+" : ""}{winProbExplainer.recommended_adjustment}%
+                      </p>
+                    </div>
+                  )}
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(winProbExplainer.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 </div>
               )}
