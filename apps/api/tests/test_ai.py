@@ -1924,3 +1924,79 @@ async def test_deal_win_probability_explainer_wrong_workspace_returns_403(app_cl
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/discovery-questions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_discovery_questions_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, stage="discovery", value=30000.0)
+
+    def _make_scalar_result(obj):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = obj
+        return r
+
+    def _make_scalars_all(rows):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = rows
+        return r
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(deal),   # deal lookup
+        _make_scalars_all([]),       # deal notes (none)
+    ])
+
+    import json as _json
+    discovery_json = _json.dumps({
+        "questions": [
+            {"question": "What budget has been allocated for this initiative?", "intent": "Confirms funding is secured.", "category": "budget"},
+            {"question": "Who will sign off on this purchase?", "intent": "Identifies the real decision maker.", "category": "authority"},
+            {"question": "What problem are you solving?", "intent": "Uncovers the core business need.", "category": "need"},
+            {"question": "What is your ideal go-live date?", "intent": "Establishes timeline urgency.", "category": "timeline"},
+            {"question": "Are there other tools you're evaluating?", "intent": "Surfaces competitive dynamics.", "category": "need"},
+            {"question": "What happens if you miss this deadline?", "intent": "Reveals consequence of inaction.", "category": "timeline"},
+        ]
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=discovery_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{deal.id}/ai/discovery-questions"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "questions" in body
+    assert isinstance(body["questions"], list)
+    assert len(body["questions"]) == 6
+    q0 = body["questions"][0]
+    assert "question" in q0
+    assert "intent" in q0
+    assert q0["category"] in {"budget", "authority", "need", "timeline"}
+    assert body["deal_id"] == str(deal.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_discovery_questions_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/ai/discovery-questions"
+        )
+
+    assert resp.status_code == 403
