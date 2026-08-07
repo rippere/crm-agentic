@@ -2902,6 +2902,44 @@ export const apiClient = {
     )
   },
 
+  getDealDiscoveryQuestions: (workspaceId: string, dealId: string, token: string): Promise<{
+    questions: Array<{
+      question: string
+      intent: string
+      category: 'budget' | 'authority' | 'need' | 'timeline'
+    }>
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, Array<{ question: string; intent: string; category: 'budget' | 'authority' | 'need' | 'timeline' }>> = {
+        'd-001': [
+          { question: "What budget range has the executive team approved for this initiative?", intent: "Confirms whether budget is secured or still in approval.", category: "budget" },
+          { question: "Who besides yourself will have final sign-off on this purchase?", intent: "Identifies the real decision maker and any blockers.", category: "authority" },
+          { question: "What's the specific outcome you're trying to achieve in the next 6 months?", intent: "Anchors the deal to a measurable business goal.", category: "need" },
+          { question: "Are there incumbent vendors or tools this would replace?", intent: "Surfaces switching costs and competitive dynamics.", category: "need" },
+          { question: "When does this need to be live for your team?", intent: "Establishes urgency and procurement timeline.", category: "timeline" },
+          { question: "Is there a board or quarterly review driving this decision date?", intent: "Uncovers external deadlines that could accelerate or delay.", category: "timeline" },
+        ],
+        'd-002': [
+          { question: "Has a budget line item been created for this project?", intent: "Determines if funding is allocated or still conceptual.", category: "budget" },
+          { question: "Beyond price, what would make this a clear winner for your team?", intent: "Reveals unstated value drivers beyond cost.", category: "need" },
+          { question: "Who are the key stakeholders we haven't spoken with yet?", intent: "Identifies influencers and potential blockers.", category: "authority" },
+          { question: "What does success look like 90 days after go-live?", intent: "Sets concrete outcome expectations for the deal.", category: "need" },
+          { question: "How does this fit into your Q4 planning cycle?", intent: "Ties the deal to a real budget or planning milestone.", category: "budget" },
+          { question: "What would cause you to delay this past year-end?", intent: "Surfaces objections and risk factors early.", category: "timeline" },
+        ],
+      }
+      const qs = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ questions: qs, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/discovery-questions`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
   getDraftEmailReply: (workspaceId: string, messageId: string, token: string): Promise<{
     subject: string
     body: string

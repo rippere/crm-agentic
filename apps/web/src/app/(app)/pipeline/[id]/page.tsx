@@ -18,7 +18,7 @@ import {
   Building2, Calendar, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users, Sparkles, RefreshCw, Shield,
+  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users, Sparkles, RefreshCw, Shield, HelpCircle,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -420,6 +420,13 @@ export default function DealDetailPage() {
   const [winProbExplainerLoading, setWinProbExplainerLoading] = useState(false);
   const [winProbExplainerGenerating, setWinProbExplainerGenerating] = useState(false);
 
+  type DiscoveryQuestion = { question: string; intent: string; category: 'budget' | 'authority' | 'need' | 'timeline' };
+  type DiscoveryQuestionsData = { questions: DiscoveryQuestion[]; deal_id: string; generated_at: string };
+  const [discoveryData, setDiscoveryData] = useState<DiscoveryQuestionsData | null>(null);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryGenerating, setDiscoveryGenerating] = useState(false);
+  const [discoveryCopied, setDiscoveryCopied] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -608,6 +615,15 @@ export default function DealDetailPage() {
           .then((data) => setNegotiationData(data ?? null))
           .catch(() => setNegotiationData(null))
           .finally(() => setNegotiationLoading(false));
+      }
+
+      if (deal.stage === "discovery" || deal.stage === "qualified") {
+        setDiscoveryLoading(true);
+        apiClient
+          .getDealDiscoveryQuestions(workspaceId, dealId, token)
+          .then((data) => setDiscoveryData(data ?? null))
+          .catch(() => setDiscoveryData(null))
+          .finally(() => setDiscoveryLoading(false));
       }
     }
 
@@ -825,6 +841,26 @@ export default function DealDetailPage() {
       setWinProbExplainer(data ?? null);
     } catch { /* ignore */ }
     finally { setWinProbExplainerGenerating(false); }
+  };
+
+  const handleRegenerateDiscovery = async () => {
+    if (!token || !workspaceId || discoveryGenerating) return;
+    setDiscoveryGenerating(true);
+    try {
+      const data = await apiClient.getDealDiscoveryQuestions(workspaceId, dealId, token);
+      setDiscoveryData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setDiscoveryGenerating(false); }
+  };
+
+  const handleCopyDiscoveryQuestions = async () => {
+    if (!discoveryData) return;
+    const text = discoveryData.questions.map((q, i) => `${i + 1}. ${q.question}`).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setDiscoveryCopied(true);
+      setTimeout(() => setDiscoveryCopied(false), 2000);
+    } catch { /* ignore */ }
   };
 
   const handleRegenerateClosePlan = async () => {
@@ -2495,6 +2531,89 @@ export default function DealDetailPage() {
               )}
             </Card>
           )}
+
+          {/* Discovery Questions — discovery/qualified stage only */}
+          {(deal.stage === "discovery" || deal.stage === "qualified") && (() => {
+            const bantColor: Record<string, string> = {
+              budget: "text-emerald-300 border-emerald-500/30 bg-emerald-500/10",
+              authority: "text-sky-300 border-sky-500/30 bg-sky-500/10",
+              need: "text-indigo-300 border-indigo-500/30 bg-indigo-500/10",
+              timeline: "text-amber-300 border-amber-500/30 bg-amber-500/10",
+            };
+            return (
+              <Card className="p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <HelpCircle className="h-4 w-4 text-violet-400" aria-hidden />
+                  <p className="text-sm font-semibold text-zinc-200">Discovery Questions</p>
+                  {discoveryData && (
+                    <span className="ml-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-violet-300">
+                      {discoveryData.questions.length} BANT
+                    </span>
+                  )}
+                  <button
+                    onClick={handleCopyDiscoveryQuestions}
+                    disabled={!discoveryData || discoveryLoading}
+                    className="ml-auto text-zinc-500 hover:text-violet-400 disabled:opacity-40 transition-colors cursor-pointer"
+                    aria-label="Copy all questions"
+                    title={discoveryCopied ? "Copied!" : "Copy all"}
+                  >
+                    {discoveryCopied ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                    ) : (
+                      <FileText className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                  <button
+                    onClick={handleRegenerateDiscovery}
+                    disabled={discoveryLoading || discoveryGenerating}
+                    className="text-zinc-500 hover:text-violet-400 disabled:opacity-40 transition-colors cursor-pointer"
+                    aria-label="Regenerate discovery questions"
+                    title="Regenerate"
+                  >
+                    {discoveryGenerating ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </div>
+
+                {discoveryLoading ? (
+                  <div className="space-y-2">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div key={i} className="h-12 rounded-lg bg-zinc-800/50 animate-pulse" />
+                    ))}
+                  </div>
+                ) : discoveryData === null ? (
+                  <p className="text-xs text-zinc-600 italic py-2">Unable to load discovery questions.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {discoveryData.questions.map((q, i) => (
+                      <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 space-y-1">
+                        <div className="flex items-start gap-2">
+                          <span className="h-4 w-4 rounded-full bg-violet-500/20 flex items-center justify-center text-[9px] font-bold text-violet-400 flex-shrink-0 mt-0.5">
+                            {i + 1}
+                          </span>
+                          <div className="flex-1 space-y-1">
+                            <p className="text-xs text-zinc-200 font-medium leading-snug">{q.question}</p>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wide ${bantColor[q.category] ?? bantColor.need}`}>
+                                {q.category}
+                              </span>
+                              <p className="text-[11px] text-zinc-500 leading-relaxed">{q.intent}</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <p className="text-[10px] text-zinc-600 text-right">
+                      Generated {new Date(discoveryData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+                )}
+              </Card>
+            );
+          })()}
 
           {/* Negotiation Script — proposal/negotiation stage only */}
           {(deal.stage === "proposal" || deal.stage === "negotiation") && (

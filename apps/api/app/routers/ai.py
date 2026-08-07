@@ -3330,3 +3330,129 @@ async def deal_win_probability_explainer(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ── Discovery Questions ────────────────────────────────────────────────────────
+
+_DISCOVERY_SYSTEM = """\
+You are Nova, an AI sales coach for NovaCRM. Generate targeted discovery questions
+for a sales deal using the BANT framework (Budget, Authority, Need, Timeline).
+
+Return ONLY valid JSON with this exact structure:
+{
+  "questions": [
+    {
+      "question": "The discovery question to ask",
+      "intent": "One sentence explaining what this question uncovers",
+      "category": "budget" | "authority" | "need" | "timeline"
+    }
+  ]
+}
+
+Rules:
+- Generate exactly 6 questions: 1-2 per BANT category, distributed naturally
+- Questions must be open-ended and specific to the deal context
+- intent: one concise sentence on what insight this question reveals
+- category must be one of: budget, authority, need, timeline
+- Make questions conversational and non-confrontational
+- Reference specific context from the deal data provided\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/discovery-questions")
+@limiter.limit("5/minute")
+async def deal_discovery_questions(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Discovery questions are not available for closed deals.",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote)
+        .where(DealNote.deal_id == deal_id, DealNote.workspace_id == workspace_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = notes_result.scalars().all()
+
+    competitor_count = len(deal.competitors or [])
+
+    context = (
+        f"Deal Title: {deal.title or 'Unknown'}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Value: ${deal.value or 0:,.0f}\n"
+        f"Stage: {deal.stage}\n"
+        f"Health Score: {deal.health_score or 0}\n"
+        f"Competitor Count: {competitor_count}\n"
+    )
+
+    if notes:
+        context += "\nRecent Deal Notes:\n"
+        for i, note in enumerate(notes, 1):
+            context += f"{i}. {(note.body or '')[:300]}\n"
+    else:
+        context += "\nNo deal notes yet — use the company and stage context.\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_DISCOVERY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_categories = {"budget", "authority", "need", "timeline"}
+        raw_questions = data.get("questions", [])
+        questions = []
+        for q in raw_questions:
+            if not isinstance(q, dict):
+                continue
+            category = str(q.get("category", "need"))
+            if category not in valid_categories:
+                category = "need"
+            questions.append({
+                "question": str(q.get("question", "")).strip(),
+                "intent": str(q.get("intent", "")).strip(),
+                "category": category,
+            })
+        questions = [q for q in questions if q["question"]][:7]
+        if not questions:
+            questions = [{
+                "question": "What business problem are you solving with this purchase?",
+                "intent": "Uncovers the core need driving the deal.",
+                "category": "need",
+            }]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "questions": questions,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
