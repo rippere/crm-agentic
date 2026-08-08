@@ -1924,3 +1924,96 @@ async def test_deal_win_probability_explainer_wrong_workspace_returns_403(app_cl
         )
 
     assert resp.status_code == 403
+
+
+# ── Task Prioritizer ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_ai_tasks_prioritize_returns_structured_response(app_client):
+    """POST /workspaces/{wid}/ai/tasks/prioritize returns prioritized_tasks list with urgency/rationale/recommended_action."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    task_id_1 = uuid.uuid4()
+    task_id_2 = uuid.uuid4()
+
+    task1 = MagicMock()
+    task1.id = task_id_1
+    task1.title = "Send contract redlines"
+    task1.status = "open"
+    task1.description = "Legal review complete, redlines ready"
+    import datetime
+    task1.due_date = (datetime.date.today() - datetime.timedelta(days=2))  # overdue
+
+    task2 = MagicMock()
+    task2.id = task_id_2
+    task2.title = "Schedule follow-up call"
+    task2.status = "open"
+    task2.description = ""
+    task2.due_date = datetime.date.today() + datetime.timedelta(days=5)
+
+    def _make_all_result(rows):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
+    # Rows returned from the JOIN query: list of (task, contact_name) tuples
+    mock_db.execute = AsyncMock(return_value=_make_all_result([
+        (task1, "Sarah Chen"),
+        (task2, None),
+    ]))
+
+    priority_json = _json.dumps({
+        "prioritized_tasks": [
+            {
+                "task_id": str(task_id_1),
+                "urgency": "critical",
+                "rationale": "Overdue by 2 days and blocking a deal closure.",
+                "recommended_action": "Send redlines to legal today.",
+            },
+            {
+                "task_id": str(task_id_2),
+                "urgency": "medium",
+                "rationale": "Due in 5 days with no blocking dependency.",
+                "recommended_action": "Book a 30-min call slot via calendar invite.",
+            },
+        ]
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=priority_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/ai/tasks/prioritize")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "prioritized_tasks" in body
+    tasks_out = body["prioritized_tasks"]
+    assert isinstance(tasks_out, list)
+    assert len(tasks_out) == 2
+
+    first = tasks_out[0]
+    assert first["task_id"] == str(task_id_1)
+    assert first["urgency"] == "critical"
+    assert isinstance(first["rationale"], str) and first["rationale"]
+    assert isinstance(first["recommended_action"], str) and first["recommended_action"]
+
+    assert body["workspace_id"] == str(workspace_id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_ai_tasks_prioritize_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-ffffaaaabbbb")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/ai/tasks/prioritize")
+
+    assert resp.status_code == 403

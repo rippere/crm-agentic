@@ -2931,4 +2931,43 @@ export const apiClient = {
       token,
     )
   },
+
+  prioritizeTasks: (workspaceId: string, token: string): Promise<{
+    prioritized_tasks: Array<{
+      task_id: string
+      urgency: 'critical' | 'high' | 'medium' | 'low'
+      rationale: string
+      recommended_action: string
+    }>
+    workspace_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        prioritized_tasks: [
+          {
+            task_id: 'task-demo-1',
+            urgency: 'critical' as const,
+            rationale: 'Overdue by 2 days and linked to a high-value deal in negotiation stage.',
+            recommended_action: 'Send the updated contract redlines to Sarah Chen today before end of business.',
+          },
+          {
+            task_id: 'task-demo-2',
+            urgency: 'high' as const,
+            rationale: 'Due in 1 day and blocking the Q3 proposal from going out.',
+            recommended_action: 'Finalize the pricing slide deck and share with Marcus Webb for review.',
+          },
+          {
+            task_id: 'task-demo-3',
+            urgency: 'medium' as const,
+            rationale: 'Due in 5 days with a warm prospect who responded positively.',
+            recommended_action: 'Schedule a follow-up call with Alex Rivera to discuss implementation timeline.',
+          },
+        ],
+        workspace_id: workspaceId,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/tasks/prioritize`, { method: 'POST' }, token)
+  },
 }
