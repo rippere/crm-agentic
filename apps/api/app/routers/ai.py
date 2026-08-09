@@ -3909,3 +3909,170 @@ async def get_team_performance(
         },
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ── Meeting Prep ───────────────────────────────────────────────────────────────
+
+_MEETING_PREP_SYSTEM = """\
+You are an expert sales coach. Given a deal's context, generate concise meeting prep notes.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "agenda_items": [
+    {"topic": "string", "goal": "string (one sentence)", "talking_points": ["string", "string", "string"]},
+    {"topic": "string", "goal": "string", "talking_points": ["string", "string"]},
+    {"topic": "string", "goal": "string", "talking_points": ["string"]}
+  ],
+  "questions_to_ask": ["string", "string", "string"],
+  "things_to_avoid": ["string", "string"]
+}
+Rules:
+- Exactly 3 agenda_items, each with 1-3 talking_points
+- Exactly 3 questions_to_ask
+- Exactly 2 things_to_avoid
+- Keep all strings concise (20 words or fewer)
+- Be specific to the deal context provided
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/meeting-prep")
+@limiter.limit("5/minute")
+async def deal_meeting_prep(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Meeting prep is not available for closed deals.",
+        )
+
+    contact_lines: list[str] = []
+    if deal.contact_id:
+        contact_result = await db.execute(
+            select(Contact).where(Contact.id == deal.contact_id, Contact.workspace_id == workspace_id)
+        )
+        contact = contact_result.scalar_one_or_none()
+        if contact:
+            contact_lines.append(
+                f"Contact: {contact.name or 'Unknown'} — {contact.role or 'unknown role'} at {contact.company or 'Unknown'}"
+            )
+            contact_lines.append(f"Contact email: {contact.email or 'unknown'}")
+
+        msg_result = await db.execute(
+            select(Message.subject, Message.received_at, ClarityScore.score)
+            .outerjoin(ClarityScore, Message.id == ClarityScore.message_id)
+            .where(Message.workspace_id == workspace_id, Message.contact_id == deal.contact_id)
+            .order_by(Message.received_at.desc())
+            .limit(3)
+        )
+        recent_messages = msg_result.all()
+        if recent_messages:
+            contact_lines.append("Recent messages:")
+            for msg in recent_messages:
+                clarity = f" (clarity {msg.score}/100)" if msg.score is not None else ""
+                ts = msg.received_at.strftime("%b %d") if msg.received_at else "?"
+                contact_lines.append(f"  - \"{msg.subject or '(no subject)'}\" received {ts}{clarity}")
+
+    notes_result = await db.execute(
+        select(DealNote)
+        .where(DealNote.deal_id == deal_id, DealNote.workspace_id == workspace_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = notes_result.scalars().all()
+
+    days_in_stage = 0
+    if deal.stage_changed_at:
+        delta = datetime.datetime.utcnow() - deal.stage_changed_at.replace(tzinfo=None)
+        days_in_stage = max(0, delta.days)
+
+    next_action_overdue = bool(deal.next_action_date and deal.next_action_date < datetime.date.today())
+    competitor_count = len(deal.competitors or [])
+
+    context_parts = [
+        f"Deal: {deal.title or 'Untitled'}",
+        f"Stage: {deal.stage}",
+        f"Value: ${deal.value or 0:,.0f}",
+        f"Health Score: {deal.health_score or 0}/100",
+        f"ML Win Probability: {deal.ml_win_probability or 0}%",
+        f"Days in Stage: {days_in_stage}",
+        f"Competitor Count: {competitor_count}",
+        f"Next Action Overdue: {'Yes' if next_action_overdue else 'No'}",
+    ]
+    if contact_lines:
+        context_parts.extend(contact_lines)
+    if notes:
+        context_parts.append("Recent Deal Notes:")
+        for i, note in enumerate(notes, 1):
+            context_parts.append(f"  {i}. {(note.body or '')[:250]}")
+    else:
+        context_parts.append("No deal notes yet.")
+
+    context = "\n".join(context_parts)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_MEETING_PREP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        raw_agenda = data.get("agenda_items", [])
+        agenda_items = []
+        for item in raw_agenda[:3]:
+            if not isinstance(item, dict):
+                continue
+            topic = str(item.get("topic", ""))[:80]
+            goal = str(item.get("goal", ""))[:120]
+            raw_tps = item.get("talking_points", [])
+            talking_points = [str(tp)[:120] for tp in raw_tps if isinstance(tp, str)][:3]
+            if topic:
+                agenda_items.append({"topic": topic, "goal": goal, "talking_points": talking_points})
+        if not agenda_items:
+            agenda_items = [
+                {"topic": "Deal Overview", "goal": "Align on current status and next steps.", "talking_points": ["Recap progress so far"]}
+            ]
+
+        raw_questions = data.get("questions_to_ask", [])
+        questions_to_ask = [str(q)[:150] for q in raw_questions if isinstance(q, str)][:3]
+        if not questions_to_ask:
+            questions_to_ask = ["What is your timeline for a decision?"]
+
+        raw_avoid = data.get("things_to_avoid", [])
+        things_to_avoid = [str(a)[:150] for a in raw_avoid if isinstance(a, str)][:2]
+        if not things_to_avoid:
+            things_to_avoid = ["Pressuring for immediate commitment"]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "agenda_items": agenda_items,
+        "questions_to_ask": questions_to_ask,
+        "things_to_avoid": things_to_avoid,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

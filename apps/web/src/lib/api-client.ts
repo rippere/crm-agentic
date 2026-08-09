@@ -2902,6 +2902,86 @@ export const apiClient = {
     )
   },
 
+  getMeetingPrep: (workspaceId: string, dealId: string, token: string): Promise<{
+    agenda_items: { topic: string; goal: string; talking_points: string[] }[]
+    questions_to_ask: string[]
+    things_to_avoid: string[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        agenda_items: { topic: string; goal: string; talking_points: string[] }[]
+        questions_to_ask: string[]
+        things_to_avoid: string[]
+      }> = {
+        'd-001': {
+          agenda_items: [
+            {
+              topic: 'Partnership Value Review',
+              goal: 'Reinforce ROI and remind the champion why they chose us.',
+              talking_points: ['Recap pilot results and key metrics achieved', 'Map features directly to their Q4 goals', 'Highlight 3 customers with similar profiles who closed'],
+            },
+            {
+              topic: 'Legal & Procurement Status',
+              goal: 'Unblock any review delays before end of quarter.',
+              talking_points: ['Ask which clauses are still open', 'Offer security review call with our CISO'],
+            },
+            {
+              topic: 'Close Plan Confirmation',
+              goal: 'Agree on mutual action plan with dates.',
+              talking_points: ['Propose signing by Sept 15', 'Confirm executive sponsor attendance'],
+            },
+          ],
+          questions_to_ask: [
+            'What would need to be true for you to sign by end of Q3?',
+            'Who else is involved in the final approval decision?',
+            'Are there any outstanding concerns from legal or security review?',
+          ],
+          things_to_avoid: [
+            'Discounting without confirming value alignment first',
+            'Bringing up competitors unless the prospect raises them',
+          ],
+        },
+        'd-002': {
+          agenda_items: [
+            {
+              topic: 'Executive Re-engagement',
+              goal: 'Re-establish urgency and re-confirm strategic fit.',
+              talking_points: ['Reference the original business case they shared', 'Show how their competitors are moving faster'],
+            },
+            {
+              topic: 'Pricing & Timeline Flexibility',
+              goal: 'Explore room to adjust terms without deep discounting.',
+              talking_points: ['Phased rollout option to reduce upfront commitment', 'Multi-year pricing incentive'],
+            },
+            {
+              topic: 'Stakeholder Alignment',
+              goal: 'Identify blockers and decision-maker gaps.',
+              talking_points: ['Ask who is skeptical and why', 'Offer a reference call with a peer company'],
+            },
+          ],
+          questions_to_ask: [
+            'What changed since our last conversation that slowed things down?',
+            'Is budget still available, or has it been reallocated?',
+            'What would accelerate the final decision?',
+          ],
+          things_to_avoid: [
+            'Mentioning competitor by name — keep focus on your own strengths',
+            'Giving any discount without a signed commitment in return',
+          ],
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/meeting-prep`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
   getDraftEmailReply: (workspaceId: string, messageId: string, token: string): Promise<{
     subject: string
     body: string
