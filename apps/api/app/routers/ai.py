@@ -3330,3 +3330,129 @@ async def deal_win_probability_explainer(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ── Task Prioritization ────────────────────────────────────────────────────────
+
+_TASK_PRIORITY_SYSTEM = """\
+You are a productivity coach helping a sales or PM team prioritize their open tasks.
+Given a list of tasks with titles, descriptions, and due dates, rank them by urgency and importance.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "items": [
+    {
+      "task_id": "<id string>",
+      "priority_rank": <integer starting at 1>,
+      "urgency": "critical" | "high" | "medium" | "low",
+      "reason": "<one sentence explaining why this rank>"
+    }
+  ],
+  "summary_note": "<2 sentence overall summary of the task load and top recommendation>"
+}
+
+Rules:
+- Include every task_id from the input, no omissions
+- priority_rank 1 = most urgent/important
+- urgency: "critical" = overdue or due today; "high" = due within 3 days; "medium" = due this week or high-impact; "low" = no due date or far out
+- reason: specific, actionable, reference the actual task title
+- summary_note: identify the #1 priority and any bottleneck theme\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/tasks/prioritize")
+@limiter.limit("5/minute")
+async def prioritize_tasks(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    tasks_result = await db.execute(
+        select(Task)
+        .where(Task.workspace_id == workspace_id, Task.status.in_(["open", "in_progress"]))
+        .order_by(Task.due_date.asc().nullslast())
+        .limit(30)
+    )
+    tasks = tasks_result.scalars().all()
+
+    if not tasks:
+        return {
+            "items": [],
+            "summary_note": "No open tasks found. Add tasks to get AI prioritization.",
+            "workspace_id": str(workspace_id),
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    today = datetime.date.today()
+    context_lines = []
+    for t in tasks:
+        due_str = str(t.due_date) if t.due_date else "no due date"
+        overdue = ""
+        if t.due_date and t.due_date < today:
+            overdue = f" (OVERDUE by {(today - t.due_date).days} days)"
+        desc_snippet = (t.description or "")[:120].strip()
+        context_lines.append(
+            f"ID: {t.id} | Title: {t.title} | Status: {t.status} | Due: {due_str}{overdue}"
+            + (f" | Description: {desc_snippet}" if desc_snippet else "")
+        )
+
+    context = f"Today's date: {today}\n\nOpen tasks:\n" + "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            system=_TASK_PRIORITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        raw_items = data.get("items", [])
+        valid_ids = {str(t.id) for t in tasks}
+        items = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            tid = str(item.get("task_id", ""))
+            if tid not in valid_ids:
+                continue
+            urgency = str(item.get("urgency", "medium"))
+            if urgency not in {"critical", "high", "medium", "low"}:
+                urgency = "medium"
+            items.append({
+                "task_id": tid,
+                "priority_rank": int(item.get("priority_rank", 99)),
+                "urgency": urgency,
+                "reason": str(item.get("reason", ""))[:200],
+            })
+        # Sort by rank and fill in any missing tasks
+        items.sort(key=lambda x: x["priority_rank"])
+        seen = {i["task_id"] for i in items}
+        rank = len(items) + 1
+        for t in tasks:
+            if str(t.id) not in seen:
+                items.append({"task_id": str(t.id), "priority_rank": rank, "urgency": "low", "reason": "Not ranked by AI."})
+                rank += 1
+
+        summary_note = str(data.get("summary_note", "Prioritization complete."))[:400]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "items": items,
+        "summary_note": summary_note,
+        "workspace_id": str(workspace_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

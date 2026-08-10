@@ -2931,4 +2931,36 @@ export const apiClient = {
       token,
     )
   },
+
+  prioritizeWorkspaceTasks: (workspaceId: string, token: string): Promise<{
+    items: {
+      task_id: string
+      priority_rank: number
+      urgency: 'critical' | 'high' | 'medium' | 'low'
+      reason: string
+    }[]
+    summary_note: string
+    workspace_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        items: [
+          { task_id: 't-001', priority_rank: 1, urgency: 'critical', reason: 'Contract review is overdue by 3 days — blocking deal closure with Acme Corp.' },
+          { task_id: 't-002', priority_rank: 2, urgency: 'high', reason: 'Follow-up call scheduled for tomorrow; prep materials must be ready first.' },
+          { task_id: 't-003', priority_rank: 3, urgency: 'high', reason: 'Proposal draft due this week for $45K opportunity — high-value pipeline impact.' },
+          { task_id: 't-004', priority_rank: 4, urgency: 'medium', reason: 'CRM data cleanup improves lead scoring accuracy for the next scoring run.' },
+          { task_id: 't-005', priority_rank: 5, urgency: 'low', reason: 'Research task with no hard deadline; schedule after urgent items are resolved.' },
+        ],
+        summary_note: 'The most urgent priority is the overdue contract review for Acme Corp, which is directly blocking a deal. Clear the two high-urgency tasks before end of day to avoid revenue impact.',
+        workspace_id: workspaceId,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/tasks/prioritize`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }

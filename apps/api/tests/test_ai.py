@@ -1924,3 +1924,70 @@ async def test_deal_win_probability_explainer_wrong_workspace_returns_403(app_cl
         )
 
     assert resp.status_code == 403
+
+
+# ── Task Prioritization ────────────────────────────────────────────────────────
+
+def _fake_task(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
+    t = MagicMock()
+    t.id = kwargs.get("id", uuid.uuid4())
+    t.workspace_id = workspace_id
+    t.title = kwargs.get("title", "Test Task")
+    t.description = kwargs.get("description", "")
+    t.status = kwargs.get("status", "open")
+    t.due_date = kwargs.get("due_date", None)
+    return t
+
+
+@pytest.mark.asyncio
+async def test_prioritize_tasks_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    task1 = _fake_task(workspace_id, title="Send proposal to Acme")
+    task2 = _fake_task(workspace_id, title="Follow up with prospect")
+
+    def _make_scalars_all(rows):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = rows
+        return r
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_all([task1, task2]))
+
+    import json as _json
+    priority_json = _json.dumps({
+        "items": [
+            {"task_id": str(task1.id), "priority_rank": 1, "urgency": "high", "reason": "Unblocks deal closure."},
+            {"task_id": str(task2.id), "priority_rank": 2, "urgency": "medium", "reason": "Keeps pipeline warm."},
+        ],
+        "summary_note": "Focus on the proposal first to unblock revenue.",
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=priority_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/ai/tasks/prioritize")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["items"], list)
+    assert len(body["items"]) == 2
+    assert body["items"][0]["priority_rank"] == 1
+    assert body["items"][0]["urgency"] == "high"
+    assert body["items"][0]["task_id"] == str(task1.id)
+    assert "summary_note" in body
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_prioritize_tasks_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/ai/tasks/prioritize")
+
+    assert resp.status_code == 403
