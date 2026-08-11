@@ -425,6 +425,11 @@ export default function ContactDetailPage() {
   const [commsStyleLoading, setCommsStyleLoading] = useState(false);
   const [commsStyleGenerating, setCommsStyleGenerating] = useState(false);
 
+  type LeadScoreExplanation = { score_assessment: 'accurate' | 'overestimated' | 'underestimated'; score_summary: string; key_signals: string[]; improvement_tips: string[]; contact_id: string; generated_at: string };
+  const [leadScoreExp, setLeadScoreExp] = useState<LeadScoreExplanation | null>(null);
+  const [leadScoreExpLoading, setLeadScoreExpLoading] = useState(false);
+  const [leadScoreExpGenerating, setLeadScoreExpGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -614,6 +619,13 @@ export default function ContactDetailPage() {
       .then((data) => setCommsStyle(data ?? null))
       .catch(() => setCommsStyle(null))
       .finally(() => setCommsStyleLoading(false));
+
+    setLeadScoreExpLoading(true);
+    apiClient
+      .getLeadScoreExplanation(workspaceId, contactId, token)
+      .then((data) => setLeadScoreExp(data ?? null))
+      .catch(() => setLeadScoreExp(null))
+      .finally(() => setLeadScoreExpLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -758,6 +770,17 @@ export default function ContactDetailPage() {
       setCommsStyle(data ?? null);
     } catch { /* ignore */ } finally {
       setCommsStyleGenerating(false);
+    }
+  };
+
+  const handleRegenerateLeadScoreExp = async () => {
+    if (!token || !workspaceId || leadScoreExpGenerating) return;
+    setLeadScoreExpGenerating(true);
+    try {
+      const data = await apiClient.getLeadScoreExplanation(workspaceId, contactId, token);
+      setLeadScoreExp(data ?? null);
+    } catch { /* ignore */ } finally {
+      setLeadScoreExpGenerating(false);
     }
   };
 
@@ -1296,6 +1319,74 @@ export default function ContactDetailPage() {
                   ))}
                 </ul>
                 <p className="text-[10px] text-zinc-600">Generated {formatRelative(commsStyle.generated_at)}</p>
+              </div>
+            )}
+          </Card>
+
+          {/* Lead Score Explainer card */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-amber-400" />
+              <p className="text-xs font-semibold text-zinc-300">Lead Score Explainer</p>
+              {leadScoreExp && (() => {
+                const assessCfg = {
+                  accurate:       { label: "Accurate",       cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" },
+                  overestimated:  { label: "Overestimated",  cls: "bg-rose-500/15 text-rose-400 border-rose-500/30" },
+                  underestimated: { label: "Underestimated", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
+                };
+                const cfg = assessCfg[leadScoreExp.score_assessment] ?? assessCfg.accurate;
+                return (
+                  <span className={cn("rounded-md px-2 py-0.5 text-[10px] font-semibold tracking-wide border", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={handleRegenerateLeadScoreExp}
+                disabled={leadScoreExpGenerating || leadScoreExpLoading}
+                className="ml-auto p-1 rounded text-zinc-500 hover:text-amber-400 disabled:opacity-40 transition-colors"
+              >
+                {leadScoreExpGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              </button>
+            </div>
+            {leadScoreExpLoading ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-3 bg-zinc-800 rounded w-full" />
+                <div className="h-3 bg-zinc-800 rounded w-4/5" />
+                <div className="h-3 bg-zinc-800 rounded w-3/5" />
+              </div>
+            ) : leadScoreExp === null ? (
+              <p className="text-xs text-zinc-600 italic py-2">Unable to load lead score explanation.</p>
+            ) : (
+              <div className="space-y-3" style={{ opacity: leadScoreExpGenerating ? 0.5 : 1 }}>
+                <p className="text-xs text-zinc-300 leading-relaxed">{leadScoreExp.score_summary}</p>
+                {leadScoreExp.key_signals.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider mb-1.5">Key signals</p>
+                    <ul className="space-y-1.5">
+                      {leadScoreExp.key_signals.map((sig, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                          <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
+                          {sig}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {leadScoreExp.improvement_tips.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider mb-1.5">Improvement tips</p>
+                    <ul className="space-y-1.5">
+                      {leadScoreExp.improvement_tips.map((tip, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                          <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                          {tip}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(leadScoreExp.generated_at)}</p>
               </div>
             )}
           </Card>
