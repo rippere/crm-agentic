@@ -1991,3 +1991,89 @@ async def test_prioritize_tasks_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/ai/tasks/prioritize")
 
     assert resp.status_code == 403
+
+
+# ── Lead Score Explanation ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_lead_score_explanation_returns_structured_response(app_client):
+    """lead-score-explanation returns assessment, summary, key_signals, improvement_tips."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _scalar_result(obj):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = obj
+        return r
+
+    def _scalars_all(rows):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = rows
+        return r
+
+    contact = _fake_contact(workspace_id, name="Alice Wu", company="TechCorp", status="prospect")
+    contact.ml_score = {"value": 72, "label": "hot", "trend": "up", "signals": ["multiple meetings booked"]}
+
+    msg = _fake_message(subject="Pricing inquiry", body_plain="Can you send me detailed pricing and ROI data?")
+    deal = _fake_deal(workspace_id, stage="proposal", value=45000.0)
+    deal.contact_id = contact.id
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _scalar_result(contact),   # contact lookup
+        _scalars_all([msg]),        # recent messages
+        _scalars_all([deal]),       # deals
+        _scalars_all([]),           # tasks
+    ])
+
+    response_json = _json.dumps({
+        "score_assessment": "accurate",
+        "score_summary": "Alice shows strong buying intent with a $45K proposal in flight and detailed pricing inquiries.",
+        "key_signals": [
+            "Active $45K deal in proposal stage.",
+            "Requested detailed pricing and ROI data — high purchase intent.",
+            "Multiple meetings already booked (from signals).",
+        ],
+        "improvement_tips": [
+            "Log the outcome of each meeting to reinforce positive scoring signals.",
+            "Send an ROI summary to keep engagement high.",
+            "Set a next-action date within 7 days to prevent deal cooling.",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/lead-score-explanation"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["score_assessment"] == "accurate"
+    assert "Alice" in body["score_summary"]
+    assert isinstance(body["key_signals"], list)
+    assert len(body["key_signals"]) >= 1
+    assert isinstance(body["improvement_tips"], list)
+    assert len(body["improvement_tips"]) >= 1
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_lead_score_explanation_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/lead-score-explanation"
+        )
+
+    assert resp.status_code == 403

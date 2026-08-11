@@ -2932,6 +2932,84 @@ export const apiClient = {
     )
   },
 
+  getLeadScoreExplanation: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    score_assessment: 'accurate' | 'overestimated' | 'underestimated';
+    score_summary: string;
+    key_signals: string[];
+    improvement_tips: string[];
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        score_assessment: 'accurate' | 'overestimated' | 'underestimated';
+        score_summary: string;
+        key_signals: string[];
+        improvement_tips: string[];
+      }> = {
+        'c-001': {
+          score_assessment: 'accurate',
+          score_summary: 'Sarah Chen\'s hot score of 82 accurately reflects her active $95K deal in negotiation and consistent high-quality engagement over the past 30 days.',
+          key_signals: [
+            'Active $95K deal in negotiation stage with 78% health score.',
+            'Requested detailed ROI data and pricing breakdown — strong purchase intent.',
+            'Responded to last 3 outreach messages within 4 hours.',
+            'Multiple stakeholders from TechCorp involved in recent email threads.',
+          ],
+          improvement_tips: [
+            'Log notes after each call to reinforce positive scoring signals.',
+            'Set a next-action date within 5 days to prevent deal cooling and maintain momentum.',
+            'Share a formal proposal deck to elevate the contact to decision stage.',
+          ],
+        },
+        'c-002': {
+          score_assessment: 'overestimated',
+          score_summary: 'Marcus Lee\'s warm score of 65 may be inflated — his $30K deal has stalled at discovery for 21 days with no recent message activity.',
+          key_signals: [
+            'Deal has been in discovery stage for 21 days with no stage change.',
+            'No inbound messages from Marcus in the last 30 days.',
+            'Low clarity score (42) on the most recent message suggests disengagement.',
+          ],
+          improvement_tips: [
+            'Re-engage with a direct outreach — ask if priorities have shifted.',
+            'Consider downgrading deal stage to reflect actual progress.',
+            'Schedule a discovery call to requalify the opportunity.',
+          ],
+        },
+        'c-003': {
+          score_assessment: 'underestimated',
+          score_summary: 'Priya Sharma\'s cold score of 38 understates her potential — she recently opened three emails and replied with budget approval questions.',
+          key_signals: [
+            'Replied with budget approval questions — intent signal not yet captured in score.',
+            'Opened all 3 emails in the last week (above average engagement).',
+            'Has an associated $45K deal in qualified stage.',
+          ],
+          improvement_tips: [
+            'Run the Lead Scorer agent to refresh the ML score with recent interaction data.',
+            'Move the deal to proposal stage to reflect the contact\'s buying stage.',
+            'Add a tag "budget-confirmed" to flag readiness for scoring update.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        score_assessment: 'accurate' as const,
+        score_summary: 'The lead score reflects current engagement and pipeline activity.',
+        key_signals: ['Recent message activity is consistent with score level.', 'Deal pipeline value aligns with the contact status.'],
+        improvement_tips: ['Log more interactions to improve score accuracy.', 'Enrich the contact record for better signal coverage.'],
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/lead-score-explanation`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
   prioritizeWorkspaceTasks: (workspaceId: string, token: string): Promise<{
     items: {
       task_id: string

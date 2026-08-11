@@ -3200,6 +3200,155 @@ async def contact_communication_style(
     }
 
 
+# ── Lead Score Explanation ─────────────────────────────────────────────────────
+
+_LEAD_SCORE_SYSTEM = """\
+You are a CRM lead scoring analyst. Given a contact's ML lead score, their recent messages, \
+deal pipeline, and task history, explain whether the score appears accurate and provide actionable advice.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "score_assessment": "accurate",
+  "score_summary": "One or two sentence narrative about the lead score.",
+  "key_signals": ["signal 1", "signal 2", "signal 3"],
+  "improvement_tips": ["tip 1", "tip 2"]
+}
+
+Rules:
+- score_assessment must be exactly one of: "accurate", "overestimated", "underestimated"
+  accurate = score reflects the contact's real buying intent and engagement
+  overestimated = score is too high relative to observed engagement/signals
+  underestimated = score is too low; contact shows stronger potential than score suggests
+- score_summary: 1-2 sentences explaining why the score assessment was made
+- key_signals: 2-4 concrete signals (positive or negative) driving the current score
+- improvement_tips: 2-3 specific CRM actions to improve the contact's score or engagement
+- Base everything on the provided data. Be direct and specific.
+
+Output only the JSON object, nothing else.\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/lead-score-explanation")
+@limiter.limit("5/minute")
+async def contact_lead_score_explanation(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Explain why a contact has their current ML lead score and suggest improvements."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    messages_result = await db.execute(
+        select(Message)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    messages = messages_result.scalars().all()
+
+    deals_result = await db.execute(
+        select(Deal)
+        .where(Deal.workspace_id == workspace_id, Deal.contact_id == contact_id)
+        .order_by(Deal.created_at.desc())
+        .limit(5)
+    )
+    deals = deals_result.scalars().all()
+
+    tasks_result = await db.execute(
+        select(Task)
+        .where(Task.workspace_id == workspace_id, Task.contact_id == contact_id)
+    )
+    tasks = tasks_result.scalars().all()
+    task_done = sum(1 for t in tasks if t.status == "done")
+    task_total = len(tasks)
+    task_rate = round(task_done / task_total * 100) if task_total else 0
+
+    ml = contact.ml_score or {}
+    score_value = int(ml.get("value", 50))
+    score_label = str(ml.get("label", "warm"))
+    existing_signals = ml.get("signals", [])
+
+    open_deals = [d for d in deals if d.stage not in ("closed_won", "closed_lost")]
+    pipeline_value = sum(d.value for d in open_deals)
+
+    context = (
+        f"Contact: {contact.name}\n"
+        f"Company: {contact.company or 'Unknown'}\n"
+        f"Role: {contact.role or 'Unknown'}\n"
+        f"Status: {contact.status}\n"
+        f"Current ML lead score: {score_value}/100 ({score_label})\n"
+        f"Existing score signals: {', '.join(existing_signals) if existing_signals else 'none recorded'}\n"
+        f"Open deals: {len(open_deals)} (pipeline value: ${pipeline_value:,.0f})\n"
+        f"Task completion: {task_done}/{task_total} tasks done ({task_rate}%)\n"
+    )
+
+    if messages:
+        context += "\nRecent messages (newest first):\n"
+        for i, msg in enumerate(messages, 1):
+            context += (
+                f"\n[Message {i}]\n"
+                f"Subject: {msg.subject or '(No subject)'}\n"
+                f"From: {msg.sender_email or 'Unknown'}\n"
+                f"Body: {(msg.body_plain or '')[:400]}\n"
+            )
+    else:
+        context += "\nNo recent messages available.\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=450,
+            system=_LEAD_SCORE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        assessment = str(data.get("score_assessment", "accurate"))
+        if assessment not in {"accurate", "overestimated", "underestimated"}:
+            assessment = "accurate"
+
+        score_summary = str(data.get("score_summary", "Score assessment complete."))[:300]
+
+        raw_signals = data.get("key_signals", [])
+        key_signals = [str(s) for s in raw_signals if isinstance(s, str)][:4]
+        if not key_signals:
+            key_signals = ["Engagement level is consistent with current score."]
+
+        raw_tips = data.get("improvement_tips", [])
+        improvement_tips = [str(t) for t in raw_tips if isinstance(t, str)][:3]
+        if not improvement_tips:
+            improvement_tips = ["Log more interactions to refine the score."]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "score_assessment": assessment,
+        "score_summary": score_summary,
+        "key_signals": key_signals,
+        "improvement_tips": improvement_tips,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
 # ── Win Probability Explainer ──────────────────────────────────────────────────
 
 _WIN_PROB_SYSTEM = """\
