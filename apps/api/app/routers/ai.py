@@ -3605,3 +3605,155 @@ async def prioritize_tasks(
         "workspace_id": str(workspace_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+_PIPELINE_HEALTH_SYSTEM = """\
+You are Nova, an AI assistant for NovaCRM. You will receive a pipeline snapshot.
+Respond with ONLY a JSON object — no markdown, no prose — with exactly these keys:
+{
+  "health_score": <integer 0-100>,
+  "rating": <"strong"|"healthy"|"at_risk"|"critical">,
+  "briefing": "<2-3 sentence narrative about overall pipeline health>",
+  "priorities": ["<specific action 1>", "<specific action 2>", "<specific action 3>"]
+}
+Score guide: 80-100=strong, 60-79=healthy, 40-59=at_risk, 0-39=critical.
+Priorities must be 3 concrete, actionable CRM recommendations.\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/pipeline-health-briefing")
+@limiter.limit("5/minute")
+async def pipeline_health_briefing(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    # Open deals aggregate
+    open_agg = await db.execute(
+        select(
+            func.count(Deal.id).label("total"),
+            func.coalesce(func.sum(Deal.value), 0).label("pipeline_value"),
+            func.coalesce(func.avg(Deal.ml_win_probability), 0).label("avg_win_prob"),
+        ).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    agg = open_agg.one()
+    total_open = int(agg.total or 0)
+    pipeline_value = float(agg.pipeline_value or 0)
+    avg_win_prob = float(agg.avg_win_prob or 0)
+
+    # At-risk open deals (health_score < 50)
+    at_risk_res = await db.execute(
+        select(func.count(Deal.id)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.health_score < 50,
+        )
+    )
+    at_risk_count = int(at_risk_res.scalar() or 0)
+
+    # Overdue close dates
+    today_str = datetime.date.today().isoformat()
+    overdue_res = await db.execute(
+        select(func.count(Deal.id)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.expected_close.isnot(None),
+            Deal.expected_close < today_str,
+        )
+    )
+    overdue_count = int(overdue_res.scalar() or 0)
+
+    # Stage breakdown
+    stage_rows = await db.execute(
+        select(
+            Deal.stage,
+            func.count(Deal.id).label("count"),
+            func.coalesce(func.sum(Deal.value), 0).label("value"),
+        ).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        ).group_by(Deal.stage).order_by(func.count(Deal.id).desc()).limit(4)
+    )
+    stage_breakdown = [
+        {"stage": row.stage, "count": int(row.count), "value": float(row.value or 0)}
+        for row in stage_rows.all()
+    ]
+
+    # Closed won totals
+    won_agg = await db.execute(
+        select(
+            func.count(Deal.id).label("count"),
+            func.coalesce(func.sum(Deal.value), 0).label("value"),
+        ).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    won_row = won_agg.one()
+    total_won = int(won_row.count or 0)
+    total_won_value = float(won_row.value or 0)
+
+    context = (
+        f"Pipeline Snapshot:\n"
+        f"- Open deals: {total_open}\n"
+        f"- Total pipeline value: ${pipeline_value:,.0f}\n"
+        f"- Average win probability: {avg_win_prob:.0f}%\n"
+        f"- At-risk deals (health < 50): {at_risk_count}\n"
+        f"- Deals with overdue close dates: {overdue_count}\n"
+        f"- Total closed-won deals: {total_won} (${total_won_value:,.0f})\n"
+        f"- Stage breakdown: {stage_breakdown}\n"
+        "\nGenerate the pipeline health assessment JSON."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_PIPELINE_HEALTH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        score_raw = data.get("health_score")
+        health_score = (
+            int(score_raw)
+            if isinstance(score_raw, (int, float)) and not isinstance(score_raw, bool)
+            else 50
+        )
+        health_score = max(0, min(100, health_score))
+
+        rating = str(data.get("rating", "healthy"))
+        if rating not in {"strong", "healthy", "at_risk", "critical"}:
+            rating = "healthy"
+
+        briefing = str(data.get("briefing", "Pipeline health analysis is in progress."))[:600]
+
+        raw_prio = data.get("priorities", [])
+        priorities = [str(p) for p in raw_prio if isinstance(p, str)][:3]
+        if not priorities:
+            priorities = ["Review at-risk deals and update health scores."]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "health_score": health_score,
+        "rating": rating,
+        "briefing": briefing,
+        "priorities": priorities,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

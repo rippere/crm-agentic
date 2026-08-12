@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -90,6 +90,15 @@ export default function ReportsPage() {
     closed_lost: number;
   }>>([]);
   const [messageVolume, setMessageVolume] = useState<Array<{ week_start: string; gmail: number; slack: number; teams: number; unknown: number; total: number }>>([]);
+  const [pipelineHealth, setPipelineHealth] = useState<{
+    health_score: number;
+    rating: 'strong' | 'healthy' | 'at_risk' | 'critical';
+    briefing: string;
+    priorities: string[];
+    generated_at: string;
+  } | null>(null);
+  const [pipelineHealthLoading, setPipelineHealthLoading] = useState(false);
+  const [pipelineHealthOpen, setPipelineHealthOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -115,6 +124,8 @@ export default function ReportsPage() {
       apiClient.getRevenueCohort("demo-workspace-1", "demo-token").then(setRevenueCohort).catch(() => {});
       apiClient.getDealVelocityTrends("demo-workspace-1", "demo-token").then(setVelocityTrends).catch(() => {});
       apiClient.getMessageVolumeTrends("demo-workspace-1", "demo-token").then(setMessageVolume).catch(() => {});
+      setPipelineHealthLoading(true);
+      apiClient.getPipelineHealthBriefing("demo-workspace-1", "demo-token").then(setPipelineHealth).catch(() => {}).finally(() => setPipelineHealthLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -144,6 +155,8 @@ export default function ReportsPage() {
       apiClient.getRevenueCohort(workspaceId, session.access_token).then(setRevenueCohort).catch(() => {});
       apiClient.getDealVelocityTrends(workspaceId, session.access_token).then(setVelocityTrends).catch(() => {});
       apiClient.getMessageVolumeTrends(workspaceId, session.access_token).then(setMessageVolume).catch(() => {});
+      setPipelineHealthLoading(true);
+      apiClient.getPipelineHealthBriefing(workspaceId, session.access_token).then(setPipelineHealth).catch(() => {}).finally(() => setPipelineHealthLoading(false));
     });
   }, []);
 
@@ -242,6 +255,34 @@ export default function ReportsPage() {
     return { won, lost, active, winRate, wonValue, pipelineValue, avgDealSize, stale, byStage, topDeals, healthBuckets, revenueChart, avgCycleTime };
   }, [deals]);
 
+  const regeneratePipelineHealth = () => {
+    setPipelineHealthLoading(true);
+    const doFetch = (workspaceId: string, token: string) => {
+      apiClient.getPipelineHealthBriefing(workspaceId, token)
+        .then(setPipelineHealth)
+        .catch(() => {})
+        .finally(() => setPipelineHealthLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPipelineHealthLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPipelineHealthLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const RATING_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+    strong:   { label: "Strong",   color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
+    healthy:  { label: "Healthy",  color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
+    at_risk:  { label: "At Risk",  color: "text-amber-400",   bg: "bg-amber-500/10 border-amber-500/20"   },
+    critical: { label: "Critical", color: "text-rose-400",    bg: "bg-rose-500/10 border-rose-500/20"     },
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col gap-6 p-4 md:p-6">
@@ -256,6 +297,70 @@ export default function ReportsPage() {
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header title="Reports" subtitle={`${deals.length} total deals · win rate ${stats.winRate}%`} />
+
+      {/* Pipeline Health AI Briefing */}
+      <Card className="border-indigo-500/20">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-zinc-100">Pipeline Health Briefing</span>
+            {pipelineHealth && (
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${RATING_CONFIG[pipelineHealth.rating]?.bg} ${RATING_CONFIG[pipelineHealth.rating]?.color}`}>
+                {RATING_CONFIG[pipelineHealth.rating]?.label}
+                <span className="font-mono">{pipelineHealth.health_score}</span>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePipelineHealth}
+              disabled={pipelineHealthLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`h-3 w-3 ${pipelineHealthLoading ? "animate-spin" : ""}`} />
+              {pipelineHealthLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button
+              onClick={() => setPipelineHealthOpen((o) => !o)}
+              className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              {pipelineHealthOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+
+        {pipelineHealthOpen && (
+          <div className="mt-4">
+            {pipelineHealthLoading && !pipelineHealth && (
+              <div className="space-y-2">
+                <div className="h-4 w-full rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-4/5 rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-3/5 rounded bg-zinc-800 animate-pulse" />
+              </div>
+            )}
+            {pipelineHealth && (
+              <div className={`transition-opacity ${pipelineHealthLoading ? "opacity-40" : "opacity-100"}`}>
+                <p className="text-sm text-zinc-300 leading-relaxed mb-4">{pipelineHealth.briefing}</p>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Top Priorities</p>
+                  {pipelineHealth.priorities.map((p, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-indigo-500/15 text-xs font-bold text-indigo-400">{i + 1}</span>
+                      <p className="text-sm text-zinc-300">{p}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs text-zinc-600">
+                  Generated {new Date(pipelineHealth.generated_at).toLocaleString()} · Claude Haiku
+                </p>
+              </div>
+            )}
+            {!pipelineHealth && !pipelineHealthLoading && (
+              <p className="text-sm text-zinc-500">Click Regenerate to generate a pipeline health briefing.</p>
+            )}
+          </div>
+        )}
+      </Card>
 
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-5">
