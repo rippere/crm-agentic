@@ -2077,3 +2077,85 @@ async def test_lead_score_explanation_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/pipeline-health-briefing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_health_briefing_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_one_result(**attrs):
+        row = MagicMock()
+        for k, v in attrs.items():
+            setattr(row, k, v)
+        result = MagicMock()
+        result.one.return_value = row
+        return result
+
+    def _make_scalar_res(value):
+        result = MagicMock()
+        result.scalar.return_value = value
+        return result
+
+    stage_row = MagicMock()
+    stage_row.stage = "proposal"
+    stage_row.count = 3
+    stage_row.value = 90000.0
+    stage_result = MagicMock()
+    stage_result.all.return_value = [stage_row]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_one_result(total=8, pipeline_value=285000.0, avg_win_prob=62.5),  # open agg
+        _make_scalar_res(2),   # at-risk count
+        _make_scalar_res(1),   # overdue count
+        stage_result,          # stage breakdown
+        _make_one_result(count=5, value=210000.0),  # won agg
+    ])
+
+    briefing_json = _json.dumps({
+        "health_score": 68,
+        "rating": "healthy",
+        "briefing": "Your pipeline shows solid momentum with $285K in open deals. Two at-risk deals need immediate attention to prevent value erosion.",
+        "priorities": [
+            "Engage the 2 at-risk deals with updated health plans this week.",
+            "Push the 1 overdue-close deal to a firm commitment or re-date the close.",
+            "Add 3 new qualified opportunities to proposal stage to maintain pipeline coverage.",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=briefing_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/pipeline-health-briefing")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["health_score"] == 68
+    assert body["rating"] == "healthy"
+    assert isinstance(body["briefing"], str)
+    assert len(body["briefing"]) > 10
+    assert isinstance(body["priorities"], list)
+    assert len(body["priorities"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_pipeline_health_briefing_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/pipeline-health-briefing")
+
+    assert resp.status_code == 403

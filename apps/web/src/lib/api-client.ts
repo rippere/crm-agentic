@@ -3041,4 +3041,32 @@ export const apiClient = {
       token,
     )
   },
+
+  getPipelineHealthBriefing: (workspaceId: string, token: string): Promise<{
+    health_score: number
+    rating: 'strong' | 'healthy' | 'at_risk' | 'critical'
+    briefing: string
+    priorities: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        health_score: 72,
+        rating: 'healthy',
+        briefing:
+          'Your pipeline is in a healthy state with strong activity across the proposal and negotiation stages. However, 3 deals are at risk due to low health scores and overdue close dates that require immediate attention. The $285K in open pipeline provides a solid foundation, though velocity in the discovery stage has slowed this month.',
+        priorities: [
+          'Engage the 3 at-risk deals immediately — schedule calls and update next-action dates to avoid further slippage.',
+          'Accelerate 2 overdue-close deals in negotiation by proposing a time-limited incentive or executive sponsorship.',
+          'Enrich and score 5 new contacts added this month to identify which should enter the active pipeline.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/pipeline-health-briefing`,
+      { method: 'GET' },
+      token,
+    )
+  },
 }
