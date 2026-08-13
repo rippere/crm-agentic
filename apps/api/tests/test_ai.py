@@ -2159,3 +2159,73 @@ async def test_pipeline_health_briefing_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/pipeline-health-briefing")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 15c: AI team performance summary tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_team_performance_returns_structured_response(app_client):
+    import json as _json
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # 5 scalar() calls: agent_runs, task_total, task_done, messages_processed,
+    # deals_moved, active_contacts
+    mock_db.scalar = AsyncMock(side_effect=[12, 30, 21, 45, 7, 14])
+
+    perf_json = _json.dumps({
+        "performance_rating": "good",
+        "highlights": [
+            "21 tasks completed this month represents a 70% completion rate.",
+            "12 AI agent runs surfaced key insights across the pipeline.",
+            "14 contacts actively engaged with 45 messages processed.",
+        ],
+        "areas_for_improvement": [
+            "Increase deal stage velocity — only 7 moves in 30 days.",
+            "Schedule weekly pipeline review to catch stalled deals earlier.",
+        ],
+        "summary_sentence": (
+            "The team shows solid engagement with a 70% task completion rate and strong "
+            "contact outreach. Focusing on deal progression will convert pipeline momentum "
+            "into closed revenue."
+        ),
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=perf_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/team-performance")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["performance_rating"] == "good"
+    assert isinstance(body["highlights"], list)
+    assert len(body["highlights"]) == 3
+    assert isinstance(body["areas_for_improvement"], list)
+    assert len(body["areas_for_improvement"]) == 2
+    assert isinstance(body["summary_sentence"], str)
+    assert len(body["summary_sentence"]) > 10
+    metrics = body["metrics"]
+    assert metrics["agent_runs"] == 12
+    assert metrics["task_completion_rate"] == 70
+    assert metrics["messages_processed"] == 45
+    assert metrics["deals_moved"] == 7
+    assert metrics["active_contacts"] == 14
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_team_performance_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/team-performance")
+
+    assert resp.status_code == 403
