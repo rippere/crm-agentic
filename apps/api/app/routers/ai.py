@@ -3794,7 +3794,7 @@ async def get_team_performance(
         await db.scalar(
             select(func.count(ActivityEvent.id)).where(
                 ActivityEvent.workspace_id == workspace_id,
-                ActivityEvent.event_type.like("agent_%"),
+                ActivityEvent.type.like("agent_%"),
                 ActivityEvent.created_at >= thirty_days_ago,
             )
         ) or 0
@@ -3831,7 +3831,7 @@ async def get_team_performance(
         await db.scalar(
             select(func.count(ActivityEvent.id)).where(
                 ActivityEvent.workspace_id == workspace_id,
-                ActivityEvent.event_type == "deal_moved",
+                ActivityEvent.type == "deal_moved",
                 ActivityEvent.created_at >= thirty_days_ago,
             )
         ) or 0
