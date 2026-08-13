@@ -165,6 +165,140 @@ export type ClarityScoreRow = {
   created_at: string;
 };
 
+// ─── Lead-Gen / Outbound Engagement rows (snake_case, matches Supabase) ──────
+// DB shape for the funnel engine. Hooks map these → the camelCase app types in
+// types.ts (rowToLead, rowToSegment, …).
+
+export type LeadRow = {
+  id: string;
+  workspace_id: string;
+  contact_id: string | null;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  company: string | null;
+  title: string | null;
+  source: "import" | "manual" | "web" | "api" | "referral" | "event";
+  stage: "new" | "contacted" | "engaged" | "qualified" | "converted" | "lost";
+  score: number;
+  score_detail: {
+    value: number;
+    label: "cold" | "warm" | "hot";
+    signals: string[];
+  };
+  owner_id: string | null;
+  custom_fields: Record<string, unknown>;
+  external_id: string | null;
+  last_engaged_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SegmentRow = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  kind: "static" | "dynamic";
+  filter: Record<string, unknown>;
+  member_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LeadSegmentMemberRow = {
+  id: string;
+  workspace_id: string;
+  segment_id: string;
+  lead_id: string;
+  added_at: string;
+};
+
+export type CampaignRow = {
+  id: string;
+  workspace_id: string;
+  segment_id: string | null;
+  sequence_id: string | null;
+  name: string;
+  status: "draft" | "scheduled" | "active" | "paused" | "completed" | "archived";
+  channel: "email" | "sms" | "mixed";
+  scheduled_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  stats: Record<string, number>;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SequenceRow = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  channel: "email" | "sms" | "mixed";
+  status: "draft" | "active" | "archived";
+  step_count: number;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SequenceStepRow = {
+  id: string;
+  workspace_id: string;
+  sequence_id: string;
+  step_order: number;
+  channel: "email" | "sms";
+  delay_hours: number;
+  subject: string | null;
+  body_template: string;
+  requires_approval: boolean;
+  ai_generate: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EnrollmentRow = {
+  id: string;
+  workspace_id: string;
+  campaign_id: string;
+  sequence_id: string;
+  lead_id: string;
+  current_step: number;
+  status: "active" | "waiting" | "paused" | "completed" | "stopped" | "bounced";
+  next_run_at: string | null;
+  last_sent_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EngagementEventRow = {
+  id: string;
+  workspace_id: string;
+  lead_id: string;
+  campaign_id: string | null;
+  enrollment_id: string | null;
+  step_id: string | null;
+  type:
+    | "queued"
+    | "sent"
+    | "delivered"
+    | "opened"
+    | "clicked"
+    | "replied"
+    | "bounced"
+    | "unsubscribed"
+    | "converted"
+    | "approved"
+    | "rejected";
+  channel: "email" | "sms" | null;
+  weight: number;
+  metadata: Record<string, unknown>;
+  occurred_at: string;
+  created_at: string;
+};
+
 // ─── Supabase Database type (tells the client about our tables) ───────────────
 type R = [];
 
@@ -235,6 +369,54 @@ export interface Database {
         Row: ClarityScoreRow;
         Insert: Omit<ClarityScoreRow, "id" | "created_at">;
         Update: Partial<Omit<ClarityScoreRow, "id" | "created_at">>;
+        Relationships: R;
+      };
+      leads: {
+        Row: LeadRow;
+        Insert: Omit<LeadRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<LeadRow, "id" | "created_at" | "updated_at">>;
+        Relationships: R;
+      };
+      lead_segments: {
+        Row: SegmentRow;
+        Insert: Omit<SegmentRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<SegmentRow, "id" | "created_at" | "updated_at">>;
+        Relationships: R;
+      };
+      lead_segment_members: {
+        Row: LeadSegmentMemberRow;
+        Insert: Omit<LeadSegmentMemberRow, "id" | "added_at">;
+        Update: Partial<Omit<LeadSegmentMemberRow, "id" | "added_at">>;
+        Relationships: R;
+      };
+      campaigns: {
+        Row: CampaignRow;
+        Insert: Omit<CampaignRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<CampaignRow, "id" | "created_at" | "updated_at">>;
+        Relationships: R;
+      };
+      sequences: {
+        Row: SequenceRow;
+        Insert: Omit<SequenceRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<SequenceRow, "id" | "created_at" | "updated_at">>;
+        Relationships: R;
+      };
+      sequence_steps: {
+        Row: SequenceStepRow;
+        Insert: Omit<SequenceStepRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<SequenceStepRow, "id" | "created_at" | "updated_at">>;
+        Relationships: R;
+      };
+      sequence_enrollments: {
+        Row: EnrollmentRow;
+        Insert: Omit<EnrollmentRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<EnrollmentRow, "id" | "created_at" | "updated_at">>;
+        Relationships: R;
+      };
+      engagement_events: {
+        Row: EngagementEventRow;
+        Insert: Omit<EngagementEventRow, "id" | "created_at">;
+        Update: Partial<Omit<EngagementEventRow, "id" | "created_at">>;
         Relationships: R;
       };
     };

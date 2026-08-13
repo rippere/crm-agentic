@@ -14,7 +14,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.limiter import limiter
-from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments, webhook_logs
+from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments, webhook_logs, leads, segments, sequences, campaigns, outreach
 
 # ── Structured logging (JSON-like key=value to stdout) ───────────────────────
 _LOG_CONFIG: dict = {
@@ -142,6 +142,15 @@ app.include_router(projects.router, tags=["projects"])
 app.include_router(kpi.router, tags=["kpi"])
 app.include_router(commitments.router, tags=["commitments"])
 app.include_router(webhook_logs.router, tags=["webhooks"])
+# Lead-gen routers. leads is included before the other lead-gen routers; each
+# router declares its own static sub-paths before its /{id} routes internally,
+# and every lead-gen path is namespaced under /workspaces/{workspace_id}/... so
+# there is no cross-router shadowing.
+app.include_router(leads.router, tags=["leads"])
+app.include_router(segments.router, tags=["segments"])
+app.include_router(sequences.router, tags=["sequences"])
+app.include_router(campaigns.router, tags=["campaigns"])
+app.include_router(outreach.router, tags=["outreach"])
 
 
 @app.get("/health")

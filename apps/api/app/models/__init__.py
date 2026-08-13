@@ -14,6 +14,14 @@ from app.models.kpi_snapshot import KpiSnapshot
 from app.models.commitment import Commitment
 from app.models.deal_note import DealNote
 from app.models.contact_note import ContactNote
+from app.models.lead import Lead
+from app.models.lead_segment import LeadSegment
+from app.models.lead_segment_member import LeadSegmentMember
+from app.models.sequence import Sequence
+from app.models.sequence_step import SequenceStep
+from app.models.campaign import Campaign
+from app.models.sequence_enrollment import SequenceEnrollment
+from app.models.engagement_event import EngagementEvent
 
 __all__ = [
     "Workspace",
@@ -32,4 +40,12 @@ __all__ = [
     "Commitment",
     "DealNote",
     "ContactNote",
+    "Lead",
+    "LeadSegment",
+    "LeadSegmentMember",
+    "Sequence",
+    "SequenceStep",
+    "Campaign",
+    "SequenceEnrollment",
+    "EngagementEvent",
 ]

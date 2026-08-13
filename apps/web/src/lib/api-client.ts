@@ -1,4 +1,14 @@
 import { demoMessages, demoTasks, demoConnectors, demoDeals, demoContacts } from './demo-data'
+import {
+  demoLeads,
+  demoSegments,
+  demoCampaigns,
+  demoSequences,
+  demoEnrollments,
+  demoPendingOutreach,
+  demoLeadFunnel,
+  demoLeadEvents,
+} from './demo-data'
 import type { KpiSnapshot, Commitment, CommitmentWeekStats } from './types'
 
 // ─── Contact-aware demo stubs ─────────────────────────────────────────────────
@@ -1691,5 +1701,309 @@ export const apiClient = {
       {},
       token,
     )
+  },
+
+  // ─── Lead-Gen / Outbound Engagement ─────────────────────────────────────────
+  // Funnel engine: leads → segments → campaigns → sequences → outreach approval.
+  // Every method carries a demo branch. Import/score jobs return {status,job_id}
+  // and are polled via getJob (below) / useJobPoller against GET /jobs/{id}.
+
+  // Leads
+  listLeads: (
+    workspaceId: string,
+    token: string,
+    opts?: { stage?: string; source?: string; minScore?: number; segmentId?: string; q?: string; sort?: string; limit?: number; offset?: number },
+  ) => {
+    if (isDemoMode) {
+      let leads = demoLeads
+      if (opts?.stage && opts.stage !== 'all') leads = leads.filter((l) => l.stage === opts.stage)
+      if (opts?.source && opts.source !== 'all') leads = leads.filter((l) => l.source === opts.source)
+      if (opts?.minScore != null) leads = leads.filter((l) => l.score >= opts.minScore!)
+      if (opts?.q) {
+        const q = opts.q.toLowerCase()
+        leads = leads.filter((l) =>
+          (l.name ?? '').toLowerCase().includes(q) ||
+          (l.email ?? '').toLowerCase().includes(q) ||
+          (l.company ?? '').toLowerCase().includes(q)
+        )
+      }
+      return Promise.resolve(leads)
+    }
+    const params = new URLSearchParams()
+    if (opts?.stage && opts.stage !== 'all') params.set('stage', opts.stage)
+    if (opts?.source && opts.source !== 'all') params.set('source', opts.source)
+    if (opts?.minScore != null) params.set('min_score', String(opts.minScore))
+    if (opts?.segmentId) params.set('segment_id', opts.segmentId)
+    if (opts?.q) params.set('q', opts.q)
+    if (opts?.sort) params.set('sort', opts.sort)
+    if (opts?.limit != null) params.set('limit', String(opts.limit))
+    if (opts?.offset != null) params.set('offset', String(opts.offset))
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/leads${qs ? `?${qs}` : ''}`, {}, token)
+  },
+  getLead: (workspaceId: string, leadId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve(demoLeads.find((l) => l.id === leadId) ?? null)
+    return apiFetch(`/workspaces/${workspaceId}/leads/${leadId}`, {}, token)
+  },
+  createLead: (
+    workspaceId: string,
+    data: { name?: string; email?: string; phone?: string; company?: string; title?: string; source?: string; stage?: string; score?: number; owner_id?: string; custom_fields?: Record<string, unknown>; external_id?: string },
+    token: string,
+  ) => {
+    if (isDemoMode) return Promise.resolve({ id: `demo-lead-${Date.now()}`, workspace_id: workspaceId, stage: 'new', source: 'manual', score: 0, ...data })
+    return apiFetch(`/workspaces/${workspaceId}/leads`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+  updateLead: (
+    workspaceId: string,
+    leadId: string,
+    data: { name?: string; email?: string; phone?: string; company?: string; title?: string; source?: string; stage?: string; score?: number; owner_id?: string; custom_fields?: Record<string, unknown>; external_id?: string },
+    token: string,
+  ) => {
+    if (isDemoMode) return Promise.resolve({ id: leadId, ...data })
+    return apiFetch(`/workspaces/${workspaceId}/leads/${leadId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
+  },
+  deleteLead: (workspaceId: string, leadId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve()
+    return apiFetch(`/workspaces/${workspaceId}/leads/${leadId}`, { method: 'DELETE' }, token)
+  },
+  importLeads: (
+    workspaceId: string,
+    data: { rows: Array<Record<string, unknown>>; mapping?: Record<string, string>; dedupe_on?: string },
+    token: string,
+  ): Promise<{ status: string; job_id: string }> => {
+    if (isDemoMode) return Promise.resolve({ status: 'queued', job_id: `demo-import-${Date.now()}` })
+    return apiFetch(`/workspaces/${workspaceId}/leads/import`, { method: 'POST', body: JSON.stringify({ rows: data.rows, mapping: data.mapping ?? {}, dedupe_on: data.dedupe_on ?? 'email' }) }, token)
+  },
+  promoteLead: (
+    workspaceId: string,
+    leadId: string,
+    data: { create_deal?: boolean; owner_id?: string },
+    token: string,
+  ): Promise<{ lead: Record<string, unknown>; contact_id: string; deal_id: string | null }> => {
+    if (isDemoMode) return Promise.resolve({ lead: { id: leadId, stage: data.create_deal ? 'converted' : 'qualified' }, contact_id: `demo-contact-${Date.now()}`, deal_id: data.create_deal ? `demo-deal-${Date.now()}` : null })
+    return apiFetch(`/workspaces/${workspaceId}/leads/${leadId}/promote`, { method: 'POST', body: JSON.stringify({ create_deal: data.create_deal ?? false, owner_id: data.owner_id }) }, token)
+  },
+  updateLeadStage: (workspaceId: string, leadId: string, stage: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: leadId, stage })
+    return apiFetch(`/workspaces/${workspaceId}/leads/${leadId}/stage`, { method: 'POST', body: JSON.stringify({ stage }) }, token)
+  },
+  getLeadFunnel: (workspaceId: string, token: string): Promise<Array<{ stage: string; count: number; value: number }>> => {
+    if (isDemoMode) return Promise.resolve(demoLeadFunnel())
+    return apiFetch(`/workspaces/${workspaceId}/leads/funnel`, {}, token)
+  },
+  getLeadEvents: (workspaceId: string, leadId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve(demoLeadEvents(leadId))
+    return apiFetch(`/workspaces/${workspaceId}/leads/${leadId}/events`, {}, token)
+  },
+  scoreLead: (workspaceId: string, leadId: string, token: string): Promise<{ status: string; lead_id: string; job_id: string }> => {
+    if (isDemoMode) return Promise.resolve({ status: 'queued', lead_id: leadId, job_id: `demo-score-${Date.now()}` })
+    return apiFetch(`/workspaces/${workspaceId}/leads/${leadId}/score`, { method: 'POST' }, token)
+  },
+
+  // Segments
+  listSegments: (workspaceId: string, token: string, opts?: { kind?: string }) => {
+    if (isDemoMode) {
+      let segs = demoSegments
+      if (opts?.kind && opts.kind !== 'all') segs = segs.filter((s) => s.kind === opts.kind)
+      return Promise.resolve(segs)
+    }
+    const params = new URLSearchParams()
+    if (opts?.kind && opts.kind !== 'all') params.set('kind', opts.kind)
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/segments${qs ? `?${qs}` : ''}`, {}, token)
+  },
+  createSegment: (
+    workspaceId: string,
+    data: { name: string; description?: string; kind?: string; filter?: Record<string, unknown> },
+    token: string,
+  ) => {
+    if (isDemoMode) return Promise.resolve({ id: `demo-seg-${Date.now()}`, workspace_id: workspaceId, kind: 'static', member_count: 0, filter: {}, ...data })
+    return apiFetch(`/workspaces/${workspaceId}/segments`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+  updateSegment: (
+    workspaceId: string,
+    segmentId: string,
+    data: { name?: string; description?: string; kind?: string; filter?: Record<string, unknown> },
+    token: string,
+  ) => {
+    if (isDemoMode) return Promise.resolve({ id: segmentId, ...data })
+    return apiFetch(`/workspaces/${workspaceId}/segments/${segmentId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
+  },
+  deleteSegment: (workspaceId: string, segmentId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve()
+    return apiFetch(`/workspaces/${workspaceId}/segments/${segmentId}`, { method: 'DELETE' }, token)
+  },
+  getSegmentMembers: (workspaceId: string, segmentId: string, token: string) => {
+    if (isDemoMode) {
+      const seg = demoSegments.find((s) => s.id === segmentId)
+      if (seg?.kind === 'dynamic') {
+        const f = seg.filter
+        return Promise.resolve(demoLeads.filter((l) =>
+          (f.minScore == null || l.score >= (f.minScore as number)) &&
+          (f.stage == null || l.stage === f.stage) &&
+          (f.source == null || l.source === f.source)
+        ))
+      }
+      // Static demo segment: return a deterministic slice.
+      return Promise.resolve(demoLeads.slice(0, seg?.memberCount ?? 10))
+    }
+    return apiFetch(`/workspaces/${workspaceId}/segments/${segmentId}/members`, {}, token)
+  },
+  addSegmentMembers: (workspaceId: string, segmentId: string, leadIds: string[], token: string): Promise<{ segment_id: string; added: number; member_count: number }> => {
+    if (isDemoMode) return Promise.resolve({ segment_id: segmentId, added: leadIds.length, member_count: leadIds.length })
+    return apiFetch(`/workspaces/${workspaceId}/segments/${segmentId}/members`, { method: 'POST', body: JSON.stringify({ lead_ids: leadIds }) }, token)
+  },
+  removeSegmentMember: (workspaceId: string, segmentId: string, leadId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve()
+    return apiFetch(`/workspaces/${workspaceId}/segments/${segmentId}/members/${leadId}`, { method: 'DELETE' }, token)
+  },
+
+  // Campaigns
+  listCampaigns: (workspaceId: string, token: string, opts?: { status?: string }) => {
+    if (isDemoMode) {
+      let camps = demoCampaigns
+      if (opts?.status && opts.status !== 'all') camps = camps.filter((c) => c.status === opts.status)
+      return Promise.resolve(camps)
+    }
+    const params = new URLSearchParams()
+    if (opts?.status && opts.status !== 'all') params.set('status', opts.status)
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/campaigns${qs ? `?${qs}` : ''}`, {}, token)
+  },
+  getCampaign: (workspaceId: string, campaignId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve(demoCampaigns.find((c) => c.id === campaignId) ?? null)
+    return apiFetch(`/workspaces/${workspaceId}/campaigns/${campaignId}`, {}, token)
+  },
+  createCampaign: (
+    workspaceId: string,
+    data: { name: string; segment_id?: string; sequence_id?: string; channel?: string; settings?: Record<string, unknown> },
+    token: string,
+  ) => {
+    if (isDemoMode) return Promise.resolve({ id: `demo-cmp-${Date.now()}`, workspace_id: workspaceId, status: 'draft', channel: 'email', stats: {}, settings: {}, ...data })
+    return apiFetch(`/workspaces/${workspaceId}/campaigns`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+  updateCampaign: (
+    workspaceId: string,
+    campaignId: string,
+    data: { name?: string; segment_id?: string; sequence_id?: string; channel?: string; settings?: Record<string, unknown> },
+    token: string,
+  ) => {
+    if (isDemoMode) return Promise.resolve({ id: campaignId, ...data })
+    return apiFetch(`/workspaces/${workspaceId}/campaigns/${campaignId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
+  },
+  scheduleCampaign: (workspaceId: string, campaignId: string, scheduledAt: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: campaignId, status: 'scheduled', scheduled_at: scheduledAt })
+    return apiFetch(`/workspaces/${workspaceId}/campaigns/${campaignId}/schedule`, { method: 'POST', body: JSON.stringify({ scheduled_at: scheduledAt }) }, token)
+  },
+  launchCampaign: (workspaceId: string, campaignId: string, token: string): Promise<{ status: string; job_id?: string }> => {
+    if (isDemoMode) return Promise.resolve({ status: 'queued', job_id: `demo-enroll-${Date.now()}` })
+    return apiFetch(`/workspaces/${workspaceId}/campaigns/${campaignId}/launch`, { method: 'POST' }, token)
+  },
+  pauseCampaign: (workspaceId: string, campaignId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: campaignId, status: 'paused' })
+    return apiFetch(`/workspaces/${workspaceId}/campaigns/${campaignId}/pause`, { method: 'POST' }, token)
+  },
+  resumeCampaign: (workspaceId: string, campaignId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve({ id: campaignId, status: 'active' })
+    return apiFetch(`/workspaces/${workspaceId}/campaigns/${campaignId}/resume`, { method: 'POST' }, token)
+  },
+  getCampaignStats: (workspaceId: string, campaignId: string, token: string) => {
+    if (isDemoMode) {
+      const c = demoCampaigns.find((x) => x.id === campaignId)
+      return Promise.resolve({
+        campaign_id: campaignId,
+        status: c?.status ?? 'draft',
+        stats: c?.stats ?? {},
+        events_by_type: { sent: c?.stats.sent ?? 0, opened: c?.stats.opened ?? 0, clicked: c?.stats.clicked ?? 0, replied: c?.stats.replied ?? 0, converted: c?.stats.converted ?? 0 },
+        total_events: (c?.stats.sent ?? 0) + (c?.stats.opened ?? 0) + (c?.stats.clicked ?? 0) + (c?.stats.replied ?? 0),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/campaigns/${campaignId}/stats`, {}, token)
+  },
+  getCampaignEnrollments: (workspaceId: string, campaignId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve(demoEnrollments.filter((e) => e.campaignId === campaignId))
+    return apiFetch(`/workspaces/${workspaceId}/campaigns/${campaignId}/enrollments`, {}, token)
+  },
+
+  // Sequences
+  listSequences: (workspaceId: string, token: string, opts?: { status?: string }) => {
+    if (isDemoMode) {
+      let seqs = demoSequences
+      if (opts?.status && opts.status !== 'all') seqs = seqs.filter((s) => s.status === opts.status)
+      return Promise.resolve(seqs)
+    }
+    const params = new URLSearchParams()
+    if (opts?.status && opts.status !== 'all') params.set('status', opts.status)
+    const qs = params.toString()
+    return apiFetch(`/workspaces/${workspaceId}/sequences${qs ? `?${qs}` : ''}`, {}, token)
+  },
+  getSequence: (workspaceId: string, sequenceId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve(demoSequences.find((s) => s.id === sequenceId) ?? null)
+    return apiFetch(`/workspaces/${workspaceId}/sequences/${sequenceId}`, {}, token)
+  },
+  createSequence: (
+    workspaceId: string,
+    data: { name: string; description?: string; channel?: string; status?: string; settings?: Record<string, unknown> },
+    token: string,
+  ) => {
+    if (isDemoMode) return Promise.resolve({ id: `demo-seq-${Date.now()}`, workspace_id: workspaceId, status: 'draft', channel: 'email', step_count: 0, settings: {}, steps: [], ...data })
+    return apiFetch(`/workspaces/${workspaceId}/sequences`, { method: 'POST', body: JSON.stringify(data) }, token)
+  },
+  updateSequence: (
+    workspaceId: string,
+    sequenceId: string,
+    data: { name?: string; description?: string; channel?: string; status?: string; settings?: Record<string, unknown> },
+    token: string,
+  ) => {
+    if (isDemoMode) return Promise.resolve({ id: sequenceId, ...data })
+    return apiFetch(`/workspaces/${workspaceId}/sequences/${sequenceId}`, { method: 'PATCH', body: JSON.stringify(data) }, token)
+  },
+  saveSequenceSteps: (
+    workspaceId: string,
+    sequenceId: string,
+    steps: Array<{ step_order?: number; channel: string; delay_hours: number; subject?: string | null; body_template: string; requires_approval: boolean; ai_generate: boolean }>,
+    token: string,
+  ) => {
+    if (isDemoMode) return Promise.resolve({ id: sequenceId, step_count: steps.length, steps })
+    return apiFetch(`/workspaces/${workspaceId}/sequences/${sequenceId}/steps`, { method: 'PUT', body: JSON.stringify({ steps }) }, token)
+  },
+
+  // Outreach (bot → human HITL approval queue)
+  listPendingOutreach: (workspaceId: string, token: string) => {
+    if (isDemoMode) return Promise.resolve(demoPendingOutreach)
+    return apiFetch(`/workspaces/${workspaceId}/outreach/pending`, {}, token)
+  },
+  draftOutreach: (workspaceId: string, enrollmentId: string, token: string): Promise<{ enrollment_id: string; subject: string | null; body: string; ai_generated: boolean }> => {
+    if (isDemoMode) {
+      const p = demoPendingOutreach.find((x) => x.enrollmentId === enrollmentId)
+      return Promise.resolve({ enrollment_id: enrollmentId, subject: p?.subject ?? null, body: p?.body ?? '', ai_generated: p?.aiGenerated ?? false })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/outreach/${enrollmentId}/draft`, { method: 'POST' }, token)
+  },
+  approveOutreach: (
+    workspaceId: string,
+    enrollmentId: string,
+    data: { subject?: string | null; body?: string | null } | undefined,
+    token: string,
+  ): Promise<{ status: string; enrollment_id: string }> => {
+    if (isDemoMode) return Promise.resolve({ status: 'approved', enrollment_id: enrollmentId })
+    return apiFetch(`/workspaces/${workspaceId}/outreach/${enrollmentId}/approve`, { method: 'POST', body: JSON.stringify(data ?? {}) }, token)
+  },
+  rejectOutreach: (
+    workspaceId: string,
+    enrollmentId: string,
+    reason: string | undefined,
+    token: string,
+  ): Promise<{ status: string; enrollment_id: string }> => {
+    if (isDemoMode) return Promise.resolve({ status: 'rejected', enrollment_id: enrollmentId })
+    return apiFetch(`/workspaces/${workspaceId}/outreach/${enrollmentId}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }, token)
+  },
+
+  // Shared Celery job poll (import/score/enroll jobs). Mirrors useJobPoller's
+  // GET /jobs/{id}; workspaceId is accepted for call-site symmetry but the
+  // endpoint is not workspace-scoped.
+  getJob: (_workspaceId: string, jobId: string, token: string): Promise<{ job_id: string; state: string; result?: Record<string, unknown> | null; error?: string | null }> => {
+    if (isDemoMode) return Promise.resolve({ job_id: jobId, state: 'success', result: {} })
+    return apiFetch(`/jobs/${jobId}`, {}, token)
   },
 }
