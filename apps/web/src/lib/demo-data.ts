@@ -5,6 +5,18 @@ import type {
   ActivityEvent,
   KPI,
   Workspace,
+  Lead,
+  LeadStage,
+  LeadSource,
+  LeadFunnelStage,
+  EngagementLabel,
+  Segment,
+  Campaign,
+  Sequence,
+  SequenceStep,
+  Enrollment,
+  EngagementEvent,
+  PendingOutreach,
 } from './types'
 
 // ─── Workspace ────────────────────────────────────────────────────────────────
@@ -952,3 +964,365 @@ export const demoAgentAccuracyData = [
   { day: 'Sat', semantic: 93, leadScore: 90, sentiment: 83 },
   { day: 'Sun', semantic: 94, leadScore: 91, sentiment: 83 },
 ]
+
+// ─── Lead-Gen / Outbound Engagement demo fixtures ────────────────────────────
+// September demo of Zach's photo-booth division: "10,000 leads → a database →
+// a funnel of engagement." Leads are event-industry prospects (wedding venues,
+// event planners, corporate coordinators, party-rental shops). ~40 rows span all
+// six funnel stages with varied engagement scores.
+
+const LEADGEN_WS = 'demo-workspace-1'
+
+function _engagementLabel(score: number): EngagementLabel {
+  if (score >= 70) return 'hot'
+  if (score >= 40) return 'warm'
+  return 'cold'
+}
+
+function _signalsFor(stage: LeadStage, score: number): string[] {
+  const base: Record<LeadStage, string[]> = {
+    new: ['Imported from event-expo list', 'No outreach sent yet'],
+    contacted: ['First email delivered', 'Awaiting reply'],
+    engaged: ['Opened 3 of 4 emails', 'Clicked pricing link'],
+    qualified: ['Replied requesting a quote', 'Confirmed event date'],
+    converted: ['Signed booking contract', 'Deposit received'],
+    lost: ['Went with a competitor', 'No response after 5 touches'],
+  }
+  return base[stage].concat(score >= 70 ? ['High engagement velocity'] : [])
+}
+
+// [name, company, title, stage, source, score]
+const _LEAD_SEED: Array<[string, string, string, LeadStage, LeadSource, number]> = [
+  // ── new (10) ──
+  ['Hannah Brooks', 'Willowmere Barn Weddings', 'Venue Coordinator', 'new', 'import', 8],
+  ['Diego Marín', 'Fiesta Party Rentals', 'Owner', 'new', 'import', 0],
+  ['Priyanka Rao', 'Lotus Event Planning', 'Lead Planner', 'new', 'web', 14],
+  ['Cody Franklin', 'Riverside Country Club', 'Events Manager', 'new', 'import', 5],
+  ['Meredith Vaughn', 'The Gilded Hall', 'Sales Director', 'new', 'event', 18],
+  ['Samuel Okafor', 'Summit Corporate Events', 'Program Manager', 'new', 'import', 3],
+  ['Bethany Cole', 'Sweetgrass Farm Venue', 'Owner', 'new', 'referral', 12],
+  ['Trevor Lang', 'Downtown Convention Center', 'Booking Lead', 'new', 'import', 0],
+  ['Isabella Ferro', 'Bella Vista Vineyards', 'Hospitality Manager', 'new', 'web', 16],
+  ['Marcus Webb', 'Northside High School', 'Prom Committee Chair', 'new', 'import', 6],
+  // ── contacted (8) ──
+  ['Angela Sørensen', 'Harbor Lights Ballroom', 'Events Director', 'contacted', 'import', 24],
+  ['Ryan Coats', 'Peak Adventure Weddings', 'Coordinator', 'contacted', 'web', 33],
+  ['Latoya Simmons', 'Grand Magnolia Estate', 'Venue Manager', 'contacted', 'referral', 28],
+  ['Henrik Bauer', 'Bauer Brewing Co.', 'Taproom Events Lead', 'contacted', 'event', 21],
+  ['Chloe Nakamura', 'Cherry Blossom Gardens', 'Owner', 'contacted', 'import', 37],
+  ['Vincent Alfaro', 'Alfaro Catering & Events', 'General Manager', 'contacted', 'manual', 30],
+  ['Grace Odenkirk', 'Lakeshore Resort', 'Group Sales', 'contacted', 'import', 26],
+  ['Devin Pryce', 'Pryce Entertainment Group', 'Booking Agent', 'contacted', 'referral', 39],
+  // ── engaged (7) ──
+  ['Sofia Marchetti', 'Marchetti Manor', 'Events Director', 'engaged', 'web', 52],
+  ['Omar Haddad', 'Skyline Rooftop Venue', 'Venue Owner', 'engaged', 'referral', 61],
+  ['Kaitlyn Reyes', 'Evergreen Event Co.', 'Senior Planner', 'engaged', 'event', 47],
+  ['Jerome Baptiste', 'Crescent Ballroom', 'Sales Manager', 'engaged', 'import', 58],
+  ['Nadia Volkov', 'Aurora Gala Productions', 'Producer', 'engaged', 'web', 64],
+  ['Tyler Mccabe', 'Mccabe Country Weddings', 'Owner', 'engaged', 'referral', 44],
+  ['Ingrid Halvorsen', 'Fjord & Fern Events', 'Creative Director', 'engaged', 'manual', 55],
+  // ── qualified (6) ──
+  ['Rebecca Ortiz', 'The Ivory Rose Venue', 'Owner', 'qualified', 'referral', 72],
+  ['Malik Johnson', 'Grandstand Corporate Retreats', 'Events Lead', 'qualified', 'web', 68],
+  ['Yuki Tanaka', 'Zen Garden Weddings', 'Coordinator', 'qualified', 'event', 76],
+  ['Fiona Callahan', 'Callahan Estate & Gardens', 'Sales Director', 'qualified', 'referral', 79],
+  ['Andre Dupont', 'Chateau Belmont', 'Hospitality Lead', 'qualified', 'manual', 65],
+  ['Simone Leclerc', 'Leclerc Luxury Events', 'Principal Planner', 'qualified', 'web', 74],
+  // ── converted (5) ──
+  ['Whitney Adair', 'Adair Grand Ballroom', 'Owner', 'converted', 'referral', 88],
+  ['Rajiv Kapoor', 'Celebration Station Rentals', 'CEO', 'converted', 'web', 91],
+  ['Elena Petrova', 'Petrova Wedding Collective', 'Founder', 'converted', 'event', 84],
+  ['Brandon Stiles', 'Stiles Corporate Functions', 'Director', 'converted', 'referral', 82],
+  ['Carmen Solis', 'Sol y Mar Beach Weddings', 'Venue Manager', 'converted', 'manual', 95],
+  // ── lost (4) ──
+  ['Gregory Voss', 'Voss Event Hall', 'Owner', 'lost', 'import', 22],
+  ['Tabitha Nguyen', 'Golden Hour Photography Studio', 'Studio Lead', 'lost', 'web', 14],
+  ['Dominic Reyes', 'Reyes Reunions & Galas', 'Organizer', 'lost', 'referral', 27],
+  ['Paula Winters', 'Winterhaven Lodge', 'Events Coordinator', 'lost', 'import', 9],
+]
+
+export const demoLeads: Lead[] = _LEAD_SEED.map(([name, company, title, stage, source, score], i) => {
+  const idNum = String(i + 1).padStart(3, '0')
+  const daysAgo = 2 + i
+  const email = name.toLowerCase().replace(/[^a-z]+/g, '.').replace(/^\.|\.$/g, '') +
+    '@' + company.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 16) + '.com'
+  const engaged = stage !== 'new'
+  return {
+    id: `l-${idNum}`,
+    workspaceId: LEADGEN_WS,
+    contactId: stage === 'converted' ? `c-conv-${idNum}` : null,
+    name,
+    email,
+    phone: `+1 (555) ${String(200 + i).padStart(3, '0')}-${String(1000 + i * 7).slice(-4)}`,
+    company,
+    title,
+    source,
+    stage,
+    score,
+    scoreDetail: {
+      value: score,
+      label: _engagementLabel(score),
+      signals: _signalsFor(stage, score),
+    },
+    ownerId: null,
+    customFields: { event_type: stage === 'lost' ? 'unknown' : 'wedding/corporate', guest_estimate: 80 + (i % 6) * 40 },
+    externalId: `expo-2026-${idNum}`,
+    lastEngagedAt: engaged ? new Date(Date.now() - daysAgo * 86400000).toISOString() : null,
+    createdAt: new Date(Date.now() - (60 - i) * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - daysAgo * 86400000).toISOString(),
+  }
+})
+
+// Funnel rollup derived from demoLeads (count + summed score per stage).
+export function demoLeadFunnel(): LeadFunnelStage[] {
+  const order: LeadStage[] = ['new', 'contacted', 'engaged', 'qualified', 'converted', 'lost']
+  return order.map((stage) => {
+    const rows = demoLeads.filter((l) => l.stage === stage)
+    return { stage, count: rows.length, value: rows.reduce((a, l) => a + l.score, 0) }
+  })
+}
+
+// ─── Segments ────────────────────────────────────────────────────────────────
+export const demoSegments: Segment[] = [
+  {
+    id: 'seg-001',
+    workspaceId: LEADGEN_WS,
+    name: 'Wedding Venues — Fall 2026',
+    description: 'Barns, estates, and vineyards booking fall wedding season.',
+    kind: 'static',
+    filter: {},
+    memberCount: 14,
+    createdAt: new Date(Date.now() - 30 * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 4 * 86400000).toISOString(),
+  },
+  {
+    id: 'seg-002',
+    workspaceId: LEADGEN_WS,
+    name: 'Hot Leads (score ≥ 70)',
+    description: 'Dynamic: any lead scoring 70 or above right now.',
+    kind: 'dynamic',
+    filter: { minScore: 70 },
+    memberCount: demoLeads.filter((l) => l.score >= 70).length,
+    createdAt: new Date(Date.now() - 22 * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 1 * 86400000).toISOString(),
+  },
+  {
+    id: 'seg-003',
+    workspaceId: LEADGEN_WS,
+    name: 'Corporate Event Coordinators',
+    description: 'Company holiday parties, retreats, and conferences.',
+    kind: 'dynamic',
+    filter: { tags: ['corporate'] },
+    memberCount: 6,
+    createdAt: new Date(Date.now() - 18 * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 6 * 86400000).toISOString(),
+  },
+  {
+    id: 'seg-004',
+    workspaceId: LEADGEN_WS,
+    name: 'Cold — Never Contacted',
+    description: 'Dynamic: freshly imported leads still in the New stage.',
+    kind: 'dynamic',
+    filter: { stage: 'new' },
+    memberCount: demoLeads.filter((l) => l.stage === 'new').length,
+    createdAt: new Date(Date.now() - 12 * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 2 * 86400000).toISOString(),
+  },
+]
+
+// ─── Sequences (+ ordered steps) ─────────────────────────────────────────────
+export const demoSequences: Sequence[] = [
+  {
+    id: 'sq-001',
+    workspaceId: LEADGEN_WS,
+    name: 'Wedding Venue Warm-Up (3-step)',
+    description: 'Intro → gallery → limited-date offer for wedding venues.',
+    channel: 'email',
+    status: 'active',
+    stepCount: 3,
+    settings: { stop_on_reply: true, quiet_hours: [21, 8] },
+    createdAt: new Date(Date.now() - 28 * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 5 * 86400000).toISOString(),
+    steps: [
+      {
+        id: 'ss-001-0', workspaceId: LEADGEN_WS, sequenceId: 'sq-001', stepOrder: 0,
+        channel: 'email', delayHours: 0,
+        subject: 'Photo booth magic for {{company}} events?',
+        bodyTemplate: 'Hi {{name}},\n\nI run the photo-booth division here and {{company}} looks like a perfect fit for our open-air booths. Couples love the instant prints and the digital gallery.\n\nWould it be worth a quick chat about your fall dates?\n\nBest,\nZach',
+        requiresApproval: true, aiGenerate: false,
+        createdAt: new Date(Date.now() - 28 * 86400000).toISOString(),
+        updatedAt: new Date(Date.now() - 28 * 86400000).toISOString(),
+      },
+      {
+        id: 'ss-001-1', workspaceId: LEADGEN_WS, sequenceId: 'sq-001', stepOrder: 1,
+        channel: 'email', delayHours: 72,
+        subject: 'A few booths in action at venues like yours',
+        bodyTemplate: 'Hi {{name}},\n\nSharing a short gallery of setups from venues similar to {{company}}. The mirror booth has been a huge hit at estate weddings this year.\n\nHappy to hold a date if you have an event coming up.\n\nZach',
+        requiresApproval: true, aiGenerate: true,
+        createdAt: new Date(Date.now() - 28 * 86400000).toISOString(),
+        updatedAt: new Date(Date.now() - 28 * 86400000).toISOString(),
+      },
+      {
+        id: 'ss-001-2', workspaceId: LEADGEN_WS, sequenceId: 'sq-001', stepOrder: 2,
+        channel: 'email', delayHours: 120,
+        subject: 'Holding fall dates for {{company}}',
+        bodyTemplate: 'Hi {{name}},\n\nFall books up fast — I can pencil {{company}} in for a preferred-partner rate if we lock something this month. Want me to send a simple quote?\n\nZach',
+        requiresApproval: true, aiGenerate: false,
+        createdAt: new Date(Date.now() - 28 * 86400000).toISOString(),
+        updatedAt: new Date(Date.now() - 28 * 86400000).toISOString(),
+      },
+    ],
+  },
+  {
+    id: 'sq-002',
+    workspaceId: LEADGEN_WS,
+    name: 'Corporate Holiday Party Outreach',
+    description: 'Two-touch email + SMS for corporate event coordinators.',
+    channel: 'mixed',
+    status: 'draft',
+    stepCount: 2,
+    settings: { stop_on_reply: true },
+    createdAt: new Date(Date.now() - 15 * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
+    steps: [
+      {
+        id: 'ss-002-0', workspaceId: LEADGEN_WS, sequenceId: 'sq-002', stepOrder: 0,
+        channel: 'email', delayHours: 0,
+        subject: 'Holiday party photo booths — {{company}}',
+        bodyTemplate: 'Hi {{name}},\n\nHoliday party season is around the corner. Our booths keep {{company}} employees laughing and hand them a printed keepsake on the way out. Want the corporate package?\n\nZach',
+        requiresApproval: true, aiGenerate: false,
+        createdAt: new Date(Date.now() - 15 * 86400000).toISOString(),
+        updatedAt: new Date(Date.now() - 15 * 86400000).toISOString(),
+      },
+      {
+        id: 'ss-002-1', workspaceId: LEADGEN_WS, sequenceId: 'sq-002', stepOrder: 1,
+        channel: 'sms', delayHours: 96,
+        subject: null,
+        bodyTemplate: 'Hi {{name}}, Zach here — following up on photo booths for the {{company}} holiday party. Happy to text over a quick quote!',
+        requiresApproval: true, aiGenerate: false,
+        createdAt: new Date(Date.now() - 15 * 86400000).toISOString(),
+        updatedAt: new Date(Date.now() - 15 * 86400000).toISOString(),
+      },
+    ],
+  },
+]
+
+// ─── Campaigns ───────────────────────────────────────────────────────────────
+export const demoCampaigns: Campaign[] = [
+  {
+    id: 'cmp-001',
+    workspaceId: LEADGEN_WS,
+    segmentId: 'seg-001',
+    sequenceId: 'sq-001',
+    name: 'Fall Wedding Season Blast',
+    status: 'active',
+    channel: 'email',
+    scheduledAt: new Date(Date.now() - 8 * 86400000).toISOString(),
+    startedAt: new Date(Date.now() - 8 * 86400000).toISOString(),
+    completedAt: null,
+    stats: { enrolled: 14, sent: 31, opened: 19, clicked: 7, replied: 4, converted: 2 },
+    settings: { daily_cap: 50, sender_identity: 'zach@photoboothco.com' },
+    createdAt: new Date(Date.now() - 10 * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 1 * 86400000).toISOString(),
+  },
+  {
+    id: 'cmp-002',
+    workspaceId: LEADGEN_WS,
+    segmentId: 'seg-003',
+    sequenceId: 'sq-002',
+    name: 'Corporate Holiday Parties',
+    status: 'scheduled',
+    channel: 'mixed',
+    scheduledAt: new Date(Date.now() + 6 * 86400000).toISOString(),
+    startedAt: null,
+    completedAt: null,
+    stats: { enrolled: 0, sent: 0, opened: 0, clicked: 0, replied: 0, converted: 0 },
+    settings: { daily_cap: 30 },
+    createdAt: new Date(Date.now() - 4 * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 2 * 86400000).toISOString(),
+  },
+  {
+    id: 'cmp-003',
+    workspaceId: LEADGEN_WS,
+    segmentId: 'seg-004',
+    sequenceId: null,
+    name: 'Cold Lead Reactivation',
+    status: 'draft',
+    channel: 'email',
+    scheduledAt: null,
+    startedAt: null,
+    completedAt: null,
+    stats: {},
+    settings: {},
+    createdAt: new Date(Date.now() - 3 * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
+  },
+]
+
+// ─── Enrollments (live positions in the Fall Wedding campaign) ───────────────
+export const demoEnrollments: Enrollment[] = [
+  { id: 'en-001', workspaceId: LEADGEN_WS, campaignId: 'cmp-001', sequenceId: 'sq-001', leadId: 'l-019', currentStep: 1, status: 'waiting', nextRunAt: new Date(Date.now() + 6 * 3600000).toISOString(), lastSentAt: new Date(Date.now() - 2 * 86400000).toISOString(), createdAt: new Date(Date.now() - 8 * 86400000).toISOString(), updatedAt: new Date(Date.now() - 2 * 86400000).toISOString() },
+  { id: 'en-002', workspaceId: LEADGEN_WS, campaignId: 'cmp-001', sequenceId: 'sq-001', leadId: 'l-020', currentStep: 2, status: 'active', nextRunAt: new Date(Date.now() + 1 * 86400000).toISOString(), lastSentAt: new Date(Date.now() - 1 * 86400000).toISOString(), createdAt: new Date(Date.now() - 8 * 86400000).toISOString(), updatedAt: new Date(Date.now() - 1 * 86400000).toISOString() },
+  { id: 'en-003', workspaceId: LEADGEN_WS, campaignId: 'cmp-001', sequenceId: 'sq-001', leadId: 'l-025', currentStep: 0, status: 'waiting', nextRunAt: new Date(Date.now() - 1 * 3600000).toISOString(), lastSentAt: null, createdAt: new Date(Date.now() - 3 * 86400000).toISOString(), updatedAt: new Date(Date.now() - 3 * 86400000).toISOString() },
+  { id: 'en-004', workspaceId: LEADGEN_WS, campaignId: 'cmp-001', sequenceId: 'sq-001', leadId: 'l-031', currentStep: 3, status: 'completed', nextRunAt: null, lastSentAt: new Date(Date.now() - 5 * 86400000).toISOString(), createdAt: new Date(Date.now() - 8 * 86400000).toISOString(), updatedAt: new Date(Date.now() - 5 * 86400000).toISOString() },
+  { id: 'en-005', workspaceId: LEADGEN_WS, campaignId: 'cmp-001', sequenceId: 'sq-001', leadId: 'l-021', currentStep: 1, status: 'stopped', nextRunAt: null, lastSentAt: new Date(Date.now() - 4 * 86400000).toISOString(), createdAt: new Date(Date.now() - 8 * 86400000).toISOString(), updatedAt: new Date(Date.now() - 4 * 86400000).toISOString() },
+  { id: 'en-006', workspaceId: LEADGEN_WS, campaignId: 'cmp-001', sequenceId: 'sq-001', leadId: 'l-024', currentStep: 0, status: 'waiting', nextRunAt: new Date(Date.now() - 30 * 60000).toISOString(), lastSentAt: null, createdAt: new Date(Date.now() - 2 * 86400000).toISOString(), updatedAt: new Date(Date.now() - 2 * 86400000).toISOString() },
+]
+
+// ─── Pending outreach (bot → human approval queue) ───────────────────────────
+function _leadLabel(leadId: string): { name: string | null; company: string | null } {
+  const l = demoLeads.find((x) => x.id === leadId)
+  return { name: l?.name ?? null, company: l?.company ?? null }
+}
+
+export const demoPendingOutreach: PendingOutreach[] = [
+  {
+    enrollmentId: 'en-003', leadId: 'l-025', campaignId: 'cmp-001', sequenceId: 'sq-001',
+    currentStep: 0, status: 'waiting',
+    subject: 'Photo booth magic for The Ivory Rose Venue events?',
+    body: 'Hi Rebecca,\n\nI run the photo-booth division here and The Ivory Rose Venue looks like a perfect fit for our open-air booths. Couples love the instant prints and the digital gallery.\n\nWould it be worth a quick chat about your fall dates?\n\nBest,\nZach',
+    leadName: _leadLabel('l-025').name, leadCompany: _leadLabel('l-025').company, aiGenerated: false,
+  },
+  {
+    enrollmentId: 'en-006', leadId: 'l-024', campaignId: 'cmp-001', sequenceId: 'sq-001',
+    currentStep: 0, status: 'waiting',
+    subject: 'Photo booth magic for Tyler Mccabe Country Weddings events?',
+    body: 'Hi Tyler,\n\nI run the photo-booth division here and Mccabe Country Weddings looks like a perfect fit for our open-air booths. Couples love the instant prints and the digital gallery.\n\nWould it be worth a quick chat about your fall dates?\n\nBest,\nZach',
+    leadName: _leadLabel('l-024').name, leadCompany: _leadLabel('l-024').company, aiGenerated: false,
+  },
+  {
+    enrollmentId: 'en-001', leadId: 'l-019', campaignId: 'cmp-001', sequenceId: 'sq-001',
+    currentStep: 1, status: 'waiting',
+    subject: 'A few booths in action at venues like yours',
+    body: 'Hi Sofia,\n\nSharing a short gallery of setups from venues similar to Marchetti Manor. The mirror booth has been a huge hit at estate weddings this year.\n\nHappy to hold a date if you have an event coming up.\n\nZach',
+    leadName: _leadLabel('l-019').name, leadCompany: _leadLabel('l-019').company, aiGenerated: true,
+  },
+  {
+    enrollmentId: 'en-002', leadId: 'l-020', campaignId: 'cmp-001', sequenceId: 'sq-001',
+    currentStep: 2, status: 'waiting',
+    subject: 'Holding fall dates for Skyline Rooftop Venue',
+    body: 'Hi Omar,\n\nFall books up fast — I can pencil Skyline Rooftop Venue in for a preferred-partner rate if we lock something this month. Want me to send a simple quote?\n\nZach',
+    leadName: _leadLabel('l-020').name, leadCompany: _leadLabel('l-020').company, aiGenerated: false,
+  },
+]
+
+// ─── Engagement events (timeline for a couple of active leads) ───────────────
+export const demoEngagementEvents: EngagementEvent[] = [
+  { id: 'ee-001', workspaceId: LEADGEN_WS, leadId: 'l-020', campaignId: 'cmp-001', enrollmentId: 'en-002', stepId: 'ss-001-0', type: 'sent', channel: 'email', weight: 0, metadata: { subject: 'Photo booth magic for Skyline Rooftop Venue events?' }, occurredAt: new Date(Date.now() - 7 * 86400000).toISOString(), createdAt: new Date(Date.now() - 7 * 86400000).toISOString() },
+  { id: 'ee-002', workspaceId: LEADGEN_WS, leadId: 'l-020', campaignId: 'cmp-001', enrollmentId: 'en-002', stepId: 'ss-001-0', type: 'opened', channel: 'email', weight: 5, metadata: {}, occurredAt: new Date(Date.now() - 6.8 * 86400000).toISOString(), createdAt: new Date(Date.now() - 6.8 * 86400000).toISOString() },
+  { id: 'ee-003', workspaceId: LEADGEN_WS, leadId: 'l-020', campaignId: 'cmp-001', enrollmentId: 'en-002', stepId: 'ss-001-0', type: 'clicked', channel: 'email', weight: 15, metadata: { url: 'https://photoboothco.com/gallery' }, occurredAt: new Date(Date.now() - 6.7 * 86400000).toISOString(), createdAt: new Date(Date.now() - 6.7 * 86400000).toISOString() },
+  { id: 'ee-004', workspaceId: LEADGEN_WS, leadId: 'l-020', campaignId: 'cmp-001', enrollmentId: 'en-002', stepId: 'ss-001-1', type: 'sent', channel: 'email', weight: 0, metadata: {}, occurredAt: new Date(Date.now() - 4 * 86400000).toISOString(), createdAt: new Date(Date.now() - 4 * 86400000).toISOString() },
+  { id: 'ee-005', workspaceId: LEADGEN_WS, leadId: 'l-020', campaignId: 'cmp-001', enrollmentId: 'en-002', stepId: 'ss-001-1', type: 'opened', channel: 'email', weight: 5, metadata: {}, occurredAt: new Date(Date.now() - 3.9 * 86400000).toISOString(), createdAt: new Date(Date.now() - 3.9 * 86400000).toISOString() },
+  { id: 'ee-006', workspaceId: LEADGEN_WS, leadId: 'l-020', campaignId: 'cmp-001', enrollmentId: 'en-002', stepId: 'ss-001-1', type: 'replied', channel: 'email', weight: 30, metadata: { snippet: 'What are your fall rates?' }, occurredAt: new Date(Date.now() - 3.5 * 86400000).toISOString(), createdAt: new Date(Date.now() - 3.5 * 86400000).toISOString() },
+  { id: 'ee-007', workspaceId: LEADGEN_WS, leadId: 'l-031', campaignId: 'cmp-001', enrollmentId: 'en-004', stepId: 'ss-001-2', type: 'converted', channel: 'email', weight: 40, metadata: { deal: 'Fall wedding booking' }, occurredAt: new Date(Date.now() - 5 * 86400000).toISOString(), createdAt: new Date(Date.now() - 5 * 86400000).toISOString() },
+  { id: 'ee-008', workspaceId: LEADGEN_WS, leadId: 'l-021', campaignId: 'cmp-001', enrollmentId: 'en-005', stepId: 'ss-001-0', type: 'bounced', channel: 'email', weight: -20, metadata: { reason: 'mailbox full' }, occurredAt: new Date(Date.now() - 6 * 86400000).toISOString(), createdAt: new Date(Date.now() - 6 * 86400000).toISOString() },
+  { id: 'ee-009', workspaceId: LEADGEN_WS, leadId: 'l-025', campaignId: 'cmp-001', enrollmentId: 'en-003', stepId: 'ss-001-0', type: 'queued', channel: 'email', weight: 0, metadata: {}, occurredAt: new Date(Date.now() - 1 * 3600000).toISOString(), createdAt: new Date(Date.now() - 1 * 3600000).toISOString() },
+  { id: 'ee-010', workspaceId: LEADGEN_WS, leadId: 'l-019', campaignId: 'cmp-001', enrollmentId: 'en-001', stepId: 'ss-001-0', type: 'opened', channel: 'email', weight: 5, metadata: {}, occurredAt: new Date(Date.now() - 3 * 86400000).toISOString(), createdAt: new Date(Date.now() - 3 * 86400000).toISOString() },
+]
+
+// Per-lead engagement-event lookup for the lead detail timeline.
+export function demoLeadEvents(leadId: string): EngagementEvent[] {
+  return demoEngagementEvents
+    .filter((e) => e.leadId === leadId)
+    .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+}

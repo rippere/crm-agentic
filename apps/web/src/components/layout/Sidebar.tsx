@@ -11,6 +11,7 @@ import {
   LayoutDashboard, Users, KanbanSquare, Bot, Settings,
   Zap, Inbox, CheckSquare, FolderOpen, Plug, Search,
   PhoneCall, ChevronsUpDown, LogOut, BarChart2, X, Activity, Target, HelpCircle,
+  Filter, Send, Workflow,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 
@@ -64,6 +65,10 @@ const navGroups: NavGroup[] = [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/contacts",  label: "Contacts",  icon: Users            },
       { href: "/pipeline",  label: "Pipeline",  icon: KanbanSquare,  hideModes: ["pm"] },
+      { href: "/leads",     label: "Leads",     icon: Filter,        hideModes: ["pm"] },
+      { href: "/campaigns", label: "Campaigns", icon: Send,          hideModes: ["pm"] },
+      { href: "/sequences", label: "Sequences", icon: Workflow,      hideModes: ["pm"] },
+      { href: "/outreach",  label: "Outreach",  icon: Inbox,         hideModes: ["pm"] },
       { href: "/reports",   label: "Reports",   icon: BarChart2,     hideModes: ["pm"] },
       { href: "/activity",  label: "Activity",  icon: Activity         },
       { href: "/life",      label: "Life",      icon: Target, requiresLife: true },
