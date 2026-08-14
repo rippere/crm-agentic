@@ -3114,4 +3114,66 @@ export const apiClient = {
       token,
     )
   },
+
+  getWorkspaceDigest: (workspaceId: string, token: string): Promise<{
+    health_rating: 'excellent' | 'good' | 'needs_attention' | 'critical'
+    summary: string
+    highlights: string[]
+    warnings: string[]
+    recommended_actions: string[]
+    metrics: {
+      total_contacts: number
+      going_dark_count: number
+      open_deal_count: number
+      total_pipeline: number
+      at_risk_deals: number
+      overdue_close_count: number
+      closed_won_count: number
+      closed_won_value: number
+      open_task_count: number
+      overdue_task_count: number
+      agent_run_count: number
+    }
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        health_rating: 'good',
+        summary:
+          'The workspace is performing steadily with 42 contacts in the system and $285K in open pipeline. 3 contacts have gone dark and 2 deals have overdue close dates requiring immediate attention.',
+        highlights: [
+          '2 deals closed won this month — $78K in new revenue booked.',
+          '18 AI agent runs accelerated lead scoring and pipeline analysis.',
+        ],
+        warnings: [
+          '3 customer/prospect contacts have had no touch in 30+ days.',
+          '4 open tasks are past their due dates — assign owners or close.',
+        ],
+        recommended_actions: [
+          'Re-engage the 3 dark contacts with a personalized outreach draft.',
+          'Update expected close dates on 2 overdue pipeline deals.',
+          'Run a clarity score sweep on unscored inbox messages.',
+        ],
+        metrics: {
+          total_contacts: 42,
+          going_dark_count: 3,
+          open_deal_count: 8,
+          total_pipeline: 285000,
+          at_risk_deals: 2,
+          overdue_close_count: 2,
+          closed_won_count: 2,
+          closed_won_value: 78000,
+          open_task_count: 12,
+          overdue_task_count: 4,
+          agent_run_count: 18,
+        },
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/workspace-digest`,
+      { method: 'GET' },
+      token,
+    )
+  },
 }

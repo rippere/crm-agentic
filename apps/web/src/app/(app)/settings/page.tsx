@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import {
   Settings, Layers, TrendingUp, CheckSquare,
   Plug, User, LogOut, Save, AlertTriangle, Users, Mail, Webhook, ChevronRight,
+  Sparkles, RefreshCw, ChevronDown, CheckCircle2,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 import { useRouter } from "next/navigation";
@@ -40,6 +41,29 @@ export default function SettingsPage() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
+  const [digest, setDigest] = useState<{
+    health_rating: 'excellent' | 'good' | 'needs_attention' | 'critical'
+    summary: string
+    highlights: string[]
+    warnings: string[]
+    recommended_actions: string[]
+    metrics: {
+      total_contacts: number
+      going_dark_count: number
+      open_deal_count: number
+      total_pipeline: number
+      at_risk_deals: number
+      closed_won_count: number
+      closed_won_value: number
+      open_task_count: number
+      overdue_task_count: number
+      agent_run_count: number
+    }
+    generated_at: string
+  } | null>(null);
+  const [digestLoading, setDigestLoading] = useState(false);
+  const [digestExpanded, setDigestExpanded] = useState(true);
+
   const addToast = (message: string, type: Toast["type"]) => {
     const id = Date.now();
     setToasts((prev) => [...prev, { id, message, type }]);
@@ -62,8 +86,21 @@ export default function SettingsPage() {
         setWorkspaceName((ws as { name: string; mode: string }).name ?? "");
         setMode(((ws as { name: string; mode: string }).mode as WorkspaceMode) ?? "sales");
       }
+      loadDigest(wsId, session.access_token);
     });
   }, []);
+
+  const loadDigest = async (wsId: string, tok: string) => {
+    setDigestLoading(true);
+    try {
+      const data = await apiClient.getWorkspaceDigest(wsId, tok);
+      setDigest(data);
+    } catch {
+      // silently fail — digest is non-critical
+    } finally {
+      setDigestLoading(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!workspaceId || !workspaceName.trim() || !token) return;
@@ -103,6 +140,124 @@ export default function SettingsPage() {
       </div>
 
       <Header title="Settings" subtitle="Workspace configuration and preferences" />
+
+      {/* AI Workspace Digest */}
+      <Card>
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-400" />
+            <p className="text-sm font-semibold text-zinc-100">Workspace Digest</p>
+            {digest && (
+              <span className={cn(
+                "text-[10px] font-semibold px-2 py-0.5 rounded-full border",
+                digest.health_rating === "excellent" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                  : digest.health_rating === "good" ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
+                  : digest.health_rating === "needs_attention" ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                  : "border-rose-500/40 bg-rose-500/10 text-rose-300"
+              )}>
+                {digest.health_rating === "needs_attention" ? "Needs Attention"
+                  : digest.health_rating.charAt(0).toUpperCase() + digest.health_rating.slice(1)}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {workspaceId && token && (
+              <button
+                onClick={() => loadDigest(workspaceId, token)}
+                disabled={digestLoading}
+                className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 transition"
+              >
+                <RefreshCw className={cn("h-3 w-3", digestLoading && "animate-spin")} />
+                {digestLoading ? "Generating…" : "Regenerate"}
+              </button>
+            )}
+            <button onClick={() => setDigestExpanded((v) => !v)} className="text-zinc-500 hover:text-zinc-300 transition">
+              <ChevronDown className={cn("h-4 w-4 transition-transform", digestExpanded && "rotate-180")} />
+            </button>
+          </div>
+        </div>
+
+        {digestExpanded && (
+          <div className="mt-4 space-y-4">
+            {digestLoading && !digest && (
+              <div className="space-y-2">
+                {[60, 80, 50].map((w) => (
+                  <div key={w} className={`h-3 bg-zinc-800 rounded animate-pulse w-${w === 60 ? '[60%]' : w === 80 ? '[80%]' : '[50%]'}`} />
+                ))}
+              </div>
+            )}
+
+            {digest && (
+              <>
+                {/* Summary */}
+                <p className="text-sm text-zinc-300 leading-relaxed">{digest.summary}</p>
+
+                {/* Metrics grid */}
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { label: "Contacts", value: digest.metrics.total_contacts },
+                    { label: "Open Deals", value: digest.metrics.open_deal_count },
+                    { label: "Pipeline", value: `$${(digest.metrics.total_pipeline / 1000).toFixed(0)}K` },
+                    { label: "Tasks Open", value: digest.metrics.open_task_count },
+                    { label: "Overdue Tasks", value: digest.metrics.overdue_task_count },
+                    { label: "Agent Runs", value: digest.metrics.agent_run_count },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="rounded-lg bg-zinc-800/60 border border-zinc-700/50 px-3 py-2">
+                      <p className="text-[10px] text-zinc-500 mb-0.5">{label}</p>
+                      <p className="text-sm font-semibold text-zinc-100">{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Two-column: Highlights + Warnings */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider mb-2">Highlights</p>
+                    <ul className="space-y-1.5">
+                      {digest.highlights.map((h, i) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 mt-0.5 shrink-0" />
+                          <span className="text-xs text-zinc-300">{h}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider mb-2">Watch Out</p>
+                    <ul className="space-y-1.5">
+                      {digest.warnings.map((w, i) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <AlertTriangle className="h-3.5 w-3.5 text-amber-400 mt-0.5 shrink-0" />
+                          <span className="text-xs text-zinc-300">{w}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Recommended Actions */}
+                <div>
+                  <p className="text-[10px] font-semibold text-violet-400 uppercase tracking-wider mb-2">Recommended Actions</p>
+                  <ol className="space-y-1">
+                    {digest.recommended_actions.map((a, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                        <span className="text-[10px] font-bold text-violet-400 mt-0.5 w-4 shrink-0">{i + 1}.</span>
+                        {a}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+
+                <p className="text-[10px] text-zinc-600">Generated {new Date(digest.generated_at).toLocaleString()}</p>
+              </>
+            )}
+
+            {!digest && !digestLoading && (
+              <p className="text-xs text-zinc-500">Digest will generate once workspace data is loaded.</p>
+            )}
+          </div>
+        )}
+      </Card>
 
       {/* Workspace */}
       <Card>

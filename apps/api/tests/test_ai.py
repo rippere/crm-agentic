@@ -2229,3 +2229,82 @@ async def test_team_performance_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/team-performance")
 
     assert resp.status_code == 403
+
+
+# ── Workspace Digest ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_workspace_digest_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import json as _json
+
+    def _scalar(v):
+        r = MagicMock()
+        r.scalar.return_value = v
+        return r
+
+    def _scalar_one(row):
+        r = MagicMock()
+        r.one.return_value = row
+        return r
+
+    def _all(rows):
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _scalar(25),                         # total_contacts
+        _scalar(3),                          # going_dark_count
+        _all([]),                            # open_deals_rows
+        _scalar(2),                          # overdue_close_count
+        _scalar(10),                         # open_task_count
+        _scalar(4),                          # overdue_task_count
+        _scalar(18),                         # agent_run_count
+        _scalar_one((1, 45000)),             # closed_won count + value
+    ])
+
+    digest_json = _json.dumps({
+        "health_rating": "good",
+        "summary": "The workspace has 25 contacts with 3 going dark. Pipeline is light with no open deals.",
+        "highlights": ["18 agent runs in the last 30 days", "1 deal closed won worth $45K"],
+        "warnings": ["3 contacts have had no touch in 30 days", "4 tasks are overdue"],
+        "recommended_actions": [
+            "Re-engage the 3 dark contacts this week",
+            "Close out the 4 overdue tasks",
+            "Open new deals to build pipeline",
+        ],
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=digest_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/workspace-digest")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["health_rating"] in {"excellent", "good", "needs_attention", "critical"}
+    assert isinstance(body["summary"], str) and len(body["summary"]) > 0
+    assert isinstance(body["highlights"], list)
+    assert isinstance(body["warnings"], list)
+    assert isinstance(body["recommended_actions"], list)
+    assert "metrics" in body
+    assert body["metrics"]["total_contacts"] == 25
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_workspace_digest_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/workspace-digest")
+
+    assert resp.status_code == 403
