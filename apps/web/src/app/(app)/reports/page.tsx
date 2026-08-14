@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -99,6 +99,22 @@ export default function ReportsPage() {
   } | null>(null);
   const [pipelineHealthLoading, setPipelineHealthLoading] = useState(false);
   const [pipelineHealthOpen, setPipelineHealthOpen] = useState(true);
+  const [teamPerf, setTeamPerf] = useState<{
+    performance_rating: 'excellent' | 'good' | 'needs_improvement' | 'critical';
+    highlights: string[];
+    areas_for_improvement: string[];
+    summary_sentence: string;
+    metrics: {
+      agent_runs: number;
+      task_completion_rate: number;
+      messages_processed: number;
+      deals_moved: number;
+      active_contacts: number;
+    };
+    generated_at: string;
+  } | null>(null);
+  const [teamPerfLoading, setTeamPerfLoading] = useState(false);
+  const [teamPerfOpen, setTeamPerfOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -126,6 +142,8 @@ export default function ReportsPage() {
       apiClient.getMessageVolumeTrends("demo-workspace-1", "demo-token").then(setMessageVolume).catch(() => {});
       setPipelineHealthLoading(true);
       apiClient.getPipelineHealthBriefing("demo-workspace-1", "demo-token").then(setPipelineHealth).catch(() => {}).finally(() => setPipelineHealthLoading(false));
+      setTeamPerfLoading(true);
+      apiClient.getTeamPerformance("demo-workspace-1", "demo-token").then(setTeamPerf).catch(() => {}).finally(() => setTeamPerfLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -157,6 +175,8 @@ export default function ReportsPage() {
       apiClient.getMessageVolumeTrends(workspaceId, session.access_token).then(setMessageVolume).catch(() => {});
       setPipelineHealthLoading(true);
       apiClient.getPipelineHealthBriefing(workspaceId, session.access_token).then(setPipelineHealth).catch(() => {}).finally(() => setPipelineHealthLoading(false));
+      setTeamPerfLoading(true);
+      apiClient.getTeamPerformance(workspaceId, session.access_token).then(setTeamPerf).catch(() => {}).finally(() => setTeamPerfLoading(false));
     });
   }, []);
 
@@ -276,11 +296,39 @@ export default function ReportsPage() {
     }
   };
 
+  const regenerateTeamPerf = () => {
+    setTeamPerfLoading(true);
+    const doFetch = (workspaceId: string, token: string) => {
+      apiClient.getTeamPerformance(workspaceId, token)
+        .then(setTeamPerf)
+        .catch(() => {})
+        .finally(() => setTeamPerfLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setTeamPerfLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setTeamPerfLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
   const RATING_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
     strong:   { label: "Strong",   color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
     healthy:  { label: "Healthy",  color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
     at_risk:  { label: "At Risk",  color: "text-amber-400",   bg: "bg-amber-500/10 border-amber-500/20"   },
     critical: { label: "Critical", color: "text-rose-400",    bg: "bg-rose-500/10 border-rose-500/20"     },
+  };
+
+  const TEAM_PERF_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+    excellent:          { label: "Excellent",          color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
+    good:               { label: "Good",               color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
+    needs_improvement:  { label: "Needs Improvement",  color: "text-amber-400",   bg: "bg-amber-500/10 border-amber-500/20"   },
+    critical:           { label: "Critical",           color: "text-rose-400",    bg: "bg-rose-500/10 border-rose-500/20"     },
   };
 
   if (loading) {
@@ -357,6 +405,104 @@ export default function ReportsPage() {
             )}
             {!pipelineHealth && !pipelineHealthLoading && (
               <p className="text-sm text-zinc-500">Click Regenerate to generate a pipeline health briefing.</p>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Team Performance AI Card */}
+      <Card className="border-teal-500/20">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-teal-400" />
+            <span className="text-sm font-semibold text-zinc-100">Team Performance</span>
+            {teamPerf && (
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${TEAM_PERF_CONFIG[teamPerf.performance_rating]?.bg} ${TEAM_PERF_CONFIG[teamPerf.performance_rating]?.color}`}>
+                {TEAM_PERF_CONFIG[teamPerf.performance_rating]?.label}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateTeamPerf}
+              disabled={teamPerfLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`h-3 w-3 ${teamPerfLoading ? "animate-spin" : ""}`} />
+              {teamPerfLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button
+              onClick={() => setTeamPerfOpen((o) => !o)}
+              className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              {teamPerfOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+
+        {teamPerfOpen && (
+          <div className="mt-4">
+            {teamPerfLoading && !teamPerf && (
+              <div className="space-y-2">
+                <div className="h-4 w-full rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-4/5 rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-3/5 rounded bg-zinc-800 animate-pulse" />
+              </div>
+            )}
+            {teamPerf && (
+              <div className={`transition-opacity ${teamPerfLoading ? "opacity-40" : "opacity-100"}`}>
+                {/* Summary */}
+                <p className="text-sm text-zinc-300 leading-relaxed mb-4">{teamPerf.summary_sentence}</p>
+
+                {/* Metrics mini-grid */}
+                <div className="grid grid-cols-5 gap-2 mb-4">
+                  {[
+                    { label: "Agent Runs", value: teamPerf.metrics.agent_runs, color: "text-teal-300" },
+                    { label: "Task Rate", value: `${teamPerf.metrics.task_completion_rate}%`, color: "text-indigo-300" },
+                    { label: "Messages", value: teamPerf.metrics.messages_processed, color: "text-violet-300" },
+                    { label: "Deals Moved", value: teamPerf.metrics.deals_moved, color: "text-amber-300" },
+                    { label: "Active Contacts", value: teamPerf.metrics.active_contacts, color: "text-emerald-300" },
+                  ].map((m) => (
+                    <div key={m.label} className="rounded-lg bg-zinc-800/50 border border-zinc-700/50 p-2 text-center">
+                      <p className={`text-lg font-mono font-bold ${m.color}`}>{m.value}</p>
+                      <p className="text-[10px] text-zinc-500 leading-tight mt-0.5">{m.label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Highlights + Areas */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">Highlights</p>
+                    <div className="space-y-1.5">
+                      {teamPerf.highlights.map((h, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-400" />
+                          <p className="text-xs text-zinc-300">{h}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">Areas to Improve</p>
+                    <div className="space-y-1.5">
+                      {teamPerf.areas_for_improvement.map((a, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-400" />
+                          <p className="text-xs text-zinc-300">{a}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <p className="mt-3 text-xs text-zinc-600">
+                  Generated {new Date(teamPerf.generated_at).toLocaleString()} · Claude Haiku · Last 30 days
+                </p>
+              </div>
+            )}
+            {!teamPerf && !teamPerfLoading && (
+              <p className="text-sm text-zinc-500">Click Regenerate to generate a team performance summary.</p>
             )}
           </div>
         )}

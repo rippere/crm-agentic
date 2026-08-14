@@ -3757,3 +3757,155 @@ async def pipeline_health_briefing(
         "priorities": priorities,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 15c: AI team performance summary
+# ---------------------------------------------------------------------------
+
+_TEAM_PERF_SYSTEM = """\
+You are a CRM performance analyst. Given metrics about a sales/PM team's activity over the last 30 days, \
+produce a JSON object with exactly these fields:
+{
+  "performance_rating": "excellent" | "good" | "needs_improvement" | "critical",
+  "highlights": ["string1", "string2", "string3"],
+  "areas_for_improvement": ["string1", "string2"],
+  "summary_sentence": "A 2-sentence narrative about overall team performance."
+}
+Be specific and data-driven — reference actual numbers. JSON only, no markdown.\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/team-performance")
+@limiter.limit("5/minute")
+async def get_team_performance(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+
+    # Agent runs in last 30 days
+    agent_runs = int(
+        await db.scalar(
+            select(func.count(ActivityEvent.id)).where(
+                ActivityEvent.workspace_id == workspace_id,
+                ActivityEvent.type.like("agent_%"),
+                ActivityEvent.created_at >= thirty_days_ago,
+            )
+        ) or 0
+    )
+
+    # Task metrics (all-time totals for completion rate)
+    task_total = int(
+        await db.scalar(
+            select(func.count(Task.id)).where(Task.workspace_id == workspace_id)
+        ) or 0
+    )
+    task_done = int(
+        await db.scalar(
+            select(func.count(Task.id)).where(
+                Task.workspace_id == workspace_id,
+                Task.status == "done",
+            )
+        ) or 0
+    )
+    task_completion_rate = round(task_done / task_total * 100) if task_total > 0 else 0
+
+    # Messages processed in last 30 days
+    messages_processed = int(
+        await db.scalar(
+            select(func.count(Message.id)).where(
+                Message.workspace_id == workspace_id,
+                Message.received_at >= thirty_days_ago,
+            )
+        ) or 0
+    )
+
+    # Deal stage moves in last 30 days
+    deals_moved = int(
+        await db.scalar(
+            select(func.count(ActivityEvent.id)).where(
+                ActivityEvent.workspace_id == workspace_id,
+                ActivityEvent.type == "deal_moved",
+                ActivityEvent.created_at >= thirty_days_ago,
+            )
+        ) or 0
+    )
+
+    # Distinct contacts with messages in last 30 days
+    active_contacts = int(
+        await db.scalar(
+            select(func.count(func.distinct(Message.contact_id))).where(
+                Message.workspace_id == workspace_id,
+                Message.contact_id.isnot(None),
+                Message.received_at >= thirty_days_ago,
+            )
+        ) or 0
+    )
+
+    context = (
+        f"Team Activity (Last 30 Days):\n"
+        f"- AI agent runs: {agent_runs}\n"
+        f"- Tasks: {task_done} completed out of {task_total} total ({task_completion_rate}% completion rate)\n"
+        f"- Messages processed: {messages_processed}\n"
+        f"- Deals moved to a new stage: {deals_moved}\n"
+        f"- Contacts actively engaged: {active_contacts}\n"
+        "\nGenerate the team performance JSON assessment."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_TEAM_PERF_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        rating = str(data.get("performance_rating", "good"))
+        if rating not in {"excellent", "good", "needs_improvement", "critical"}:
+            rating = "good"
+
+        raw_highlights = data.get("highlights", [])
+        highlights = [str(h) for h in raw_highlights if isinstance(h, str)][:3]
+        if not highlights:
+            highlights = ["Team is actively engaging contacts through the CRM."]
+
+        raw_areas = data.get("areas_for_improvement", [])
+        areas_for_improvement = [str(a) for a in raw_areas if isinstance(a, str)][:2]
+        if not areas_for_improvement:
+            areas_for_improvement = ["Increase AI agent usage to surface insights faster."]
+
+        summary_sentence = str(
+            data.get("summary_sentence", "Team performance data is being compiled.")
+        )[:600]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "performance_rating": rating,
+        "highlights": highlights,
+        "areas_for_improvement": areas_for_improvement,
+        "summary_sentence": summary_sentence,
+        "metrics": {
+            "agent_runs": agent_runs,
+            "task_completion_rate": task_completion_rate,
+            "messages_processed": messages_processed,
+            "deals_moved": deals_moved,
+            "active_contacts": active_contacts,
+        },
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

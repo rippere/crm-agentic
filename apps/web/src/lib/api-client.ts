@@ -3069,4 +3069,49 @@ export const apiClient = {
       token,
     )
   },
+
+  getTeamPerformance: (workspaceId: string, token: string): Promise<{
+    performance_rating: 'excellent' | 'good' | 'needs_improvement' | 'critical'
+    highlights: string[]
+    areas_for_improvement: string[]
+    summary_sentence: string
+    metrics: {
+      agent_runs: number
+      task_completion_rate: number
+      messages_processed: number
+      deals_moved: number
+      active_contacts: number
+    }
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        performance_rating: 'good',
+        highlights: [
+          '21 tasks completed this month — a 70% completion rate, well above the team average.',
+          '12 AI agent runs surfaced key pipeline insights and accelerated deal scoring.',
+          '14 contacts actively engaged with 45 messages processed, keeping relationships warm.',
+        ],
+        areas_for_improvement: [
+          'Increase deal stage velocity — only 7 stage moves in 30 days suggests pipeline momentum is slowing.',
+          'Schedule a weekly pipeline review to surface stalled deals and align on next actions before month end.',
+        ],
+        summary_sentence:
+          'The team is performing well with strong task completion and active contact engagement. Focusing on deal progression will convert current pipeline momentum into closed revenue over the next quarter.',
+        metrics: {
+          agent_runs: 12,
+          task_completion_rate: 70,
+          messages_processed: 45,
+          deals_moved: 7,
+          active_contacts: 14,
+        },
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/team-performance`,
+      { method: 'GET' },
+      token,
+    )
+  },
 }
