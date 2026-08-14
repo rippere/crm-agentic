@@ -420,6 +420,11 @@ export default function DealDetailPage() {
   const [winProbExplainerLoading, setWinProbExplainerLoading] = useState(false);
   const [winProbExplainerGenerating, setWinProbExplainerGenerating] = useState(false);
 
+  type RoiProjectionData = { roi_multiplier: number; payback_months: number; year1_value: number; year3_value: number; assumptions: string[]; deal_id: string; generated_at: string };
+  const [roiProjection, setRoiProjection] = useState<RoiProjectionData | null>(null);
+  const [roiProjectionLoading, setRoiProjectionLoading] = useState(false);
+  const [roiProjectionGenerating, setRoiProjectionGenerating] = useState(false);
+
   type MeetingPrepAgendaItem = { topic: string; goal: string; talking_points: string[] };
   type MeetingPrepData = { agenda_items: MeetingPrepAgendaItem[]; questions_to_ask: string[]; things_to_avoid: string[]; deal_id: string; generated_at: string };
   const [meetingPrepData, setMeetingPrepData] = useState<MeetingPrepData | null>(null);
@@ -587,6 +592,13 @@ export default function DealDetailPage() {
         .then((data) => setWinProbExplainer(data ?? null))
         .catch(() => setWinProbExplainer(null))
         .finally(() => setWinProbExplainerLoading(false));
+
+      setRoiProjectionLoading(true);
+      apiClient
+        .getDealRoiProjection(workspaceId, dealId, token)
+        .then((data) => setRoiProjection(data ?? null))
+        .catch(() => setRoiProjection(null))
+        .finally(() => setRoiProjectionLoading(false));
 
       setClosePlanLoading(true);
       apiClient
@@ -840,6 +852,16 @@ export default function DealDetailPage() {
       setWinProbExplainer(data ?? null);
     } catch { /* ignore */ }
     finally { setWinProbExplainerGenerating(false); }
+  };
+
+  const handleRegenerateRoiProjection = async () => {
+    if (!token || !workspaceId || roiProjectionGenerating) return;
+    setRoiProjectionGenerating(true);
+    try {
+      const data = await apiClient.getDealRoiProjection(workspaceId, dealId, token);
+      setRoiProjection(data ?? null);
+    } catch { /* ignore */ }
+    finally { setRoiProjectionGenerating(false); }
   };
 
   const handleRegenerateClosePlan = async () => {
@@ -2155,6 +2177,79 @@ export default function DealDetailPage() {
                   )}
                   <p className="text-[10px] text-zinc-600 text-right">
                     Generated {new Date(winProbExplainer.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* ROI Projection */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <DollarSign className="h-4 w-4 text-emerald-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">ROI Projection</p>
+                {roiProjection && (
+                  <span className="ml-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-emerald-300">
+                    {roiProjection.roi_multiplier.toFixed(1)}× ROI
+                  </span>
+                )}
+                <button
+                  onClick={handleRegenerateRoiProjection}
+                  disabled={roiProjectionLoading || roiProjectionGenerating}
+                  className="ml-auto text-zinc-500 hover:text-emerald-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate ROI projection"
+                  title="Regenerate"
+                >
+                  {roiProjectionGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {roiProjectionLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-8 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : roiProjection === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load ROI projection.</p>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-end gap-1.5">
+                    <span className="text-3xl font-bold text-emerald-400 tabular-nums">{roiProjection.roi_multiplier.toFixed(1)}×</span>
+                    <span className="text-xs text-zinc-500 mb-1">3-year return on investment</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-lg bg-zinc-800/60 px-2 py-1.5 text-center">
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-wide">Payback</p>
+                      <p className="text-sm font-semibold text-zinc-200 tabular-nums">{roiProjection.payback_months}mo</p>
+                    </div>
+                    <div className="rounded-lg bg-zinc-800/60 px-2 py-1.5 text-center">
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-wide">Yr 1</p>
+                      <p className="text-sm font-semibold text-emerald-300 tabular-nums">${(roiProjection.year1_value / 1000).toFixed(0)}K</p>
+                    </div>
+                    <div className="rounded-lg bg-zinc-800/60 px-2 py-1.5 text-center">
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-wide">Yr 3</p>
+                      <p className="text-sm font-semibold text-emerald-300 tabular-nums">${(roiProjection.year3_value / 1000).toFixed(0)}K</p>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 mb-1.5">Key Assumptions</p>
+                    <ol className="space-y-1">
+                      {roiProjection.assumptions.map((a, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <span className="mt-0.5 flex-shrink-0 h-4 w-4 rounded-full bg-emerald-500/15 flex items-center justify-center text-[9px] font-bold text-emerald-400">{i + 1}</span>
+                          <span className="text-xs text-zinc-400 leading-snug">{a}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(roiProjection.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 </div>
               )}
