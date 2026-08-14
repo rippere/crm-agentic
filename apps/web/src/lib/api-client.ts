@@ -3194,4 +3194,66 @@ export const apiClient = {
       token,
     )
   },
+
+  getContactOnboardingChecklist: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    checklist: { step: string; detail: string; category: 'data' | 'outreach' | 'research' | 'relationship'; priority: 'high' | 'medium' | 'low' }[]
+    readiness: 'new' | 'in_progress' | 'ready'
+    readiness_reason: string
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type ChecklistStub = {
+        checklist: { step: string; detail: string; category: 'data' | 'outreach' | 'research' | 'relationship'; priority: 'high' | 'medium' | 'low' }[]
+        readiness: 'new' | 'in_progress' | 'ready'
+        readiness_reason: string
+      }
+      const stubs: Record<string, ChecklistStub> = {
+        'c-001': {
+          checklist: [
+            { step: 'Schedule quarterly business review', detail: 'Acme Corp is a strategic account — proactive QBR strengthens retention.', category: 'relationship', priority: 'high' },
+            { step: 'Add mobile phone to profile', detail: 'Direct line needed for time-sensitive deal updates.', category: 'data', priority: 'high' },
+            { step: 'Map stakeholder org chart', detail: 'Identify other decision-makers beyond the primary contact.', category: 'research', priority: 'medium' },
+            { step: 'Log meeting notes from last call', detail: 'Capture commitments before they slip through the cracks.', category: 'relationship', priority: 'medium' },
+            { step: 'Send product roadmap PDF', detail: 'They expressed interest in Q4 features — follow through.', category: 'outreach', priority: 'low' },
+          ],
+          readiness: 'ready',
+          readiness_reason: 'Strong engagement history and active pipeline deal — fully ready to advance.',
+        },
+        'c-002': {
+          checklist: [
+            { step: 'Send re-engagement email today', detail: 'Contact has gone dark — a personal note from an exec may revive interest.', category: 'outreach', priority: 'high' },
+            { step: 'Add company size and industry', detail: 'Missing data limits personalization and scoring accuracy.', category: 'data', priority: 'high' },
+            { step: 'Research competitor landscape', detail: 'Understand why they may be evaluating alternatives.', category: 'research', priority: 'medium' },
+            { step: 'Create a follow-up task with due date', detail: 'Set a reminder to check in if no reply within 5 days.', category: 'relationship', priority: 'medium' },
+            { step: 'Review previous message clarity scores', detail: 'Low-clarity messages may have confused or delayed their response.', category: 'research', priority: 'low' },
+          ],
+          readiness: 'in_progress',
+          readiness_reason: 'Some prior outreach but no deal attached and recent silence — needs re-engagement.',
+        },
+        'c-003': {
+          checklist: [
+            { step: 'Send personalised intro email', detail: 'First touch should reference their role and pain points.', category: 'outreach', priority: 'high' },
+            { step: 'Fill in company and LinkedIn URL', detail: 'Key identifiers needed for research and personalization.', category: 'data', priority: 'high' },
+            { step: 'Research their industry use cases', detail: 'Tailor the pitch to resonate with their specific sector.', category: 'research', priority: 'medium' },
+            { step: 'Add to a relevant deal or pipeline', detail: 'Convert initial interest into trackable pipeline.', category: 'relationship', priority: 'medium' },
+            { step: 'Schedule a 15-min discovery call', detail: 'Move from email introduction to live qualification.', category: 'outreach', priority: 'low' },
+          ],
+          readiness: 'new',
+          readiness_reason: 'No messages or notes yet — basic outreach and data collection needed first.',
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/onboarding-checklist`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }

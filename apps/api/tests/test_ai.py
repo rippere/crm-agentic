@@ -2311,3 +2311,91 @@ async def test_deal_meeting_prep_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ── Contact Onboarding Checklist ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_contact_onboarding_checklist_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+    contact.status = "prospect"
+    contact.ml_score = {"value": 55, "label": "warm"}
+    contact.company = "Acme Corp"
+    contact.role = "VP Engineering"
+    contact.email = "alex@acme.com"
+    contact.phone = None
+
+    def _scalar(v):
+        r = MagicMock()
+        r.scalar.return_value = v
+        return r
+
+    def _all(rows):
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    def _scalar_one_or_none(v):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = v
+        return r
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _scalar_one_or_none(contact),   # contact lookup
+        _scalar(3),                      # msg_count
+        _scalar(1),                      # note_count
+        _all([]),                        # open_deals
+    ])
+
+    import json as _json
+    checklist_json = _json.dumps({
+        "checklist": [
+            {"step": "Send intro email today", "detail": "Personalised opener referencing their eng role.", "category": "outreach", "priority": "high"},
+            {"step": "Add phone number to profile", "detail": "Required for call-based follow-up.", "category": "data", "priority": "high"},
+            {"step": "Research company tech stack", "detail": "Understand fit with your product before next touch.", "category": "research", "priority": "medium"},
+            {"step": "Link to an open deal", "detail": "Convert prospect engagement into pipeline.", "category": "relationship", "priority": "medium"},
+            {"step": "Schedule a 30-min discovery call", "detail": "Move relationship from email to live conversation.", "category": "outreach", "priority": "low"},
+        ],
+        "readiness": "in_progress",
+        "readiness_reason": "3 messages exchanged but no open deal yet — nearly ready to qualify.",
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=checklist_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/onboarding-checklist"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["checklist"], list)
+    assert len(body["checklist"]) == 5
+    item = body["checklist"][0]
+    assert "step" in item and "detail" in item and "category" in item and "priority" in item
+    assert item["category"] in {"data", "outreach", "research", "relationship"}
+    assert item["priority"] in {"high", "medium", "low"}
+    assert body["readiness"] in {"new", "in_progress", "ready"}
+    assert isinstance(body["readiness_reason"], str)
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_onboarding_checklist_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/onboarding-checklist"
+        )
+
+    assert resp.status_code == 403
