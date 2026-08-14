@@ -4076,3 +4076,214 @@ async def deal_meeting_prep(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+# ── Workspace Digest ───────────────────────────────────────────────────────────
+
+_WORKSPACE_DIGEST_SYSTEM = """\
+You are a CRM analytics expert generating a weekly workspace health digest for an admin.
+Given workspace metrics, produce an honest, actionable health report.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "health_rating": "excellent" | "good" | "needs_attention" | "critical",
+  "summary": "2-3 sentence narrative on workspace health",
+  "highlights": ["achievement 1", "achievement 2"],
+  "warnings": ["concern 1", "concern 2"],
+  "recommended_actions": ["action 1", "action 2", "action 3"]
+}
+
+Rules:
+- health_rating: excellent = all KPIs green; good = mostly healthy; needs_attention = 1-2 issues; critical = multiple problems
+- summary: be direct and specific — reference actual numbers from the context
+- highlights: 2 recent wins or positive trends (keep to 15 words each max)
+- warnings: 2 concerns that need admin attention (keep to 15 words each max)
+- recommended_actions: 3 specific, actionable steps (keep to 20 words each max)
+- If metrics are sparse (new workspace), focus on next-step recommendations
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/workspace-digest")
+@limiter.limit("5/minute")
+async def workspace_digest(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    today = datetime.date.today()
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+
+    # Total contacts
+    total_contacts_result = await db.execute(
+        select(func.count(Contact.id)).where(Contact.workspace_id == workspace_id)
+    )
+    total_contacts = total_contacts_result.scalar() or 0
+
+    # Contacts going dark (no touch in 30 days)
+    recent_msg_cids = select(Message.contact_id).where(
+        Message.workspace_id == workspace_id,
+        Message.received_at >= thirty_days_ago,
+        Message.contact_id.isnot(None),
+    )
+    recent_note_cids = select(ContactNote.contact_id).where(
+        ContactNote.workspace_id == workspace_id,
+        ContactNote.created_at >= thirty_days_ago,
+    )
+    going_dark_result = await db.execute(
+        select(func.count(Contact.id)).where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+            Contact.id.not_in(recent_msg_cids),
+            Contact.id.not_in(recent_note_cids),
+        )
+    )
+    going_dark_count = going_dark_result.scalar() or 0
+
+    # Open deals stats
+    open_deals_result = await db.execute(
+        select(Deal.value, Deal.ml_win_probability, Deal.health_score, Deal.stage_changed_at).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals_rows = open_deals_result.all()
+    open_deal_count = len(open_deals_rows)
+    total_pipeline = sum((r.value or 0) for r in open_deals_rows)
+    at_risk_deals = sum(1 for r in open_deals_rows if (r.health_score or 0) < 50)
+    avg_win_prob = (
+        round(sum((r.ml_win_probability or 0) for r in open_deals_rows) / open_deal_count)
+        if open_deal_count else 0
+    )
+
+    # Overdue close dates
+    overdue_close_result = await db.execute(
+        select(func.count(Deal.id)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.expected_close < today,
+        )
+    )
+    overdue_close_count = overdue_close_result.scalar() or 0
+
+    # Open tasks
+    open_tasks_result = await db.execute(
+        select(func.count(Task.id)).where(
+            Task.workspace_id == workspace_id,
+            Task.status.in_(["open", "in_progress"]),
+        )
+    )
+    open_task_count = open_tasks_result.scalar() or 0
+
+    # Overdue tasks
+    overdue_tasks_result = await db.execute(
+        select(func.count(Task.id)).where(
+            Task.workspace_id == workspace_id,
+            Task.status.in_(["open", "in_progress"]),
+            Task.due_date < today,
+        )
+    )
+    overdue_task_count = overdue_tasks_result.scalar() or 0
+
+    # Recent agent runs (last 30 days)
+    agent_runs_result = await db.execute(
+        select(func.count(ActivityEvent.id)).where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "agent_run",
+            ActivityEvent.created_at >= thirty_days_ago,
+        )
+    )
+    agent_run_count = agent_runs_result.scalar() or 0
+
+    # Closed won in last 30 days
+    closed_won_result = await db.execute(
+        select(func.count(Deal.id), func.coalesce(func.sum(Deal.value), 0)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= thirty_days_ago,
+        )
+    )
+    closed_won_row = closed_won_result.one()
+    closed_won_count = closed_won_row[0] or 0
+    closed_won_value = float(closed_won_row[1] or 0)
+
+    context = (
+        f"=== Workspace Health Snapshot (Last 30 Days) ===\n"
+        f"Total Contacts: {total_contacts}\n"
+        f"Contacts Going Dark (no touch in 30d): {going_dark_count}\n"
+        f"\nPipeline:\n"
+        f"  Open Deals: {open_deal_count} (total pipeline ${total_pipeline:,.0f})\n"
+        f"  At-Risk Deals (health < 50): {at_risk_deals}\n"
+        f"  Avg Win Probability: {avg_win_prob}%\n"
+        f"  Overdue Close Dates: {overdue_close_count}\n"
+        f"  Closed Won (last 30d): {closed_won_count} deals worth ${closed_won_value:,.0f}\n"
+        f"\nTasks:\n"
+        f"  Open Tasks: {open_task_count}\n"
+        f"  Overdue Tasks: {overdue_task_count}\n"
+        f"\nAgents:\n"
+        f"  Agent Runs (last 30d): {agent_run_count}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_WORKSPACE_DIGEST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        rating = str(data.get("health_rating", "good"))
+        if rating not in {"excellent", "good", "needs_attention", "critical"}:
+            rating = "good"
+
+        summary = str(data.get("summary", "Workspace health assessment complete."))[:500]
+
+        raw_highlights = data.get("highlights", [])
+        highlights = [str(h) for h in raw_highlights if isinstance(h, str)][:3]
+        if not highlights:
+            highlights = ["Workspace is active and operational."]
+
+        raw_warnings = data.get("warnings", [])
+        warnings = [str(w) for w in raw_warnings if isinstance(w, str)][:3]
+        if not warnings:
+            warnings = ["Review contacts for engagement gaps."]
+
+        raw_actions = data.get("recommended_actions", [])
+        recommended_actions = [str(a) for a in raw_actions if isinstance(a, str)][:4]
+        if not recommended_actions:
+            recommended_actions = ["Connect a Gmail or Slack account to start ingesting messages."]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "health_rating": rating,
+        "summary": summary,
+        "highlights": highlights,
+        "warnings": warnings,
+        "recommended_actions": recommended_actions,
+        "metrics": {
+            "total_contacts": total_contacts,
+            "going_dark_count": going_dark_count,
+            "open_deal_count": open_deal_count,
+            "total_pipeline": total_pipeline,
+            "at_risk_deals": at_risk_deals,
+            "overdue_close_count": overdue_close_count,
+            "closed_won_count": closed_won_count,
+            "closed_won_value": closed_won_value,
+            "open_task_count": open_task_count,
+            "overdue_task_count": overdue_task_count,
+            "agent_run_count": agent_run_count,
+        },
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
