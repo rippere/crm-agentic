@@ -3115,7 +3115,7 @@ export const apiClient = {
     )
   },
 
-  getWorkspaceDigest: (workspaceId: string, token: string): Promise<{
+  getWorkspaceHealthDigest: (workspaceId: string, token: string): Promise<{
     health_rating: 'excellent' | 'good' | 'needs_attention' | 'critical'
     summary: string
     highlights: string[]

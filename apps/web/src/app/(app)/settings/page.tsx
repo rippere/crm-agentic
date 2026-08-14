@@ -93,7 +93,7 @@ export default function SettingsPage() {
   const loadDigest = async (wsId: string, tok: string) => {
     setDigestLoading(true);
     try {
-      const data = await apiClient.getWorkspaceDigest(wsId, tok);
+      const data = await apiClient.getWorkspaceHealthDigest(wsId, tok);
       setDigest(data);
     } catch {
       // silently fail — digest is non-critical

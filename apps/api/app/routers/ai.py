@@ -4025,7 +4025,7 @@ async def workspace_digest(
     agent_runs_result = await db.execute(
         select(func.count(ActivityEvent.id)).where(
             ActivityEvent.workspace_id == workspace_id,
-            ActivityEvent.event_type == "agent_run",
+            ActivityEvent.type == "agent_run",
             ActivityEvent.created_at >= thirty_days_ago,
         )
     )
