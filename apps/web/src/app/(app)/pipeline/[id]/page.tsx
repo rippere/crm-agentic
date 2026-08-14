@@ -15,7 +15,7 @@ import { useJobPoller } from "@/hooks/useJobPoller";
 import type { DealStage } from "@/lib/types";
 import {
   ArrowLeft, Brain, Heart, AlertTriangle, TrendingUp,
-  Building2, Calendar, ChevronRight, Mail, Zap,
+  Building2, Calendar, CalendarDays, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
   FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users, Sparkles, RefreshCw, Shield,
@@ -420,6 +420,14 @@ export default function DealDetailPage() {
   const [winProbExplainerLoading, setWinProbExplainerLoading] = useState(false);
   const [winProbExplainerGenerating, setWinProbExplainerGenerating] = useState(false);
 
+  type MeetingPrepAgendaItem = { topic: string; goal: string; talking_points: string[] };
+  type MeetingPrepData = { agenda_items: MeetingPrepAgendaItem[]; questions_to_ask: string[]; things_to_avoid: string[]; deal_id: string; generated_at: string };
+  const [meetingPrepData, setMeetingPrepData] = useState<MeetingPrepData | null>(null);
+  const [meetingPrepLoading, setMeetingPrepLoading] = useState(false);
+  const [meetingPrepGenerating, setMeetingPrepGenerating] = useState(false);
+  const [meetingPrepCollapsed, setMeetingPrepCollapsed] = useState(false);
+  const [meetingPrepOpenIdx, setMeetingPrepOpenIdx] = useState<number | null>(null);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -609,6 +617,13 @@ export default function DealDetailPage() {
           .catch(() => setNegotiationData(null))
           .finally(() => setNegotiationLoading(false));
       }
+
+      setMeetingPrepLoading(true);
+      apiClient
+        .getMeetingPrep(workspaceId, dealId, token)
+        .then((data) => setMeetingPrepData(data ?? null))
+        .catch(() => setMeetingPrepData(null))
+        .finally(() => setMeetingPrepLoading(false));
     }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
@@ -866,6 +881,16 @@ export default function DealDetailPage() {
       setNegotiationData(data ?? null);
     } catch { /* ignore */ }
     finally { setNegotiationGenerating(false); }
+  };
+
+  const handleRegenerateMeetingPrep = async () => {
+    if (!token || !workspaceId || meetingPrepGenerating) return;
+    setMeetingPrepGenerating(true);
+    try {
+      const data = await apiClient.getMeetingPrep(workspaceId, dealId, token);
+      setMeetingPrepData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setMeetingPrepGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -2656,6 +2681,123 @@ export default function DealDetailPage() {
                     Generated {new Date(winLossData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 </div>
+              )}
+            </Card>
+          )}
+
+          {/* Meeting Prep — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-indigo-400" aria-hidden />
+                <button
+                  className="flex-1 flex items-center gap-1.5 text-left cursor-pointer"
+                  onClick={() => setMeetingPrepCollapsed((c) => !c)}
+                  aria-label={meetingPrepCollapsed ? "Expand Meeting Prep" : "Collapse Meeting Prep"}
+                >
+                  <p className="text-sm font-semibold text-zinc-200">Meeting Prep</p>
+                  <ChevronRight className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${meetingPrepCollapsed ? "" : "rotate-90"}`} />
+                </button>
+                <button
+                  onClick={handleRegenerateMeetingPrep}
+                  disabled={meetingPrepLoading || meetingPrepGenerating}
+                  className="ml-auto text-zinc-500 hover:text-indigo-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate meeting prep"
+                  title="Regenerate"
+                >
+                  {meetingPrepGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {!meetingPrepCollapsed && (
+                <>
+                  {meetingPrepLoading ? (
+                    <div className="space-y-2">
+                      {[1, 2, 3].map((i) => (
+                        <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                      ))}
+                    </div>
+                  ) : meetingPrepData === null ? (
+                    <p className="text-xs text-zinc-600 italic py-2">Unable to load meeting prep.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Agenda Items */}
+                      {meetingPrepData.agenda_items.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Agenda</p>
+                          {meetingPrepData.agenda_items.map((item, idx) => (
+                            <div key={idx} className="rounded-lg border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+                              <button
+                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left cursor-pointer hover:bg-zinc-800/40 transition-colors"
+                                onClick={() => setMeetingPrepOpenIdx(meetingPrepOpenIdx === idx ? null : idx)}
+                                aria-expanded={meetingPrepOpenIdx === idx}
+                              >
+                                <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-indigo-500/15 text-[10px] font-bold text-indigo-400">
+                                  {idx + 1}
+                                </span>
+                                <span className="flex-1 text-xs font-medium text-zinc-200">{item.topic}</span>
+                                <ChevronRight className={`h-3 w-3 text-zinc-600 transition-transform ${meetingPrepOpenIdx === idx ? "rotate-90" : ""}`} />
+                              </button>
+                              {meetingPrepOpenIdx === idx && (
+                                <div className="px-3 pb-3 pt-1 space-y-2 border-t border-zinc-800">
+                                  <p className="text-[11px] text-zinc-400 italic">{item.goal}</p>
+                                  {item.talking_points.length > 0 && (
+                                    <ul className="space-y-1">
+                                      {item.talking_points.map((tp, ti) => (
+                                        <li key={ti} className="flex items-start gap-2">
+                                          <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 flex-shrink-0 mt-1.5" />
+                                          <span className="text-xs text-zinc-300">{tp}</span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Questions to Ask */}
+                      {meetingPrepData.questions_to_ask.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Questions to Ask</p>
+                          <ul className="space-y-1">
+                            {meetingPrepData.questions_to_ask.map((q, i) => (
+                              <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0 mt-1.5" />
+                                <span className="text-xs text-zinc-300">{q}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Things to Avoid */}
+                      {meetingPrepData.things_to_avoid.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Things to Avoid</p>
+                          <ul className="space-y-1">
+                            {meetingPrepData.things_to_avoid.map((a, i) => (
+                              <li key={i} className="flex items-start gap-2 rounded-lg border border-rose-900/30 bg-rose-500/5 px-3 py-2">
+                                <span className="h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0 mt-1.5" />
+                                <span className="text-xs text-rose-300">{a}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-zinc-600 text-right">
+                        Generated {new Date(meetingPrepData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </div>
+                  )}
+                </>
               )}
             </Card>
           )}
