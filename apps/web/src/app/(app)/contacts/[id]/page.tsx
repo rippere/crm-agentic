@@ -430,6 +430,13 @@ export default function ContactDetailPage() {
   const [leadScoreExpLoading, setLeadScoreExpLoading] = useState(false);
   const [leadScoreExpGenerating, setLeadScoreExpGenerating] = useState(false);
 
+  type OnboardingChecklistItem = { step: string; detail: string; category: 'data' | 'outreach' | 'research' | 'relationship'; priority: 'high' | 'medium' | 'low' };
+  type OnboardingChecklistData = { checklist: OnboardingChecklistItem[]; readiness: 'new' | 'in_progress' | 'ready'; readiness_reason: string; contact_id: string; generated_at: string };
+  const [onboardingChecklist, setOnboardingChecklist] = useState<OnboardingChecklistData | null>(null);
+  const [onboardingChecklistLoading, setOnboardingChecklistLoading] = useState(false);
+  const [onboardingChecklistGenerating, setOnboardingChecklistGenerating] = useState(false);
+  const [checkedItems, setCheckedItems] = useState<Set<number>>(new Set());
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -626,6 +633,13 @@ export default function ContactDetailPage() {
       .then((data) => setLeadScoreExp(data ?? null))
       .catch(() => setLeadScoreExp(null))
       .finally(() => setLeadScoreExpLoading(false));
+
+    setOnboardingChecklistLoading(true);
+    apiClient
+      .getContactOnboardingChecklist(workspaceId, contactId, token)
+      .then((data) => setOnboardingChecklist(data ?? null))
+      .catch(() => setOnboardingChecklist(null))
+      .finally(() => setOnboardingChecklistLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1387,6 +1401,120 @@ export default function ContactDetailPage() {
                   </div>
                 )}
                 <p className="text-[10px] text-zinc-600">Generated {formatRelative(leadScoreExp.generated_at)}</p>
+              </div>
+            )}
+          </Card>
+
+          {/* Onboarding Checklist */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <ListTodo className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Onboarding Checklist</p>
+              {onboardingChecklist && (
+                <span className={cn(
+                  "ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full",
+                  onboardingChecklist.readiness === 'ready' ? "bg-emerald-500/15 text-emerald-400" :
+                  onboardingChecklist.readiness === 'in_progress' ? "bg-indigo-500/15 text-indigo-400" :
+                  "bg-zinc-700/50 text-zinc-400"
+                )}>
+                  {onboardingChecklist.readiness === 'ready' ? 'Ready' :
+                   onboardingChecklist.readiness === 'in_progress' ? 'In Progress' : 'New'}
+                </span>
+              )}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId) return;
+                  setOnboardingChecklistGenerating(true);
+                  try {
+                    const data = await apiClient.getContactOnboardingChecklist(workspaceId, contactId, token);
+                    setOnboardingChecklist(data ?? null);
+                    setCheckedItems(new Set());
+                  } catch { /* ignore */ } finally {
+                    setOnboardingChecklistGenerating(false);
+                  }
+                }}
+                disabled={onboardingChecklistGenerating}
+                className={cn("ml-1 text-zinc-500 hover:text-zinc-300 transition", onboardingChecklist ? "" : "hidden")}
+              >
+                <RefreshCw className={cn("h-3 w-3", onboardingChecklistGenerating && "animate-spin")} />
+              </button>
+            </div>
+
+            {onboardingChecklistLoading ? (
+              <div className="space-y-2">
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} className="h-10 rounded-lg bg-zinc-800 animate-pulse" />
+                ))}
+              </div>
+            ) : onboardingChecklist ? (
+              <div className="space-y-2">
+                {onboardingChecklist.readiness_reason && (
+                  <p className="text-[10px] text-zinc-500 italic">{onboardingChecklist.readiness_reason}</p>
+                )}
+                {onboardingChecklist.checklist.map((item, i) => {
+                  const checked = checkedItems.has(i);
+                  const catColor = item.category === 'data' ? 'text-sky-400' :
+                                   item.category === 'outreach' ? 'text-violet-400' :
+                                   item.category === 'research' ? 'text-amber-400' : 'text-emerald-400';
+                  const priColor = item.priority === 'high' ? 'bg-rose-500/15 text-rose-400' :
+                                   item.priority === 'medium' ? 'bg-amber-500/15 text-amber-400' :
+                                   'bg-zinc-700/50 text-zinc-400';
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setCheckedItems(prev => {
+                        const next = new Set(prev);
+                        if (next.has(i)) next.delete(i); else next.add(i);
+                        return next;
+                      })}
+                      className={cn(
+                        "w-full text-left flex items-start gap-3 rounded-lg border p-3 transition-all",
+                        checked
+                          ? "border-zinc-700/30 bg-zinc-800/30 opacity-50"
+                          : "border-zinc-700 bg-zinc-800 hover:border-zinc-600"
+                      )}
+                    >
+                      <div className="mt-0.5 flex-shrink-0">
+                        {checked
+                          ? <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                          : <div className="h-4 w-4 rounded-full border-2 border-zinc-600" />
+                        }
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className={cn("text-xs font-medium", checked ? "line-through text-zinc-500" : "text-zinc-200")}>{item.step}</p>
+                          <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium", priColor)}>{item.priority}</span>
+                          <span className={cn("text-[10px] font-medium", catColor)}>{item.category}</span>
+                        </div>
+                        <p className="text-[10px] text-zinc-500 mt-0.5 leading-relaxed">{item.detail}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(onboardingChecklist.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">Generate an AI-powered onboarding checklist for this contact.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setOnboardingChecklistGenerating(true);
+                    try {
+                      const data = await apiClient.getContactOnboardingChecklist(workspaceId, contactId, token);
+                      setOnboardingChecklist(data ?? null);
+                    } catch { /* ignore */ } finally {
+                      setOnboardingChecklistGenerating(false);
+                    }
+                  }}
+                  disabled={onboardingChecklistGenerating}
+                >
+                  {onboardingChecklistGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <ListTodo className="h-3 w-3" />}
+                  {onboardingChecklistGenerating ? "Generating…" : "Generate Checklist"}
+                </Button>
               </div>
             )}
           </Card>

@@ -4287,3 +4287,170 @@ async def workspace_digest(
         },
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+# ── Contact Onboarding Checklist ───────────────────────────────────────────────
+
+_ONBOARDING_CHECKLIST_SYSTEM = """\
+You are a CRM onboarding coach. Given a contact's current profile, generate a prioritised
+checklist of next steps the sales rep should take to properly onboard and develop this relationship.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "checklist": [
+    {
+      "step": "short action title (5-8 words)",
+      "detail": "one sentence explaining why this matters",
+      "category": "data" | "outreach" | "research" | "relationship",
+      "priority": "high" | "medium" | "low"
+    }
+  ],
+  "readiness": "new" | "in_progress" | "ready",
+  "readiness_reason": "one sentence explaining the readiness assessment"
+}
+
+Rules:
+- Return exactly 5 steps — not 4, not 6
+- category:
+    data = filling in missing profile fields (email, role, company, LinkedIn)
+    outreach = sending a first/follow-up message or scheduling a call
+    research = understanding the contact's context, company, competitors
+    relationship = tasks that deepen trust (notes, referrals, QBRs)
+- priority: high = should happen today/this week; medium = this month; low = nice-to-have
+- readiness:
+    new = fewer than 2 touches (messages or notes), missing key profile fields
+    in_progress = some engagement but not enough to qualify
+    ready = 5+ touches, key fields filled, open pipeline deal
+- Be specific to the contact's actual data (name, company, status, score)
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/onboarding-checklist")
+@limiter.limit("5/minute")
+async def contact_onboarding_checklist(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Message count
+    msg_count_result = await db.execute(
+        select(func.count(Message.id)).where(
+            Message.workspace_id == workspace_id, Message.contact_id == contact_id
+        )
+    )
+    msg_count = msg_count_result.scalar() or 0
+
+    # Note count
+    note_count_result = await db.execute(
+        select(func.count(ContactNote.id)).where(
+            ContactNote.workspace_id == workspace_id, ContactNote.contact_id == contact_id
+        )
+    )
+    note_count = note_count_result.scalar() or 0
+
+    # Open deals
+    deals_result = await db.execute(
+        select(Deal.title, Deal.stage, Deal.value).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals = deals_result.all()
+
+    ml = contact.ml_score or {}
+    score_value = int(ml.get("value", 0))
+    score_label = str(ml.get("label", "unknown"))
+
+    missing_fields: list[str] = []
+    if not contact.company:
+        missing_fields.append("company")
+    if not contact.role:
+        missing_fields.append("role")
+    if not contact.email:
+        missing_fields.append("email")
+    if not contact.phone:
+        missing_fields.append("phone")
+
+    context = (
+        f"Contact: {contact.name or 'Unknown'}\n"
+        f"Company: {contact.company or 'Unknown — MISSING'}\n"
+        f"Role: {contact.role or 'Unknown — MISSING'}\n"
+        f"Email: {contact.email or 'Unknown — MISSING'}\n"
+        f"Phone: {contact.phone or 'Unknown — MISSING'}\n"
+        f"Status: {contact.status}\n"
+        f"ML Lead Score: {score_value}/100 ({score_label})\n"
+        f"Messages exchanged: {msg_count}\n"
+        f"Notes recorded: {note_count}\n"
+        f"Open deals: {len(open_deals)}\n"
+        f"Missing profile fields: {', '.join(missing_fields) if missing_fields else 'none — profile complete'}\n"
+    )
+    if open_deals:
+        context += "Open deals:\n"
+        for d in open_deals:
+            context += f"  - {d.title or 'Untitled'} ({d.stage}, ${d.value or 0:,.0f})\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_ONBOARDING_CHECKLIST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        raw_checklist = data.get("checklist", [])
+        checklist = []
+        valid_cats = {"data", "outreach", "research", "relationship"}
+        valid_pris = {"high", "medium", "low"}
+        for item in raw_checklist[:6]:
+            if not isinstance(item, dict):
+                continue
+            step = str(item.get("step", ""))[:80]
+            detail = str(item.get("detail", ""))[:150]
+            category = str(item.get("category", "outreach"))
+            priority = str(item.get("priority", "medium"))
+            if category not in valid_cats:
+                category = "outreach"
+            if priority not in valid_pris:
+                priority = "medium"
+            if step:
+                checklist.append({"step": step, "detail": detail, "category": category, "priority": priority})
+
+        if not checklist:
+            checklist = [{"step": "Add contact details", "detail": "Fill in company, role, and phone.", "category": "data", "priority": "high"}]
+
+        readiness = str(data.get("readiness", "new"))
+        if readiness not in {"new", "in_progress", "ready"}:
+            readiness = "new"
+
+        readiness_reason = str(data.get("readiness_reason", "Contact is newly added."))[:200]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "checklist": checklist,
+        "readiness": readiness,
+        "readiness_reason": readiness_reason,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
