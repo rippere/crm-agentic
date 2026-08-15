@@ -2528,7 +2528,7 @@ async def test_deal_roi_projection_returns_structured_response(app_client):
 
         async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
             resp = await ac.post(
-                f"/workspaces/{workspace_id}/ai/deals/{uuid.uuid4()}/roi-projection"
+                f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/ai/roi-projection"
             )
 
     assert resp.status_code == 200
@@ -2551,7 +2551,7 @@ async def test_deal_roi_projection_wrong_workspace_returns_403(app_client):
 
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.post(
-            f"/workspaces/{wrong_id}/ai/deals/{deal_id}/roi-projection"
+            f"/workspaces/{wrong_id}/deals/{deal_id}/ai/roi-projection"
         )
 
     assert resp.status_code == 403
