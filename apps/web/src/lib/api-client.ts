@@ -3257,6 +3257,64 @@ export const apiClient = {
     )
   },
 
+  getDealRoiProjection: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    roi_multiplier: number
+    payback_months: number
+    year1_value: number
+    year3_value: number
+    assumptions: string[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { roi_multiplier: number; payback_months: number; year1_value: number; year3_value: number; assumptions: string[] }> = {
+        'd-001': {
+          roi_multiplier: 4.2,
+          payback_months: 7,
+          year1_value: 63000,
+          year3_value: 189000,
+          assumptions: [
+            'Acme Corp handles 200+ sales touches/month — automation saves ~15 hrs/rep',
+            'Current manual CRM overhead estimated at $18K/year in lost productivity',
+            'Assumes 70% adoption of AI coaching features by month 3',
+          ],
+        },
+        'd-002': {
+          roi_multiplier: 2.8,
+          payback_months: 11,
+          year1_value: 42000,
+          year3_value: 126000,
+          assumptions: [
+            'Globex operates a 5-person sales team with 150 weekly outbound touches',
+            'CRM consolidation reduces tooling overhead by approximately $8K/year',
+            'Assumes gradual adoption — full ROI realised by month 10',
+          ],
+        },
+      }
+      const stub = stubs[dealId] ?? {
+        roi_multiplier: 3.1,
+        payback_months: 9,
+        year1_value: 45000,
+        year3_value: 135000,
+        assumptions: [
+          'Based on industry-average productivity gains for a 3–10 person sales team',
+          'Estimated 12 hours/week time saving on manual CRM data entry per rep',
+          'Excludes implementation and onboarding costs (typically 1–2 months)',
+        ],
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/roi-projection`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
   getContactOnboardingChecklist: (
     workspaceId: string,
     contactId: string,

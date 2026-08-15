@@ -4454,3 +4454,124 @@ async def contact_onboarding_checklist(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# AI deal ROI projection
+# ---------------------------------------------------------------------------
+
+_DEAL_ROI_SYSTEM = """\
+You are Nova, an AI assistant in NovaCRM. Calculate a realistic ROI projection \
+for a deal prospect — the return on investment the CUSTOMER would achieve by \
+purchasing this product.
+
+Return valid JSON (no markdown) in exactly this shape:
+{
+  "roi_multiplier": <float, e.g. 3.2 — total 3-year return divided by total 3-year cost>,
+  "payback_months": <int 1–36, months until the customer breaks even>,
+  "year1_value": <int, estimated first-year value generated in dollars>,
+  "year3_value": <int, estimated 3-year cumulative value in dollars>,
+  "assumptions": [<exactly 3 concise assumption strings, each under 120 chars>]
+}
+
+Base year1_value on the deal notes and deal context. Be conservative — \
+realistic estimates build credibility. The roi_multiplier should reflect \
+year3_value divided by (annual deal value × 3).\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/roi-projection")
+@limiter.limit("5/minute")
+async def deal_roi_projection(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ROI projection is only available for open deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    note_bodies = [row[0] for row in notes_result.all() if row[0]]
+
+    today = datetime.date.today()
+    if deal.stage_changed_at:
+        days_in_stage = (today - deal.stage_changed_at.date()).days
+    else:
+        days_in_stage = 0
+
+    context = (
+        f"Deal: {deal.title or 'Untitled'}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Annual contract value: ${float(deal.value or 0):,.0f}\n"
+        f"Current stage: {deal.stage}\n"
+        f"Health score: {deal.health_score or 0}/100\n"
+        f"Days in current stage: {days_in_stage}\n"
+        f"ML win probability: {deal.ml_win_probability or 0}%\n"
+        f"Competitor count: {len(deal.competitors) if deal.competitors else 0}\n"
+    )
+    if note_bodies:
+        context += "\nRecent deal notes (latest first):\n"
+        for body in note_bodies:
+            context += f"  - {body[:200]}\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_ROI_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        roi_multiplier = round(float(data.get("roi_multiplier", 2.5)), 1)
+        payback_months = max(1, min(36, int(data.get("payback_months", 12))))
+        year1_value = max(0, int(data.get("year1_value", 0)))
+        year3_value = max(0, int(data.get("year3_value", 0)))
+        raw_assumptions = data.get("assumptions") or []
+        assumptions = [str(a)[:120] for a in raw_assumptions[:3]]
+        if not assumptions:
+            assumptions = [
+                "Based on industry-average productivity gains for the buyer's team size",
+                "Assumes 70-80% feature adoption within the first 3 months",
+                "Excludes one-time implementation and onboarding costs",
+            ]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "roi_multiplier": roi_multiplier,
+        "payback_months": payback_months,
+        "year1_value": year1_value,
+        "year3_value": year3_value,
+        "assumptions": assumptions,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

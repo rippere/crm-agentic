@@ -2474,3 +2474,84 @@ async def test_contact_onboarding_checklist_wrong_workspace_returns_403(app_clie
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/roi-projection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_roi_projection_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    deal = _fake_deal_row(stage="proposal", value=20000.0, health_score=78)
+    deal.stage_changed_at = None
+    deal.ml_win_probability = 65
+    deal.competitors = []
+    deal.next_action_date = None
+
+    def _scalar_one_or_none(v):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = v
+        return r
+
+    def _all(rows):
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _scalar_one_or_none(deal),   # deal lookup
+        _all([]),                     # deal notes
+    ])
+
+    import json as _json
+    roi_json = _json.dumps({
+        "roi_multiplier": 3.8,
+        "payback_months": 8,
+        "year1_value": 56000,
+        "year3_value": 228000,
+        "assumptions": [
+            "Team of 8 saves 12 hours/week on manual CRM tasks",
+            "Current tooling costs estimated at $15K/year",
+            "Full adoption reached by month 4",
+        ],
+    })
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=roi_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/ai/roi-projection"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["roi_multiplier"], float)
+    assert isinstance(body["payback_months"], int)
+    assert isinstance(body["year1_value"], int)
+    assert isinstance(body["year3_value"], int)
+    assert isinstance(body["assumptions"], list)
+    assert len(body["assumptions"]) == 3
+    assert "deal_id" in body
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_roi_projection_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/ai/roi-projection"
+        )
+
+    assert resp.status_code == 403
