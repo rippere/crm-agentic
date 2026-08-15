@@ -3376,4 +3376,59 @@ export const apiClient = {
       token,
     )
   },
+
+  getContactGrowthForecast: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    forecast_revenue_3m: number
+    forecast_revenue_12m: number
+    growth_trajectory: 'declining' | 'flat' | 'growing' | 'accelerating'
+    key_drivers: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { forecast_revenue_3m: number; forecast_revenue_12m: number; growth_trajectory: 'declining' | 'flat' | 'growing' | 'accelerating'; key_drivers: string[] }> = {
+        'c-001': {
+          forecast_revenue_3m: 28000,
+          forecast_revenue_12m: 120000,
+          growth_trajectory: 'accelerating',
+          key_drivers: [
+            'Two active high-value deals in proposal and negotiation stages',
+            'Consistently strong engagement — 12 messages in last 90 days',
+            'Historical win rate of 67% signals reliable conversion pipeline',
+          ],
+        },
+        'c-002': {
+          forecast_revenue_3m: 5000,
+          forecast_revenue_12m: 22000,
+          growth_trajectory: 'declining',
+          key_drivers: [
+            'No recent messages or notes — contact engagement has dropped off',
+            'Lost deal in Q3 reduces confidence in near-term conversion',
+            'Low ML score (warm) and stalled outreach dampen pipeline outlook',
+          ],
+        },
+        'c-003': {
+          forecast_revenue_3m: 8000,
+          forecast_revenue_12m: 38000,
+          growth_trajectory: 'flat',
+          key_drivers: [
+            'One open deal in discovery stage — early but promising signals',
+            'Moderate engagement pace with consistent note-taking',
+            'Cold status suggests early funnel position; longer runway to close',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/growth-forecast`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }

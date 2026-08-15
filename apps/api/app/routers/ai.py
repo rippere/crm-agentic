@@ -4575,3 +4575,141 @@ async def deal_roi_projection(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 15g: AI contact growth forecast
+# ---------------------------------------------------------------------------
+
+_CONTACT_GROWTH_FORECAST_SYSTEM = """\
+You are a CRM revenue intelligence AI. Given a contact's deal history and
+recent engagement data, produce a realistic growth forecast.
+
+Return ONLY a JSON object with these fields:
+{
+  "forecast_revenue_3m": <int, realistic new pipeline/revenue expected in next 3 months>,
+  "forecast_revenue_12m": <int, realistic cumulative revenue in next 12 months>,
+  "growth_trajectory": "<one of: declining|flat|growing|accelerating>",
+  "key_drivers": ["<driver 1>", "<driver 2>", "<driver 3>"]
+}
+Base estimates on the patterns described. Be conservative and realistic. Never invent
+numbers that contradict the provided data. key_drivers should be specific and actionable.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/growth-forecast")
+@limiter.limit("5/minute")
+async def contact_growth_forecast(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Fetch all deals for this contact
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+        )
+    )
+    deals = deals_result.scalars().all()
+
+    # Message count last 90 days
+    ninety_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=90)
+    msg_result = await db.execute(
+        select(func.count(Message.id)).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= ninety_days_ago,
+        )
+    )
+    recent_message_count = msg_result.scalar() or 0
+
+    # Note count last 90 days
+    note_result = await db.execute(
+        select(func.count(ContactNote.id)).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+            ContactNote.created_at >= ninety_days_ago,
+        )
+    )
+    recent_note_count = note_result.scalar() or 0
+
+    # Build context
+    open_deals = [d for d in deals if d.stage not in ("closed_won", "closed_lost")]
+    won_deals = [d for d in deals if d.stage == "closed_won"]
+    lost_deals = [d for d in deals if d.stage == "closed_lost"]
+    total_pipeline = sum(d.value or 0 for d in open_deals)
+    closed_won_value = sum(d.value or 0 for d in won_deals)
+
+    context = (
+        f"Contact: {contact.name} ({contact.email})\n"
+        f"Company: {contact.company or 'Unknown'}\n"
+        f"Status: {contact.status}\n"
+        f"ML score: {contact.ml_score or 0} ({contact.ml_score_label or 'unknown'})\n\n"
+        f"Deal history:\n"
+        f"  Open deals: {len(open_deals)} (total pipeline ${total_pipeline:,.0f})\n"
+        f"  Won deals: {len(won_deals)} (total ${closed_won_value:,.0f})\n"
+        f"  Lost deals: {len(lost_deals)}\n\n"
+        f"Recent activity (last 90 days):\n"
+        f"  Messages: {recent_message_count}\n"
+        f"  Notes: {recent_note_count}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_CONTACT_GROWTH_FORECAST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_trajectories = {"declining", "flat", "growing", "accelerating"}
+        trajectory = data.get("growth_trajectory", "flat")
+        if trajectory not in valid_trajectories:
+            trajectory = "flat"
+
+        forecast_3m = max(0, int(data.get("forecast_revenue_3m", 0)))
+        forecast_12m = max(0, int(data.get("forecast_revenue_12m", 0)))
+        raw_drivers = data.get("key_drivers") or []
+        key_drivers = [str(d)[:120] for d in raw_drivers[:3]]
+        if not key_drivers:
+            key_drivers = [
+                "Engagement level and deal activity trend",
+                "Current pipeline stage distribution",
+                "Historical win rate for this contact type",
+            ]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "forecast_revenue_3m": forecast_3m,
+        "forecast_revenue_12m": forecast_12m,
+        "growth_trajectory": trajectory,
+        "key_drivers": key_drivers,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

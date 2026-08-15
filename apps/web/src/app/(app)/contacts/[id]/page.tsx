@@ -437,6 +437,11 @@ export default function ContactDetailPage() {
   const [onboardingChecklistGenerating, setOnboardingChecklistGenerating] = useState(false);
   const [checkedItems, setCheckedItems] = useState<Set<number>>(new Set());
 
+  type GrowthForecastData = { forecast_revenue_3m: number; forecast_revenue_12m: number; growth_trajectory: 'declining' | 'flat' | 'growing' | 'accelerating'; key_drivers: string[]; contact_id: string; generated_at: string };
+  const [growthForecast, setGrowthForecast] = useState<GrowthForecastData | null>(null);
+  const [growthForecastLoading, setGrowthForecastLoading] = useState(false);
+  const [growthForecastGenerating, setGrowthForecastGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -640,6 +645,13 @@ export default function ContactDetailPage() {
       .then((data) => setOnboardingChecklist(data ?? null))
       .catch(() => setOnboardingChecklist(null))
       .finally(() => setOnboardingChecklistLoading(false));
+
+    setGrowthForecastLoading(true);
+    apiClient
+      .getContactGrowthForecast(workspaceId, contactId, token)
+      .then((data) => setGrowthForecast(data ?? null))
+      .catch(() => setGrowthForecast(null))
+      .finally(() => setGrowthForecastLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1514,6 +1526,94 @@ export default function ContactDetailPage() {
                 >
                   {onboardingChecklistGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <ListTodo className="h-3 w-3" />}
                   {onboardingChecklistGenerating ? "Generating…" : "Generate Checklist"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Growth Forecast */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-emerald-400" />
+              <p className="text-xs font-semibold text-zinc-300">Growth Forecast</p>
+              {growthForecast && (() => {
+                const traj = growthForecast.growth_trajectory;
+                const cfg = {
+                  accelerating: { label: 'Accelerating', cls: 'bg-emerald-500/15 text-emerald-400' },
+                  growing:      { label: 'Growing',      cls: 'bg-indigo-500/15 text-indigo-400'  },
+                  flat:         { label: 'Flat',         cls: 'bg-zinc-700/50 text-zinc-400'      },
+                  declining:    { label: 'Declining',    cls: 'bg-rose-500/15 text-rose-400'      },
+                }[traj] ?? { label: traj, cls: 'bg-zinc-700/50 text-zinc-400' };
+                return (
+                  <span className={cn("ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || growthForecastGenerating) return;
+                  setGrowthForecastGenerating(true);
+                  try {
+                    const data = await apiClient.getContactGrowthForecast(workspaceId, contactId, token);
+                    setGrowthForecast(data ?? null);
+                  } catch { /* ignore */ } finally { setGrowthForecastGenerating(false); }
+                }}
+                disabled={growthForecastGenerating}
+                className={cn("ml-1 text-zinc-500 hover:text-zinc-300 transition", growthForecast ? "" : "hidden")}
+              >
+                <RefreshCw className={cn("h-3 w-3", growthForecastGenerating && "animate-spin")} />
+              </button>
+            </div>
+
+            {growthForecastLoading ? (
+              <div className="space-y-2">
+                <div className="h-14 rounded-lg bg-zinc-800 animate-pulse" />
+                <div className="h-10 rounded-lg bg-zinc-800 animate-pulse" />
+              </div>
+            ) : growthForecast ? (
+              <div className="space-y-3">
+                {/* Revenue stats grid */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-lg bg-zinc-800/60 p-3 text-center">
+                    <p className="text-[10px] text-zinc-500 mb-1">3-Month</p>
+                    <p className="text-base font-bold text-emerald-400">{formatCurrency(growthForecast.forecast_revenue_3m)}</p>
+                  </div>
+                  <div className="rounded-lg bg-zinc-800/60 p-3 text-center">
+                    <p className="text-[10px] text-zinc-500 mb-1">12-Month</p>
+                    <p className="text-base font-bold text-indigo-400">{formatCurrency(growthForecast.forecast_revenue_12m)}</p>
+                  </div>
+                </div>
+                {/* Key drivers */}
+                <div className="space-y-1">
+                  <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">Key Drivers</p>
+                  {growthForecast.key_drivers.map((driver, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="text-emerald-500 text-[10px] font-bold mt-0.5">{i + 1}.</span>
+                      <p className="text-xs text-zinc-400 leading-relaxed">{driver}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(growthForecast.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">AI-powered revenue growth forecast for this contact.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setGrowthForecastGenerating(true);
+                    try {
+                      const data = await apiClient.getContactGrowthForecast(workspaceId, contactId, token);
+                      setGrowthForecast(data ?? null);
+                    } catch { /* ignore */ } finally { setGrowthForecastGenerating(false); }
+                  }}
+                  disabled={growthForecastGenerating}
+                >
+                  {growthForecastGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <TrendingUp className="h-3 w-3" />}
+                  {growthForecastGenerating ? "Forecasting…" : "Generate Forecast"}
                 </Button>
               </div>
             )}
