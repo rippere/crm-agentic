@@ -2555,3 +2555,92 @@ async def test_deal_roi_projection_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/contacts/{cid}/growth-forecast
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_contact_growth_forecast_returns_structured_response(app_client):
+    """growth-forecast returns forecast_revenue_3m/12m, growth_trajectory, key_drivers."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _scalar_one_or_none(v):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = v
+        return r
+
+    def _scalars_all(rows):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = rows
+        return r
+
+    def _scalar(v):
+        r = MagicMock()
+        r.scalar.return_value = v
+        return r
+
+    contact = _fake_contact(workspace_id, name="Priya Nair", company="StartupBase", status="customer")
+    contact.ml_score = {"value": 80, "label": "hot"}
+
+    deal = _fake_deal(workspace_id, stage="closed_won", value=30000.0)
+    deal.contact_id = contact.id
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _scalar_one_or_none(contact),  # contact lookup
+        _scalars_all([deal]),           # all deals for contact
+        _scalar(7),                     # message count last 90d
+        _scalar(3),                     # note count last 90d
+    ])
+
+    forecast_json = _json.dumps({
+        "forecast_revenue_3m": 18000,
+        "forecast_revenue_12m": 75000,
+        "growth_trajectory": "growing",
+        "key_drivers": [
+            "Existing closed-won deal signals high-intent re-purchase potential",
+            "Strong recent message cadence (7 in 90 days) shows active engagement",
+            "Customer status with healthy ML score supports upsell forecasting",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=forecast_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/growth-forecast"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["forecast_revenue_3m"], int)
+    assert body["forecast_revenue_3m"] == 18000
+    assert isinstance(body["forecast_revenue_12m"], int)
+    assert body["growth_trajectory"] in {"declining", "flat", "growing", "accelerating"}
+    assert body["growth_trajectory"] == "growing"
+    assert isinstance(body["key_drivers"], list)
+    assert len(body["key_drivers"]) == 3
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_growth_forecast_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/growth-forecast"
+        )
+
+    assert resp.status_code == 403
