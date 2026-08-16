@@ -2644,3 +2644,100 @@ async def test_contact_growth_forecast_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/goal-tracker
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_goal_tracker_returns_structured_response(app_client):
+    """goal-tracker returns goals list with status, progress_pct, and overall_health."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _open_deals_result():
+        row1 = MagicMock()
+        row1.value = 85000.0
+        row1.health_score = 72
+        row1.ml_win_probability = 65
+        row2 = MagicMock()
+        row2.value = 45000.0
+        row2.health_score = 38
+        row2.ml_win_probability = 22
+        r = MagicMock()
+        r.all.return_value = [row1, row2]
+        return r
+
+    def _cw_result():
+        row = MagicMock()
+        row.__getitem__ = lambda self, i: [3, 210000.0][i]
+        r = MagicMock()
+        r.first.return_value = row
+        return r
+
+    mock_db.scalar = AsyncMock(side_effect=[
+        12,  # total_contacts
+        18,  # total_tasks
+        13,  # done_tasks
+        7,   # contacts_with_recent_msg
+    ])
+    mock_db.execute = AsyncMock(side_effect=[
+        _open_deals_result(),
+        _cw_result(),
+    ])
+
+    goal_json = _json.dumps({
+        "goals": [
+            {
+                "name": "Close $130K pipeline",
+                "target_description": "Convert all open deals to closed-won this quarter",
+                "progress_pct": 62,
+                "status": "at_risk",
+                "insight": "One deal at health 38 is dragging the pipeline. Immediate outreach needed.",
+            },
+            {
+                "name": "Improve task completion",
+                "target_description": "Maintain task completion rate above 80%",
+                "progress_pct": 72,
+                "status": "on_track",
+                "insight": "Task completion at 72% is close to target. Three overdue tasks remain.",
+            },
+        ],
+        "overall_health": "at_risk",
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=goal_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/goal-tracker")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["goals"], list)
+    assert len(body["goals"]) == 2
+    goal = body["goals"][0]
+    assert goal["name"] == "Close $130K pipeline"
+    assert goal["progress_pct"] == 62
+    assert goal["status"] == "at_risk"
+    assert isinstance(goal["insight"], str)
+    assert body["overall_health"] == "at_risk"
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_goal_tracker_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/goal-tracker")
+
+    assert resp.status_code == 403

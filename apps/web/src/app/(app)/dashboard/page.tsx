@@ -19,7 +19,7 @@ import {
   DollarSign, Briefcase, Brain, Bot, TrendingUp, TrendingDown,
   Minus, Activity, CheckCircle, AlertTriangle, Info,
   ListTodo, Mail, BarChart2, CheckSquare, ExternalLink, Bell,
-  Sparkles, RefreshCw,
+  Sparkles, RefreshCw, Target, ChevronDown,
 } from "lucide-react";
 import { cn, SIGNAL } from "@/lib/utils";
 import type { KPI, ActivityEvent, Deal } from "@/lib/types";
@@ -262,6 +262,13 @@ export default function DashboardPage() {
     generated_at: string;
   } | null>(null);
   const [contactHealthLoading, setContactHealthLoading] = useState(false);
+  const [goalTracker, setGoalTracker] = useState<{
+    goals: Array<{ name: string; target_description: string; progress_pct: number; status: 'on_track' | 'at_risk' | 'behind'; insight: string }>;
+    overall_health: 'on_track' | 'at_risk' | 'behind';
+    generated_at: string;
+  } | null>(null);
+  const [goalTrackerLoading, setGoalTrackerLoading] = useState(false);
+  const [goalTrackerOpen, setGoalTrackerOpen] = useState(true);
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
@@ -294,6 +301,10 @@ export default function DashboardPage() {
       apiClient.getContactHealthOverview("demo-workspace-1", "demo-token").then((data) => {
         setContactHealthOverview(data);
       }).catch(() => {}).finally(() => setContactHealthLoading(false));
+      setGoalTrackerLoading(true);
+      apiClient.getWorkspaceGoalTracker("demo-workspace-1", "demo-token").then((data) => {
+        setGoalTracker(data);
+      }).catch(() => {}).finally(() => setGoalTrackerLoading(false));
       return;
     }
 
@@ -357,6 +368,11 @@ export default function DashboardPage() {
         .then((data) => { setContactHealthOverview(data); })
         .catch(() => {})
         .finally(() => setContactHealthLoading(false));
+      setGoalTrackerLoading(true);
+      apiClient.getWorkspaceGoalTracker(workspaceId, session.access_token)
+        .then((data) => { setGoalTracker(data); })
+        .catch(() => {})
+        .finally(() => setGoalTrackerLoading(false));
 
       // Subscribe to Supabase Realtime for live activity feed
       const channel = supabase
@@ -476,6 +492,27 @@ export default function DashboardPage() {
       }
     } catch { /* silently ignore */ } finally {
       setDigestLoading(false);
+    }
+  }
+
+  async function regenerateGoalTracker() {
+    if (goalTrackerLoading) return;
+    setGoalTrackerLoading(true);
+    try {
+      if (DEMO_MODE) {
+        const data = await apiClient.getWorkspaceGoalTracker("demo-workspace-1", "demo-token");
+        setGoalTracker(data);
+      } else {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        const workspaceId: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!workspaceId) return;
+        const data = await apiClient.getWorkspaceGoalTracker(workspaceId, session.access_token);
+        setGoalTracker(data);
+      }
+    } catch { /* silently ignore */ } finally {
+      setGoalTrackerLoading(false);
     }
   }
 
@@ -722,6 +759,101 @@ export default function DashboardPage() {
                 </div>
               </div>
             ) : null}
+          </Card>
+        </section>
+      )}
+
+      {/* AI Goal Tracker */}
+      {(goalTracker !== null || goalTrackerLoading) && (
+        <section aria-labelledby="goal-tracker-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="goal-tracker-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Workspace Goals
+            </h2>
+            <Badge variant="indigo" size="sm" dot>Nova AI</Badge>
+            {goalTracker && (
+              <Badge
+                variant={goalTracker.overall_health === "on_track" ? "emerald" : goalTracker.overall_health === "at_risk" ? "amber" : "rose"}
+                size="sm"
+              >
+                {goalTracker.overall_health.replace("_", " ")}
+              </Badge>
+            )}
+            {goalTracker && (
+              <span className="text-[11px] text-zinc-600 font-mono ml-auto">
+                {new Date(goalTracker.generated_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+          <Card className="relative">
+            <div className="flex items-center gap-2 mb-4 pr-40">
+              <Target className="h-4 w-4 text-indigo-400 flex-shrink-0" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-100">Goal Progress Tracker</p>
+            </div>
+            <div className="absolute top-3 right-3 flex items-center gap-2">
+              <button
+                onClick={regenerateGoalTracker}
+                disabled={goalTrackerLoading}
+                className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] text-zinc-400 hover:text-indigo-400 hover:border-indigo-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Regenerate goals"
+              >
+                <RefreshCw className={cn("h-3 w-3", goalTrackerLoading && "animate-spin")} />
+                {goalTrackerLoading ? "Generating…" : "Regenerate"}
+              </button>
+              <button
+                onClick={() => setGoalTrackerOpen((o) => !o)}
+                className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-zinc-400 hover:text-zinc-200 transition-colors"
+                title={goalTrackerOpen ? "Collapse" : "Expand"}
+              >
+                <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !goalTrackerOpen && "-rotate-90")} />
+              </button>
+            </div>
+            {goalTrackerOpen && (
+              <>
+                {goalTrackerLoading && !goalTracker ? (
+                  <div className="space-y-3 animate-pulse">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div key={i} className="space-y-1.5">
+                        <div className="h-2.5 bg-zinc-800 rounded w-1/4" />
+                        <div className="h-1.5 bg-zinc-800 rounded w-full" />
+                        <div className="h-2 bg-zinc-800 rounded w-2/3" />
+                      </div>
+                    ))}
+                  </div>
+                ) : goalTracker ? (
+                  <div className={cn("space-y-4 transition-opacity", goalTrackerLoading && "opacity-50")}>
+                    {goalTracker.goals.map((goal, idx) => (
+                      <div key={idx} className="space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-zinc-100">{goal.name}</span>
+                          <span className={cn(
+                            "px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide flex-shrink-0",
+                            goal.status === "on_track" && "bg-emerald-400/10 text-emerald-400",
+                            goal.status === "at_risk" && "bg-amber-400/10 text-amber-400",
+                            goal.status === "behind" && "bg-rose-400/10 text-rose-400",
+                          )}>
+                            {goal.status.replace("_", " ")}
+                          </span>
+                          <span className="text-xs font-mono text-zinc-400 ml-auto">{goal.progress_pct}%</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className={cn(
+                              "h-full rounded-full transition-all",
+                              goal.status === "on_track" && "bg-emerald-400",
+                              goal.status === "at_risk" && "bg-amber-400",
+                              goal.status === "behind" && "bg-rose-500",
+                            )}
+                            style={{ width: `${goal.progress_pct}%` }}
+                          />
+                        </div>
+                        <p className="text-[11px] text-zinc-500 leading-relaxed">{goal.insight}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            )}
           </Card>
         </section>
       )}
