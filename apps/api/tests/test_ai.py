@@ -2741,3 +2741,86 @@ async def test_goal_tracker_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/goal-tracker")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/deals/{did}/ai/next-step
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_next_step_returns_structured_response(app_client):
+    """next-step returns next_step, rationale, blockers, and time_horizon."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_deal = MagicMock()
+    mock_deal.id = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    mock_deal.workspace_id = workspace_id
+    mock_deal.stage = "proposal"
+    mock_deal.title = "Enterprise SaaS Deal"
+    mock_deal.company = "Acme Corp"
+    mock_deal.value = 85000.0
+    mock_deal.health_score = 68
+    mock_deal.ml_win_probability = 55
+    mock_deal.stage_changed_at = None
+    mock_deal.created_at = None
+    mock_deal.next_action = "Send pricing deck"
+    mock_deal.next_action_date = None
+    mock_deal.contact_id = None
+
+    def _scalar_one_or_none_result(val):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = val
+        return r
+
+    def _notes_result():
+        r = MagicMock()
+        r.all.return_value = [("Prospect asked about integrations",), ("Positive call last week",)]
+        return r
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _scalar_one_or_none_result(mock_deal),
+        _notes_result(),
+    ])
+
+    ai_response = MagicMock()
+    ai_response.content = [MagicMock(text=_json.dumps({
+        "next_step": "Schedule a technical integration walkthrough with the IT lead",
+        "rationale": "The prospect raised integration concerns. Addressing them directly with a technical demo will build confidence and unblock the final approval.",
+        "blockers": ["IT lead availability unknown", "Competing evaluation from TechCorp"],
+        "time_horizon": "this_week",
+    }))]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_instance = MagicMock()
+        mock_cls.return_value = mock_instance
+        mock_instance.messages.create.return_value = ai_response
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{mock_deal.id}/ai/next-step",
+                json={},
+            )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert isinstance(body["next_step"], str) and len(body["next_step"]) > 0
+    assert isinstance(body["rationale"], str) and len(body["rationale"]) > 0
+    assert isinstance(body["blockers"], list)
+    assert len(body["blockers"]) == 2
+    assert body["time_horizon"] == "this_week"
+    assert "deal_id" in body
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_next_step_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    deal_id = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/deals/{deal_id}/ai/next-step", json={})
+
+    assert resp.status_code == 403

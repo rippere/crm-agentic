@@ -4866,3 +4866,148 @@ async def workspace_goal_tracker(
         "overall_health": overall,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# AI deal next-step planner
+# ---------------------------------------------------------------------------
+
+_NEXT_STEP_SYSTEM = """\
+You are Nova, a CRM deal intelligence AI. Given the deal's current context, identify the single
+most impactful next step the sales rep should take right now.
+
+Respond ONLY with valid JSON (no markdown fences, no extra keys):
+{
+  "next_step": "<one specific, actionable sentence — what to do next>",
+  "rationale": "<1-2 sentences explaining why this is the priority>",
+  "blockers": ["<blocker 1>", "<blocker 2>"],
+  "time_horizon": "<this_week|this_month|next_quarter>"
+}
+
+Rules:
+- next_step must be a concrete action (e.g. "Schedule a technical demo with the VP Engineering")
+- blockers: array of 0–3 specific obstacles impeding the deal (empty array [] if none)
+- time_horizon — this_week: needs immediate action; this_month: on track; next_quarter: early stage
+- Be specific to the deal context — avoid generic advice
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/next-step")
+@limiter.limit("5/minute")
+async def deal_next_step(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Next-step planner is not available for closed deals",
+        )
+
+    # Days in current stage
+    now = datetime.datetime.now(tz=timezone.utc)
+    stage_ref = deal.stage_changed_at or deal.created_at
+    if stage_ref and stage_ref.tzinfo is None:
+        stage_ref = stage_ref.replace(tzinfo=timezone.utc)
+    days_in_stage = (now - stage_ref).days if stage_ref else 0
+
+    # Next-action overdue days
+    next_action_overdue_days = 0
+    if deal.next_action_date:
+        try:
+            delta = (datetime.date.today() - deal.next_action_date).days
+            next_action_overdue_days = max(0, delta)
+        except (ValueError, TypeError):
+            pass
+
+    # Last 3 deal note bodies (newest first)
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id, DealNote.workspace_id == workspace_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    note_bodies = [(row[0] or "") for row in notes_result.all()]
+
+    # Open task count scoped to deal's contact
+    open_tasks = 0
+    if deal.contact_id:
+        open_tasks = await db.scalar(
+            select(func.count(Task.id)).where(
+                Task.workspace_id == workspace_id,
+                Task.contact_id == deal.contact_id,
+                Task.status.in_(["open", "in_progress"]),
+            )
+        ) or 0
+
+    lines = [
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}",
+        f"Stage: {deal.stage}",
+        f"Value: ${float(deal.value):,.0f}",
+        f"Health score: {deal.health_score}/100",
+        f"ML win probability: {deal.ml_win_probability}%",
+        f"Days in current stage: {days_in_stage}",
+        f"Next action text: {deal.next_action or 'none set'}",
+        f"Next action overdue by: {next_action_overdue_days} days",
+        f"Open tasks for contact: {open_tasks}",
+    ]
+
+    if note_bodies:
+        lines.append("Recent deal notes (newest first):")
+        for body in note_bodies:
+            lines.append(f"  - {(body or '')[:200]}")
+    else:
+        lines.append("Recent deal notes: none")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_NEXT_STEP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_horizons = {"this_week", "this_month", "next_quarter"}
+        time_horizon = data.get("time_horizon", "this_month")
+        if time_horizon not in valid_horizons:
+            time_horizon = "this_month"
+
+        next_step = str(data.get("next_step", "Review deal and update next action"))[:300]
+        rationale = str(data.get("rationale", ""))[:400]
+        raw_blockers = data.get("blockers") or []
+        blockers = [str(b)[:150] for b in raw_blockers[:3]]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "next_step": next_step,
+        "rationale": rationale,
+        "blockers": blockers,
+        "time_horizon": time_horizon,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

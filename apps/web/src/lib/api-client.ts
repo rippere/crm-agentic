@@ -3485,4 +3485,50 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealNextStep: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    next_step: string
+    rationale: string
+    blockers: string[]
+    time_horizon: 'this_week' | 'this_month' | 'next_quarter'
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { next_step: string; rationale: string; blockers: string[]; time_horizon: 'this_week' | 'this_month' | 'next_quarter' }> = {
+        'd-001': {
+          next_step: 'Schedule a technical integration walkthrough with the VP Engineering this week',
+          rationale: 'The prospect has raised integration questions but no technical call has been booked. A hands-on demo will address blockers and build confidence ahead of the proposal review.',
+          blockers: ['No technical champion confirmed', 'Competing evaluation still active'],
+          time_horizon: 'this_week',
+        },
+        'd-002': {
+          next_step: 'Send a revised proposal addressing the pricing objection raised in the last call',
+          rationale: 'The deal has been stalled in proposal stage for 12 days. Delivering a tailored pricing structure will re-engage the decision maker and move toward sign-off.',
+          blockers: ['Decision maker on leave until next week'],
+          time_horizon: 'this_month',
+        },
+      }
+      const stub = stubs[dealId] ?? {
+        next_step: 'Review deal health and schedule a follow-up discovery call',
+        rationale: 'No recent engagement detected. A proactive check-in will help re-qualify the deal and surface any new objections early.',
+        blockers: [],
+        time_horizon: 'this_month' as const,
+      }
+      return Promise.resolve({
+        ...stub,
+        deal_id: dealId,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/next-step`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
