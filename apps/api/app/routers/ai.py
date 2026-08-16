@@ -4713,3 +4713,156 @@ async def contact_growth_forecast(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# AI workspace goal tracker
+# ---------------------------------------------------------------------------
+
+_GOAL_TRACKER_SYSTEM = """\
+You are Nova, the AI workspace intelligence in NovaCRM. Analyze the provided workspace metrics
+and infer 4 implied business goals. For each goal, assess current progress and provide insight.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "goals": [
+    {
+      "name": "<short goal name, max 5 words>",
+      "target_description": "<what success looks like in 1 sentence>",
+      "progress_pct": <integer 0-100>,
+      "status": "<on_track|at_risk|behind>",
+      "insight": "<1-2 sentence specific insight about progress>"
+    }
+  ],
+  "overall_health": "<on_track|at_risk|behind>"
+}
+
+Infer realistic goals from the data (e.g. "Close $X in pipeline", "Improve win rate",
+"Reduce task backlog", "Re-engage dark contacts"). Be specific and actionable. Base
+progress_pct on the real numbers provided. Use "on_track" when progress is solid,
+"at_risk" when momentum is flagging, and "behind" when clearly failing.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/goal-tracker")
+@limiter.limit("5/minute")
+async def workspace_goal_tracker(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    total_contacts = await db.scalar(
+        select(func.count(Contact.id)).where(Contact.workspace_id == workspace_id)
+    ) or 0
+
+    open_deals_result = await db.execute(
+        select(Deal.value, Deal.health_score, Deal.ml_win_probability).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deal_rows = open_deals_result.all()
+    open_deal_count = len(open_deal_rows)
+    total_pipeline = sum(float(r.value or 0) for r in open_deal_rows)
+    at_risk_count = sum(1 for r in open_deal_rows if (r.health_score or 0) < 50)
+
+    cw_result = await db.execute(
+        select(func.count(Deal.id), func.sum(Deal.value)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    cw_row = cw_result.first()
+    closed_won_count = cw_row[0] or 0
+    closed_won_value = float(cw_row[1] or 0)
+
+    total_tasks = await db.scalar(
+        select(func.count(Task.id)).where(Task.workspace_id == workspace_id)
+    ) or 0
+    done_tasks = await db.scalar(
+        select(func.count(Task.id)).where(
+            Task.workspace_id == workspace_id,
+            Task.status == "done",
+        )
+    ) or 0
+    task_completion_rate = round(done_tasks / total_tasks * 100) if total_tasks > 0 else 0
+
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+    contacts_with_recent_msg = await db.scalar(
+        select(func.count(func.distinct(Message.contact_id))).where(
+            Message.workspace_id == workspace_id,
+            Message.received_at >= thirty_days_ago,
+            Message.contact_id.isnot(None),
+        )
+    ) or 0
+
+    context = (
+        f"Workspace metrics:\n"
+        f"  Total contacts: {total_contacts}\n"
+        f"  Active contacts (messaged in 30d): {contacts_with_recent_msg}\n"
+        f"  Open deals: {open_deal_count}\n"
+        f"  Total pipeline value: ${total_pipeline:,.0f}\n"
+        f"  At-risk deals (health < 50): {at_risk_count}\n"
+        f"  Closed-won deals: {closed_won_count} (total ${closed_won_value:,.0f})\n"
+        f"  Open tasks: {total_tasks - done_tasks}\n"
+        f"  Task completion rate: {task_completion_rate}%\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_GOAL_TRACKER_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_statuses = {"on_track", "at_risk", "behind"}
+        raw_goals = data.get("goals", [])
+        goals = []
+        for g in raw_goals[:4]:
+            if not isinstance(g, dict):
+                continue
+            s = g.get("status", "at_risk")
+            if s not in valid_statuses:
+                s = "at_risk"
+            goals.append({
+                "name": str(g.get("name", "Goal"))[:60],
+                "target_description": str(g.get("target_description", ""))[:200],
+                "progress_pct": max(0, min(100, int(g.get("progress_pct", 0)))),
+                "status": s,
+                "insight": str(g.get("insight", ""))[:300],
+            })
+
+        overall = data.get("overall_health", "at_risk")
+        if overall not in valid_statuses:
+            overall = "at_risk"
+
+        if not goals:
+            goals = [{
+                "name": "Close pipeline deals",
+                "target_description": "Convert open deals to closed-won revenue",
+                "progress_pct": min(100, closed_won_count * 10),
+                "status": "at_risk",
+                "insight": "No goal data available. Review open deal health.",
+            }]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "goals": goals,
+        "overall_health": overall,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

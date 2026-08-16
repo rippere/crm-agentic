@@ -3431,4 +3431,58 @@ export const apiClient = {
       token,
     )
   },
+
+  getWorkspaceGoalTracker: (workspaceId: string, token: string): Promise<{
+    goals: Array<{
+      name: string
+      target_description: string
+      progress_pct: number
+      status: 'on_track' | 'at_risk' | 'behind'
+      insight: string
+    }>
+    overall_health: 'on_track' | 'at_risk' | 'behind'
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        overall_health: 'at_risk',
+        goals: [
+          {
+            name: 'Close $400K in pipeline',
+            target_description: 'Convert at least $400K of open pipeline to closed-won this quarter',
+            progress_pct: 62,
+            status: 'at_risk',
+            insight: '$285K in open pipeline with 3 at-risk deals and 2 overdue close dates. Current velocity needs to accelerate to hit the quarterly target.',
+          },
+          {
+            name: 'Improve win rate to 55%',
+            target_description: 'Achieve a 55% win rate across all closed deals this quarter',
+            progress_pct: 48,
+            status: 'behind',
+            insight: 'Current win rate sits at 43% across 7 closed deals. Strengthening proposal-stage coaching and reducing time-in-stage should close the gap.',
+          },
+          {
+            name: 'Clear open task backlog',
+            target_description: 'Complete 80%+ of open tasks within their due dates',
+            progress_pct: 71,
+            status: 'on_track',
+            insight: 'Task completion rate is at 71% — above the midpoint target. Focus on the 8 overdue tasks to push past the 80% threshold.',
+          },
+          {
+            name: 'Re-engage silent contacts',
+            target_description: 'Reduce contacts with no touch in 30+ days to under 20%',
+            progress_pct: 55,
+            status: 'at_risk',
+            insight: '4 of 12 tracked contacts have had no messages or notes in the last 30 days. Targeted outreach sequences can recover these relationships.',
+          },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/goal-tracker`,
+      { method: 'GET' },
+      token,
+    )
+  },
 }
