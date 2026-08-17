@@ -4958,7 +4958,7 @@ async def agent_recommendations(
     recent_agent_runs = await db.scalar(
         select(func.count(ActivityEvent.id)).where(
             ActivityEvent.workspace_id == workspace_id,
-            ActivityEvent.event_type.like("agent_%"),
+            ActivityEvent.type.like("agent_%"),
             ActivityEvent.created_at >= thirty_days_ago,
         )
     ) or 0
