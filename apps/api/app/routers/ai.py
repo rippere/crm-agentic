@@ -4866,3 +4866,182 @@ async def workspace_goal_tracker(
         "overall_health": overall,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/agent-recommendations
+# ---------------------------------------------------------------------------
+
+_AGENT_REC_SYSTEM = """\
+You are Nova, the AI assistant embedded in NovaCRM. Based on the workspace metrics provided,
+recommend which of the available AI agents the team should run next and why.
+
+Available agents: Lead Scorer, Email Composer, Pipeline Optimizer, Sentiment Analyzer,
+Call Summarizer, Semantic Sorter.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "recommendations": [
+    {
+      "agent_id": "<snake_case_agent_id>",
+      "agent_name": "<Agent Display Name>",
+      "priority": "<high|medium|low>",
+      "reason": "<1 sentence explaining why this agent should run>",
+      "action": "<1 sentence specific action the user should take>",
+      "target_count": <integer — number of contacts/deals/messages this affects>
+    }
+  ],
+  "overall_insight": "<2-sentence summary of the most impactful agent usage right now>"
+}
+
+Return 3–4 recommendations ordered by priority. Be specific: reference the actual counts
+provided. Use "high" when the gap has clear revenue/relationship impact, "medium" for
+meaningful but non-urgent improvements, "low" for housekeeping.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/agent-recommendations")
+@limiter.limit("5/minute")
+async def agent_recommendations(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+    fourteen_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=14)
+
+    # Contacts with low ML score (Lead Scorer candidates)
+    low_score_contacts = await db.scalar(
+        select(func.count(Contact.id)).where(
+            Contact.workspace_id == workspace_id,
+            Contact.ml_score < 40,
+        )
+    ) or 0
+
+    # Open deals with no stage change in 14+ days (Pipeline Optimizer)
+    stale_deals = await db.scalar(
+        select(func.count(Deal.id)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at <= fourteen_days_ago,
+        )
+    ) or 0
+
+    # Contacts with no message in 30 days (Email Composer)
+    going_dark_count = await db.scalar(
+        select(func.count(Contact.id)).where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+            ~Contact.id.in_(
+                select(Message.contact_id).where(
+                    Message.workspace_id == workspace_id,
+                    Message.received_at >= thirty_days_ago,
+                    Message.contact_id.isnot(None),
+                )
+            ),
+        )
+    ) or 0
+
+    # Unprocessed messages (Semantic Sorter / Message Ingestor)
+    unprocessed_messages = await db.scalar(
+        select(func.count(Message.id)).where(
+            Message.workspace_id == workspace_id,
+            Message.processed == False,
+        )
+    ) or 0
+
+    # Recent agent runs (last 30d) from activity_events
+    recent_agent_runs = await db.scalar(
+        select(func.count(ActivityEvent.id)).where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.event_type.like("agent_%"),
+            ActivityEvent.created_at >= thirty_days_ago,
+        )
+    ) or 0
+
+    # Messages without a clarity score
+    messages_without_clarity = await db.scalar(
+        select(func.count(Message.id)).where(
+            Message.workspace_id == workspace_id,
+            ~Message.id.in_(
+                select(ClarityScore.message_id).where(
+                    ClarityScore.workspace_id == workspace_id
+                )
+            ),
+        )
+    ) or 0
+
+    context = (
+        f"Workspace agent usage snapshot:\n"
+        f"  Agent runs in last 30 days: {recent_agent_runs}\n"
+        f"  Contacts with low ML score (<40): {low_score_contacts}\n"
+        f"  Stale open deals (no stage change in 14+ days): {stale_deals}\n"
+        f"  Contacts going dark (no message in 30 days): {going_dark_count}\n"
+        f"  Unprocessed messages: {unprocessed_messages}\n"
+        f"  Messages without clarity scores: {messages_without_clarity}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_AGENT_REC_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_priorities = {"high", "medium", "low"}
+        valid_agent_ids = {
+            "lead_scorer", "email_composer", "pipeline_optimizer",
+            "sentiment_analyzer", "call_summarizer", "semantic_sorter",
+        }
+        recs = []
+        for r in data.get("recommendations", [])[:4]:
+            if not isinstance(r, dict):
+                continue
+            p = r.get("priority", "medium")
+            if p not in valid_priorities:
+                p = "medium"
+            aid = str(r.get("agent_id", ""))
+            if aid not in valid_agent_ids:
+                aid = "lead_scorer"
+            recs.append({
+                "agent_id": aid,
+                "agent_name": str(r.get("agent_name", "Agent"))[:50],
+                "priority": p,
+                "reason": str(r.get("reason", ""))[:200],
+                "action": str(r.get("action", ""))[:200],
+                "target_count": max(0, int(r.get("target_count", 0))),
+            })
+
+        overall_insight = str(data.get("overall_insight", ""))[:400]
+
+        if not recs:
+            recs = [{
+                "agent_id": "lead_scorer",
+                "agent_name": "Lead Scorer",
+                "priority": "medium",
+                "reason": "Regular scoring keeps ML models accurate.",
+                "action": "Run Lead Scorer on all contacts to refresh predictions.",
+                "target_count": low_score_contacts,
+            }]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "recommendations": recs,
+        "overall_insight": overall_insight,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

@@ -3485,4 +3485,63 @@ export const apiClient = {
       token,
     )
   },
+
+  getAgentRecommendations: (workspaceId: string, token: string): Promise<{
+    recommendations: Array<{
+      agent_id: string
+      agent_name: string
+      priority: 'high' | 'medium' | 'low'
+      reason: string
+      action: string
+      target_count: number
+    }>
+    overall_insight: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        overall_insight: 'Lead Scorer and Pipeline Optimizer should be your top priorities this week. Eight contacts need rescoring and three stale deals are at risk of slipping without intervention.',
+        recommendations: [
+          {
+            agent_id: 'lead_scorer',
+            agent_name: 'Lead Scorer',
+            priority: 'high',
+            reason: '8 contacts have ML scores below 40 and need fresh predictions based on recent interactions.',
+            action: 'Run Lead Scorer on all contacts to refresh ML predictions and surface high-value leads.',
+            target_count: 8,
+          },
+          {
+            agent_id: 'pipeline_optimizer',
+            agent_name: 'Pipeline Optimizer',
+            priority: 'high',
+            reason: '3 open deals have had no stage change in 14+ days and risk going cold.',
+            action: 'Run Pipeline Optimizer on stale deals to generate re-engagement plans and next actions.',
+            target_count: 3,
+          },
+          {
+            agent_id: 'email_composer',
+            agent_name: 'Email Composer',
+            priority: 'medium',
+            reason: '4 contacts have had no messages in the last 30 days and may be going dark.',
+            action: 'Use Email Composer to draft personalised re-engagement emails for silent contacts.',
+            target_count: 4,
+          },
+          {
+            agent_id: 'semantic_sorter',
+            agent_name: 'Semantic Sorter',
+            priority: 'low',
+            reason: '6 inbox messages have not been clarity-scored and may contain hidden commitments.',
+            action: 'Run Semantic Sorter on unprocessed messages to extract tasks and clarity scores.',
+            target_count: 6,
+          },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/agent-recommendations`,
+      { method: 'GET' },
+      token,
+    )
+  },
 }
