@@ -14,6 +14,7 @@ import {
   Brain, Sparkles, Mail, Mic, TrendingUp, Heart,
   Play, Pause, Settings, ChevronRight, Cpu, Target,
   ArrowRight, GitBranch, Zap, Loader2, CheckCircle, XCircle,
+  ChevronDown, RefreshCw,
 } from "lucide-react";
 import {
   LineChart, Line, ResponsiveContainer, Tooltip,
@@ -561,6 +562,16 @@ export default function AgentsPage() {
   // loaded, so we can show "—" rather than a fabricated number.
   const [tasksToday, setTasksToday] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [agentRecs, setAgentRecs] = useState<{
+    recommendations: Array<{
+      agent_id: string; agent_name: string; priority: 'high' | 'medium' | 'low';
+      reason: string; action: string; target_count: number;
+    }>;
+    overall_insight: string;
+    generated_at: string;
+  } | null>(null);
+  const [recsLoading, setRecsLoading] = useState(false);
+  const [recsOpen, setRecsOpen] = useState(true);
 
   const addToast = useCallback((message: string, type: Toast["type"] = "info") => {
     const id = Date.now();
@@ -630,6 +641,24 @@ export default function AgentsPage() {
       })
       .catch(() => {});
   }, [token, workspaceId]);
+
+  // Fetch AI agent recommendations on mount
+  const fetchRecs = useCallback(async () => {
+    if (!token || !workspaceId) return;
+    setRecsLoading(true);
+    try {
+      const data = await apiClient.getAgentRecommendations(workspaceId, token);
+      setAgentRecs(data);
+    } catch {
+      // silent — recs are best-effort
+    } finally {
+      setRecsLoading(false);
+    }
+  }, [token, workspaceId]);
+
+  useEffect(() => {
+    fetchRecs();
+  }, [fetchRecs]);
 
   // Poll /agents every 5s while any agent is processing
   const pollAgents = useCallback(async () => {
@@ -754,6 +783,87 @@ export default function AgentsPage() {
           </div>
         </Card>
       </div>
+
+      {/* AI Agent Recommendations */}
+      <Card className="overflow-hidden">
+        <button
+          className="flex w-full items-center justify-between px-4 py-3"
+          onClick={() => setRecsOpen((o) => !o)}
+        >
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-400" />
+            <span className="text-sm font-semibold text-zinc-100">Agent Recommendations</span>
+            {agentRecs && (
+              <span className="rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-semibold text-violet-300">
+                {agentRecs.recommendations.length} suggestions
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); fetchRecs(); }}
+              disabled={recsLoading}
+              className="rounded-lg p-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-40"
+              title="Regenerate"
+            >
+              {recsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            </button>
+            <ChevronDown className={`h-4 w-4 text-zinc-400 transition-transform ${recsOpen ? "rotate-180" : ""}`} />
+          </div>
+        </button>
+        {recsOpen && (
+          <div className="border-t border-zinc-800 px-4 pb-4 pt-3">
+            {recsLoading && !agentRecs ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-14 rounded-lg bg-zinc-800/60 animate-pulse" />
+                ))}
+              </div>
+            ) : agentRecs ? (
+              <>
+                {agentRecs.overall_insight && (
+                  <p className="mb-3 text-xs text-zinc-400 leading-relaxed">{agentRecs.overall_insight}</p>
+                )}
+                <div className="space-y-2">
+                  {agentRecs.recommendations.map((rec) => (
+                    <div
+                      key={rec.agent_id}
+                      className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5"
+                    >
+                      <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-violet-500/10 border border-violet-500/20">
+                        <Sparkles className="h-3.5 w-3.5 text-violet-400" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-semibold text-zinc-200">{rec.agent_name}</span>
+                          <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                            rec.priority === 'high'
+                              ? 'bg-rose-500/15 text-rose-300'
+                              : rec.priority === 'medium'
+                              ? 'bg-amber-500/15 text-amber-300'
+                              : 'bg-zinc-700/60 text-zinc-400'
+                          }`}>
+                            {rec.priority}
+                          </span>
+                          {rec.target_count > 0 && (
+                            <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
+                              {rec.target_count} items
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-[11px] text-zinc-400 leading-relaxed">{rec.reason}</p>
+                        <p className="mt-0.5 text-[11px] text-violet-300/80 leading-relaxed">{rec.action}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="text-xs text-zinc-500">Could not load recommendations.</p>
+            )}
+          </div>
+        )}
+      </Card>
 
       {/* Agent grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3" role="list" aria-label="AI Agents">

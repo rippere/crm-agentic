@@ -2741,3 +2741,80 @@ async def test_goal_tracker_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/goal-tracker")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/agent-recommendations
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_agent_recommendations_returns_structured_response(app_client):
+    """agent-recommendations returns recommendations list with agent_id, priority, and overall_insight."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    mock_db.scalar = AsyncMock(side_effect=[
+        8,   # low_score_contacts
+        3,   # stale_deals
+        4,   # going_dark_count
+        12,  # unprocessed_messages
+        15,  # recent_agent_runs
+        6,   # messages_without_clarity
+    ])
+
+    rec_json = _json.dumps({
+        "recommendations": [
+            {
+                "agent_id": "lead_scorer",
+                "agent_name": "Lead Scorer",
+                "priority": "high",
+                "reason": "8 contacts have ML scores below 40 and haven't been rescored recently.",
+                "action": "Run Lead Scorer on all contacts to refresh ML predictions.",
+                "target_count": 8,
+            },
+            {
+                "agent_id": "pipeline_optimizer",
+                "agent_name": "Pipeline Optimizer",
+                "priority": "high",
+                "reason": "3 open deals have had no stage change in 14+ days.",
+                "action": "Run Pipeline Optimizer on stale deals to generate re-engagement plans.",
+                "target_count": 3,
+            },
+        ],
+        "overall_insight": "Lead scoring and pipeline optimization should be top priorities this week.",
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=rec_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/agent-recommendations")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["recommendations"], list)
+    assert len(body["recommendations"]) == 2
+    rec = body["recommendations"][0]
+    assert rec["agent_id"] == "lead_scorer"
+    assert rec["priority"] == "high"
+    assert rec["target_count"] == 8
+    assert isinstance(rec["reason"], str)
+    assert isinstance(body["overall_insight"], str)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_agent_recommendations_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agent-recommendations")
+
+    assert resp.status_code == 403
