@@ -4866,3 +4866,197 @@ async def workspace_goal_tracker(
         "overall_health": overall,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 15i — AI workspace next-best-actions
+# ---------------------------------------------------------------------------
+
+_NEXT_BEST_ACTIONS_SYSTEM = """\
+You are Nova, an AI CRM assistant. You are given a workspace snapshot with:
+- Going-dark contacts (no message or note in 30+ days)
+- At-risk deals (open deals with health score < 50)
+- Overdue tasks (open/in_progress tasks with past due dates)
+- Deals with overdue next-action dates
+
+Return EXACTLY a JSON object with an "actions" array of up to 6 objects, each with:
+{
+  "rank": <integer 1-6>,
+  "action_type": "<contact_outreach|deal_followup|task_complete|deal_review>",
+  "entity_id": "<string UUID of the deal or contact>",
+  "entity_name": "<name of the deal or contact>",
+  "description": "<1 concise sentence: what to do and why>",
+  "urgency": "<critical|high|medium|low>"
+}
+
+Rank from most to least urgent. Use "critical" only for >30-day dark contacts or health<30 deals.
+Respond with ONLY the JSON object — no prose, no markdown.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/next-best-actions")
+@limiter.limit("5/minute")
+async def workspace_next_best_actions(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    today = datetime.date.today()
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+
+    # At-risk open deals
+    at_risk_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.company, Deal.health_score, Deal.ml_win_probability)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+            Deal.health_score < 50,
+        )
+        .order_by(Deal.health_score)
+        .limit(5)
+    )
+    at_risk_deals = at_risk_result.all()
+
+    # Deals with overdue next_action_date
+    overdue_action_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.company, Deal.next_action_date)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+            Deal.next_action_date.isnot(None),
+            Deal.next_action_date < today,
+        )
+        .order_by(Deal.next_action_date)
+        .limit(5)
+    )
+    overdue_actions = overdue_action_result.all()
+
+    # Contacts with no recent message
+    recent_msg_result = await db.execute(
+        select(Message.contact_id)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.received_at >= thirty_days_ago,
+            Message.contact_id.isnot(None),
+        )
+    )
+    recent_msg_ids = {str(r[0]) for r in recent_msg_result.all()}
+
+    # Contacts with no recent note
+    recent_note_result = await db.execute(
+        select(ContactNote.contact_id)
+        .where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.created_at >= thirty_days_ago,
+        )
+    )
+    recent_note_ids = {str(r[0]) for r in recent_note_result.all()}
+    active_contact_ids = recent_msg_ids | recent_note_ids
+
+    all_contacts_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.company, Contact.status)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+        )
+        .limit(30)
+    )
+    dark_contacts = [c for c in all_contacts_result.all() if str(c.id) not in active_contact_ids][:5]
+
+    # Overdue open tasks
+    overdue_tasks_result = await db.execute(
+        select(Task.id, Task.title, Task.due_date, Task.contact_id)
+        .where(
+            Task.workspace_id == workspace_id,
+            Task.status.in_(["open", "in_progress"]),
+            Task.due_date.isnot(None),
+            Task.due_date < today,
+        )
+        .order_by(Task.due_date)
+        .limit(5)
+    )
+    overdue_tasks = overdue_tasks_result.all()
+
+    lines = ["Workspace next-best-action data:"]
+    if at_risk_deals:
+        lines.append("At-risk deals (health < 50):")
+        for d in at_risk_deals:
+            lines.append(f"  - id={d.id} name='{d.title}' company='{d.company}' health={d.health_score} win_prob={d.ml_win_probability}%")
+    if overdue_actions:
+        lines.append("Deals with overdue next-action:")
+        for d in overdue_actions:
+            days_over = (today - d.next_action_date).days if d.next_action_date else 0
+            lines.append(f"  - id={d.id} name='{d.title}' company='{d.company}' overdue_by={days_over}d")
+    if dark_contacts:
+        lines.append("Contacts with no touch in 30+ days:")
+        for c in dark_contacts:
+            lines.append(f"  - id={c.id} name='{c.name}' company='{c.company}' status={c.status}")
+    if overdue_tasks:
+        lines.append("Overdue open tasks:")
+        for t in overdue_tasks:
+            days_over = (today - t.due_date).days if t.due_date else 0
+            lines.append(f"  - id={t.id} title='{t.title}' overdue_by={days_over}d")
+    if len(lines) == 1:
+        lines.append("No at-risk deals, dark contacts, or overdue tasks found.")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_NEXT_BEST_ACTIONS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_types = {"contact_outreach", "deal_followup", "task_complete", "deal_review"}
+        valid_urgencies = {"critical", "high", "medium", "low"}
+        raw_actions = data.get("actions", [])
+        actions = []
+        for i, a in enumerate(raw_actions[:6]):
+            if not isinstance(a, dict):
+                continue
+            atype = a.get("action_type", "deal_review")
+            if atype not in valid_types:
+                atype = "deal_review"
+            urgency = a.get("urgency", "medium")
+            if urgency not in valid_urgencies:
+                urgency = "medium"
+            actions.append({
+                "rank": i + 1,
+                "action_type": atype,
+                "entity_id": str(a.get("entity_id", ""))[:36],
+                "entity_name": str(a.get("entity_name", "Unknown"))[:80],
+                "description": str(a.get("description", ""))[:300],
+                "urgency": urgency,
+            })
+
+        if not actions:
+            actions = [{
+                "rank": 1,
+                "action_type": "deal_review",
+                "entity_id": "",
+                "entity_name": "Workspace",
+                "description": "Review your pipeline and contact list for opportunities.",
+                "urgency": "low",
+            }]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "actions": actions,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
