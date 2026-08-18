@@ -2741,3 +2741,97 @@ async def test_goal_tracker_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/goal-tracker")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 15l: POST /workspaces/{wid}/ai/contacts/{cid}/competitive-intel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_competitive_intel_returns_structured_response(app_client):
+    """competitive-intel returns competitors, talking points, and risk level."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+    contact_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    contact_mock = MagicMock()
+    contact_mock.name = "Jane Doe"
+    contact_mock.role = "VP of Sales"
+    contact_mock.company = "Acme Corp"
+    contact_mock.status = "prospect"
+
+    contact_result = MagicMock()
+    contact_result.scalar_one_or_none.return_value = contact_mock
+
+    msg_row = MagicMock()
+    msg_row.subject = "Comparing options"
+    msg_row.body_plain = "We are also evaluating Salesforce and HubSpot for our CRM needs."
+    msg_row.received_at = None
+    msg_row.sender_email = "jane@acme.com"
+
+    def _mk_result(rows):
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    deal_row = MagicMock()
+    deal_row.id = workspace_id
+    deal_row.title = "Acme Enterprise"
+    deal_row.competitors = ["Salesforce", "HubSpot"]
+    deal_row.health_score = 42
+
+    intel_json = _json.dumps({
+        "competitors_mentioned": ["Salesforce", "HubSpot"],
+        "talking_points": [
+            {"competitor": "Salesforce", "point": "NovaCRM costs 30% less at enterprise tier.", "angle": "price"},
+            {"competitor": "HubSpot", "point": "AI-native pipeline reduces manual entry by 40%.", "angle": "feature"},
+        ],
+        "competitive_risk": "high",
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=intel_json)]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        contact_result,          # contact lookup
+        _mk_result([msg_row]),   # messages
+        _mk_result([deal_row]),  # deals
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact_id}/competitive-intel"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["competitors_mentioned"] == ["Salesforce", "HubSpot"]
+    assert isinstance(body["talking_points"], list)
+    assert len(body["talking_points"]) == 2
+    tp = body["talking_points"][0]
+    assert tp["competitor"] == "Salesforce"
+    assert tp["angle"] == "price"
+    assert isinstance(tp["point"], str)
+    assert body["competitive_risk"] == "high"
+    assert body["contact_id"] == str(contact_id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_competitive_intel_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    contact_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/competitive-intel"
+        )
+
+    assert resp.status_code == 403
