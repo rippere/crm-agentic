@@ -2741,3 +2741,97 @@ async def test_goal_tracker_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/goal-tracker")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/next-best-actions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_next_best_actions_returns_structured_response(app_client):
+    """next-best-actions returns ranked actions with action_type and urgency."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _mk_result(rows):
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    at_risk_row = MagicMock()
+    at_risk_row.id = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    at_risk_row.title = "Stale Deal"
+    at_risk_row.company = "Acme Corp"
+    at_risk_row.health_score = 28
+    at_risk_row.ml_win_probability = 18
+
+    dark_row = MagicMock()
+    dark_row.id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    dark_row.name = "Dark Contact"
+    dark_row.company = "GhostCo"
+    dark_row.status = "prospect"
+
+    actions_json = _json.dumps({
+        "actions": [
+            {
+                "rank": 1,
+                "action_type": "deal_followup",
+                "entity_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity_name": "Stale Deal",
+                "description": "Health score of 28 is critical. Send urgent follow-up to recover this deal.",
+                "urgency": "critical",
+            },
+            {
+                "rank": 2,
+                "action_type": "contact_outreach",
+                "entity_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "entity_name": "Dark Contact",
+                "description": "No contact in 30+ days. Re-engage with a personalised outreach.",
+                "urgency": "high",
+            },
+        ]
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=actions_json)]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _mk_result([at_risk_row]),         # at-risk deals
+        _mk_result([]),                    # overdue next-action deals
+        _mk_result([]),                    # recent message contact ids
+        _mk_result([]),                    # recent note contact ids
+        _mk_result([dark_row]),            # all prospect/customer contacts
+        _mk_result([]),                    # overdue tasks
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/next-best-actions")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["actions"], list)
+    assert len(body["actions"]) == 2
+    action = body["actions"][0]
+    assert action["rank"] == 1
+    assert action["action_type"] == "deal_followup"
+    assert action["urgency"] == "critical"
+    assert action["entity_name"] == "Stale Deal"
+    assert isinstance(action["description"], str)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_next_best_actions_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/next-best-actions")
+
+    assert resp.status_code == 403

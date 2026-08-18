@@ -3485,4 +3485,69 @@ export const apiClient = {
       token,
     )
   },
+
+  getWorkspaceNextBestActions: (workspaceId: string, token: string): Promise<{
+    actions: Array<{
+      rank: number
+      action_type: 'contact_outreach' | 'deal_followup' | 'task_complete' | 'deal_review'
+      entity_id: string
+      entity_name: string
+      description: string
+      urgency: 'critical' | 'high' | 'medium' | 'low'
+    }>
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        actions: [
+          {
+            rank: 1,
+            action_type: 'deal_followup',
+            entity_id: 'd-002',
+            entity_name: 'Global Finance Enterprise Suite',
+            description: 'Deal silent for 21 days with health 35 — send executive summary to unblock board review.',
+            urgency: 'critical',
+          },
+          {
+            rank: 2,
+            action_type: 'contact_outreach',
+            entity_id: 'c-003',
+            entity_name: 'Priya Nair',
+            description: 'No contact in 32 days. High buying intent (4 pricing page visits) — send a personalised follow-up.',
+            urgency: 'high',
+          },
+          {
+            rank: 3,
+            action_type: 'deal_review',
+            entity_id: 'd-001',
+            entity_name: 'TechCorp Platform Expansion',
+            description: 'Close date is in 5 days. Confirm SLA language with Sarah and legal sign-off timeline.',
+            urgency: 'high',
+          },
+          {
+            rank: 4,
+            action_type: 'task_complete',
+            entity_id: 't-001',
+            entity_name: 'Send renewal proposal to Accelarate Partners',
+            description: 'Task is 3 days overdue. Complete and send before the opportunity window closes.',
+            urgency: 'medium',
+          },
+          {
+            rank: 5,
+            action_type: 'contact_outreach',
+            entity_id: 'c-005',
+            entity_name: 'Amara Osei',
+            description: 'No activity in 45 days. Brief re-engagement email to re-qualify interest.',
+            urgency: 'medium',
+          },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/next-best-actions`,
+      { method: 'GET' },
+      token,
+    )
+  },
 }

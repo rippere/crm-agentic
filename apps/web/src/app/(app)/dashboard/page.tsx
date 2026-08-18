@@ -19,7 +19,7 @@ import {
   DollarSign, Briefcase, Brain, Bot, TrendingUp, TrendingDown,
   Minus, Activity, CheckCircle, AlertTriangle, Info,
   ListTodo, Mail, BarChart2, CheckSquare, ExternalLink, Bell,
-  Sparkles, RefreshCw, Target, ChevronDown,
+  Sparkles, RefreshCw, Target, ChevronDown, Zap, Phone, Calendar,
 } from "lucide-react";
 import { cn, SIGNAL } from "@/lib/utils";
 import type { KPI, ActivityEvent, Deal } from "@/lib/types";
@@ -269,6 +269,19 @@ export default function DashboardPage() {
   } | null>(null);
   const [goalTrackerLoading, setGoalTrackerLoading] = useState(false);
   const [goalTrackerOpen, setGoalTrackerOpen] = useState(true);
+  const [nextBestActions, setNextBestActions] = useState<{
+    actions: Array<{
+      rank: number;
+      action_type: 'contact_outreach' | 'deal_followup' | 'task_complete' | 'deal_review';
+      entity_id: string;
+      entity_name: string;
+      description: string;
+      urgency: 'critical' | 'high' | 'medium' | 'low';
+    }>;
+    generated_at: string;
+  } | null>(null);
+  const [nbaLoading, setNbaLoading] = useState(false);
+  const [nbaOpen, setNbaOpen] = useState(true);
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
@@ -305,6 +318,10 @@ export default function DashboardPage() {
       apiClient.getWorkspaceGoalTracker("demo-workspace-1", "demo-token").then((data) => {
         setGoalTracker(data);
       }).catch(() => {}).finally(() => setGoalTrackerLoading(false));
+      setNbaLoading(true);
+      apiClient.getWorkspaceNextBestActions("demo-workspace-1", "demo-token").then((data) => {
+        setNextBestActions(data);
+      }).catch(() => {}).finally(() => setNbaLoading(false));
       return;
     }
 
@@ -373,6 +390,11 @@ export default function DashboardPage() {
         .then((data) => { setGoalTracker(data); })
         .catch(() => {})
         .finally(() => setGoalTrackerLoading(false));
+      setNbaLoading(true);
+      apiClient.getWorkspaceNextBestActions(workspaceId, session.access_token)
+        .then((data) => { setNextBestActions(data); })
+        .catch(() => {})
+        .finally(() => setNbaLoading(false));
 
       // Subscribe to Supabase Realtime for live activity feed
       const channel = supabase
@@ -513,6 +535,27 @@ export default function DashboardPage() {
       }
     } catch { /* silently ignore */ } finally {
       setGoalTrackerLoading(false);
+    }
+  }
+
+  async function regenerateNextBestActions() {
+    if (nbaLoading) return;
+    setNbaLoading(true);
+    try {
+      if (DEMO_MODE) {
+        const data = await apiClient.getWorkspaceNextBestActions("demo-workspace-1", "demo-token");
+        setNextBestActions(data);
+      } else {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        const workspaceId: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!workspaceId) return;
+        const data = await apiClient.getWorkspaceNextBestActions(workspaceId, session.access_token);
+        setNextBestActions(data);
+      }
+    } catch { /* silently ignore */ } finally {
+      setNbaLoading(false);
     }
   }
 
@@ -850,6 +893,112 @@ export default function DashboardPage() {
                         <p className="text-[11px] text-zinc-500 leading-relaxed">{goal.insight}</p>
                       </div>
                     ))}
+                  </div>
+                ) : null}
+              </>
+            )}
+          </Card>
+        </section>
+      )}
+
+      {/* AI Next Best Actions */}
+      {(nextBestActions !== null || nbaLoading) && (
+        <section aria-labelledby="nba-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="nba-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Today&apos;s Priorities
+            </h2>
+            <Badge variant="indigo" size="sm" dot>Nova AI</Badge>
+            {nextBestActions && (
+              <span className="text-[11px] text-zinc-600 font-mono ml-auto">
+                {new Date(nextBestActions.generated_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+          <Card className="relative">
+            <div className="flex items-center gap-2 mb-4 pr-40">
+              <Zap className="h-4 w-4 text-violet-400 flex-shrink-0" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-100">Next Best Actions</p>
+            </div>
+            <div className="absolute top-3 right-3 flex items-center gap-2">
+              <button
+                onClick={regenerateNextBestActions}
+                disabled={nbaLoading}
+                className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] text-zinc-400 hover:text-violet-400 hover:border-violet-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Regenerate actions"
+              >
+                <RefreshCw className={cn("h-3 w-3", nbaLoading && "animate-spin")} />
+                {nbaLoading ? "Generating…" : "Regenerate"}
+              </button>
+              <button
+                onClick={() => setNbaOpen((o) => !o)}
+                className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-zinc-400 hover:text-zinc-200 transition-colors"
+                title={nbaOpen ? "Collapse" : "Expand"}
+              >
+                <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !nbaOpen && "-rotate-90")} />
+              </button>
+            </div>
+            {nbaOpen && (
+              <>
+                {nbaLoading && !nextBestActions ? (
+                  <div className="space-y-3 animate-pulse">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="flex items-start gap-3">
+                        <div className="h-5 w-5 rounded-full bg-zinc-800 flex-shrink-0 mt-0.5" />
+                        <div className="flex-1 space-y-1.5">
+                          <div className="h-2.5 bg-zinc-800 rounded w-1/3" />
+                          <div className="h-2 bg-zinc-800 rounded w-full" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : nextBestActions ? (
+                  <div className={cn("space-y-3 transition-opacity", nbaLoading && "opacity-50")}>
+                    {nextBestActions.actions.map((action) => {
+                      const urgencyColor = {
+                        critical: "bg-rose-400/10 text-rose-400 border-rose-500/20",
+                        high: "bg-amber-400/10 text-amber-400 border-amber-500/20",
+                        medium: "bg-indigo-400/10 text-indigo-400 border-indigo-500/20",
+                        low: "bg-zinc-400/10 text-zinc-400 border-zinc-600/20",
+                      }[action.urgency];
+                      const typeIcon = {
+                        contact_outreach: <Phone className="h-3 w-3" />,
+                        deal_followup: <Mail className="h-3 w-3" />,
+                        task_complete: <CheckSquare className="h-3 w-3" />,
+                        deal_review: <Calendar className="h-3 w-3" />,
+                      }[action.action_type];
+                      const entityPath = action.action_type === 'contact_outreach'
+                        ? `/contacts/${action.entity_id}`
+                        : action.action_type === 'task_complete'
+                        ? `/tasks`
+                        : `/pipeline/${action.entity_id}`;
+                      return (
+                        <div key={action.rank} className="flex items-start gap-3 group">
+                          <span className={cn(
+                            "mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border text-[10px] font-bold",
+                            urgencyColor,
+                          )}>
+                            {action.rank}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={cn("flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border", urgencyColor)}>
+                                {typeIcon}
+                                {action.urgency}
+                              </span>
+                              <Link
+                                href={entityPath}
+                                className="text-xs font-medium text-zinc-200 hover:text-violet-400 truncate transition-colors max-w-[200px]"
+                              >
+                                {action.entity_name}
+                              </Link>
+                              <ExternalLink className="h-3 w-3 text-zinc-600 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                            </div>
+                            <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">{action.description}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : null}
               </>
