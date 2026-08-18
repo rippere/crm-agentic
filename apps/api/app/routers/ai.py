@@ -4866,3 +4866,144 @@ async def workspace_goal_tracker(
         "overall_health": overall,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 15l: AI contact competitive intelligence
+# ---------------------------------------------------------------------------
+
+_COMPETITIVE_INTEL_SYSTEM = """\
+You are Nova, an AI CRM assistant. You are given a contact profile, their last 3 messages, \
+and the competitors listed in their open deals.
+
+Return EXACTLY a JSON object with:
+{
+  "competitors_mentioned": ["<name>", ...],
+  "talking_points": [
+    {"competitor": "<name>", "point": "<1-sentence win argument>", "angle": "<price|feature|support|trust|integration>"},
+    ...
+  ],
+  "competitive_risk": "<low|medium|high>"
+}
+
+- competitors_mentioned: up to 5 unique competitor names found in deals or message content
+- talking_points: up to 3 objects, most-threatening competitor first; omit list if no competitors
+- competitive_risk: "high" if >=2 competitors or any linked deal has health<50; "medium" if 1 competitor; "low" if none
+- Respond with ONLY the JSON object — no prose, no markdown.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/competitive-intel")
+@limiter.limit("5/minute")
+async def contact_competitive_intel(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id, Contact.id == contact_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    msg_result = await db.execute(
+        select(Message.subject, Message.body_plain, Message.received_at, Message.sender_email)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    messages = msg_result.all()
+
+    deal_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.competitors, Deal.health_score)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = deal_result.all()
+
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} ({contact.role or 'unknown role'} at {contact.company or 'Unknown'})",
+        f"Status: {contact.status}",
+        "",
+        "Open deals:",
+    ]
+    if deals:
+        for d in deals:
+            competitors = d.competitors if isinstance(d.competitors, list) else []
+            lines.append(f"  - title='{d.title}' health={d.health_score} competitors={competitors}")
+    else:
+        lines.append("  (none)")
+
+    lines.append("")
+    lines.append("Last 3 messages (most recent first):")
+    if messages:
+        for m in messages:
+            body_snippet = (m.body_plain or "")[:400].replace("\n", " ")
+            lines.append(
+                f"  - subject='{m.subject or '(no subject)'}'"
+                f" from='{m.sender_email or 'unknown'}'"
+                f" body='{body_snippet}'"
+            )
+    else:
+        lines.append("  (none)")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_COMPETITIVE_INTEL_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_angles = {"price", "feature", "support", "trust", "integration"}
+        valid_risks = {"low", "medium", "high"}
+
+        competitors_mentioned = [str(c)[:80] for c in data.get("competitors_mentioned", []) if c][:5]
+
+        raw_tps = data.get("talking_points", [])
+        talking_points = []
+        for tp in raw_tps[:3]:
+            if not isinstance(tp, dict):
+                continue
+            angle = tp.get("angle", "feature")
+            if angle not in valid_angles:
+                angle = "feature"
+            talking_points.append({
+                "competitor": str(tp.get("competitor", "Unknown"))[:80],
+                "point": str(tp.get("point", ""))[:300],
+                "angle": angle,
+            })
+
+        competitive_risk = data.get("competitive_risk", "low")
+        if competitive_risk not in valid_risks:
+            competitive_risk = "low"
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "competitors_mentioned": competitors_mentioned,
+        "talking_points": talking_points,
+        "competitive_risk": competitive_risk,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

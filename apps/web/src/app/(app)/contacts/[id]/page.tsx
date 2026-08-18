@@ -442,6 +442,10 @@ export default function ContactDetailPage() {
   const [growthForecastLoading, setGrowthForecastLoading] = useState(false);
   const [growthForecastGenerating, setGrowthForecastGenerating] = useState(false);
 
+  type CompetitiveIntelData = { competitors_mentioned: string[]; talking_points: Array<{ competitor: string; point: string; angle: 'price' | 'feature' | 'support' | 'trust' | 'integration' }>; competitive_risk: 'low' | 'medium' | 'high'; contact_id: string; generated_at: string };
+  const [competitiveIntel, setCompetitiveIntel] = useState<CompetitiveIntelData | null>(null);
+  const [competitiveIntelLoading, setCompetitiveIntelLoading] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -652,6 +656,13 @@ export default function ContactDetailPage() {
       .then((data) => setGrowthForecast(data ?? null))
       .catch(() => setGrowthForecast(null))
       .finally(() => setGrowthForecastLoading(false));
+
+    setCompetitiveIntelLoading(true);
+    apiClient
+      .getContactCompetitiveIntel(workspaceId, contactId, token)
+      .then((data) => setCompetitiveIntel(data ?? null))
+      .catch(() => setCompetitiveIntel(null))
+      .finally(() => setCompetitiveIntelLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1964,6 +1975,91 @@ export default function ContactDetailPage() {
                             {item.priority}
                           </span>
                           <p className="text-xs text-zinc-400 leading-snug">{item.action}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </Card>
+          )}
+
+          {/* Competitive Intelligence */}
+          {(competitiveIntelLoading || competitiveIntel !== null) && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Zap className="h-4 w-4 text-amber-400" />
+                <p className="text-sm font-semibold text-zinc-200">Competitive Intel</p>
+                {competitiveIntel && !competitiveIntelLoading && (
+                  <>
+                    <span className={cn(
+                      "ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border",
+                      competitiveIntel.competitive_risk === 'high'
+                        ? "text-rose-400 bg-rose-500/10 border-rose-500/20"
+                        : competitiveIntel.competitive_risk === 'medium'
+                        ? "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                        : "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+                    )}>
+                      {competitiveIntel.competitive_risk} risk
+                    </span>
+                    <button
+                      onClick={() => {
+                        if (!workspaceId || !token) return;
+                        setCompetitiveIntel(null);
+                        setCompetitiveIntelLoading(true);
+                        apiClient
+                          .getContactCompetitiveIntel(workspaceId, contactId, token)
+                          .then((data) => setCompetitiveIntel(data ?? null))
+                          .catch(() => setCompetitiveIntel(null))
+                          .finally(() => setCompetitiveIntelLoading(false));
+                      }}
+                      className="ml-auto text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                      title="Regenerate"
+                    >
+                      ↺
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {competitiveIntelLoading ? (
+                <div className="space-y-2">
+                  <div className="h-5 w-32 rounded bg-zinc-800 animate-pulse" />
+                  <div className="h-16 rounded bg-zinc-800 animate-pulse" />
+                </div>
+              ) : competitiveIntel ? (
+                <div className="space-y-3">
+                  {competitiveIntel.competitors_mentioned.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {competitiveIntel.competitors_mentioned.map((c) => (
+                        <span key={c} className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-300">
+                          {c}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-zinc-500">No competitors identified in this contact&apos;s deals or messages.</p>
+                  )}
+
+                  {competitiveIntel.talking_points.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Talking Points</p>
+                      {competitiveIntel.talking_points.map((tp, i) => (
+                        <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2.5 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-semibold text-zinc-400">{tp.competitor}</span>
+                            <span className={cn(
+                              "text-[9px] font-semibold px-1.5 py-0.5 rounded border",
+                              tp.angle === 'price' ? "text-sky-400 bg-sky-500/10 border-sky-500/20"
+                              : tp.angle === 'feature' ? "text-indigo-400 bg-indigo-500/10 border-indigo-500/20"
+                              : tp.angle === 'support' ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+                              : tp.angle === 'trust' ? "text-violet-400 bg-violet-500/10 border-violet-500/20"
+                              : "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                            )}>
+                              {tp.angle}
+                            </span>
+                          </div>
+                          <p className="text-xs text-zinc-400 leading-snug">{tp.point}</p>
                         </div>
                       ))}
                     </div>

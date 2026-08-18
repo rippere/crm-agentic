@@ -3432,6 +3432,54 @@ export const apiClient = {
     )
   },
 
+  getContactCompetitiveIntel: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    competitors_mentioned: string[]
+    talking_points: Array<{
+      competitor: string
+      point: string
+      angle: 'price' | 'feature' | 'support' | 'trust' | 'integration'
+    }>
+    competitive_risk: 'low' | 'medium' | 'high'
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        competitors_mentioned: string[]
+        talking_points: Array<{ competitor: string; point: string; angle: 'price' | 'feature' | 'support' | 'trust' | 'integration' }>
+        competitive_risk: 'low' | 'medium' | 'high'
+      }> = {
+        'c-001': {
+          competitors_mentioned: ['Salesforce', 'HubSpot'],
+          talking_points: [
+            { competitor: 'Salesforce', point: 'NovaCRM\'s AI-native pipeline reduces admin overhead by 40% vs Salesforce\'s manual-entry model.', angle: 'feature' },
+            { competitor: 'HubSpot', point: 'Our per-seat pricing is 30% lower at the enterprise tier with no feature-gating on AI tools.', angle: 'price' },
+            { competitor: 'Salesforce', point: 'Dedicated onboarding support and a 2-hour SLA distinguish our support model from Salesforce\'s tiered add-on pricing.', angle: 'support' },
+          ],
+          competitive_risk: 'high',
+        },
+        'c-002': {
+          competitors_mentioned: ['Pipedrive'],
+          talking_points: [
+            { competitor: 'Pipedrive', point: 'NovaCRM\'s AI lead scoring and deal health alerts surface risk proactively — Pipedrive requires manual monitoring.', angle: 'feature' },
+          ],
+          competitive_risk: 'medium',
+        },
+      }
+      const stub = stubs[contactId] ?? { competitors_mentioned: [], talking_points: [], competitive_risk: 'low' as const }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/competitive-intel`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
   getWorkspaceGoalTracker: (workspaceId: string, token: string): Promise<{
     goals: Array<{
       name: string
