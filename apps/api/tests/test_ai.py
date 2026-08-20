@@ -2741,3 +2741,95 @@ async def test_goal_tracker_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/goal-tracker")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 15m — AI competitive landscape
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_competitive_landscape_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _open_deals_result():
+        row1 = MagicMock()
+        row1.title = "Deal A"
+        row1.stage = "proposal"
+        row1.competitors = ["Salesforce", "HubSpot"]
+        row1.value = 50000.0
+        row2 = MagicMock()
+        row2.title = "Deal B"
+        row2.stage = "negotiation"
+        row2.competitors = ["Salesforce", "Pipedrive"]
+        row2.value = 80000.0
+        row3 = MagicMock()
+        row3.title = "Deal C"
+        row3.stage = "qualified"
+        row3.competitors = ["HubSpot"]
+        row3.value = 30000.0
+        r = MagicMock()
+        r.all.return_value = [row1, row2, row3]
+        return r
+
+    mock_db.execute = AsyncMock(return_value=_open_deals_result())
+
+    landscape_json = _json.dumps({
+        "top_competitors": [
+            {
+                "name": "Salesforce",
+                "deal_count": 2,
+                "stages_present": ["proposal", "negotiation"],
+                "threat_level": "high",
+                "positioning_note": "Emphasize ease-of-use and lower TCO vs Salesforce.",
+            },
+            {
+                "name": "HubSpot",
+                "deal_count": 2,
+                "stages_present": ["proposal", "qualified"],
+                "threat_level": "medium",
+                "positioning_note": "Lead with AI-native features that HubSpot lacks.",
+            },
+        ],
+        "competitive_summary": "Salesforce and HubSpot dominate. Focus on differentiated AI capabilities.",
+        "win_strategies": [
+            "Lead with AI automation demos in discovery calls.",
+            "Offer a competitive migration package for Salesforce customers.",
+            "Reference case studies that highlight ROI over HubSpot deployments.",
+        ],
+    })
+
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=landscape_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/competitive-landscape")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["top_competitors"], list)
+    assert len(body["top_competitors"]) == 2
+    comp = body["top_competitors"][0]
+    assert comp["name"] == "Salesforce"
+    assert comp["threat_level"] == "high"
+    assert isinstance(comp["positioning_note"], str)
+    assert isinstance(body["competitive_summary"], str)
+    assert len(body["win_strategies"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_competitive_landscape_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/competitive-landscape")
+
+    assert resp.status_code == 403

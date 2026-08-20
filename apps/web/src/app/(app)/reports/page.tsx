@@ -115,6 +115,14 @@ export default function ReportsPage() {
   } | null>(null);
   const [teamPerfLoading, setTeamPerfLoading] = useState(false);
   const [teamPerfOpen, setTeamPerfOpen] = useState(true);
+  const [competitiveLandscape, setCompetitiveLandscape] = useState<{
+    top_competitors: Array<{ name: string; deal_count: number; stages_present: string[]; threat_level: 'low' | 'medium' | 'high'; positioning_note: string }>
+    competitive_summary: string
+    win_strategies: string[]
+    generated_at: string
+  } | null>(null);
+  const [competitiveLandscapeLoading, setCompetitiveLandscapeLoading] = useState(false);
+  const [competitiveLandscapeOpen, setCompetitiveLandscapeOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -144,6 +152,8 @@ export default function ReportsPage() {
       apiClient.getPipelineHealthBriefing("demo-workspace-1", "demo-token").then(setPipelineHealth).catch(() => {}).finally(() => setPipelineHealthLoading(false));
       setTeamPerfLoading(true);
       apiClient.getTeamPerformance("demo-workspace-1", "demo-token").then(setTeamPerf).catch(() => {}).finally(() => setTeamPerfLoading(false));
+      setCompetitiveLandscapeLoading(true);
+      apiClient.getCompetitiveLandscape("demo-workspace-1", "demo-token").then(setCompetitiveLandscape).catch(() => {}).finally(() => setCompetitiveLandscapeLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -177,6 +187,8 @@ export default function ReportsPage() {
       apiClient.getPipelineHealthBriefing(workspaceId, session.access_token).then(setPipelineHealth).catch(() => {}).finally(() => setPipelineHealthLoading(false));
       setTeamPerfLoading(true);
       apiClient.getTeamPerformance(workspaceId, session.access_token).then(setTeamPerf).catch(() => {}).finally(() => setTeamPerfLoading(false));
+      setCompetitiveLandscapeLoading(true);
+      apiClient.getCompetitiveLandscape(workspaceId, session.access_token).then(setCompetitiveLandscape).catch(() => {}).finally(() => setCompetitiveLandscapeLoading(false));
     });
   }, []);
 
@@ -312,6 +324,27 @@ export default function ReportsPage() {
         if (!session) { setTeamPerfLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTeamPerfLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateCompetitiveLandscape = () => {
+    setCompetitiveLandscapeLoading(true);
+    const doFetch = (workspaceId: string, token: string) => {
+      apiClient.getCompetitiveLandscape(workspaceId, token)
+        .then(setCompetitiveLandscape)
+        .catch(() => {})
+        .finally(() => setCompetitiveLandscapeLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCompetitiveLandscapeLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCompetitiveLandscapeLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -503,6 +536,75 @@ export default function ReportsPage() {
             )}
             {!teamPerf && !teamPerfLoading && (
               <p className="text-sm text-zinc-500">Click Regenerate to generate a team performance summary.</p>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Competitive Landscape AI Card */}
+      <Card className="gap-0 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Trophy className="h-4 w-4 text-amber-400" />
+            <span className="text-sm font-semibold text-zinc-100">Competitive Landscape</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateCompetitiveLandscape}
+              disabled={competitiveLandscapeLoading}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`h-3 w-3 ${competitiveLandscapeLoading ? "animate-spin" : ""}`} />
+              {competitiveLandscapeLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setCompetitiveLandscapeOpen((o) => !o)} className="text-zinc-500 hover:text-zinc-300 transition-colors">
+              {competitiveLandscapeOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {competitiveLandscapeOpen && (
+          <div className="p-4 space-y-4">
+            {competitiveLandscapeLoading && !competitiveLandscape && (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => <div key={i} className="h-10 rounded-lg bg-zinc-800 animate-pulse" />)}
+              </div>
+            )}
+            {competitiveLandscape && (
+              <div className={`space-y-4 transition-opacity ${competitiveLandscapeLoading ? "opacity-40" : "opacity-100"}`}>
+                <p className="text-sm text-zinc-300 leading-relaxed">{competitiveLandscape.competitive_summary}</p>
+                {competitiveLandscape.top_competitors.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">Top Competitors</p>
+                    {competitiveLandscape.top_competitors.map((c) => {
+                      const threatColor = c.threat_level === 'high' ? 'text-rose-400 bg-rose-500/10 border-rose-500/20' : c.threat_level === 'medium' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' : 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+                      return (
+                        <div key={c.name} className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-zinc-100">{c.name}</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${threatColor}`}>{c.threat_level}</span>
+                          </div>
+                          <p className="text-xs text-zinc-400">{c.deal_count} deal{c.deal_count !== 1 ? 's' : ''} · stages: {c.stages_present.join(', ')}</p>
+                          <p className="text-xs text-zinc-500 italic">{c.positioning_note}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">Win Strategies</p>
+                  <ol className="space-y-1.5">
+                    {competitiveLandscape.win_strategies.map((s, i) => (
+                      <li key={i} className="flex gap-2 text-sm text-zinc-300">
+                        <span className="flex-shrink-0 font-mono text-xs text-amber-400 mt-0.5">{i + 1}.</span>
+                        <span>{s}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              </div>
+            )}
+            {!competitiveLandscape && !competitiveLandscapeLoading && (
+              <p className="text-sm text-zinc-500">Click Regenerate to generate a competitive landscape analysis.</p>
             )}
           </div>
         )}

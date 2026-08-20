@@ -3485,4 +3485,57 @@ export const apiClient = {
       token,
     )
   },
+
+  getCompetitiveLandscape: (workspaceId: string, token: string): Promise<{
+    top_competitors: Array<{
+      name: string
+      deal_count: number
+      stages_present: string[]
+      threat_level: 'low' | 'medium' | 'high'
+      positioning_note: string
+    }>
+    competitive_summary: string
+    win_strategies: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        top_competitors: [
+          {
+            name: 'Salesforce',
+            deal_count: 3,
+            stages_present: ['qualified', 'proposal', 'negotiation'],
+            threat_level: 'high',
+            positioning_note: 'Emphasize AI-native automation, lower TCO, and faster onboarding vs Salesforce CRM.',
+          },
+          {
+            name: 'HubSpot',
+            deal_count: 2,
+            stages_present: ['discovery', 'proposal'],
+            threat_level: 'medium',
+            positioning_note: 'Lead with unified sales + PM intelligence that HubSpot cannot match.',
+          },
+          {
+            name: 'Pipedrive',
+            deal_count: 1,
+            stages_present: ['qualified'],
+            threat_level: 'low',
+            positioning_note: 'Highlight AI scoring and team workspace features absent in Pipedrive.',
+          },
+        ],
+        competitive_summary: 'Salesforce is the dominant competitor across proposal and negotiation stages, appearing in 3 of 7 open deals. HubSpot challenges in early funnel stages — lean on AI differentiation to create separation.',
+        win_strategies: [
+          'Open every discovery call with an AI automation demo tailored to the prospect\'s stack.',
+          'Offer a free competitive migration package for teams moving from Salesforce or HubSpot.',
+          'Reference customer success stories where AI coaching reduced sales cycle by 20%+.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/competitive-landscape`,
+      { method: 'GET' },
+      token,
+    )
+  },
 }
