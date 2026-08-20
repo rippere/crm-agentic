@@ -4866,3 +4866,134 @@ async def workspace_goal_tracker(
         "overall_health": overall,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# AI workspace competitive landscape summary
+# ---------------------------------------------------------------------------
+
+_COMPETITIVE_LANDSCAPE_SYSTEM = """\
+You are Nova, the AI sales intelligence in NovaCRM. Analyze the provided competitor data from
+active deals and produce a concise competitive landscape summary.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "top_competitors": [
+    {
+      "name": "<competitor name>",
+      "deal_count": <integer>,
+      "stages_present": ["<stage1>", "<stage2>"],
+      "threat_level": "<low|medium|high>",
+      "positioning_note": "<1-sentence note on how to counter this competitor>"
+    }
+  ],
+  "competitive_summary": "<2-sentence overall landscape narrative>",
+  "win_strategies": ["<strategy 1>", "<strategy 2>", "<strategy 3>"]
+}
+
+Rate threat_level as "high" if deal_count >= 3, "medium" if 2, "low" if 1.
+Limit top_competitors to the 5 most common. Provide exactly 3 win_strategies.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/competitive-landscape")
+@limiter.limit("5/minute")
+async def workspace_competitive_landscape(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    open_deals_result = await db.execute(
+        select(Deal.title, Deal.stage, Deal.competitors, Deal.value).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+            Deal.competitors.isnot(None),
+        )
+    )
+    open_deals = open_deals_result.all()
+
+    competitor_counts: Counter = Counter()
+    competitor_stages: dict = defaultdict(set)
+    for row in open_deals:
+        competitors = row.competitors or []
+        for comp in competitors:
+            name = comp if isinstance(comp, str) else comp.get("name", "Unknown")
+            competitor_counts[name] += 1
+            competitor_stages[name].add(row.stage)
+
+    top_5 = competitor_counts.most_common(5)
+    total_open = len(open_deals)
+
+    if not top_5:
+        return {
+            "top_competitors": [],
+            "competitive_summary": "No competitor data found in open deals. Add competitor information to deal records for landscape analysis.",
+            "win_strategies": [
+                "Establish unique value proposition early in the sales cycle.",
+                "Track competitor mentions consistently across all open deals.",
+                "Focus on customer success stories to differentiate.",
+            ],
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    context_lines = [
+        f"Open deals analyzed: {total_open}",
+        "Competitor occurrences in open deals:",
+    ]
+    for name, count in top_5:
+        stages = sorted(competitor_stages[name])
+        context_lines.append(f"  - {name}: {count} deal(s), stages: {', '.join(stages)}")
+
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_COMPETITIVE_LANDSCAPE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_threats = {"low", "medium", "high"}
+        raw_competitors = data.get("top_competitors", [])
+        top_competitors = []
+        for c in raw_competitors[:5]:
+            if not isinstance(c, dict):
+                continue
+            threat = c.get("threat_level", "medium")
+            if threat not in valid_threats:
+                threat = "medium"
+            top_competitors.append({
+                "name": str(c.get("name", "Unknown"))[:80],
+                "deal_count": max(0, int(c.get("deal_count", 1))),
+                "stages_present": [str(s) for s in (c.get("stages_present") or [])[:6]],
+                "threat_level": threat,
+                "positioning_note": str(c.get("positioning_note", ""))[:300],
+            })
+
+        strategies = [str(s)[:300] for s in (data.get("win_strategies") or [])[:3]]
+        while len(strategies) < 3:
+            strategies.append("Focus on differentiated value and customer outcomes.")
+
+        summary = str(data.get("competitive_summary", ""))[:500]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "top_competitors": top_competitors,
+        "competitive_summary": summary,
+        "win_strategies": strategies,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
