@@ -7,12 +7,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Zap, Brain, Sparkles, TrendingUp, Bot, Shield,
   ArrowRight, Check, ChevronDown, Mail, Mic, Heart,
-  BarChart3, Users, KanbanSquare, Menu, X, Star,
+  BarChart3, Users, KanbanSquare, Menu, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createBrowserClient } from "@/lib/supabase";
-import { Testimonials } from "./_landing/Testimonials";
-import { TrustStrip } from "./_landing/TrustStrip";
 
 // ─── Auth params rescue ───────────────────────────────────────────────────────
 // Supabase auth redirects fall back to the Site URL (this page) when the
@@ -189,38 +187,7 @@ function Hero() {
       </div>
 
       <div className="mt-9 flex flex-col items-center gap-2.5">
-        <div className="flex items-center gap-3">
-          <div className="flex -space-x-2.5" aria-hidden="true">
-            {[
-              "/testimonials/sarah-chen.jpg",
-              "/testimonials/marcus-webb.jpg",
-              "/testimonials/lena-kovacs.jpg",
-              "/testimonials/dmitri-volkov.jpg",
-            ].map((src, i) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={i}
-                src={src}
-                alt=""
-                loading="lazy"
-                width={28}
-                height={28}
-                className="h-7 w-7 rounded-full border-2 border-zinc-950 object-cover"
-              />
-            ))}
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="flex gap-0.5" aria-hidden="true">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Star key={i} className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-              ))}
-            </div>
-            <span className="text-sm text-zinc-400">
-              <span className="font-semibold text-zinc-200">4.9</span> from 200+ revenue teams
-            </span>
-          </div>
-        </div>
-        <p className="text-xs text-zinc-600">No credit card required · Cancel anytime</p>
+        <p className="text-xs text-zinc-600">No credit card required to start</p>
       </div>
 
       {/* Dashboard preview */}
@@ -302,8 +269,8 @@ const features = [
   {
     icon: <Mail className="h-5 w-5" />,
     title: "Autonomous Email Composer",
-    description: "Claude drafts hyper-personalized outreach using semantic tags, deal stage, and contact history. Review or send automatically.",
-    tags: ["Claude Sonnet", "Personalized", "One-click Send"],
+    description: "Claude drafts personalized outreach using semantic tags, deal stage, and contact history. Review before you send.",
+    tags: ["Claude", "Personalized", "Review queue"],
     color: "amber",
   },
   {
@@ -315,9 +282,9 @@ const features = [
   },
   {
     icon: <Heart className="h-5 w-5" />,
-    title: "Churn Risk",
-    description: "Claude analyzes every email, ticket, and call transcript to flag at-risk accounts before sentiment drops below your threshold.",
-    tags: ["Sentiment Analysis", "Risk Alerts", "Early Warning"],
+    title: "Sentiment Analysis",
+    description: "Claude scores the sentiment of incoming messages and call summaries, so a cooling relationship shows up in the contact record instead of going unnoticed.",
+    tags: ["Sentiment Analysis", "Per-message scoring", "Claude"],
     color: "rose",
   },
 ];
@@ -413,18 +380,17 @@ function AgentsSection() {
     <section id="agents" className="relative overflow-hidden px-6 py-24 bg-gradient-to-b from-zinc-950 to-zinc-900" aria-labelledby="agents-heading">
       <div className="pointer-events-none absolute inset-0 bg-glow-emerald" aria-hidden="true" />
       <div className="mx-auto max-w-4xl text-center relative">
-        <p className="text-xs font-mono text-emerald-400 uppercase tracking-widest mb-3">Live Automation</p>
-        <h2 id="agents-heading" className="text-3xl font-bold text-zinc-100 sm:text-4xl">Agents that never sleep</h2>
+        <p className="text-xs font-mono text-emerald-400 uppercase tracking-widest mb-3">Automation</p>
+        <h2 id="agents-heading" className="text-3xl font-bold text-zinc-100 sm:text-4xl">Agents that work in the background</h2>
         <p className="mt-4 text-zinc-400 max-w-xl mx-auto">
-          Every agent runs continuously — updating scores, watching your pipeline, and triggering actions the moment conditions are met.
+          Agents run on a schedule and on triggers — updating scores, watching your pipeline, and surfacing the next action, so the busywork happens without a person driving it.
         </p>
         <div className="mt-12 rounded-2xl border border-zinc-800 bg-zinc-950 text-left overflow-hidden">
           <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3 bg-zinc-900">
             <Bot className="h-4 w-4 text-indigo-400" aria-hidden="true" />
-            <span className="text-xs font-mono text-zinc-400">Agent Activity Log · Live</span>
-            <span className="ml-auto flex items-center gap-1.5 text-xs text-emerald-400 font-mono">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 agent-pulse" aria-hidden="true" />
-              streaming
+            <span className="text-xs font-mono text-zinc-400">Agent Activity Log</span>
+            <span className="ml-auto flex items-center gap-1.5 text-xs text-zinc-500 font-mono">
+              example output
             </span>
           </div>
           <div className="p-4 space-y-2 font-mono text-xs" role="log" aria-live="polite" aria-label="Agent activity log">
@@ -470,8 +436,8 @@ const plans = [
   },
   {
     name: "Enterprise", price: "Custom", per: "",
-    description: "Dedicated infrastructure, custom onboarding, and SLAs.",
-    features: ["Custom agent development", "On-premise deployment", "SSO + SCIM", "Dedicated success engineer", "Custom SLA"],
+    description: "A scoped engagement for teams with specific requirements.",
+    features: ["Custom agent development", "Custom onboarding", "Dedicated point of contact", "Requirements scoped with you"],
     cta: "Contact Sales", highlight: false,
   },
 ];
@@ -489,7 +455,7 @@ function PricingSection() {
             <div key={plan.name} className={cn("rounded-2xl border p-6 flex flex-col", plan.highlight ? "border-indigo-500/40 bg-indigo-600/5 shadow-glow" : "border-zinc-800 bg-zinc-900")}>
               {plan.highlight && (
                 <div className="mb-4 inline-flex self-start rounded-full bg-indigo-500/20 px-3 py-1 text-xs font-medium text-indigo-300 border border-indigo-500/30">
-                  Most Popular
+                  Recommended
                 </div>
               )}
               <h3 className="text-base font-bold text-zinc-100">{plan.name}</h3>
@@ -535,7 +501,7 @@ function CTASection() {
           <span className="bg-gradient-to-r from-indigo-300 via-indigo-400 to-[#2DD4AA] bg-clip-text text-transparent">a brain</span>
         </h2>
         <p className="mt-4 text-zinc-400">
-          Join teams using NovaCRM to close deals faster, never miss a follow-up, and let AI handle the work that slows you down.
+          Put an AI layer on your pipeline — score leads, draft the follow-ups, and let the busywork run itself.
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
           <Link
@@ -593,10 +559,8 @@ export default function LandingPage() {
       <AuthParamsRescue />
       <Nav />
       <Hero />
-      <TrustStrip />
       <FeaturesSection />
       <AgentsSection />
-      <Testimonials />
       <PricingSection />
       <CTASection />
       <Footer />
