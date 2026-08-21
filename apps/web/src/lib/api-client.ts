@@ -3538,4 +3538,54 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealFollowupSequence: (workspaceId: string, dealId: string, token: string): Promise<{
+    steps: Array<{
+      step: number
+      timing: 'now' | '3d' | '7d' | '14d'
+      channel: 'email' | 'call' | 'slack'
+      action: string
+      goal: string
+    }>
+    rationale: string
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        steps: Array<{ step: number; timing: 'now' | '3d' | '7d' | '14d'; channel: 'email' | 'call' | 'slack'; action: string; goal: string }>
+        rationale: string
+        deal_id: string
+        generated_at: string
+      }> = {
+        'd-001': {
+          steps: [
+            { step: 1, timing: 'now', channel: 'email', action: 'Send a personalized proposal recap highlighting the ROI analysis and quick-win milestones.', goal: 'Confirm the prospect has reviewed the proposal and surface any initial questions.' },
+            { step: 2, timing: '3d', channel: 'call', action: 'Schedule a 30-minute call to walk through the pricing options and address any legal questions.', goal: 'Remove blockers and align on the preferred contract structure.' },
+            { step: 3, timing: '7d', channel: 'slack', action: 'Share a relevant customer success story from a similar vertical.', goal: 'Build confidence and position NovaCRM as the clear choice before final sign-off.' },
+          ],
+          rationale: 'Multi-channel approach — email to recap value, call to unblock, Slack to maintain momentum — keeps TechCorp engaged without overwhelming their team.',
+          deal_id: 'd-001',
+          generated_at: new Date().toISOString(),
+        },
+        'd-002': {
+          steps: [
+            { step: 1, timing: 'now', channel: 'call', action: 'Call the champion to understand why momentum has stalled and identify internal blockers.', goal: 'Diagnose the cause of inactivity and agree on a concrete next step.' },
+            { step: 2, timing: '7d', channel: 'email', action: 'Send a tailored re-engagement email referencing the specific pain points discussed on the call.', goal: 'Re-anchor the deal around business value and restart the decision process.' },
+            { step: 3, timing: '14d', channel: 'email', action: 'Share a limited-time incentive (e.g. extended onboarding support) to create urgency.', goal: 'Drive a decision before the quarter closes.' },
+          ],
+          rationale: 'Phone-first approach diagnoses the stall, followed by email reinforcement — creates urgency without appearing pushy for a deal that has gone quiet.',
+          deal_id: 'd-002',
+          generated_at: new Date().toISOString(),
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/followup-sequence`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }

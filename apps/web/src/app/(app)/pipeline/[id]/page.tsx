@@ -18,7 +18,7 @@ import {
   Building2, Calendar, CalendarDays, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users, Sparkles, RefreshCw, Shield,
+  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users, Sparkles, RefreshCw, Shield, Repeat,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -433,6 +433,12 @@ export default function DealDetailPage() {
   const [meetingPrepCollapsed, setMeetingPrepCollapsed] = useState(false);
   const [meetingPrepOpenIdx, setMeetingPrepOpenIdx] = useState<number | null>(null);
 
+  type FollowupStep = { step: number; timing: 'now' | '3d' | '7d' | '14d'; channel: 'email' | 'call' | 'slack'; action: string; goal: string };
+  type FollowupSequenceData = { steps: FollowupStep[]; rationale: string; deal_id: string; generated_at: string };
+  const [followupData, setFollowupData] = useState<FollowupSequenceData | null>(null);
+  const [followupLoading, setFollowupLoading] = useState(false);
+  const [followupGenerating, setFollowupGenerating] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -636,6 +642,13 @@ export default function DealDetailPage() {
         .then((data) => setMeetingPrepData(data ?? null))
         .catch(() => setMeetingPrepData(null))
         .finally(() => setMeetingPrepLoading(false));
+
+      setFollowupLoading(true);
+      apiClient
+        .getDealFollowupSequence(workspaceId, dealId, token)
+        .then((data) => setFollowupData(data ?? null))
+        .catch(() => setFollowupData(null))
+        .finally(() => setFollowupLoading(false));
     }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
@@ -913,6 +926,16 @@ export default function DealDetailPage() {
       setMeetingPrepData(data ?? null);
     } catch { /* ignore */ }
     finally { setMeetingPrepGenerating(false); }
+  };
+
+  const handleRegenerateFollowup = async () => {
+    if (!token || !workspaceId || followupGenerating) return;
+    setFollowupGenerating(true);
+    try {
+      const data = await apiClient.getDealFollowupSequence(workspaceId, dealId, token);
+      setFollowupData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setFollowupGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -2893,6 +2916,87 @@ export default function DealDetailPage() {
                     </div>
                   )}
                 </>
+              )}
+            </Card>
+          )}
+
+          {/* Follow-Up Sequence — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Repeat className="h-4 w-4 text-emerald-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Follow-Up Sequence</p>
+                <button
+                  onClick={handleRegenerateFollowup}
+                  disabled={followupLoading || followupGenerating}
+                  className="ml-auto text-zinc-500 hover:text-emerald-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate follow-up sequence"
+                  title="Regenerate"
+                >
+                  {followupGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {followupLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-14 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : followupData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Sequence unavailable for this deal.</p>
+              ) : (
+                <div className="space-y-3">
+                  {followupData.steps.map((step) => {
+                    const timingColor = step.timing === 'now'
+                      ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'
+                      : step.timing === '3d'
+                      ? 'text-amber-300 border-amber-500/30 bg-amber-500/10'
+                      : 'text-zinc-300 border-zinc-600/30 bg-zinc-800/40';
+                    const channelIcon = step.channel === 'email'
+                      ? <Mail className="h-3 w-3" />
+                      : step.channel === 'call'
+                      ? <User className="h-3 w-3" />
+                      : <Zap className="h-3 w-3" />;
+                    const channelColor = step.channel === 'email'
+                      ? 'text-indigo-300 border-indigo-500/30 bg-indigo-500/10'
+                      : step.channel === 'call'
+                      ? 'text-sky-300 border-sky-500/30 bg-sky-500/10'
+                      : 'text-violet-300 border-violet-500/30 bg-violet-500/10';
+                    return (
+                      <div key={step.step} className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 space-y-1.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-[10px] font-bold text-emerald-400">
+                            {step.step}
+                          </span>
+                          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${timingColor}`}>
+                            {step.timing}
+                          </span>
+                          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${channelColor}`}>
+                            {channelIcon}
+                            {step.channel}
+                          </span>
+                        </div>
+                        <p className="text-xs font-medium text-zinc-200">{step.action}</p>
+                        <p className="text-[11px] text-zinc-500 italic">Goal: {step.goal}</p>
+                      </div>
+                    );
+                  })}
+
+                  {followupData.rationale && (
+                    <p className="text-[11px] text-zinc-500 leading-relaxed border-t border-zinc-800 pt-2">
+                      {followupData.rationale}
+                    </p>
+                  )}
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(followupData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
               )}
             </Card>
           )}
