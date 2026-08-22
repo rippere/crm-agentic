@@ -439,6 +439,11 @@ export default function DealDetailPage() {
   const [followupLoading, setFollowupLoading] = useState(false);
   const [followupGenerating, setFollowupGenerating] = useState(false);
 
+  type ChampionRiskData = { risk_level: 'low' | 'medium' | 'high' | 'critical'; champion_status: 'active' | 'uncertain' | 'at_risk' | 'unknown'; risk_signals: string[]; mitigation_steps: string[]; deal_id: string; generated_at: string };
+  const [championRisk, setChampionRisk] = useState<ChampionRiskData | null>(null);
+  const [championRiskLoading, setChampionRiskLoading] = useState(false);
+  const [championRiskGenerating, setChampionRiskGenerating] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -649,6 +654,13 @@ export default function DealDetailPage() {
         .then((data) => setFollowupData(data ?? null))
         .catch(() => setFollowupData(null))
         .finally(() => setFollowupLoading(false));
+
+      setChampionRiskLoading(true);
+      apiClient
+        .getChampionRisk(workspaceId, dealId, token)
+        .then((data) => setChampionRisk(data ?? null))
+        .catch(() => setChampionRisk(null))
+        .finally(() => setChampionRiskLoading(false));
     }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
@@ -936,6 +948,16 @@ export default function DealDetailPage() {
       setFollowupData(data ?? null);
     } catch { /* ignore */ }
     finally { setFollowupGenerating(false); }
+  };
+
+  const handleRegenerateChampionRisk = async () => {
+    if (!token || !workspaceId || championRiskGenerating) return;
+    setChampionRiskGenerating(true);
+    try {
+      const data = await apiClient.getChampionRisk(workspaceId, dealId, token);
+      setChampionRisk(data ?? null);
+    } catch { /* ignore */ }
+    finally { setChampionRiskGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -2997,6 +3019,96 @@ export default function DealDetailPage() {
                     Generated {new Date(followupData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 </div>
+              )}
+            </Card>
+          )}
+
+          {/* Champion Risk — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-amber-400" />
+                <p className="text-sm font-semibold text-zinc-200">Champion Risk</p>
+                {championRisk && (
+                  <button
+                    onClick={handleRegenerateChampionRisk}
+                    disabled={championRiskLoading || championRiskGenerating}
+                    className="ml-auto text-zinc-500 hover:text-amber-400 disabled:opacity-40 transition-colors cursor-pointer"
+                    aria-label="Regenerate champion risk"
+                    title="Regenerate"
+                  >
+                    {championRiskGenerating ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                )}
+              </div>
+
+              {championRiskLoading ? (
+                <div className="space-y-2">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="h-10 rounded-xl border border-zinc-800 bg-zinc-900 animate-pulse" />
+                  ))}
+                </div>
+              ) : championRisk === null ? (
+                <p className="text-xs text-zinc-500 py-4 text-center">Could not assess champion risk.</p>
+              ) : (
+                <>
+                  {/* Risk level + champion status badges */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={cn(
+                      "text-[11px] font-semibold rounded-full px-2.5 py-0.5",
+                      championRisk.risk_level === "critical" ? "bg-rose-900/60 text-rose-300" :
+                      championRisk.risk_level === "high" ? "bg-amber-900/60 text-amber-300" :
+                      championRisk.risk_level === "medium" ? "bg-yellow-900/60 text-yellow-300" :
+                      "bg-emerald-900/60 text-emerald-300"
+                    )}>
+                      {championRisk.risk_level.charAt(0).toUpperCase() + championRisk.risk_level.slice(1)} Risk
+                    </span>
+                    <span className={cn(
+                      "text-[11px] font-medium rounded-full px-2.5 py-0.5",
+                      championRisk.champion_status === "active" ? "bg-emerald-900/40 text-emerald-400" :
+                      championRisk.champion_status === "uncertain" ? "bg-amber-900/40 text-amber-400" :
+                      championRisk.champion_status === "at_risk" ? "bg-rose-900/40 text-rose-400" :
+                      "bg-zinc-800 text-zinc-400"
+                    )}>
+                      {championRisk.champion_status === "at_risk" ? "At Risk" :
+                       championRisk.champion_status.charAt(0).toUpperCase() + championRisk.champion_status.slice(1)}
+                    </span>
+                  </div>
+
+                  {/* Risk signals */}
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Risk Signals</p>
+                    <ul className="space-y-1">
+                      {championRisk.risk_signals.map((signal, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-300 leading-snug">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0 mt-1.5" />
+                          {signal}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Mitigation steps */}
+                  <div className="space-y-1 border-t border-zinc-800 pt-2">
+                    <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Mitigation Steps</p>
+                    <ul className="space-y-1">
+                      {championRisk.mitigation_steps.map((step, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-300 leading-snug">
+                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-indigo-900/60 text-[9px] font-bold text-indigo-300 flex-shrink-0 mt-0.5">{i + 1}</span>
+                          {step}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(championRisk.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </>
               )}
             </Card>
           )}

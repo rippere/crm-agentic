@@ -3539,6 +3539,72 @@ export const apiClient = {
     )
   },
 
+  getChampionRisk: (workspaceId: string, dealId: string, token: string): Promise<{
+    risk_level: 'low' | 'medium' | 'high' | 'critical'
+    champion_status: 'active' | 'uncertain' | 'at_risk' | 'unknown'
+    risk_signals: string[]
+    mitigation_steps: string[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { risk_level: 'low' | 'medium' | 'high' | 'critical'; champion_status: 'active' | 'uncertain' | 'at_risk' | 'unknown'; risk_signals: string[]; mitigation_steps: string[] }> = {
+        'd-001': {
+          risk_level: 'high',
+          champion_status: 'uncertain',
+          risk_signals: [
+            'No response to the last 2 follow-up emails over 21 days — champion may have lost budget authority.',
+            'Board sign-off cited as the blocker but no update from champion on board timeline.',
+            'Deal stalled in Proposal stage for 3 weeks without a scheduled next meeting.',
+          ],
+          mitigation_steps: [
+            'Request a brief 15-minute sync with Marcus to confirm board review date and re-affirm his internal support.',
+            'Send an executive-level one-pager tailored for the board to make it easy for Marcus to champion internally.',
+            'Identify a secondary champion or technical sponsor within Global Finance who can co-advocate.',
+          ],
+        },
+        'd-002': {
+          risk_level: 'critical',
+          champion_status: 'at_risk',
+          risk_signals: [
+            'No named champion or decision-maker identified in the stakeholder map.',
+            'Health score of 28 suggests severely stalled deal with no recent positive signals.',
+            'No deal notes in the last 30 days — complete radio silence from the prospect.',
+          ],
+          mitigation_steps: [
+            'Escalate to a senior contact at the prospect company to identify who is now responsible for the evaluation.',
+            'Send a value-focused re-engagement email with a time-limited offer to create urgency.',
+            'Consider a last-chance outreach sequence and set a clear expiry date for the deal.',
+          ],
+        },
+      }
+      const stub = stubs[dealId] ?? {
+        risk_level: 'medium' as const,
+        champion_status: 'uncertain' as const,
+        risk_signals: [
+          'Champion engagement has slowed — fewer replies and no meeting scheduled.',
+          'Deal has been in the current stage longer than average without a clear next step.',
+          'No secondary champion identified to backstop the primary contact.',
+        ],
+        mitigation_steps: [
+          'Reach out directly to confirm the champion is still driving the evaluation internally.',
+          'Map a second internal stakeholder who can advocate if the primary contact becomes unavailable.',
+          'Schedule a next touchpoint with a concrete agenda to re-establish momentum.',
+        ],
+      }
+      return Promise.resolve({
+        ...stub,
+        deal_id: dealId,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/champion-risk`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
   getDealFollowupSequence: (workspaceId: string, dealId: string, token: string): Promise<{
     steps: Array<{
       step: number
