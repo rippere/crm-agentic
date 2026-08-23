@@ -444,6 +444,11 @@ export default function DealDetailPage() {
   const [championRiskLoading, setChampionRiskLoading] = useState(false);
   const [championRiskGenerating, setChampionRiskGenerating] = useState(false);
 
+  type CompetitiveResponseData = { primary_competitor: string; battle_card: { strengths: string[]; weaknesses: string[]; key_differentiators: string[]; suggested_talk_track: string }; deal_id: string; generated_at: string };
+  const [competitiveResponse, setCompetitiveResponse] = useState<CompetitiveResponseData | null>(null);
+  const [competitiveResponseLoading, setCompetitiveResponseLoading] = useState(false);
+  const [competitiveResponseGenerating, setCompetitiveResponseGenerating] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -661,6 +666,13 @@ export default function DealDetailPage() {
         .then((data) => setChampionRisk(data ?? null))
         .catch(() => setChampionRisk(null))
         .finally(() => setChampionRiskLoading(false));
+
+      setCompetitiveResponseLoading(true);
+      apiClient
+        .getCompetitiveResponse(workspaceId, dealId, token)
+        .then((data) => setCompetitiveResponse(data ?? null))
+        .catch(() => setCompetitiveResponse(null))
+        .finally(() => setCompetitiveResponseLoading(false));
     }
 
     if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
@@ -958,6 +970,16 @@ export default function DealDetailPage() {
       setChampionRisk(data ?? null);
     } catch { /* ignore */ }
     finally { setChampionRiskGenerating(false); }
+  };
+
+  const handleRegenerateCompetitiveResponse = async () => {
+    if (!token || !workspaceId || competitiveResponseGenerating) return;
+    setCompetitiveResponseGenerating(true);
+    try {
+      const data = await apiClient.getCompetitiveResponse(workspaceId, dealId, token);
+      setCompetitiveResponse(data ?? null);
+    } catch { /* ignore */ }
+    finally { setCompetitiveResponseGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -3107,6 +3129,94 @@ export default function DealDetailPage() {
 
                   <p className="text-[10px] text-zinc-600 text-right">
                     Generated {new Date(championRisk.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* Competitive Response — open deals with competitors only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Swords className="h-4 w-4 text-rose-400" />
+                <p className="text-sm font-semibold text-zinc-200">Competitive Response</p>
+                {competitiveResponse && (
+                  <button
+                    onClick={handleRegenerateCompetitiveResponse}
+                    className="ml-auto p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+                    title="Regenerate"
+                  >
+                    {competitiveResponseGenerating
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <RefreshCw className="h-3 w-3" />}
+                  </button>
+                )}
+              </div>
+
+              {competitiveResponseLoading ? (
+                <div className="space-y-2">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="h-10 rounded-xl border border-zinc-800 bg-zinc-900 animate-pulse" />
+                  ))}
+                </div>
+              ) : competitiveResponse === null ? (
+                <p className="text-xs text-zinc-500 py-2 text-center">No competitors tracked or data unavailable.</p>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-rose-300 bg-rose-900/30 border border-rose-800/40 px-2 py-0.5 rounded-full">
+                      vs {competitiveResponse.primary_competitor}
+                    </span>
+                  </div>
+
+                  {/* Strengths */}
+                  <div>
+                    <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide mb-1">Their Strengths</p>
+                    <ul className="space-y-1">
+                      {competitiveResponse.battle_card.strengths.map((s, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-400 leading-snug">
+                          <span className="flex-shrink-0 mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-500/70 mt-1.5" />
+                          {s}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Weaknesses */}
+                  <div>
+                    <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide mb-1">Their Weaknesses</p>
+                    <ul className="space-y-1">
+                      {competitiveResponse.battle_card.weaknesses.map((w, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-400 leading-snug">
+                          <span className="flex-shrink-0 mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500/70 mt-1.5" />
+                          {w}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Key Differentiators */}
+                  <div>
+                    <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide mb-1">Our Differentiators</p>
+                    <ul className="space-y-1">
+                      {competitiveResponse.battle_card.key_differentiators.map((d, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-300 leading-snug">
+                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-indigo-900/60 text-[9px] font-bold text-indigo-300 flex-shrink-0 mt-0.5">{i + 1}</span>
+                          {d}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Talk Track */}
+                  <div className="rounded-lg bg-rose-950/30 border border-rose-800/30 p-2.5">
+                    <p className="text-[10px] font-semibold text-rose-400 uppercase tracking-wide mb-1">Suggested Talk Track</p>
+                    <p className="text-xs text-zinc-300 leading-relaxed">{competitiveResponse.battle_card.suggested_talk_track}</p>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(competitiveResponse.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 </>
               )}

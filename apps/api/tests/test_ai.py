@@ -3018,3 +3018,98 @@ async def test_deal_champion_risk_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# POST /workspaces/{wid}/deals/{did}/ai/competitive-response
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_competitive_response_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    deal = _fake_deal_row(stage="negotiation", value=50000.0, health_score=60)
+    deal.stage_changed_at = None
+    deal.ml_win_probability = 55
+    deal.competitors = ["Salesforce", "HubSpot"]
+
+    def _scalar_one_or_none(v):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = v
+        return r
+
+    def _all(rows):
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _scalar_one_or_none(deal),  # deal lookup
+        _all([]),                    # deal notes
+    ])
+
+    response_json = _json.dumps({
+        "primary_competitor": "Salesforce",
+        "battle_card": {
+            "strengths": [
+                "Massive ecosystem with AppExchange marketplace.",
+                "Strong enterprise brand recognition.",
+                "Extensive third-party integrations.",
+            ],
+            "weaknesses": [
+                "High TCO and complex per-feature licensing.",
+                "Steep learning curve requiring dedicated admins.",
+                "Slow implementation — typically 6–18 months.",
+            ],
+            "key_differentiators": [
+                "NovaCRM deploys in days, not months, with no implementation fees.",
+                "AI-native pipeline intelligence built in — no plugins required.",
+                "Predictable flat pricing that scales with headcount.",
+            ],
+            "suggested_talk_track": (
+                "When Salesforce comes up, acknowledge their breadth but pivot to speed. "
+                "Ask how long their last CRM implementation took and what percentage of features they actually used."
+            ),
+        },
+    })
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/ai/competitive-response"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "primary_competitor" in body
+    assert isinstance(body["primary_competitor"], str)
+    bc = body["battle_card"]
+    assert isinstance(bc["strengths"], list) and len(bc["strengths"]) == 3
+    assert isinstance(bc["weaknesses"], list) and len(bc["weaknesses"]) == 3
+    assert isinstance(bc["key_differentiators"], list) and len(bc["key_differentiators"]) == 3
+    assert isinstance(bc["suggested_talk_track"], str)
+    assert "deal_id" in body
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_competitive_response_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/ai/competitive-response"
+        )
+
+    assert resp.status_code == 403
