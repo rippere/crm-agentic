@@ -3654,4 +3654,54 @@ export const apiClient = {
       token,
     )
   },
+
+  getCompetitiveResponse: (workspaceId: string, dealId: string, token: string): Promise<{
+    primary_competitor: string
+    battle_card: {
+      strengths: string[]
+      weaknesses: string[]
+      key_differentiators: string[]
+      suggested_talk_track: string
+    }
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        primary_competitor: string
+        battle_card: {
+          strengths: string[]
+          weaknesses: string[]
+          key_differentiators: string[]
+          suggested_talk_track: string
+        }
+      }> = {
+        'd-001': {
+          primary_competitor: 'Salesforce',
+          battle_card: {
+            strengths: ['Massive ecosystem and AppExchange marketplace', 'Well-known brand with strong enterprise trust', 'Extensive third-party integrations'],
+            weaknesses: ['High total cost of ownership and complex licensing', 'Steep learning curve requiring dedicated admins', 'Slow implementation timelines for large orgs'],
+            key_differentiators: ['NovaCRM deploys in days, not months, with zero implementation fees', 'AI-native pipeline intelligence out of the box — no plugins required', 'Flat, predictable pricing that scales with headcount, not feature tiers'],
+            suggested_talk_track: "When Salesforce comes up, acknowledge their breadth but pivot to speed: 'Most of our customers were on Salesforce and switched because they were paying for 80% of features they never used. With NovaCRM, you\'re live in a week and the AI works on day one.' Close by asking how long their last CRM implementation took.",
+          },
+        },
+        'd-002': {
+          primary_competitor: 'HubSpot',
+          battle_card: {
+            strengths: ['Strong inbound marketing suite bundled with CRM', 'Generous free tier lowers adoption friction', 'Clean UX familiar to marketing teams'],
+            weaknesses: ['CRM depth is secondary to marketing — limited for complex sales cycles', 'AI features are bolt-ons, not built into the core workflow', 'Pricing escalates sharply beyond the free tier'],
+            key_differentiators: ['NovaCRM is built for sales-led teams, not marketing-led pipelines', 'AI coaching and lead scoring are native, not add-ons requiring higher plans', 'Purpose-built for PM + Sales alignment in a single workspace'],
+            suggested_talk_track: "Position NovaCRM against HubSpot\'s marketing roots: 'HubSpot is great if your sales process starts with inbound. If you\'re running outbound enterprise deals, you need a CRM that\'s built for sales complexity — that\'s where NovaCRM wins.' Ask about their current deal stage management and pipeline review cadence.",
+          },
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/competitive-response`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
