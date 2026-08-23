@@ -3,16 +3,14 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion, type Variants } from "framer-motion";
 import {
   Zap, Brain, Sparkles, TrendingUp, Bot, Shield,
   ArrowRight, Check, ChevronDown, Mail, Mic, Heart,
-  BarChart3, Users, KanbanSquare, Menu, X, Star,
+  Users, KanbanSquare, Menu, X, Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createBrowserClient } from "@/lib/supabase";
-import { Testimonials } from "./_landing/Testimonials";
-import { TrustStrip } from "./_landing/TrustStrip";
 
 // ─── Auth params rescue ───────────────────────────────────────────────────────
 // Supabase auth redirects fall back to the Site URL (this page) when the
@@ -141,7 +139,24 @@ function Nav() {
 }
 
 // ─── Hero ─────────────────────────────────────────────────────────────────────
+// Rotating verb-phrases — each maps to a real shipped agent (Lead Scorer,
+// Email Composer, Call Summarizer, and stall detection), so the headline stays
+// honest while it cycles.
+const HERO_PHRASES = [
+  "scores your leads",
+  "drafts your outreach",
+  "summarizes your calls",
+  "chases your stalled deals",
+];
+
 function Hero() {
+  const reduce = useReducedMotion();
+  const [phrase, setPhrase] = useState(0);
+  useEffect(() => {
+    if (reduce) return; // hold on the first phrase when motion is reduced
+    const id = setInterval(() => setPhrase((n) => (n + 1) % HERO_PHRASES.length), 2600);
+    return () => clearInterval(id);
+  }, [reduce]);
   return (
     <section
       className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-6 pt-28 pb-16 text-center"
@@ -157,18 +172,30 @@ function Hero() {
 
       <h1
         id="hero-heading"
-        className="mx-auto max-w-4xl text-balance text-5xl font-bold leading-[1.05] tracking-tight text-zinc-100 sm:text-6xl lg:text-[5rem]"
+        className="mx-auto max-w-4xl text-4xl font-bold leading-[1.08] tracking-tight text-zinc-100 sm:text-5xl lg:text-6xl"
       >
-        The CRM that{" "}
-        <span className="bg-gradient-to-r from-indigo-300 via-indigo-400 to-[#2DD4AA] bg-clip-text text-transparent">
-          works the pipeline
-        </span>{" "}
-        for you
+        <span className="block">The CRM that</span>
+        <span className="relative block py-1" aria-hidden="true">
+          <span className="invisible">chases your stalled deals</span>
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={phrase}
+              initial={reduce ? false : { opacity: 0, y: "0.4em" }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduce ? { opacity: 0 } : { opacity: 0, y: "-0.4em" }}
+              transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+              className="absolute inset-0 flex items-center justify-center bg-gradient-to-r from-indigo-300 via-indigo-400 to-[#2DD4AA] bg-clip-text text-transparent"
+            >
+              {HERO_PHRASES[phrase]}
+            </motion.span>
+          </AnimatePresence>
+        </span>
+        <span className="sr-only">works your pipeline</span>
+        <span className="block">for you</span>
       </h1>
 
       <p className="mx-auto mt-6 max-w-xl text-pretty text-lg text-zinc-400 leading-relaxed">
-        Six AI agents score your leads, draft the outreach, summarize the calls,
-        and catch stalled deals — so your team sells while the busywork runs itself.
+        Six AI agents do the busywork, so your team sells.
       </p>
 
       <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
@@ -189,38 +216,7 @@ function Hero() {
       </div>
 
       <div className="mt-9 flex flex-col items-center gap-2.5">
-        <div className="flex items-center gap-3">
-          <div className="flex -space-x-2.5" aria-hidden="true">
-            {[
-              "/testimonials/sarah-chen.jpg",
-              "/testimonials/marcus-webb.jpg",
-              "/testimonials/lena-kovacs.jpg",
-              "/testimonials/dmitri-volkov.jpg",
-            ].map((src, i) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={i}
-                src={src}
-                alt=""
-                loading="lazy"
-                width={28}
-                height={28}
-                className="h-7 w-7 rounded-full border-2 border-zinc-950 object-cover"
-              />
-            ))}
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="flex gap-0.5" aria-hidden="true">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Star key={i} className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-              ))}
-            </div>
-            <span className="text-sm text-zinc-400">
-              <span className="font-semibold text-zinc-200">4.9</span> from 200+ revenue teams
-            </span>
-          </div>
-        </div>
-        <p className="text-xs text-zinc-600">No credit card required · Cancel anytime</p>
+        <p className="text-xs text-zinc-600">No credit card required to start</p>
       </div>
 
       {/* Dashboard preview */}
@@ -302,8 +298,8 @@ const features = [
   {
     icon: <Mail className="h-5 w-5" />,
     title: "Autonomous Email Composer",
-    description: "Claude drafts hyper-personalized outreach using semantic tags, deal stage, and contact history. Review or send automatically.",
-    tags: ["Claude Sonnet", "Personalized", "One-click Send"],
+    description: "Claude drafts personalized outreach using semantic tags, deal stage, and contact history. Review before you send.",
+    tags: ["Claude", "Personalized", "Review queue"],
     color: "amber",
   },
   {
@@ -315,9 +311,9 @@ const features = [
   },
   {
     icon: <Heart className="h-5 w-5" />,
-    title: "Churn Risk",
-    description: "Claude analyzes every email, ticket, and call transcript to flag at-risk accounts before sentiment drops below your threshold.",
-    tags: ["Sentiment Analysis", "Risk Alerts", "Early Warning"],
+    title: "Sentiment Analysis",
+    description: "Claude scores the sentiment of incoming messages and call summaries, so a cooling relationship shows up in the contact record instead of going unnoticed.",
+    tags: ["Sentiment Analysis", "Per-message scoring", "Claude"],
     color: "rose",
   },
 ];
@@ -407,49 +403,274 @@ function FeaturesSection() {
   );
 }
 
-// ─── Agents showcase ─────────────────────────────────────────────────────────
+// ─── Shared scroll-reveal variants (module scope; also used by ProvenanceProof) ─
+const revealParent: Variants = {
+  hidden: {},
+  show: { transition: { staggerChildren: 0.08, delayChildren: 0.06 } },
+};
+const revealItem: Variants = {
+  hidden: { opacity: 0, y: 18 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.55, ease: [0.16, 1, 0.3, 1] } },
+};
+
+// ─── Agents roster — "Hire your six-agent team" ──────────────────────────────
+// Signal-green is the sole agent accent; every line is exactly what ships; model
+// provenance lives in the Fira-Code tech tag. Replaces the old activity-log block.
+const roster = [
+  {
+    name: "Mira",
+    role: "Contact Librarian",
+    icon: <Sparkles className="h-5 w-5" aria-hidden="true" />,
+    line: "Embeds every contact with a sentence-transformer, then auto-tags them by intent, role, industry, and buying stage.",
+    tech: "all-MiniLM-L6-v2 · pgvector",
+    schedule: "nightly · 02:00 UTC",
+  },
+  {
+    name: "Vera",
+    role: "Lead Scorer",
+    icon: <Brain className="h-5 w-5" aria-hidden="true" />,
+    line: "Scores each lead 0–100 from engagement signals, firmographics, and deal history — a heuristic model, not ML.",
+    tech: "heuristic signals · 0–100",
+    schedule: "nightly · 02:15 UTC",
+  },
+  {
+    name: "Atlas",
+    role: "Pipeline Watcher",
+    icon: <TrendingUp className="h-5 w-5" aria-hidden="true" />,
+    line: "Flags stalled and aging deals and recommends the next best action to keep the pipeline moving.",
+    tech: "stall detection · next-best-action",
+    schedule: "nightly + on stage change",
+  },
+  {
+    name: "Quill",
+    role: "Outreach Drafter",
+    icon: <Mail className="h-5 w-5" aria-hidden="true" />,
+    line: "Drafts personalized outreach from a contact's tags, stage, and history — into a review queue, never auto-sent.",
+    tech: "claude-haiku-4-5 · review queue",
+    schedule: "on request → queued",
+  },
+  {
+    name: "Echo",
+    role: "Call Scribe",
+    icon: <Mic className="h-5 w-5" aria-hidden="true" />,
+    line: "Transcribes your calls, then pulls action items, objections, and sentiment onto the record.",
+    tech: "whisper · claude-haiku-4-5",
+    schedule: "on call upload",
+  },
+  {
+    name: "Pulse",
+    role: "Sentiment Reader",
+    icon: <Heart className="h-5 w-5" aria-hidden="true" />,
+    line: "Scores sentiment on each incoming message and call summary so a cooling relationship surfaces on the contact.",
+    tech: "claude-haiku-4-5 · per-message",
+    schedule: "on new message",
+  },
+];
+
+// Clearly-labeled SAMPLE data — never a live feed. Times echo the real cadence:
+// nightly batch (02:00 / 02:15 UTC) plus daytime triggers.
+const exampleLog = [
+  { time: "02:00:04", agent: "Mira",  msg: "embedded 48 contacts · top tag: enterprise_buyer" },
+  { time: "02:15:11", agent: "Vera",  msg: "rescored 1,204 leads · signals: engagement, firmographic" },
+  { time: "02:15:12", agent: "Atlas", msg: "deal d1 flagged stalled · 21d in negotiation · next: re-engage" },
+  { time: "09:41:33", agent: "Echo",  msg: "call ac-081 transcribed · 3 action items · 1 objection" },
+  { time: "09:41:35", agent: "Pulse", msg: "message m-5521 sentiment 0.34 · cooling · surfaced on contact" },
+  { time: "09:42:07", agent: "Quill", msg: "draft e-0092 → review queue · contact m_webb · stage proposal" },
+];
+
 function AgentsSection() {
   return (
-    <section id="agents" className="relative overflow-hidden px-6 py-24 bg-gradient-to-b from-zinc-950 to-zinc-900" aria-labelledby="agents-heading">
+    <section
+      id="agents"
+      className="relative overflow-hidden px-6 py-28 sm:py-32 bg-gradient-to-b from-zinc-950 to-zinc-900"
+      aria-labelledby="agents-heading"
+    >
       <div className="pointer-events-none absolute inset-0 bg-glow-emerald" aria-hidden="true" />
-      <div className="mx-auto max-w-4xl text-center relative">
-        <p className="text-xs font-mono text-emerald-400 uppercase tracking-widest mb-3">Live Automation</p>
-        <h2 id="agents-heading" className="text-3xl font-bold text-zinc-100 sm:text-4xl">Agents that never sleep</h2>
-        <p className="mt-4 text-zinc-400 max-w-xl mx-auto">
-          Every agent runs continuously — updating scores, watching your pipeline, and triggering actions the moment conditions are met.
-        </p>
-        <div className="mt-12 rounded-2xl border border-zinc-800 bg-zinc-950 text-left overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3 bg-zinc-900">
-            <Bot className="h-4 w-4 text-indigo-400" aria-hidden="true" />
-            <span className="text-xs font-mono text-zinc-400">Agent Activity Log · Live</span>
-            <span className="ml-auto flex items-center gap-1.5 text-xs text-emerald-400 font-mono">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 agent-pulse" aria-hidden="true" />
-              streaming
+
+      <div className="relative mx-auto max-w-6xl">
+        {/* Header */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: "-80px" }}
+          transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+          className="mx-auto max-w-2xl text-center"
+        >
+          <p className="mb-3 font-mono text-xs uppercase tracking-widest text-[#2DD4AA]">
+            Your AI team
+          </p>
+          <h2 id="agents-heading" className="text-3xl font-bold text-zinc-100 sm:text-4xl">
+            Hire your six-agent team
+          </h2>
+          <p className="mx-auto mt-4 max-w-xl text-zinc-400">
+            Six specialized agents handle the CRM busywork — each with one job it does well,
+            a real model behind it, and your review before anything goes out.
+          </p>
+          <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-[#00C896]/20 bg-[#00C896]/10 px-3.5 py-1.5 font-mono text-xs text-[#6EFFD5]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[#00C896]" aria-hidden="true" />
+            Scheduled runs · Celery Beat nightly (02:00 &amp; 02:15 UTC) + triggers — not a live feed
+          </div>
+        </motion.div>
+
+        {/* Roster grid — uniform, flush cells (auto-rows-fr + h-full + mt-auto footer) */}
+        <motion.div
+          variants={revealParent}
+          initial="hidden"
+          whileInView="show"
+          viewport={{ once: true, margin: "-60px" }}
+          className="mt-16 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 lg:auto-rows-fr"
+        >
+          {roster.map((a) => (
+            <motion.article
+              key={a.name}
+              variants={revealItem}
+              className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 p-6 transition-all duration-200 hover:-translate-y-0.5 hover:border-[#00C896]/30 hover:bg-zinc-800/60"
+            >
+              {/* signal-green top hairline on hover */}
+              <div
+                className="pointer-events-none absolute inset-x-0 -top-px h-px bg-gradient-to-r from-transparent via-[#00C896]/60 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+                aria-hidden="true"
+              />
+
+              {/* Identity: icon tile + name + role + watermark initial */}
+              <div className="flex items-center gap-3.5">
+                <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-[#00C896]/20 bg-[#00C896]/10 text-[#2DD4AA]">
+                  {a.icon}
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-semibold text-zinc-100">{a.name}</h3>
+                  <p className="font-mono text-xs text-[#6EFFD5]/80">{a.role}</p>
+                </div>
+                <span
+                  className="ml-auto font-mono text-2xl font-bold leading-none text-zinc-800 transition-colors duration-200 group-hover:text-zinc-700"
+                  aria-hidden="true"
+                >
+                  {a.name[0]}
+                </span>
+              </div>
+
+              {/* Honest capability line */}
+              <p className="mt-4 text-sm leading-relaxed text-zinc-400">{a.line}</p>
+
+              {/* Footer: Fira-Code provenance tag (real tech) + schedule/trigger badge */}
+              <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-5">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-[#00C896]/20 bg-[#00C896]/10 px-2.5 py-1 font-mono text-[10px] font-medium text-[#6EFFD5]">
+                  <span className="h-1 w-1 rounded-full bg-[#00C896]" aria-hidden="true" />
+                  {a.tech}
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full border border-zinc-800 bg-zinc-950/60 px-2 py-1 font-mono text-[10px] text-zinc-500">
+                  <Clock className="h-2.5 w-2.5" aria-hidden="true" />
+                  {a.schedule}
+                </span>
+              </div>
+            </motion.article>
+          ))}
+        </motion.div>
+
+        {/* Folded-in honest "example output" — static sample rows, deliberately
+            not framed as a real-time feed (no blink, no auto-updating region). */}
+        <motion.div
+          variants={revealItem}
+          initial="hidden"
+          whileInView="show"
+          viewport={{ once: true, margin: "-60px" }}
+          className="mx-auto mt-8 max-w-3xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950"
+        >
+          <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-4 py-3">
+            <Bot className="h-4 w-4 text-[#2DD4AA]" aria-hidden="true" />
+            <span className="font-mono text-xs text-zinc-300">Agent Activity Log</span>
+            <span className="ml-auto rounded-full border border-[#00C896]/20 bg-[#00C896]/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-[#6EFFD5]">
+              example output
             </span>
           </div>
-          <div className="p-4 space-y-2 font-mono text-xs" role="log" aria-live="polite" aria-label="Agent activity log">
-            {[
-              { time: "14:32:01", agent: "LeadScorer", msg: "contact:c6 score updated 88→95 · signals:[upsell,champion,power_user]", color: "text-emerald-400" },
-              { time: "14:31:58", agent: "SemanticSorter", msg: "batch:48 contacts tagged · top_tag:enterprise_buyer", color: "text-indigo-400" },
-              { time: "14:31:44", agent: "EmailComposer", msg: "draft:email_0092 queued · contact:marcus_webb · stage:proposal", color: "text-amber-400" },
-              { time: "14:31:32", agent: "PipelineOptimizer", msg: "deal:d1 moved discovery→negotiation · flagged:high_value", color: "text-indigo-300" },
-              { time: "14:31:19", agent: "SentimentAnalyzer", msg: "⚠ at_risk:lena_kovacs · sentiment:0.31 · re_engagement:triggered", color: "text-rose-400" },
-              { time: "14:31:05", agent: "LeadScorer", msg: "rescored 1,204 contacts · 38 newly hot", color: "text-emerald-400" },
-            ].map(({ time, agent, msg, color }) => (
+
+          <div
+            className="space-y-2 p-4 font-mono text-xs"
+            role="group"
+            aria-label="Example agent activity log — sample data, not a live feed"
+          >
+            {exampleLog.map(({ time, agent, msg }) => (
               <div key={time + agent} className="flex items-start gap-3">
-                <span className="text-zinc-700 flex-shrink-0">{time}</span>
-                <span className={cn("flex-shrink-0", color)}>[{agent}]</span>
-                <span className="text-zinc-400 break-all">{msg}</span>
+                <span className="flex-shrink-0 text-zinc-700">{time}</span>
+                <span className="flex-shrink-0 text-[#2DD4AA]">[{agent}]</span>
+                <span className="break-all text-zinc-400">{msg}</span>
               </div>
             ))}
-            <div className="flex items-center gap-2 pt-1">
-              <span className="text-zinc-700">14:32:02</span>
-              <span className="text-indigo-400">[SemanticSorter]</span>
-              <span className="text-zinc-500 cursor-blink">processing batch:49</span>
-            </div>
           </div>
-        </div>
+
+          <div className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-900/60 px-4 py-2.5 font-mono text-[10px] text-zinc-500">
+            <Clock className="h-3 w-3 text-zinc-600" aria-hidden="true" />
+            <span>Sample data. Nightly jobs run 02:00 &amp; 02:15 UTC; the rest fire on triggers. Every draft waits in a review queue.</span>
+          </div>
+        </motion.div>
       </div>
+    </section>
+  );
+}
+
+// ─── Provenance proof — capabilities we can point to (before CTASection) ──────
+// Replaces the removed fake social proof. Proves CAPABILITIES, never customers —
+// no logos, counts, ratings, or customer-endorsement claims. Reuses the shared variants.
+const provenanceItems = [
+  { icon: <Sparkles className="h-4 w-4" aria-hidden="true" />, label: "Semantic search", detail: "MiniLM embeddings over pgvector" },
+  { icon: <Mic className="h-4 w-4" aria-hidden="true" />,      label: "Call summaries",  detail: "Whisper transcription + Claude (Haiku)" },
+  { icon: <Shield className="h-4 w-4" aria-hidden="true" />,   label: "Encrypted",       detail: "In transit and at rest" },
+  { icon: <Users className="h-4 w-4" aria-hidden="true" />,    label: "Isolated",        detail: "Per-workspace data separation" },
+];
+
+const infraStack = ["Postgres 16 + pgvector", "Supabase auth", "FastAPI async", "Celery + Redis"];
+
+function ProvenanceProof() {
+  return (
+    <section className="border-y border-zinc-800/70 px-6 py-16" aria-labelledby="provenance-heading">
+      <motion.div
+        variants={revealParent}
+        initial="hidden"
+        whileInView="show"
+        viewport={{ once: true, margin: "-60px" }}
+        className="mx-auto max-w-6xl"
+      >
+        <motion.div variants={revealItem} className="text-center">
+          <p className="mb-2 font-mono text-xs uppercase tracking-widest text-[#2DD4AA]">
+            Provenance, not promises
+          </p>
+          <h2 id="provenance-heading" className="text-lg font-semibold text-zinc-200">
+            Every claim here is a capability we can point to.
+          </h2>
+        </motion.div>
+
+        {/* Capability strip */}
+        <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {provenanceItems.map((item) => (
+            <motion.div
+              key={item.label}
+              variants={revealItem}
+              className="flex items-center gap-3.5 rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-4 transition-colors duration-200 hover:border-[#00C896]/25"
+            >
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-[#00C896]/20 bg-[#00C896]/10 text-[#2DD4AA]">
+                {item.icon}
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-zinc-100">{item.label}</p>
+                <p className="font-mono text-[11px] text-zinc-500">{item.detail}</p>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+
+        {/* Real infrastructure — Fira-Code chips */}
+        <motion.div variants={revealItem} className="mt-8 flex flex-wrap items-center justify-center gap-2">
+          <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-600">Running on</span>
+          {infraStack.map((tech) => (
+            <span
+              key={tech}
+              className="rounded-full border border-zinc-800 bg-zinc-950 px-2.5 py-1 font-mono text-[11px] text-zinc-400"
+            >
+              {tech}
+            </span>
+          ))}
+        </motion.div>
+      </motion.div>
     </section>
   );
 }
@@ -470,8 +691,8 @@ const plans = [
   },
   {
     name: "Enterprise", price: "Custom", per: "",
-    description: "Dedicated infrastructure, custom onboarding, and SLAs.",
-    features: ["Custom agent development", "On-premise deployment", "SSO + SCIM", "Dedicated success engineer", "Custom SLA"],
+    description: "A scoped engagement for teams with specific requirements.",
+    features: ["Custom agent development", "Custom onboarding", "Dedicated point of contact", "Requirements scoped with you"],
     cta: "Contact Sales", highlight: false,
   },
 ];
@@ -489,7 +710,7 @@ function PricingSection() {
             <div key={plan.name} className={cn("rounded-2xl border p-6 flex flex-col", plan.highlight ? "border-indigo-500/40 bg-indigo-600/5 shadow-glow" : "border-zinc-800 bg-zinc-900")}>
               {plan.highlight && (
                 <div className="mb-4 inline-flex self-start rounded-full bg-indigo-500/20 px-3 py-1 text-xs font-medium text-indigo-300 border border-indigo-500/30">
-                  Most Popular
+                  Recommended
                 </div>
               )}
               <h3 className="text-base font-bold text-zinc-100">{plan.name}</h3>
@@ -535,7 +756,7 @@ function CTASection() {
           <span className="bg-gradient-to-r from-indigo-300 via-indigo-400 to-[#2DD4AA] bg-clip-text text-transparent">a brain</span>
         </h2>
         <p className="mt-4 text-zinc-400">
-          Join teams using NovaCRM to close deals faster, never miss a follow-up, and let AI handle the work that slows you down.
+          Put an AI layer on your pipeline — score leads, draft the follow-ups, and let the busywork run itself.
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
           <Link
@@ -546,13 +767,11 @@ function CTASection() {
             <ArrowRight className="h-4 w-4" aria-hidden="true" />
           </Link>
         </div>
-        <div className="mt-8 flex flex-wrap justify-center gap-6">
-          {[{ icon: <Shield className="h-4 w-4" />, label: "Encrypted in transit & at rest" }, { icon: <BarChart3 className="h-4 w-4" />, label: "Per-workspace data isolation" }, { icon: <Users className="h-4 w-4" />, label: "You own your data" }].map(({ icon, label }) => (
-            <div key={label} className="flex items-center gap-2 text-sm text-zinc-500">
-              <span className="text-indigo-400" aria-hidden="true">{icon}</span>
-              {label}
-            </div>
-          ))}
+        <div className="mt-8 flex justify-center">
+          <div className="flex items-center gap-2 text-sm text-zinc-500">
+            <span className="text-indigo-400" aria-hidden="true"><Users className="h-4 w-4" /></span>
+            You own your data
+          </div>
         </div>
       </div>
     </section>
@@ -593,11 +812,10 @@ export default function LandingPage() {
       <AuthParamsRescue />
       <Nav />
       <Hero />
-      <TrustStrip />
       <FeaturesSection />
       <AgentsSection />
-      <Testimonials />
       <PricingSection />
+      <ProvenanceProof />
       <CTASection />
       <Footer />
     </div>

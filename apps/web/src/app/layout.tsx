@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "NovaCRM — Agentic Intelligence",
   description:
-    "AI-native CRM powered by semantic sorting, ML lead scoring, and autonomous agents.",
+    "AI-native CRM with semantic contact search, signal-based lead scoring, and agents that draft outreach and watch your pipeline.",
 };
 
 export const viewport: Viewport = {
