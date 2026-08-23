@@ -4997,3 +4997,289 @@ async def workspace_competitive_landscape(
         "win_strategies": strategies,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# AI deal follow-up sequence
+# ---------------------------------------------------------------------------
+
+_FOLLOWUP_SEQUENCE_SYSTEM = """\
+You are Nova, the AI sales intelligence in NovaCRM. Generate a 3-step follow-up sequence
+for an open sales deal based on its context.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "steps": [
+    {
+      "step": 1,
+      "timing": "<now|3d|7d|14d>",
+      "channel": "<email|call|slack>",
+      "action": "<one specific action to take, max 200 chars>",
+      "goal": "<desired outcome of this step, max 150 chars>"
+    }
+  ],
+  "rationale": "<1-2 sentence explanation of the overall sequence strategy>"
+}
+
+Provide exactly 3 steps with varied timings and channels appropriate to deal context.
+timing must be one of: now, 3d, 7d, 14d.
+channel must be one of: email, call, slack.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/followup-sequence")
+@limiter.limit("5/minute")
+async def deal_followup_sequence(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Follow-up sequences are only available for open deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    recent_notes = [r[0] for r in notes_result.fetchall()]
+
+    stage_changed = deal.stage_changed_at or deal.created_at
+    days_in_stage = 0
+    if stage_changed:
+        days_in_stage = max(0, (datetime.datetime.utcnow() - stage_changed.replace(tzinfo=None)).days)
+
+    next_action_overdue = False
+    if deal.next_action_date:
+        try:
+            na_date = datetime.date.fromisoformat(str(deal.next_action_date))
+            next_action_overdue = na_date < datetime.date.today()
+        except ValueError:
+            pass
+
+    context_lines = [
+        f"Deal: {deal.title or 'Untitled'} | Company: {deal.company or 'Unknown'}",
+        f"Stage: {deal.stage} | Value: ${deal.value:,.0f}",
+        f"Health score: {deal.health_score} | Win probability: {deal.ml_win_probability}%",
+        f"Days in current stage: {days_in_stage}",
+        f"Next action overdue: {next_action_overdue}",
+        f"Competitor count: {len(deal.competitors) if deal.competitors else 0}",
+    ]
+    if recent_notes:
+        context_lines.append("\nRecent deal notes (newest first):")
+        for i, note in enumerate(recent_notes, 1):
+            context_lines.append(f"  Note {i}: {note[:300]}")
+
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_FOLLOWUP_SEQUENCE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_timings = {"now", "3d", "7d", "14d"}
+        valid_channels = {"email", "call", "slack"}
+        steps = []
+        for s in (data.get("steps") or [])[:3]:
+            if not isinstance(s, dict):
+                continue
+            timing = s.get("timing", "3d")
+            if timing not in valid_timings:
+                timing = "3d"
+            channel = s.get("channel", "email")
+            if channel not in valid_channels:
+                channel = "email"
+            steps.append({
+                "step": len(steps) + 1,
+                "timing": timing,
+                "channel": channel,
+                "action": str(s.get("action", ""))[:300],
+                "goal": str(s.get("goal", ""))[:200],
+            })
+
+        while len(steps) < 3:
+            steps.append({
+                "step": len(steps) + 1,
+                "timing": "7d",
+                "channel": "email",
+                "action": "Follow up with the prospect to check on next steps.",
+                "goal": "Maintain momentum and keep the deal moving forward.",
+            })
+
+        rationale = str(data.get("rationale", ""))[:500]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "steps": steps,
+        "rationale": rationale,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 15o: AI deal champion risk assessment
+# ---------------------------------------------------------------------------
+
+_CHAMPION_RISK_SYSTEM = """\
+You are Nova, an AI sales intelligence engine. Assess the champion risk for an \
+open deal — specifically the risk that the internal champion or decision-maker \
+may be weakening, gone silent, or absent.
+
+Return valid JSON (no markdown) in exactly this shape:
+{
+  "risk_level": "<one of: low|medium|high|critical>",
+  "champion_status": "<one of: active|uncertain|at_risk|unknown>",
+  "risk_signals": ["<signal 1>", "<signal 2>", "<signal 3>"],
+  "mitigation_steps": ["<step 1>", "<step 2>", "<step 3>"]
+}
+
+Definitions:
+- risk_level: low = champion clearly engaged; medium = some uncertainty; \
+high = champion likely losing influence or going silent; critical = no champion or key stakeholder gone
+- champion_status: active = confirmed champion actively pushing deal; \
+uncertain = champion present but silent lately; at_risk = champion may have left or lost authority; \
+unknown = no champion identified
+- risk_signals: exactly 3 specific observations from the deal data explaining the risk
+- mitigation_steps: exactly 3 concrete actions to strengthen the champion relationship
+\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/champion-risk")
+@limiter.limit("5/minute")
+async def deal_champion_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Champion risk is only available for open deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    note_bodies = [row[0] for row in notes_result.all() if row[0]]
+
+    today = datetime.date.today()
+    if deal.stage_changed_at:
+        days_in_stage = (today - deal.stage_changed_at.date()).days
+    else:
+        days_in_stage = 0
+
+    mentions = deal.mentions or []
+    champion_count = sum(1 for m in mentions if isinstance(m, dict) and m.get("type") == "champion")
+    decision_maker_count = sum(1 for m in mentions if isinstance(m, dict) and m.get("type") == "decision_maker")
+
+    champion_names = [m.get("name", "Unknown") for m in mentions if isinstance(m, dict) and m.get("type") == "champion"]
+    dm_names = [m.get("name", "Unknown") for m in mentions if isinstance(m, dict) and m.get("type") == "decision_maker"]
+
+    context = (
+        f"Deal: {deal.title or 'Untitled'}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${float(deal.value or 0):,.0f}\n"
+        f"Health score: {deal.health_score or 0}/100\n"
+        f"Days in current stage: {days_in_stage}\n"
+        f"ML win probability: {deal.ml_win_probability or 0}%\n"
+        f"Identified champions: {champion_count} ({', '.join(champion_names) if champion_names else 'none'})\n"
+        f"Identified decision-makers: {decision_maker_count} ({', '.join(dm_names) if dm_names else 'none'})\n"
+        f"Total stakeholders mapped: {len(mentions)}\n"
+    )
+    if note_bodies:
+        context += "\nRecent deal notes (latest first):\n"
+        for body in note_bodies:
+            context += f"  - {body[:200]}\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_CHAMPION_RISK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_risk_levels = {"low", "medium", "high", "critical"}
+        valid_statuses = {"active", "uncertain", "at_risk", "unknown"}
+
+        risk_level = str(data.get("risk_level", "medium"))
+        if risk_level not in valid_risk_levels:
+            risk_level = "medium"
+
+        champion_status = str(data.get("champion_status", "unknown"))
+        if champion_status not in valid_statuses:
+            champion_status = "unknown"
+
+        risk_signals = [str(s)[:200] for s in (data.get("risk_signals") or [])[:3]]
+        while len(risk_signals) < 3:
+            risk_signals.append("Insufficient deal activity to assess champion engagement.")
+
+        mitigation_steps = [str(s)[:200] for s in (data.get("mitigation_steps") or [])[:3]]
+        while len(mitigation_steps) < 3:
+            mitigation_steps.append("Identify and engage a named internal champion.")
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "risk_level": risk_level,
+        "champion_status": champion_status,
+        "risk_signals": risk_signals,
+        "mitigation_steps": mitigation_steps,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
