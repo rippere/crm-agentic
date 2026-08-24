@@ -2,6 +2,7 @@ import csv
 import difflib
 import io
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta
 
@@ -23,6 +24,8 @@ from app.models.contact import Contact
 from app.models.contact_note import ContactNote
 from app.models.activity_event import ActivityEvent
 from app.services.supabase_rest import get_row
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -658,12 +661,40 @@ async def compose_email(
     )
 
     client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_content}],
-    )
+    try:
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
+        )
+    except _anthropic.APIStatusError as exc:
+        # Anthropic returned a definite error (out-of-credits 400, auth 401,
+        # rate-limit 429, etc.). Surface it as a recoverable 503 with an
+        # actionable detail rather than letting it bubble up as an opaque 500 —
+        # the compose-email UI can then show "AI drafting temporarily
+        # unavailable" instead of a generic crash. See the credit-exhaustion
+        # incident 2026-08-23 where this masked as "the connectors are broken".
+        detail_msg = ""
+        if isinstance(getattr(exc, "body", None), dict):
+            detail_msg = str(exc.body.get("message", ""))
+        logger.warning(
+            "compose_email anthropic_error contact_id=%s status=%s message=%s",
+            contact_id,
+            getattr(exc, "status_code", "?"),
+            detail_msg or str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI email drafting is temporarily unavailable. Please try again shortly, or check the Anthropic API credit balance.",
+        ) from exc
+    except _anthropic.APIError as exc:
+        # Connection/timeout errors that aren't a definite HTTP status.
+        logger.warning("compose_email anthropic_conn_error contact_id=%s exc=%s", contact_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI email drafting is temporarily unavailable. Please try again shortly.",
+        ) from exc
 
     raw = message.content[0].text if message.content else "{}"
 
