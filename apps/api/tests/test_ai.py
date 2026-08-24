@@ -3113,3 +3113,88 @@ async def test_deal_competitive_response_wrong_workspace_returns_403(app_client)
         )
 
     assert resp.status_code == 403
+
+# POST /workspaces/{wid}/deals/{did}/ai/expansion-opportunity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_expansion_opportunity_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    deal = _fake_deal_row(stage="closed_won", value=95000.0, health_score=88)
+    deal.contact_id = None
+
+    def _scalar_one_or_none(v):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = v
+        return r
+
+    def _all(rows):
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _scalar_one_or_none(deal),  # deal lookup
+        _all([]),                    # deal notes
+    ])
+
+    response_json = _json.dumps({
+        "opportunity_score": 82,
+        "upsell_products": [
+            "Enterprise Analytics Suite add-on",
+            "Dedicated Customer Success Manager package",
+            "Advanced API access tier",
+        ],
+        "cross_sell_signals": [
+            "Mentioned interest in reporting dashboards during onboarding",
+            "Team size suggests need for multi-seat license expansion",
+            "High engagement score signals strong platform adoption",
+        ],
+        "recommended_timing": "3_months",
+        "next_step": "Schedule a 90-day business review to surface new use cases and expansion budget",
+    })
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/deals/{uuid.uuid4()}/ai/expansion-opportunity"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "opportunity_score" in body
+    assert isinstance(body["opportunity_score"], int)
+    assert 0 <= body["opportunity_score"] <= 100
+    assert "upsell_products" in body
+    assert isinstance(body["upsell_products"], list) and len(body["upsell_products"]) == 3
+    assert "cross_sell_signals" in body
+    assert isinstance(body["cross_sell_signals"], list) and len(body["cross_sell_signals"]) == 3
+    assert body["recommended_timing"] in ("immediate", "3_months", "6_months")
+    assert "next_step" in body and isinstance(body["next_step"], str)
+    assert "deal_id" in body
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_expansion_opportunity_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/ai/expansion-opportunity"
+        )
+
+    assert resp.status_code == 403

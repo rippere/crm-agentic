@@ -449,6 +449,11 @@ export default function DealDetailPage() {
   const [competitiveResponseLoading, setCompetitiveResponseLoading] = useState(false);
   const [competitiveResponseGenerating, setCompetitiveResponseGenerating] = useState(false);
 
+  type ExpansionOpportunityData = { opportunity_score: number; upsell_products: string[]; cross_sell_signals: string[]; recommended_timing: 'immediate' | '3_months' | '6_months'; next_step: string; deal_id: string; generated_at: string };
+  const [expansionOpportunity, setExpansionOpportunity] = useState<ExpansionOpportunityData | null>(null);
+  const [expansionOpportunityLoading, setExpansionOpportunityLoading] = useState(false);
+  const [expansionOpportunityGenerating, setExpansionOpportunityGenerating] = useState(false);
+
   const optimizePoller = useJobPoller();
 
   // ── Auth init ──────────────────────────────────────────────────────────────
@@ -682,6 +687,15 @@ export default function DealDetailPage() {
         .then((data) => setWinLossData(data ?? null))
         .catch(() => setWinLossData(null))
         .finally(() => setWinLossLoading(false));
+    }
+
+    if (deal.stage === "closed_won") {
+      setExpansionOpportunityLoading(true);
+      apiClient
+        .getExpansionOpportunity(workspaceId, dealId, token)
+        .then((data) => setExpansionOpportunity(data ?? null))
+        .catch(() => setExpansionOpportunity(null))
+        .finally(() => setExpansionOpportunityLoading(false));
     }
 
     if (deal.contact_id) {
@@ -970,6 +984,17 @@ export default function DealDetailPage() {
       setChampionRisk(data ?? null);
     } catch { /* ignore */ }
     finally { setChampionRiskGenerating(false); }
+  };
+
+  const handleRegenerateExpansionOpportunity = async () => {
+    if (!token || !workspaceId || expansionOpportunityGenerating) return;
+    setExpansionOpportunityGenerating(true);
+    try {
+      const data = await apiClient.getExpansionOpportunity(workspaceId, dealId, token);
+      setExpansionOpportunity(data);
+    } catch { /* noop */ } finally {
+      setExpansionOpportunityGenerating(false);
+    }
   };
 
   const handleRegenerateCompetitiveResponse = async () => {
@@ -2844,6 +2869,121 @@ export default function DealDetailPage() {
                   </p>
                 </div>
               )}
+            </Card>
+          )}
+
+          {/* Expansion Opportunity — closed_won deals only */}
+          {stage === "closed_won" && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-emerald-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Expansion Opportunity</p>
+                {expansionOpportunity && (
+                  <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${
+                    expansionOpportunity.opportunity_score >= 70
+                      ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                      : expansionOpportunity.opportunity_score >= 40
+                      ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                      : "text-zinc-400 border-zinc-600/30 bg-zinc-700/10"
+                  }`}>
+                    Score {expansionOpportunity.opportunity_score}
+                  </span>
+                )}
+                <button
+                  onClick={handleRegenerateExpansionOpportunity}
+                  disabled={expansionOpportunityLoading || expansionOpportunityGenerating}
+                  className="ml-auto text-zinc-500 hover:text-emerald-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate expansion opportunity"
+                  title="Regenerate"
+                >
+                  {expansionOpportunityGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {expansionOpportunityLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : expansionOpportunity === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load expansion opportunity data.</p>
+              ) : (() => {
+                const s = expansionOpportunity.opportunity_score;
+                const circumference = 2 * Math.PI * 28;
+                const dash = (s / 100) * circumference;
+                const scoreColor = s >= 70 ? "#34d399" : s >= 40 ? "#fbbf24" : "#71717a";
+                const timingLabels: Record<string, string> = { immediate: "Immediate", "3_months": "3 Months", "6_months": "6 Months" };
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-4">
+                      <div className="relative flex-shrink-0">
+                        <svg width="68" height="68" viewBox="0 0 68 68">
+                          <circle cx="34" cy="34" r="28" fill="none" stroke="#27272a" strokeWidth="8" />
+                          <circle
+                            cx="34" cy="34" r="28" fill="none"
+                            stroke={scoreColor} strokeWidth="8"
+                            strokeLinecap="round"
+                            strokeDasharray={`${dash} ${circumference}`}
+                            transform="rotate(-90 34 34)"
+                            style={{ transition: "stroke-dasharray 0.5s ease" }}
+                          />
+                        </svg>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          <span className="text-base font-bold font-mono" style={{ color: scoreColor }}>{s}</span>
+                        </div>
+                      </div>
+                      <div className="flex-1 space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide">Timing</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold ${
+                            expansionOpportunity.recommended_timing === "immediate"
+                              ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                              : expansionOpportunity.recommended_timing === "3_months"
+                              ? "text-indigo-300 border-indigo-500/30 bg-indigo-500/10"
+                              : "text-zinc-300 border-zinc-600/30 bg-zinc-700/10"
+                          }`}>
+                            {timingLabels[expansionOpportunity.recommended_timing] ?? expansionOpportunity.recommended_timing}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-zinc-300 leading-relaxed">{expansionOpportunity.next_step}</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Upsell Products</p>
+                      <ul className="space-y-1">
+                        {expansionOpportunity.upsell_products.map((p, i) => (
+                          <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-[9px] font-bold text-emerald-400 mt-0.5">{i + 1}</span>
+                            <p className="text-xs text-zinc-300 leading-relaxed">{p}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Cross-Sell Signals</p>
+                      <ul className="space-y-1">
+                        {expansionOpportunity.cross_sell_signals.map((sig, i) => (
+                          <li key={i} className="flex items-start gap-2">
+                            <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-indigo-400" />
+                            <p className="text-xs text-zinc-400 leading-relaxed">{sig}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <p className="text-[10px] text-zinc-600 text-right">
+                      Generated {new Date(expansionOpportunity.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+                );
+              })()}
             </Card>
           )}
 

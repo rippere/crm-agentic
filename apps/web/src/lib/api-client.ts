@@ -3704,4 +3704,62 @@ export const apiClient = {
       token,
     )
   },
+
+  getExpansionOpportunity: (workspaceId: string, dealId: string, token: string): Promise<{
+    opportunity_score: number
+    upsell_products: string[]
+    cross_sell_signals: string[]
+    recommended_timing: 'immediate' | '3_months' | '6_months'
+    next_step: string
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        opportunity_score: number
+        upsell_products: string[]
+        cross_sell_signals: string[]
+        recommended_timing: 'immediate' | '3_months' | '6_months'
+        next_step: string
+      }> = {
+        'd-001': {
+          opportunity_score: 84,
+          upsell_products: [
+            'Enterprise Analytics Suite add-on with advanced reporting',
+            'Dedicated Customer Success Manager package',
+            'Multi-workspace license for subsidiary teams',
+          ],
+          cross_sell_signals: [
+            'Mentioned evaluating a project management tool in post-close debrief',
+            'Team size of 80+ suggests seat expansion opportunity within 6 months',
+            'High adoption score indicates strong platform stickiness for upsell',
+          ],
+          recommended_timing: '3_months',
+          next_step: 'Schedule a 90-day business review to surface new use cases and present the Enterprise Analytics add-on',
+        },
+        'd-002': {
+          opportunity_score: 58,
+          upsell_products: [
+            'Premium API access tier for deeper integrations',
+            'Additional connector seats for Slack and Teams',
+            'Advanced security and compliance package',
+          ],
+          cross_sell_signals: [
+            'Contact asked about API rate limits during implementation — signals deeper integration interest',
+            'Deal notes reference plans to expand the team using the platform next quarter',
+            'Low task completion rate suggests onboarding support package could add value',
+          ],
+          recommended_timing: '6_months',
+          next_step: 'Send a post-implementation health check survey, then book a roadmap call to present the API tier upgrade',
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/expansion-opportunity`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
