@@ -675,9 +675,16 @@ async def compose_email(
         # the compose-email UI can then show "AI drafting temporarily
         # unavailable" instead of a generic crash. See the credit-exhaustion
         # incident 2026-08-23 where this masked as "the connectors are broken".
+        # Anthropic error bodies nest the human-readable message under
+        # `error.message` ({"type": "error", "error": {"message": ...}}), not at
+        # the top level — read the nested field so the log captures the actual
+        # cause (e.g. "credit balance is too low") instead of a generic repr.
         detail_msg = ""
-        if isinstance(getattr(exc, "body", None), dict):
-            detail_msg = str(exc.body.get("message", ""))
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):
+                detail_msg = str(err.get("message", ""))
         logger.warning(
             "compose_email anthropic_error contact_id=%s status=%s message=%s",
             contact_id,
