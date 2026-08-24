@@ -5405,3 +5405,144 @@ async def get_deal_competitive_response(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# Phase 15q: AI deal expansion opportunity
+# ---------------------------------------------------------------------------
+
+_EXPANSION_OPPORTUNITY_SYSTEM = """You are a sales intelligence AI that identifies expansion opportunities for recently closed deals.
+
+Given a closed_won deal context, return a JSON object with exactly these keys:
+{
+  "opportunity_score": <integer 0-100>,
+  "upsell_products": ["<string>", "<string>", "<string>"],
+  "cross_sell_signals": ["<string>", "<string>", "<string>"],
+  "recommended_timing": "<one of: immediate|3_months|6_months>",
+  "next_step": "<string — one specific action to take>"
+}
+
+opportunity_score: 0 = no expansion potential, 100 = very high expansion potential.
+upsell_products: 3 specific product/service upgrades or add-ons relevant to this deal.
+cross_sell_signals: 3 signals from the deal context suggesting adjacent product interest.
+recommended_timing: when to approach the customer about expansion.
+Output only valid JSON, no prose."""
+
+
+@router.post(
+    "/workspaces/{workspace_id}/deals/{deal_id}/ai/expansion-opportunity",
+    summary="AI deal expansion opportunity analysis",
+)
+@limiter.limit("5/minute")
+async def deal_expansion_opportunity(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    if deal.stage != "closed_won":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expansion opportunity is only available for closed_won deals",
+        )
+
+    contact = None
+    if deal.contact_id:
+        contact_result = await db.execute(
+            select(Contact).where(Contact.id == deal.contact_id)
+        )
+        contact = contact_result.scalar_one_or_none()
+
+    note_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = [row[0] for row in note_result.all()]
+
+    open_task_count = 0
+    if deal.contact_id:
+        open_task_count = await db.scalar(
+            select(func.count()).where(
+                Task.workspace_id == workspace_id,
+                Task.contact_id == deal.contact_id,
+                Task.status.in_(["open", "in_progress"]),
+            )
+        ) or 0
+
+    contact_info = ""
+    if contact:
+        contact_info = (
+            f"Contact: {contact.name or 'unknown'}, Company: {contact.company or 'unknown'}, "
+            f"Status: {contact.status or 'unknown'}, ML Score: {contact.ml_score or 0}/100. "
+        )
+
+    note_snippets = "; ".join(f'"{n[:120]}"' for n in notes) if notes else "none"
+
+    context = (
+        f"Deal: {deal.title}, Company: {deal.company or 'unknown'}, "
+        f"Value: ${deal.value or 0:,.0f}, "
+        f"Health score: {deal.health_score or 0}/100. "
+        f"{contact_info}"
+        f"Open tasks for this contact: {open_task_count}. "
+        f"Recent deal notes: {note_snippets}."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_EXPANSION_OPPORTUNITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = message.content[0].text.strip()
+        parsed = json.loads(raw)
+
+        opportunity_score = max(0, min(100, int(parsed.get("opportunity_score", 50))))
+
+        def _pad3(lst: list, default: str) -> list:
+            lst = [str(x) for x in lst] if isinstance(lst, list) else []
+            while len(lst) < 3:
+                lst.append(default)
+            return lst[:3]
+
+        upsell_products = _pad3(parsed.get("upsell_products", []), "Enterprise tier upgrade")
+        cross_sell_signals = _pad3(
+            parsed.get("cross_sell_signals", []), "Expressed interest in related features"
+        )
+
+        raw_timing = str(parsed.get("recommended_timing", "3_months"))
+        if raw_timing not in ("immediate", "3_months", "6_months"):
+            raw_timing = "3_months"
+        recommended_timing = raw_timing
+
+        next_step = str(
+            parsed.get("next_step", "Schedule a 30-day post-implementation review call")
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "opportunity_score": opportunity_score,
+        "upsell_products": upsell_products,
+        "cross_sell_signals": cross_sell_signals,
+        "recommended_timing": recommended_timing,
+        "next_step": next_step,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
