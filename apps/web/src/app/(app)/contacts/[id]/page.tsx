@@ -442,6 +442,11 @@ export default function ContactDetailPage() {
   const [growthForecastLoading, setGrowthForecastLoading] = useState(false);
   const [growthForecastGenerating, setGrowthForecastGenerating] = useState(false);
 
+  type ChurnRiskData = { risk_level: 'low' | 'medium' | 'high' | 'critical'; churn_signals: string[]; retention_actions: string[]; contact_id: string; generated_at: string };
+  const [churnRisk, setChurnRisk] = useState<ChurnRiskData | null>(null);
+  const [churnRiskLoading, setChurnRiskLoading] = useState(false);
+  const [churnRiskGenerating, setChurnRiskGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -652,6 +657,13 @@ export default function ContactDetailPage() {
       .then((data) => setGrowthForecast(data ?? null))
       .catch(() => setGrowthForecast(null))
       .finally(() => setGrowthForecastLoading(false));
+
+    setChurnRiskLoading(true);
+    apiClient
+      .getChurnRisk(workspaceId, contactId, token)
+      .then((data) => setChurnRisk(data ?? null))
+      .catch(() => setChurnRisk(null))
+      .finally(() => setChurnRiskLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1614,6 +1626,90 @@ export default function ContactDetailPage() {
                 >
                   {growthForecastGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <TrendingUp className="h-3 w-3" />}
                   {growthForecastGenerating ? "Forecasting…" : "Generate Forecast"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Churn Risk */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-rose-400" />
+              <p className="text-xs font-semibold text-zinc-300">Churn Risk</p>
+              {churnRisk && (() => {
+                const cfg = {
+                  low:      { label: 'Low',      cls: 'bg-emerald-500/15 text-emerald-400' },
+                  medium:   { label: 'Medium',   cls: 'bg-amber-500/15 text-amber-400'    },
+                  high:     { label: 'High',     cls: 'bg-rose-500/15 text-rose-400'      },
+                  critical: { label: 'Critical', cls: 'bg-rose-600/20 text-rose-300'      },
+                }[churnRisk.risk_level] ?? { label: churnRisk.risk_level, cls: 'bg-zinc-700/50 text-zinc-400' };
+                return (
+                  <span className={cn("ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || churnRiskGenerating) return;
+                  setChurnRiskGenerating(true);
+                  try {
+                    const data = await apiClient.getChurnRisk(workspaceId, contactId, token);
+                    setChurnRisk(data ?? null);
+                  } catch { /* ignore */ } finally { setChurnRiskGenerating(false); }
+                }}
+                disabled={churnRiskGenerating}
+                className={cn("ml-1 text-zinc-500 hover:text-zinc-300 transition", churnRisk ? "" : "hidden")}
+              >
+                <RefreshCw className={cn("h-3 w-3", churnRiskGenerating && "animate-spin")} />
+              </button>
+            </div>
+
+            {churnRiskLoading ? (
+              <div className="space-y-2">
+                <div className="h-12 rounded-lg bg-zinc-800 animate-pulse" />
+                <div className="h-12 rounded-lg bg-zinc-800 animate-pulse" />
+              </div>
+            ) : churnRisk ? (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">Churn Signals</p>
+                  {churnRisk.churn_signals.map((signal, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="mt-1 h-1.5 w-1.5 rounded-full bg-rose-500 flex-shrink-0" />
+                      <p className="text-xs text-zinc-400 leading-relaxed">{signal}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">Retention Actions</p>
+                  {churnRisk.retention_actions.map((action, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="mt-1 h-1.5 w-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                      <p className="text-xs text-zinc-400 leading-relaxed">{action}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(churnRisk.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">AI churn risk assessment for this contact.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setChurnRiskGenerating(true);
+                    try {
+                      const data = await apiClient.getChurnRisk(workspaceId, contactId, token);
+                      setChurnRisk(data ?? null);
+                    } catch { /* ignore */ } finally { setChurnRiskGenerating(false); }
+                  }}
+                  disabled={churnRiskGenerating}
+                >
+                  {churnRiskGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <AlertTriangle className="h-3 w-3" />}
+                  {churnRiskGenerating ? "Assessing…" : "Assess Churn Risk"}
                 </Button>
               </div>
             )}

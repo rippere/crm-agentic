@@ -3762,4 +3762,67 @@ export const apiClient = {
       token,
     )
   },
+
+  getChurnRisk: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    risk_level: 'low' | 'medium' | 'high' | 'critical'
+    churn_signals: string[]
+    retention_actions: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { risk_level: 'low' | 'medium' | 'high' | 'critical'; churn_signals: string[]; retention_actions: string[] }> = {
+        'c-001': {
+          risk_level: 'low',
+          churn_signals: [
+            'Engagement is strong — 12 messages and 5 notes in the last 90 days',
+            'Two active high-value deals indicate ongoing mutual investment',
+            'ML lead score is "hot" — contact is actively progressing through the funnel',
+          ],
+          retention_actions: [
+            'Send a personalized QBR invite to cement the relationship before close',
+            'Share a relevant case study matching their industry to reinforce value',
+            'Introduce a senior point of contact to deepen the executive relationship',
+          ],
+        },
+        'c-002': {
+          risk_level: 'critical',
+          churn_signals: [
+            'No messages or notes in the last 30 days — contact has gone dark',
+            'Lost deal in Q3 signals unresolved objections or competitive loss',
+            'ML score has declined to "warm" from prior "hot" classification',
+          ],
+          retention_actions: [
+            'Send a re-engagement email acknowledging the silence and offering a fresh conversation',
+            'Offer a complimentary audit or discovery session to reignite interest',
+            'Escalate to a senior relationship manager for a direct outreach call this week',
+          ],
+        },
+        'c-003': {
+          risk_level: 'medium',
+          churn_signals: [
+            'Contact status is "cold" — early funnel with limited recent touchpoints',
+            'Only 3 messages in the last 90 days indicates low engagement frequency',
+            'No notes created recently — internal team awareness of this contact is low',
+          ],
+          retention_actions: [
+            'Initiate a value-add touchpoint: share a relevant industry insight or report',
+            'Add the contact to a nurture sequence with bi-weekly check-ins',
+            'Create a follow-up task with a specific due date to prevent further silence',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/churn-risk`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }

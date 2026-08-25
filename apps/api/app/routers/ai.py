@@ -5546,3 +5546,179 @@ async def deal_expansion_opportunity(
         "deal_id": str(deal_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# AI contact churn risk assessment
+# ---------------------------------------------------------------------------
+
+_CHURN_RISK_SYSTEM = """\
+You are a CRM analyst specialized in customer retention. Given a contact's engagement
+profile, return a JSON object assessing their churn risk:
+{
+  "risk_level": "<one of: low|medium|high|critical>",
+  "churn_signals": ["<signal 1>", "<signal 2>", "<signal 3>"],
+  "retention_actions": ["<action 1>", "<action 2>", "<action 3>"]
+}
+Rules:
+- risk_level must be exactly one of: low, medium, high, critical
+- churn_signals: 3 specific, evidence-based signals from the data
+- retention_actions: 3 concrete, actionable steps to retain this contact
+- Base risk_level on: days since last touch (>30=elevated, >60=high, >90=critical),
+  message frequency decline, going-dark flag, pipeline value at stake, task neglect
+Return ONLY the JSON object, no markdown, no explanation.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/churn-risk")
+@limiter.limit("5/minute")
+async def contact_churn_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    ninety_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=90)
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+
+    # Message count last 90 days
+    msg_result = await db.execute(
+        select(func.count(Message.id)).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= ninety_days_ago,
+        )
+    )
+    recent_message_count = msg_result.scalar() or 0
+
+    # Note count last 90 days
+    note_result = await db.execute(
+        select(func.count(ContactNote.id)).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+            ContactNote.created_at >= ninety_days_ago,
+        )
+    )
+    recent_note_count = note_result.scalar() or 0
+
+    # Open deal pipeline value
+    deal_result = await db.execute(
+        select(func.coalesce(func.sum(Deal.value), 0)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    open_pipeline_value = float(deal_result.scalar() or 0)
+
+    # Open task count
+    task_result = await db.execute(
+        select(func.count(Task.id)).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status.in_(["open", "in_progress"]),
+        )
+    )
+    open_task_count = task_result.scalar() or 0
+
+    # Days since last touch (latest of message or note)
+    last_msg_result = await db.execute(
+        select(func.max(Message.received_at)).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+        )
+    )
+    last_msg_at = last_msg_result.scalar()
+
+    last_note_result = await db.execute(
+        select(func.max(ContactNote.created_at)).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+        )
+    )
+    last_note_at = last_note_result.scalar()
+
+    last_touch = None
+    for ts in (last_msg_at, last_note_at):
+        if ts is not None:
+            if last_touch is None or ts > last_touch:
+                last_touch = ts
+
+    now = datetime.datetime.utcnow()
+    days_since_last_touch = (now - last_touch).days if last_touch else 999
+    going_dark = days_since_last_touch >= 30
+
+    context = (
+        f"Contact: {contact.name} ({contact.email})\n"
+        f"Company: {contact.company or 'Unknown'}\n"
+        f"Status: {contact.status}\n"
+        f"ML score: {contact.ml_score or 0} ({contact.ml_score_label or 'unknown'})\n\n"
+        f"Engagement (last 90 days):\n"
+        f"  Messages: {recent_message_count}\n"
+        f"  Notes: {recent_note_count}\n"
+        f"  Open tasks: {open_task_count}\n\n"
+        f"Last touch: {days_since_last_touch} days ago\n"
+        f"Going dark (30+ days silent): {'Yes' if going_dark else 'No'}\n"
+        f"Open pipeline at risk: ${open_pipeline_value:,.0f}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_CHURN_RISK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_risk_levels = {"low", "medium", "high", "critical"}
+        risk_level = data.get("risk_level", "medium")
+        if risk_level not in valid_risk_levels:
+            risk_level = "medium"
+
+        def _pad3(lst: list, default: str) -> list:
+            lst = [str(x) for x in lst] if isinstance(lst, list) else []
+            while len(lst) < 3:
+                lst.append(default)
+            return lst[:3]
+
+        churn_signals = _pad3(
+            data.get("churn_signals", []),
+            "Reduced engagement activity detected",
+        )
+        retention_actions = _pad3(
+            data.get("retention_actions", []),
+            "Schedule a check-in call to re-engage",
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "risk_level": risk_level,
+        "churn_signals": churn_signals,
+        "retention_actions": retention_actions,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
