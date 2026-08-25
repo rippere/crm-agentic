@@ -3198,3 +3198,93 @@ async def test_deal_expansion_opportunity_wrong_workspace_returns_403(app_client
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 15r — AI contact churn risk assessment
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_contact_churn_risk_returns_structured_response(app_client):
+    """churn-risk returns risk_level, churn_signals x3, retention_actions x3."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _sone(v):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = v
+        return r
+
+    def _scalar(v):
+        r = MagicMock()
+        r.scalar.return_value = v
+        return r
+
+    contact = _fake_contact(workspace_id, name="Dana Nguyen", company="FinCorp", status="customer")
+    contact.ml_score = 55
+    contact.ml_score_label = "warm"
+
+    import datetime as _dt
+    last_touch_ts = _dt.datetime.utcnow() - _dt.timedelta(days=45)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _sone(contact),          # contact lookup
+        _scalar(2),              # message count last 90d
+        _scalar(1),              # note count last 90d
+        _scalar(12000.0),        # open pipeline value
+        _scalar(3),              # open task count
+        _scalar(last_touch_ts),  # last message received_at
+        _scalar(None),           # last note created_at
+    ])
+
+    response_json = _json.dumps({
+        "risk_level": "high",
+        "churn_signals": [
+            "Only 2 messages in the last 90 days — engagement frequency is declining",
+            "45 days since last touch — contact has gone silent past the 30-day threshold",
+            "Warm ML score with low recent activity suggests pipeline stall risk",
+        ],
+        "retention_actions": [
+            "Send a personalised re-engagement email referencing their open deal",
+            "Schedule a discovery call to understand any blockers or competitor conversations",
+            "Share a relevant industry insight to provide value before the next ask",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/churn-risk"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["risk_level"] in {"low", "medium", "high", "critical"}
+    assert body["risk_level"] == "high"
+    assert isinstance(body["churn_signals"], list)
+    assert len(body["churn_signals"]) == 3
+    assert isinstance(body["retention_actions"], list)
+    assert len(body["retention_actions"]) == 3
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_churn_risk_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/churn-risk"
+        )
+
+    assert resp.status_code == 403
