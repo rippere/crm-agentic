@@ -1036,8 +1036,12 @@ export default function ContactsPage() {
 
   useEffect(() => {
     if (!token || !workspaceId) return;
-    apiClient.getConnectors(workspaceId, token).then((connectors: Array<{ provider: string }>) => {
-      setHasGmailConnector(connectors.some((c) => c.provider === 'gmail'));
+    apiClient.getConnectors(workspaceId, token).then((connectors: Array<{ service: string }>) => {
+      // The connectors API serializes the provider under `service` (see
+      // apps/api/app/routers/gmail.py), not `provider`. Reading the wrong key
+      // left hasGmailConnector permanently false, so the "No Gmail" badge and
+      // disabled Send button persisted even after Gmail was connected.
+      setHasGmailConnector(connectors.some((c) => c.service === 'gmail'));
     }).catch(() => {});
   }, [token, workspaceId]);
 
