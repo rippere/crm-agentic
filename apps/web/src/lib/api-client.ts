@@ -160,7 +160,20 @@ async function apiFetch(path: string, options: RequestInit = {}, token?: string,
   }
   if (!res.ok) {
     console.error(`[api] ${options.method ?? 'GET'} ${path} → ${res.status}`)
-    throw new Error(`API error ${res.status}`)
+    // Attach status + machine-readable detail so callers can distinguish cases
+    // (e.g. a 409 { code: "gmail_reauth_required" }) without changing the thrown
+    // type. Backwards-compatible: still an Error with the same message.
+    let detail: unknown
+    try { detail = (await res.json())?.detail } catch { /* body absent or not JSON */ }
+    const err = new Error(`API error ${res.status}`) as Error & {
+      status?: number; detail?: unknown; code?: string
+    }
+    err.status = res.status
+    err.detail = detail
+    if (detail && typeof detail === 'object' && 'code' in (detail as Record<string, unknown>)) {
+      err.code = String((detail as Record<string, unknown>).code)
+    }
+    throw err
   }
   return res.json()
 }

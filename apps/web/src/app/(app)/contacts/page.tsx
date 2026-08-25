@@ -315,6 +315,8 @@ function EmailComposerModal({
   const [sending, setSending] = useState(false);
   const [sendSuccess, setSendSuccess] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [needsReauth, setNeedsReauth] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(`Subject: ${draft.subject}\n\n${draft.body}`);
@@ -326,6 +328,7 @@ function EmailComposerModal({
     if (!workspaceId || !token || sending || sendSuccess) return;
     setSending(true);
     setSendError(null);
+    setNeedsReauth(false);
     try {
       await apiClient.sendEmail(workspaceId, contact.id, {
         to: contact.email,
@@ -333,10 +336,35 @@ function EmailComposerModal({
         body: draft.body,
       }, token);
       setSendSuccess(true);
-    } catch {
-      setSendError("Send failed — check Gmail connection");
+    } catch (err) {
+      const e = err as { code?: string; status?: number };
+      if (e?.status === 409 && e?.code === "gmail_reauth_required") {
+        setNeedsReauth(true);
+        setSendError("Gmail connection expired — reconnect to send.");
+      } else {
+        setSendError("Send failed — check Gmail connection");
+      }
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleReconnect = async () => {
+    if (!workspaceId || !token || reconnecting) return;
+    setReconnecting(true);
+    try {
+      const { auth_url } = await apiClient.getGmailAuthUrl(workspaceId, token);
+      // Only navigate to a server-generated https URL — guards against an open
+      // redirect if the endpoint ever returned a non-https/javascript: scheme.
+      if (auth_url && /^https:\/\//.test(auth_url)) {
+        window.location.href = auth_url;
+      } else {
+        setSendError("Could not start Gmail reconnect. Try again from Connectors.");
+        setReconnecting(false);
+      }
+    } catch {
+      setSendError("Could not start Gmail reconnect. Try again from Connectors.");
+      setReconnecting(false);
     }
   };
 
@@ -405,6 +433,20 @@ function EmailComposerModal({
           </div>
           {sendError && (
             <p className="text-xs text-rose-400 text-center">{sendError}</p>
+          )}
+          {needsReauth && (
+            <Button
+              variant="primary"
+              className="w-full justify-center"
+              onClick={handleReconnect}
+              disabled={reconnecting}
+            >
+              {reconnecting ? (
+                <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Redirecting…</>
+              ) : (
+                <><Mail className="h-3.5 w-3.5" /> Reconnect Gmail</>
+              )}
+            </Button>
           )}
         </div>
       </div>

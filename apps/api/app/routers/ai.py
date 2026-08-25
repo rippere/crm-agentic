@@ -4163,7 +4163,12 @@ async def workspace_digest(
         select(func.count(Deal.id)).where(
             Deal.workspace_id == workspace_id,
             Deal.stage.not_in(["closed_won", "closed_lost"]),
-            Deal.expected_close < today,
+            # expected_close is a String column holding ISO dates ("YYYY-MM-DD"),
+            # so compare against a string — comparing to a date object raises
+            # "operator does not exist: text < date". Lexical order matches date
+            # order for ISO strings. Mirrors the /deals overdue query in this file.
+            Deal.expected_close.isnot(None),
+            Deal.expected_close < today.isoformat(),
         )
     )
     overdue_close_count = overdue_close_result.scalar() or 0
