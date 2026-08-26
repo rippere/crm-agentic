@@ -167,8 +167,10 @@
 ## Current Phase
 Phase 15 — AI Summaries & Intelligence (continued)
 
+- [2026-08-26] Phase 15s: AI contact deal velocity benchmark — POST /workspaces/{id}/ai/contacts/{cid}/deal-velocity-benchmark (Claude Haiku, 5/min; reads all closed deals for contact + workspace, computes per-stage avg days, compares contact avg vs workspace avg; returns {contact_avg_days, workspace_avg_days, velocity_rating: fast|on_par|slow, stage_breakdown, insight, contact_id, generated_at}); "Deal Velocity" Card on /contacts/[id] after Churn Risk (2-col avg grid, per-stage days table, italic AI insight, Regenerate button, loading skeleton, empty CTA); getDealVelocityBenchmark() in api-client with c-001 (fast/28d), c-002 (slow/61d), c-003 (no history) demo stubs; 2 new tests (structured response + 403 guard); PR #95 open (CI pending)
+
 ## Next Task
-Phase 15s: AI contact deal velocity benchmark — POST /workspaces/{id}/ai/contacts/{cid}/deal-velocity-benchmark endpoint (Claude Haiku, 5/min; reads all closed deals for contact, computes avg days-to-close per stage, compares vs workspace average; returns {contact_avg_days, workspace_avg_days, velocity_rating: fast|on_par|slow, stage_breakdown[{stage, contact_days, workspace_days}], insight, contact_id, generated_at}); "Deal Velocity" card on /contacts/[id]; getDealVelocityBenchmark() in api-client with per-contact demo stubs; 2 new tests
+Phase 15t: AI contact deal outcome predictor — POST /workspaces/{id}/ai/contacts/{cid}/deal-outcome-predictor (Claude Haiku, 5/min; reads all open deals for contact with stage, value, health, ml_win_probability; returns {predicted_outcome: win|loss|stalled, confidence: high|medium|low, key_risks[×3], recommended_actions[×3], contact_id, generated_at}); "Deal Outcome" card on /contacts/[id] after Deal Velocity; getDealOutcomePredictor() in api-client with per-contact demo stubs; 2 new tests
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.

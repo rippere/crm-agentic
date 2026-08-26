@@ -5727,3 +5727,154 @@ async def contact_churn_risk(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# AI contact deal velocity benchmark
+# ---------------------------------------------------------------------------
+
+_VELOCITY_BENCHMARK_SYSTEM = """\
+You are a CRM analyst specializing in sales performance benchmarking. Given a contact's
+deal velocity data compared to workspace averages, return a JSON object:
+{
+  "velocity_rating": "<one of: fast|on_par|slow>",
+  "insight": "<one concise sentence explaining the rating and its business implication>"
+}
+Rules:
+- velocity_rating: fast = contact avg is ≥15% faster than workspace avg; slow = ≥15% slower; otherwise on_par
+- insight: exactly one sentence, specific to the numbers provided, no generic platitudes
+Return ONLY the JSON object, no markdown, no explanation.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/deal-velocity-benchmark")
+@limiter.limit("5/minute")
+async def contact_deal_velocity_benchmark(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # All closed deals for this contact with timing data
+    contact_deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+        )
+    )
+    contact_deals = contact_deals_result.scalars().all()
+
+    # All closed deals in workspace for comparison
+    workspace_deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+        )
+    )
+    workspace_deals = workspace_deals_result.scalars().all()
+
+    def _avg_days(deals: list) -> float | None:
+        deltas = []
+        for d in deals:
+            if d.stage_changed_at and d.created_at:
+                delta = (d.stage_changed_at - d.created_at).days
+                if delta >= 0:
+                    deltas.append(delta)
+        return round(sum(deltas) / len(deltas), 1) if deltas else None
+
+    def _stage_days(deals: list) -> dict:
+        by_stage: dict[str, list[float]] = defaultdict(list)
+        for d in deals:
+            if d.stage_changed_at and d.created_at:
+                delta = (d.stage_changed_at - d.created_at).days
+                if delta >= 0:
+                    by_stage[d.stage].append(float(delta))
+        return {s: round(sum(v) / len(v), 1) for s, v in by_stage.items()}
+
+    contact_avg = _avg_days(contact_deals)
+    workspace_avg = _avg_days(workspace_deals)
+
+    contact_stage_map = _stage_days(contact_deals)
+    workspace_stage_map = _stage_days(workspace_deals)
+
+    all_stages = sorted(set(list(contact_stage_map.keys()) + list(workspace_stage_map.keys())))
+    stage_breakdown = [
+        {
+            "stage": s,
+            "contact_days": contact_stage_map.get(s),
+            "workspace_days": workspace_stage_map.get(s),
+        }
+        for s in all_stages
+    ]
+
+    # Default velocity_rating when we have no data
+    if contact_avg is None or workspace_avg is None or workspace_avg == 0:
+        velocity_rating = "on_par"
+        insight = "Insufficient closed-deal history to benchmark velocity against workspace average."
+    else:
+        pct_diff = (workspace_avg - contact_avg) / workspace_avg
+        if pct_diff >= 0.15:
+            default_rating = "fast"
+        elif pct_diff <= -0.15:
+            default_rating = "slow"
+        else:
+            default_rating = "on_par"
+
+        context = (
+            f"Contact: {contact.name} ({contact.email})\n"
+            f"Contact closed deals: {len(contact_deals)}\n"
+            f"Contact avg days to close: {contact_avg}\n"
+            f"Workspace avg days to close: {workspace_avg}\n"
+            f"Percentage difference: {pct_diff*100:.1f}% ({'faster' if pct_diff > 0 else 'slower'} than average)\n"
+        )
+
+        try:
+            client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=150,
+                system=_VELOCITY_BENCHMARK_SYSTEM,
+                messages=[{"role": "user", "content": context}],
+            )
+            raw = msg.content[0].text.strip() if msg.content else "{}"
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                data = {}
+
+            valid_ratings = {"fast", "on_par", "slow"}
+            velocity_rating = data.get("velocity_rating", default_rating)
+            if velocity_rating not in valid_ratings:
+                velocity_rating = default_rating
+
+            insight = str(data.get("insight", "Velocity assessment completed."))
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"AI unavailable: {exc}",
+            ) from exc
+
+    return {
+        "contact_avg_days": contact_avg,
+        "workspace_avg_days": workspace_avg,
+        "velocity_rating": velocity_rating,
+        "stage_breakdown": stage_breakdown,
+        "insight": insight,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

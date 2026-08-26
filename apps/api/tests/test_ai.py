@@ -3288,3 +3288,94 @@ async def test_contact_churn_risk_wrong_workspace_returns_403(app_client):
         )
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 15s — AI contact deal velocity benchmark
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_contact_deal_velocity_benchmark_returns_structured_response(app_client):
+    """deal-velocity-benchmark returns contact/workspace avg days, velocity_rating, insight."""
+    import json as _json
+    import datetime as _dt
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _sone(v):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = v
+        return r
+
+    def _scalars(lst):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = lst
+        return r
+
+    contact = _fake_contact(workspace_id, name="Quinn Rivera", company="RivTech", status="customer")
+
+    now = _dt.datetime.utcnow()
+    # Two closed deals for contact — each ~30 days to close
+    contact_deal_a = MagicMock()
+    contact_deal_a.stage = "closed_won"
+    contact_deal_a.created_at = now - _dt.timedelta(days=30)
+    contact_deal_a.stage_changed_at = now
+    contact_deal_b = MagicMock()
+    contact_deal_b.stage = "closed_won"
+    contact_deal_b.created_at = now - _dt.timedelta(days=26)
+    contact_deal_b.stage_changed_at = now
+
+    # Workspace deals — contact deals plus a slower one averaging 42 days
+    ws_deal_extra = MagicMock()
+    ws_deal_extra.stage = "closed_lost"
+    ws_deal_extra.created_at = now - _dt.timedelta(days=70)
+    ws_deal_extra.stage_changed_at = now
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _sone(contact),                                        # contact lookup
+        _scalars([contact_deal_a, contact_deal_b]),            # contact closed deals
+        _scalars([contact_deal_a, contact_deal_b, ws_deal_extra]),  # workspace closed deals
+    ])
+
+    response_json = _json.dumps({
+        "velocity_rating": "fast",
+        "insight": "Deals with this contact close 33% faster than the workspace average.",
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/deal-velocity-benchmark"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["velocity_rating"] in {"fast", "on_par", "slow"}
+    assert body["velocity_rating"] == "fast"
+    assert body["contact_avg_days"] is not None
+    assert body["workspace_avg_days"] is not None
+    assert isinstance(body["stage_breakdown"], list)
+    assert isinstance(body["insight"], str)
+    assert len(body["insight"]) > 0
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_deal_velocity_benchmark_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/deal-velocity-benchmark"
+        )
+
+    assert resp.status_code == 403
