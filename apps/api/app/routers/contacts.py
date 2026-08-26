@@ -963,7 +963,7 @@ async def send_email(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     from app.models.connector import Connector
-    from app.services.gmail_client import GmailClient
+    from app.services.gmail_client import GmailClient, GmailReauthRequired
     from app.config import settings
 
     result = await db.execute(
@@ -985,7 +985,39 @@ async def send_email(
 
     try:
         sent = await client.send_message(to=body.to, subject=body.subject, body=body.body)
+    except GmailReauthRequired as exc:
+        logger.warning(
+            "send_email gmail_reauth_required workspace_id=%s contact_id=%s connector_id=%s exc=%s",
+            workspace_id, contact_id, connector.id, exc,
+        )
+        # Persist an auth-error event so GET /connectors reports this connector as
+        # "error" and the UI can steer the user to reconnect (mirrors slack_ingest).
+        try:
+            db.add(ActivityEvent(
+                workspace_id=workspace_id,
+                type="connector_auth_error",
+                agent_name="Gmail",
+                description=f"Gmail connector authorization failed: {exc}. Reconnect required.",
+                meta=f"connector_id={connector.id} code={getattr(exc, 'code', 'reauth_required')}",
+                severity="error",
+            ))
+            await db.commit()
+        except Exception:  # noqa: BLE001 — best-effort; never mask the reauth error
+            await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "gmail_reauth_required",
+                "message": "Gmail connection expired. Please reconnect Gmail to send email.",
+            },
+        ) from exc
     except Exception as exc:
+        # Surface the real Gmail failure to the server log — the 502 body alone was
+        # opaque, hiding the actual cause (bad scope, quota, network, API error).
+        logger.warning(
+            "send_email gmail_error workspace_id=%s contact_id=%s connector_id=%s exc_type=%s exc=%s",
+            workspace_id, contact_id, connector.id, type(exc).__name__, exc,
+        )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Gmail error: {exc}") from exc
 
     event = ActivityEvent(
