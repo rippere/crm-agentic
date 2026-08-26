@@ -447,6 +447,12 @@ export default function ContactDetailPage() {
   const [churnRiskLoading, setChurnRiskLoading] = useState(false);
   const [churnRiskGenerating, setChurnRiskGenerating] = useState(false);
 
+  type VelocityStageRow = { stage: string; contact_days: number | null; workspace_days: number | null };
+  type VelocityBenchmarkData = { contact_avg_days: number | null; workspace_avg_days: number | null; velocity_rating: 'fast' | 'on_par' | 'slow'; stage_breakdown: VelocityStageRow[]; insight: string; contact_id: string; generated_at: string };
+  const [velocityBenchmark, setVelocityBenchmark] = useState<VelocityBenchmarkData | null>(null);
+  const [velocityBenchmarkLoading, setVelocityBenchmarkLoading] = useState(false);
+  const [velocityBenchmarkGenerating, setVelocityBenchmarkGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -664,6 +670,13 @@ export default function ContactDetailPage() {
       .then((data) => setChurnRisk(data ?? null))
       .catch(() => setChurnRisk(null))
       .finally(() => setChurnRiskLoading(false));
+
+    setVelocityBenchmarkLoading(true);
+    apiClient
+      .getDealVelocityBenchmark(workspaceId, contactId, token)
+      .then((data) => setVelocityBenchmark(data ?? null))
+      .catch(() => setVelocityBenchmark(null))
+      .finally(() => setVelocityBenchmarkLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1710,6 +1723,102 @@ export default function ContactDetailPage() {
                 >
                   {churnRiskGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <AlertTriangle className="h-3 w-3" />}
                   {churnRiskGenerating ? "Assessing…" : "Assess Churn Risk"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Deal Velocity Benchmark */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Deal Velocity</p>
+              {velocityBenchmark && (() => {
+                const cfg = {
+                  fast:   { label: 'Faster than avg', cls: 'bg-emerald-500/15 text-emerald-400' },
+                  on_par: { label: 'On par',          cls: 'bg-indigo-500/15 text-indigo-400'   },
+                  slow:   { label: 'Slower than avg', cls: 'bg-rose-500/15 text-rose-400'       },
+                }[velocityBenchmark.velocity_rating] ?? { label: velocityBenchmark.velocity_rating, cls: 'bg-zinc-700/50 text-zinc-400' };
+                return (
+                  <span className={cn("ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || velocityBenchmarkGenerating) return;
+                  setVelocityBenchmarkGenerating(true);
+                  try {
+                    const data = await apiClient.getDealVelocityBenchmark(workspaceId, contactId, token);
+                    setVelocityBenchmark(data ?? null);
+                  } catch { /* ignore */ } finally { setVelocityBenchmarkGenerating(false); }
+                }}
+                disabled={velocityBenchmarkGenerating}
+                className={cn("ml-1 text-zinc-500 hover:text-zinc-300 transition", velocityBenchmark ? "" : "hidden")}
+              >
+                <RefreshCw className={cn("h-3 w-3", velocityBenchmarkGenerating && "animate-spin")} />
+              </button>
+            </div>
+
+            {velocityBenchmarkLoading ? (
+              <div className="space-y-2">
+                <div className="h-10 rounded-lg bg-zinc-800 animate-pulse" />
+                <div className="h-10 rounded-lg bg-zinc-800 animate-pulse" />
+              </div>
+            ) : velocityBenchmark ? (
+              <div className="space-y-3">
+                {velocityBenchmark.contact_avg_days !== null && velocityBenchmark.workspace_avg_days !== null ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-center">
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">This Contact</p>
+                        <p className="text-base font-semibold text-zinc-100">{velocityBenchmark.contact_avg_days}d</p>
+                      </div>
+                      <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-center">
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Workspace Avg</p>
+                        <p className="text-base font-semibold text-zinc-100">{velocityBenchmark.workspace_avg_days}d</p>
+                      </div>
+                    </div>
+                    {velocityBenchmark.stage_breakdown.length > 0 && (
+                      <div className="space-y-1">
+                        <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">By Stage</p>
+                        {velocityBenchmark.stage_breakdown.map((row) => (
+                          <div key={row.stage} className="flex items-center justify-between">
+                            <span className="text-[11px] text-zinc-500 capitalize">{row.stage.replace('_', ' ')}</span>
+                            <span className="text-[11px] text-zinc-300">
+                              {row.contact_days !== null ? `${row.contact_days}d` : '—'}
+                              {row.workspace_days !== null ? <span className="text-zinc-600"> / {row.workspace_days}d avg</span> : null}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-zinc-600 italic">No closed deals to benchmark yet.</p>
+                )}
+                <p className="text-[11px] text-zinc-400 leading-relaxed italic">{velocityBenchmark.insight}</p>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(velocityBenchmark.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">Benchmark deal velocity against workspace average.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setVelocityBenchmarkGenerating(true);
+                    try {
+                      const data = await apiClient.getDealVelocityBenchmark(workspaceId, contactId, token);
+                      setVelocityBenchmark(data ?? null);
+                    } catch { /* ignore */ } finally { setVelocityBenchmarkGenerating(false); }
+                  }}
+                  disabled={velocityBenchmarkGenerating}
+                >
+                  {velocityBenchmarkGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <TrendingUp className="h-3 w-3" />}
+                  {velocityBenchmarkGenerating ? "Benchmarking…" : "Benchmark Velocity"}
                 </Button>
               </div>
             )}

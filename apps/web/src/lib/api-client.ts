@@ -3838,4 +3838,67 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealVelocityBenchmark: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    contact_avg_days: number | null
+    workspace_avg_days: number | null
+    velocity_rating: 'fast' | 'on_par' | 'slow'
+    stage_breakdown: Array<{ stage: string; contact_days: number | null; workspace_days: number | null }>
+    insight: string
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        contact_avg_days: number | null
+        workspace_avg_days: number | null
+        velocity_rating: 'fast' | 'on_par' | 'slow'
+        stage_breakdown: Array<{ stage: string; contact_days: number | null; workspace_days: number | null }>
+        insight: string
+      }> = {
+        'c-001': {
+          contact_avg_days: 28,
+          workspace_avg_days: 42,
+          velocity_rating: 'fast',
+          stage_breakdown: [
+            { stage: 'discovery', contact_days: 5, workspace_days: 9 },
+            { stage: 'qualified', contact_days: 7, workspace_days: 12 },
+            { stage: 'proposal', contact_days: 9, workspace_days: 13 },
+            { stage: 'negotiation', contact_days: 7, workspace_days: 8 },
+          ],
+          insight: 'Deals with this contact close 33% faster than the workspace average, driven by shorter discovery and proposal phases — a strong indicator of high alignment and buying intent.',
+        },
+        'c-002': {
+          contact_avg_days: 61,
+          workspace_avg_days: 42,
+          velocity_rating: 'slow',
+          stage_breakdown: [
+            { stage: 'discovery', contact_days: 14, workspace_days: 9 },
+            { stage: 'qualified', contact_days: 18, workspace_days: 12 },
+            { stage: 'proposal', contact_days: 19, workspace_days: 13 },
+            { stage: 'negotiation', contact_days: 10, workspace_days: 8 },
+          ],
+          insight: 'Deals with this contact take 45% longer to close than the workspace average, with particularly prolonged discovery and qualified stages suggesting hesitancy or internal blockers.',
+        },
+        'c-003': {
+          contact_avg_days: null,
+          workspace_avg_days: 42,
+          velocity_rating: 'on_par',
+          stage_breakdown: [],
+          insight: 'Insufficient closed-deal history to benchmark velocity against workspace average.',
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/deal-velocity-benchmark`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
