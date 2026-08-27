@@ -17,7 +17,7 @@ import {
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
   Star, Calendar, X, Plus, Send, BarChart2, Download, Layers, Sparkles,
-  Route, MessageSquare, PhoneCall, RefreshCw, Radio,
+  Route, MessageSquare, PhoneCall, RefreshCw, Radio, Target,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -453,6 +453,11 @@ export default function ContactDetailPage() {
   const [velocityBenchmarkLoading, setVelocityBenchmarkLoading] = useState(false);
   const [velocityBenchmarkGenerating, setVelocityBenchmarkGenerating] = useState(false);
 
+  type DealOutcomePredictorData = { predicted_outcome: 'win' | 'loss' | 'stalled'; confidence: 'high' | 'medium' | 'low'; key_risks: string[]; recommended_actions: string[]; contact_id: string; generated_at: string };
+  const [dealOutcomePredictor, setDealOutcomePredictor] = useState<DealOutcomePredictorData | null>(null);
+  const [dealOutcomePredictorLoading, setDealOutcomePredictorLoading] = useState(false);
+  const [dealOutcomePredictorGenerating, setDealOutcomePredictorGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -677,6 +682,13 @@ export default function ContactDetailPage() {
       .then((data) => setVelocityBenchmark(data ?? null))
       .catch(() => setVelocityBenchmark(null))
       .finally(() => setVelocityBenchmarkLoading(false));
+
+    setDealOutcomePredictorLoading(true);
+    apiClient
+      .getDealOutcomePredictor(workspaceId, contactId, token)
+      .then((data) => setDealOutcomePredictor(data ?? null))
+      .catch(() => setDealOutcomePredictor(null))
+      .finally(() => setDealOutcomePredictorLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1819,6 +1831,98 @@ export default function ContactDetailPage() {
                 >
                   {velocityBenchmarkGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <TrendingUp className="h-3 w-3" />}
                   {velocityBenchmarkGenerating ? "Benchmarking…" : "Benchmark Velocity"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* ── Deal Outcome Predictor ── */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Target className="h-4 w-4 text-sky-400" />
+              <p className="text-xs font-semibold text-zinc-300">Deal Outcome</p>
+              {dealOutcomePredictor && (() => {
+                const cfg = {
+                  win:     { label: 'Win',     cls: 'bg-emerald-500/20 text-emerald-300' },
+                  loss:    { label: 'Loss',    cls: 'bg-rose-500/20 text-rose-300' },
+                  stalled: { label: 'Stalled', cls: 'bg-amber-500/20 text-amber-300' },
+                }[dealOutcomePredictor.predicted_outcome] ?? { label: dealOutcomePredictor.predicted_outcome, cls: 'bg-zinc-700/50 text-zinc-400' };
+                return (
+                  <span className={cn("ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || dealOutcomePredictorGenerating) return;
+                  setDealOutcomePredictorGenerating(true);
+                  try {
+                    const data = await apiClient.getDealOutcomePredictor(workspaceId, contactId, token);
+                    setDealOutcomePredictor(data ?? null);
+                  } catch { /* ignore */ } finally { setDealOutcomePredictorGenerating(false); }
+                }}
+                disabled={dealOutcomePredictorGenerating}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", dealOutcomePredictor ? "" : "hidden")}
+                aria-label="Regenerate deal outcome prediction"
+              >
+                <RefreshCw className={cn("h-3 w-3", dealOutcomePredictorGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {dealOutcomePredictorLoading ? (
+              <div className="h-20 rounded-lg bg-zinc-800/50 animate-pulse" />
+            ) : dealOutcomePredictor ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    "text-[10px] font-semibold px-1.5 py-0.5 rounded-full",
+                    { high: 'bg-emerald-500/20 text-emerald-400', medium: 'bg-amber-500/20 text-amber-400', low: 'bg-zinc-700/50 text-zinc-400' }[dealOutcomePredictor.confidence]
+                  )}>
+                    {dealOutcomePredictor.confidence.charAt(0).toUpperCase() + dealOutcomePredictor.confidence.slice(1)} confidence
+                  </span>
+                </div>
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Key Risks</p>
+                  <ul className="space-y-1">
+                    {dealOutcomePredictor.key_risks.map((risk, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-500" />
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{risk}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Recommended Actions</p>
+                  <ol className="space-y-1 list-none">
+                    {dealOutcomePredictor.recommended_actions.map((action, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-0.5 flex-shrink-0 w-4 h-4 rounded-full bg-sky-500/20 text-sky-300 text-[9px] font-bold flex items-center justify-center">{i + 1}</span>
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{action}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(dealOutcomePredictor.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">Predict deal outcome from open pipeline for this contact.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setDealOutcomePredictorGenerating(true);
+                    try {
+                      const data = await apiClient.getDealOutcomePredictor(workspaceId, contactId, token);
+                      setDealOutcomePredictor(data ?? null);
+                    } catch { /* ignore */ } finally { setDealOutcomePredictorGenerating(false); }
+                  }}
+                  disabled={dealOutcomePredictorGenerating}
+                >
+                  {dealOutcomePredictorGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Target className="h-3 w-3" />}
+                  {dealOutcomePredictorGenerating ? "Predicting…" : "Predict Outcome"}
                 </Button>
               </div>
             )}

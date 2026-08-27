@@ -5878,3 +5878,151 @@ async def contact_deal_velocity_benchmark(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# AI contact deal outcome predictor
+# ---------------------------------------------------------------------------
+
+_DEAL_OUTCOME_PREDICTOR_SYSTEM = """\
+You are an expert CRM analyst predicting deal outcomes. Given a contact's open deals with
+their stage, value, health score, and ML win probability, return a JSON object:
+{
+  "predicted_outcome": "<one of: win|loss|stalled>",
+  "confidence": "<one of: high|medium|low>",
+  "key_risks": ["<risk 1>", "<risk 2>", "<risk 3>"],
+  "recommended_actions": ["<action 1>", "<action 2>", "<action 3>"]
+}
+Rules:
+- predicted_outcome: win = avg win prob ≥60%; loss = avg win prob <30% and low health; stalled = in between or mixed signals
+- confidence: high = clear signal from multiple deals; medium = mixed signals; low = single deal or insufficient data
+- key_risks: exactly 3 specific, actionable risks based on the deal data
+- recommended_actions: exactly 3 concrete next steps to improve the outcome
+Return ONLY the JSON object, no markdown, no explanation.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/deal-outcome-predictor")
+@limiter.limit("5/minute")
+async def contact_deal_outcome_predictor(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    open_stages = ["discovery", "qualified", "proposal", "negotiation"]
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.in_(open_stages),
+        )
+    )
+    open_deals = deals_result.scalars().all()
+
+    if not open_deals:
+        return {
+            "predicted_outcome": "stalled",
+            "confidence": "low",
+            "key_risks": [
+                "No open deals for this contact.",
+                "Contact may have disengaged.",
+                "Pipeline coverage is zero.",
+            ],
+            "recommended_actions": [
+                "Initiate a discovery call to identify new opportunities.",
+                "Review past deal history to understand why deals closed.",
+                "Send a re-engagement message to gauge interest.",
+            ],
+            "contact_id": str(contact_id),
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    deals_summary = "\n".join(
+        f"- Deal '{d.title}' | stage={d.stage} | value=${d.value or 0:,.0f} "
+        f"| health={d.health_score or 0} | ml_win_prob={d.ml_win_probability or 0}%"
+        for d in open_deals
+    )
+    context = (
+        f"Contact: {contact.name} ({contact.email}), status={contact.status}\n"
+        f"Open deals ({len(open_deals)}):\n{deals_summary}\n"
+    )
+
+    valid_outcomes = {"win", "loss", "stalled"}
+    valid_confidences = {"high", "medium", "low"}
+
+    # Compute defaults from data
+    probs = [d.ml_win_probability or 0 for d in open_deals]
+    avg_prob = sum(probs) / len(probs)
+    avg_health = sum(d.health_score or 0 for d in open_deals) / len(open_deals)
+
+    if avg_prob >= 60:
+        default_outcome = "win"
+    elif avg_prob < 30 and avg_health < 40:
+        default_outcome = "loss"
+    else:
+        default_outcome = "stalled"
+    default_confidence = "high" if len(open_deals) >= 3 else ("medium" if len(open_deals) >= 2 else "low")
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_OUTCOME_PREDICTOR_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        predicted_outcome = data.get("predicted_outcome", default_outcome)
+        if predicted_outcome not in valid_outcomes:
+            predicted_outcome = default_outcome
+
+        confidence = data.get("confidence", default_confidence)
+        if confidence not in valid_confidences:
+            confidence = default_confidence
+
+        key_risks = data.get("key_risks", [])
+        if not isinstance(key_risks, list):
+            key_risks = []
+        key_risks = [str(r) for r in key_risks[:3]]
+        while len(key_risks) < 3:
+            key_risks.append("Monitor deal progress closely.")
+
+        recommended_actions = data.get("recommended_actions", [])
+        if not isinstance(recommended_actions, list):
+            recommended_actions = []
+        recommended_actions = [str(a) for a in recommended_actions[:3]]
+        while len(recommended_actions) < 3:
+            recommended_actions.append("Follow up with the contact.")
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "predicted_outcome": predicted_outcome,
+        "confidence": confidence,
+        "key_risks": key_risks,
+        "recommended_actions": recommended_actions,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

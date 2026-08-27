@@ -3379,3 +3379,95 @@ async def test_contact_deal_velocity_benchmark_wrong_workspace_returns_403(app_c
         )
 
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_contact_deal_outcome_predictor_returns_structured_response(app_client):
+    """deal-outcome-predictor returns predicted_outcome, confidence, key_risks, recommended_actions."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _sone(v):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = v
+        return r
+
+    def _scalars(lst):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = lst
+        return r
+
+    contact = _fake_contact(workspace_id, name="Petra Lang", company="LangCo", status="customer")
+
+    deal_a = MagicMock()
+    deal_a.title = "LangCo Enterprise"
+    deal_a.stage = "proposal"
+    deal_a.value = 45000.0
+    deal_a.health_score = 78
+    deal_a.ml_win_probability = 65
+
+    deal_b = MagicMock()
+    deal_b.title = "LangCo Upsell"
+    deal_b.stage = "negotiation"
+    deal_b.value = 12000.0
+    deal_b.health_score = 82
+    deal_b.ml_win_probability = 70
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _sone(contact),
+        _scalars([deal_a, deal_b]),
+    ])
+
+    response_json = _json.dumps({
+        "predicted_outcome": "win",
+        "confidence": "high",
+        "key_risks": [
+            "Competitor pricing pressure in negotiation stage.",
+            "Champion may not have full budget authority.",
+            "Deal may slip if decision delayed past quarter end.",
+        ],
+        "recommended_actions": [
+            "Schedule executive alignment call this week.",
+            "Send ROI case study tailored to LangCo vertical.",
+            "Offer a limited-time incentive to accelerate signing.",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/deal-outcome-predictor"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["predicted_outcome"] in {"win", "loss", "stalled"}
+    assert body["predicted_outcome"] == "win"
+    assert body["confidence"] in {"high", "medium", "low"}
+    assert isinstance(body["key_risks"], list)
+    assert len(body["key_risks"]) == 3
+    assert isinstance(body["recommended_actions"], list)
+    assert len(body["recommended_actions"]) == 3
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_deal_outcome_predictor_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/deal-outcome-predictor"
+        )
+
+    assert resp.status_code == 403
