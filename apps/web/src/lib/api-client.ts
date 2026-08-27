@@ -3901,4 +3901,76 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealOutcomePredictor: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    predicted_outcome: 'win' | 'loss' | 'stalled'
+    confidence: 'high' | 'medium' | 'low'
+    key_risks: string[]
+    recommended_actions: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        predicted_outcome: 'win' | 'loss' | 'stalled'
+        confidence: 'high' | 'medium' | 'low'
+        key_risks: string[]
+        recommended_actions: string[]
+      }> = {
+        'c-001': {
+          predicted_outcome: 'win',
+          confidence: 'high',
+          key_risks: [
+            'Competitor pricing pressure may emerge in final negotiations.',
+            'Decision timeline could slip past quarter end.',
+            'Budget approval may require additional stakeholder sign-off.',
+          ],
+          recommended_actions: [
+            'Schedule executive alignment call to confirm timeline and budget.',
+            'Send a customized ROI analysis before next check-in.',
+            'Offer a limited-time incentive to accelerate the signing decision.',
+          ],
+        },
+        'c-002': {
+          predicted_outcome: 'stalled',
+          confidence: 'medium',
+          key_risks: [
+            'No activity in 14+ days signals disengagement.',
+            'Low win probability across all open deals.',
+            'Champion may have lost internal support.',
+          ],
+          recommended_actions: [
+            'Re-engage with a personalized outreach highlighting new value.',
+            'Request a call to understand current blockers.',
+            'Reassess deal viability and consider archiving stalled opportunities.',
+          ],
+        },
+        'c-003': {
+          predicted_outcome: 'loss',
+          confidence: 'low',
+          key_risks: [
+            'Contact has not responded to recent outreach attempts.',
+            'Health scores are declining across open deals.',
+            'No recent note or task activity to anchor next steps.',
+          ],
+          recommended_actions: [
+            'Attempt one final outreach with a clear value proposition.',
+            'Escalate to a senior relationship manager for a fresh perspective.',
+            'Mark deals as at-risk and update pipeline forecast accordingly.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/deal-outcome-predictor`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
