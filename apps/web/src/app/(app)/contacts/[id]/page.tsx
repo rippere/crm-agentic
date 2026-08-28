@@ -458,6 +458,11 @@ export default function ContactDetailPage() {
   const [dealOutcomePredictorLoading, setDealOutcomePredictorLoading] = useState(false);
   const [dealOutcomePredictorGenerating, setDealOutcomePredictorGenerating] = useState(false);
 
+  type DealPortfolioOverviewData = { pipeline_health: 'strong' | 'at_risk' | 'mixed'; total_pipeline_value: number; open_deal_count: number; highlights: string[]; risks: string[]; contact_id: string; generated_at: string };
+  const [dealPortfolio, setDealPortfolio] = useState<DealPortfolioOverviewData | null>(null);
+  const [dealPortfolioLoading, setDealPortfolioLoading] = useState(false);
+  const [dealPortfolioGenerating, setDealPortfolioGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -689,6 +694,13 @@ export default function ContactDetailPage() {
       .then((data) => setDealOutcomePredictor(data ?? null))
       .catch(() => setDealOutcomePredictor(null))
       .finally(() => setDealOutcomePredictorLoading(false));
+
+    setDealPortfolioLoading(true);
+    apiClient
+      .getDealPortfolioOverview(workspaceId, contactId, token)
+      .then((data) => setDealPortfolio(data ?? null))
+      .catch(() => setDealPortfolio(null))
+      .finally(() => setDealPortfolioLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -1923,6 +1935,95 @@ export default function ContactDetailPage() {
                 >
                   {dealOutcomePredictorGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Target className="h-3 w-3" />}
                   {dealOutcomePredictorGenerating ? "Predicting…" : "Predict Outcome"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Deal Portfolio Overview */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Layers className="h-4 w-4 text-teal-400" />
+              <p className="text-xs font-semibold text-zinc-300">Deal Portfolio</p>
+              {dealPortfolio && (() => {
+                const cfg = {
+                  strong: { label: 'Strong', cls: 'bg-emerald-500/20 text-emerald-400' },
+                  at_risk: { label: 'At Risk', cls: 'bg-rose-500/20 text-rose-400' },
+                  mixed: { label: 'Mixed', cls: 'bg-amber-500/20 text-amber-400' },
+                }[dealPortfolio.pipeline_health];
+                return (
+                  <span className={cn("ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || dealPortfolioGenerating) return;
+                  setDealPortfolioGenerating(true);
+                  try {
+                    const data = await apiClient.getDealPortfolioOverview(workspaceId, contactId, token);
+                    setDealPortfolio(data ?? null);
+                  } catch { /* ignore */ } finally { setDealPortfolioGenerating(false); }
+                }}
+                disabled={dealPortfolioGenerating}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", dealPortfolio ? "" : "hidden")}
+                aria-label="Regenerate deal portfolio overview"
+              >
+                <RefreshCw className={cn("h-3 w-3", dealPortfolioGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {dealPortfolioLoading ? (
+              <div className="h-20 rounded-lg bg-zinc-800/50 animate-pulse" />
+            ) : dealPortfolio ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-3 text-[11px] text-zinc-400">
+                  <span><span className="font-semibold text-zinc-200">{dealPortfolio.open_deal_count}</span> open {dealPortfolio.open_deal_count === 1 ? 'deal' : 'deals'}</span>
+                  <span className="text-zinc-600">·</span>
+                  <span><span className="font-semibold text-teal-300">${(dealPortfolio.total_pipeline_value / 1000).toFixed(0)}K</span> pipeline</span>
+                </div>
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Highlights</p>
+                  <ul className="space-y-1">
+                    {dealPortfolio.highlights.map((h, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500" />
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{h}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Risks</p>
+                  <ul className="space-y-1">
+                    {dealPortfolio.risks.map((r, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-500" />
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{r}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(dealPortfolio.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">Analyze this contact&apos;s full deal portfolio across all stages.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setDealPortfolioGenerating(true);
+                    try {
+                      const data = await apiClient.getDealPortfolioOverview(workspaceId, contactId, token);
+                      setDealPortfolio(data ?? null);
+                    } catch { /* ignore */ } finally { setDealPortfolioGenerating(false); }
+                  }}
+                  disabled={dealPortfolioGenerating}
+                >
+                  {dealPortfolioGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Layers className="h-3 w-3" />}
+                  {dealPortfolioGenerating ? "Analyzing…" : "View Portfolio"}
                 </Button>
               </div>
             )}

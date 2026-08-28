@@ -3471,3 +3471,93 @@ async def test_contact_deal_outcome_predictor_wrong_workspace_returns_403(app_cl
         )
 
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_contact_deal_portfolio_overview_returns_structured_response(app_client):
+    """deal-portfolio-overview returns pipeline_health, totals, highlights x3, risks x3."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _sone(v):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = v
+        return r
+
+    def _scalars(lst):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = lst
+        return r
+
+    contact = _fake_contact(workspace_id, name="Priya Shah", company="ShahCo", status="customer")
+
+    deal_a = MagicMock()
+    deal_a.title = "ShahCo Platform"
+    deal_a.stage = "proposal"
+    deal_a.value = 55000.0
+    deal_a.health_score = 80
+    deal_a.ml_win_probability = 68
+
+    deal_b = MagicMock()
+    deal_b.title = "ShahCo Expansion"
+    deal_b.stage = "closed_won"
+    deal_b.value = 30000.0
+    deal_b.health_score = None
+    deal_b.ml_win_probability = None
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _sone(contact),
+        _scalars([deal_a, deal_b]),
+    ])
+
+    response_json = _json.dumps({
+        "pipeline_health": "strong",
+        "highlights": [
+            "One deal in proposal stage worth $55K shows active pipeline.",
+            "Previously closed $30K deal demonstrates proven buying relationship.",
+            "Average health score of 80 indicates strong deal momentum.",
+        ],
+        "risks": [
+            "Single open deal creates pipeline concentration risk.",
+            "No early-stage deals to replenish pipeline post-close.",
+            "Proposal stage can stall without executive alignment.",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/deal-portfolio-overview"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["pipeline_health"] in {"strong", "at_risk", "mixed"}
+    assert body["pipeline_health"] == "strong"
+    assert isinstance(body["total_pipeline_value"], (int, float))
+    assert body["open_deal_count"] == 1
+    assert isinstance(body["highlights"], list) and len(body["highlights"]) == 3
+    assert isinstance(body["risks"], list) and len(body["risks"]) == 3
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_deal_portfolio_overview_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/deal-portfolio-overview"
+        )
+
+    assert resp.status_code == 403
