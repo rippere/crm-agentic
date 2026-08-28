@@ -3973,4 +3973,81 @@ export const apiClient = {
       token,
     )
   },
+
+  getDealPortfolioOverview: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    pipeline_health: 'strong' | 'at_risk' | 'mixed'
+    total_pipeline_value: number
+    open_deal_count: number
+    highlights: string[]
+    risks: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        pipeline_health: 'strong' | 'at_risk' | 'mixed'
+        total_pipeline_value: number
+        open_deal_count: number
+        highlights: string[]
+        risks: string[]
+      }> = {
+        'c-001': {
+          pipeline_health: 'strong',
+          total_pipeline_value: 95000,
+          open_deal_count: 2,
+          highlights: [
+            'Two active deals with combined $95K pipeline at proposal and negotiation stages.',
+            'Previously closed $48K deal demonstrates strong revenue track record.',
+            'High average health score of 81 signals strong relationship momentum.',
+          ],
+          risks: [
+            'Both deals in late-stage may create a pipeline gap if neither closes this quarter.',
+            'Heavy reliance on two large deals increases single-point-of-failure risk.',
+            'No early-stage deals to replenish pipeline after current opportunities resolve.',
+          ],
+        },
+        'c-002': {
+          pipeline_health: 'at_risk',
+          total_pipeline_value: 30000,
+          open_deal_count: 1,
+          highlights: [
+            'One open deal keeps the contact engaged in the active pipeline.',
+            'Contact has a history of reaching proposal stage, indicating real buying intent.',
+            'Deal value of $30K aligns with typical deal size for this segment.',
+          ],
+          risks: [
+            'Single open deal with low health score (34) signals stalled momentum.',
+            'No closed-won history increases forecast uncertainty.',
+            'Low win probability (22%) requires urgent re-engagement to rescue the deal.',
+          ],
+        },
+        'c-003': {
+          pipeline_health: 'mixed',
+          total_pipeline_value: 45000,
+          open_deal_count: 1,
+          highlights: [
+            'Active deal at $45K value shows meaningful pipeline presence.',
+            'Contact status as prospect suggests growing interest and qualification.',
+            'Consistent touchpoints in the last 30 days indicate active engagement.',
+          ],
+          risks: [
+            'Medium health score (56) suggests deal is in a fragile state.',
+            'No closed-won deals yet — conversion remains unproven for this contact.',
+            'Competitor presence in deal notes may complicate the close process.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/deal-portfolio-overview`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }

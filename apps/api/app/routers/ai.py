@@ -6026,3 +6026,151 @@ async def contact_deal_outcome_predictor(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+_DEAL_PORTFOLIO_OVERVIEW_SYSTEM = """\
+You are an expert CRM analyst reviewing a contact's full deal portfolio across all pipeline stages.
+Given the contact profile and their deals (open and closed), return a JSON object:
+{
+  "pipeline_health": "<one of: strong|at_risk|mixed>",
+  "highlights": ["<highlight 1>", "<highlight 2>", "<highlight 3>"],
+  "risks": ["<risk 1>", "<risk 2>", "<risk 3>"]
+}
+Rules:
+- pipeline_health: strong = open deals healthy + good win probability; at_risk = most deals stalled or low health; mixed = a blend of healthy and struggling deals
+- highlights: exactly 3 positive observations about the contact's portfolio (closed won, high-value stages, strong momentum, etc.)
+- risks: exactly 3 specific risks or gaps in the portfolio (stalled deals, low health, no pipeline, overdue actions, etc.)
+Return ONLY the JSON object, no markdown, no explanation.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/deal-portfolio-overview")
+@limiter.limit("5/minute")
+async def contact_deal_portfolio_overview(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+        )
+    )
+    all_deals = deals_result.scalars().all()
+
+    open_stages = {"discovery", "qualified", "proposal", "negotiation"}
+    open_deals = [d for d in all_deals if d.stage in open_stages]
+    closed_won = [d for d in all_deals if d.stage == "closed_won"]
+    closed_lost = [d for d in all_deals if d.stage == "closed_lost"]
+
+    total_pipeline_value = sum(d.value or 0 for d in open_deals)
+    closed_won_value = sum(d.value or 0 for d in closed_won)
+    open_deal_count = len(open_deals)
+
+    if not all_deals:
+        return {
+            "pipeline_health": "at_risk",
+            "total_pipeline_value": 0,
+            "open_deal_count": 0,
+            "highlights": [
+                "No deal history found — fresh relationship to develop.",
+                "Opportunity to establish the first deal and set the foundation.",
+                "Contact profile is active and ready for pipeline engagement.",
+            ],
+            "risks": [
+                "Zero pipeline coverage for this contact.",
+                "No historical deal data to benchmark performance.",
+                "Risk of contact disengagement without active opportunities.",
+            ],
+            "contact_id": str(contact_id),
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    avg_health = sum(d.health_score or 0 for d in open_deals) / max(len(open_deals), 1)
+    avg_prob = sum(d.ml_win_probability or 0 for d in open_deals) / max(len(open_deals), 1)
+
+    deals_summary = "\n".join(
+        f"- Deal '{d.title}' | stage={d.stage} | value=${d.value or 0:,.0f} "
+        f"| health={d.health_score or 0} | ml_win_prob={d.ml_win_probability or 0}%"
+        for d in all_deals
+    )
+    context = (
+        f"Contact: {contact.name} ({contact.email}), status={contact.status}\n"
+        f"Total deals: {len(all_deals)} | Open: {open_deal_count} | "
+        f"Closed Won: {len(closed_won)} (${closed_won_value:,.0f}) | "
+        f"Closed Lost: {len(closed_lost)}\n"
+        f"Open pipeline: ${total_pipeline_value:,.0f} | Avg health: {avg_health:.0f} | Avg win prob: {avg_prob:.0f}%\n"
+        f"All deals:\n{deals_summary}\n"
+    )
+
+    if avg_health >= 65 and avg_prob >= 55:
+        default_health = "strong"
+    elif avg_health < 40 or avg_prob < 25:
+        default_health = "at_risk"
+    else:
+        default_health = "mixed"
+
+    valid_health = {"strong", "at_risk", "mixed"}
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_PORTFOLIO_OVERVIEW_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        pipeline_health = data.get("pipeline_health", default_health)
+        if pipeline_health not in valid_health:
+            pipeline_health = default_health
+
+        highlights = data.get("highlights", [])
+        if not isinstance(highlights, list):
+            highlights = []
+        highlights = [str(h) for h in highlights[:3]]
+        while len(highlights) < 3:
+            highlights.append("Portfolio shows consistent engagement with multiple active deals.")
+
+        risks = data.get("risks", [])
+        if not isinstance(risks, list):
+            risks = []
+        risks = [str(r) for r in risks[:3]]
+        while len(risks) < 3:
+            risks.append("Monitor deal progression to prevent pipeline stagnation.")
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "pipeline_health": pipeline_health,
+        "total_pipeline_value": total_pipeline_value,
+        "open_deal_count": open_deal_count,
+        "highlights": highlights,
+        "risks": risks,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
