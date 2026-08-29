@@ -3561,3 +3561,97 @@ async def test_contact_deal_portfolio_overview_wrong_workspace_returns_403(app_c
         )
 
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_contact_competitive_positioning_returns_structured_response(app_client):
+    """competitive-positioning returns positioning_strength, top_competitor, win_rate, tips x3, diffs x3."""
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _sone(v):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = v
+        return r
+
+    def _scalars(lst):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = lst
+        return r
+
+    contact = _fake_contact(workspace_id, name="Jordan Lee", company="LeeCo", status="prospect")
+
+    deal_a = MagicMock()
+    deal_a.title = "LeeCo Platform"
+    deal_a.stage = "proposal"
+    deal_a.value = 40000.0
+    deal_a.health_score = 72
+    deal_a.ml_win_probability = 60
+    deal_a.competitors = ["Salesforce", "HubSpot"]
+
+    deal_b = MagicMock()
+    deal_b.title = "LeeCo Expansion"
+    deal_b.stage = "closed_won"
+    deal_b.value = 25000.0
+    deal_b.health_score = None
+    deal_b.ml_win_probability = None
+    deal_b.competitors = ["Salesforce"]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _sone(contact),
+        _scalars([deal_a, deal_b]),
+    ])
+
+    response_json = _json.dumps({
+        "positioning_strength": "strong",
+        "top_competitor": "Salesforce",
+        "win_rate_vs_competitor": 100,
+        "positioning_tips": [
+            "Lead with agentic AI differentiators to outmanoeuvre Salesforce on intelligence features.",
+            "Reference the closed-won deal history to anchor the conversation in proven delivery.",
+            "Use the competitive-response analysis to build a tailored battle card for this account.",
+        ],
+        "differentiators": [
+            "NovaCRM's real-time health scoring updates without manual entry — Salesforce requires custom reports.",
+            "Unified sales + PM workspace eliminates the tool-switching overhead Salesforce imposes.",
+            "Claude-powered semantic search surfaces relevant notes far faster than Salesforce SOQL queries.",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/competitive-positioning"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["positioning_strength"] in {"strong", "moderate", "weak"}
+    assert body["positioning_strength"] == "strong"
+    assert body["top_competitor"] == "Salesforce"
+    assert isinstance(body["win_rate_vs_competitor"], int)
+    assert isinstance(body["positioning_tips"], list) and len(body["positioning_tips"]) == 3
+    assert isinstance(body["differentiators"], list) and len(body["differentiators"]) == 3
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_competitive_positioning_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/competitive-positioning"
+        )
+
+    assert resp.status_code == 403

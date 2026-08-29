@@ -17,7 +17,7 @@ import {
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
   Star, Calendar, X, Plus, Send, BarChart2, Download, Layers, Sparkles,
-  Route, MessageSquare, PhoneCall, RefreshCw, Radio, Target,
+  Route, MessageSquare, PhoneCall, RefreshCw, Radio, Target, Trophy,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -463,6 +463,11 @@ export default function ContactDetailPage() {
   const [dealPortfolioLoading, setDealPortfolioLoading] = useState(false);
   const [dealPortfolioGenerating, setDealPortfolioGenerating] = useState(false);
 
+  type CompetitivePositioningData = { positioning_strength: 'strong' | 'moderate' | 'weak'; top_competitor: string | null; win_rate_vs_competitor: number | null; positioning_tips: string[]; differentiators: string[]; contact_id: string; generated_at: string };
+  const [competitivePositioning, setCompetitivePositioning] = useState<CompetitivePositioningData | null>(null);
+  const [competitivePositioningLoading, setCompetitivePositioningLoading] = useState(false);
+  const [competitivePositioningGenerating, setCompetitivePositioningGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -701,6 +706,13 @@ export default function ContactDetailPage() {
       .then((data) => setDealPortfolio(data ?? null))
       .catch(() => setDealPortfolio(null))
       .finally(() => setDealPortfolioLoading(false));
+
+    setCompetitivePositioningLoading(true);
+    apiClient
+      .getContactCompetitivePositioning(workspaceId, contactId, token)
+      .then((data) => setCompetitivePositioning(data ?? null))
+      .catch(() => setCompetitivePositioning(null))
+      .finally(() => setCompetitivePositioningLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -2024,6 +2036,106 @@ export default function ContactDetailPage() {
                 >
                   {dealPortfolioGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Layers className="h-3 w-3" />}
                   {dealPortfolioGenerating ? "Analyzing…" : "View Portfolio"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* ── Competitive Positioning Card ── */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Trophy className="h-4 w-4 text-amber-400" />
+              <p className="text-xs font-semibold text-zinc-300">Competitive Position</p>
+              {competitivePositioning && (
+                <span className={cn(
+                  "ml-1 px-1.5 py-0.5 rounded text-[10px] font-semibold",
+                  competitivePositioning.positioning_strength === 'strong' ? "bg-emerald-500/15 text-emerald-400" :
+                  competitivePositioning.positioning_strength === 'moderate' ? "bg-amber-500/15 text-amber-400" :
+                  "bg-rose-500/15 text-rose-400"
+                )}>
+                  {competitivePositioning.positioning_strength.charAt(0).toUpperCase() + competitivePositioning.positioning_strength.slice(1)}
+                </span>
+              )}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || competitivePositioningGenerating) return;
+                  setCompetitivePositioningGenerating(true);
+                  try {
+                    const data = await apiClient.getContactCompetitivePositioning(workspaceId, contactId, token);
+                    setCompetitivePositioning(data ?? null);
+                  } catch { /* ignore */ } finally { setCompetitivePositioningGenerating(false); }
+                }}
+                disabled={competitivePositioningGenerating}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", competitivePositioning ? "" : "hidden")}
+                aria-label="Regenerate competitive positioning"
+              >
+                <RefreshCw className={cn("h-3 w-3", competitivePositioningGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {competitivePositioningLoading ? (
+              <div className="h-20 rounded-lg bg-zinc-800/50 animate-pulse" />
+            ) : competitivePositioning ? (
+              <div className="space-y-3">
+                {competitivePositioning.top_competitor && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">vs</span>
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 border border-amber-500/20 text-amber-300">
+                      {competitivePositioning.top_competitor}
+                    </span>
+                    {competitivePositioning.win_rate_vs_competitor !== null && (
+                      <span className={cn(
+                        "px-2 py-0.5 rounded-full text-[11px] font-mono font-semibold",
+                        competitivePositioning.win_rate_vs_competitor >= 60 ? "bg-emerald-500/10 text-emerald-400" :
+                        competitivePositioning.win_rate_vs_competitor >= 40 ? "bg-amber-500/10 text-amber-400" :
+                        "bg-rose-500/10 text-rose-400"
+                      )}>
+                        {competitivePositioning.win_rate_vs_competitor}% win rate
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Positioning Tips</p>
+                  <ul className="space-y-1">
+                    {competitivePositioning.positioning_tips.map((tip, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-500" />
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{tip}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Differentiators</p>
+                  <ul className="space-y-1">
+                    {competitivePositioning.differentiators.map((d, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-indigo-500" />
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{d}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(competitivePositioning.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">Analyze competitive positioning based on deal history and tracked competitors.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setCompetitivePositioningGenerating(true);
+                    try {
+                      const data = await apiClient.getContactCompetitivePositioning(workspaceId, contactId, token);
+                      setCompetitivePositioning(data ?? null);
+                    } catch { /* ignore */ } finally { setCompetitivePositioningGenerating(false); }
+                  }}
+                  disabled={competitivePositioningGenerating}
+                >
+                  {competitivePositioningGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trophy className="h-3 w-3" />}
+                  {competitivePositioningGenerating ? "Analyzing…" : "View Positioning"}
                 </Button>
               </div>
             )}

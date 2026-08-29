@@ -6174,3 +6174,208 @@ async def contact_deal_portfolio_overview(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# AI contact competitive positioning
+# ---------------------------------------------------------------------------
+
+_COMPETITIVE_POSITIONING_SYSTEM = """\
+You are Nova, the AI sales positioning expert in NovaCRM.
+
+Analyze this contact's competitive positioning based on their deal history and competitor data.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "positioning_strength": "strong",
+  "top_competitor": "Salesforce",
+  "win_rate_vs_competitor": 67,
+  "positioning_tips": [
+    "Tip 1 — specific tactical advice referencing the competitive situation and deal data.",
+    "Tip 2 — second positioning tip using a specific CRM action (e.g. run competitive-response analysis).",
+    "Tip 3 — third positioning tip."
+  ],
+  "differentiators": [
+    "Differentiator 1 — what sets NovaCRM apart from the top competitor for this deal context.",
+    "Differentiator 2.",
+    "Differentiator 3."
+  ]
+}
+
+Rules:
+- positioning_strength: exactly one of "strong" | "moderate" | "weak"
+  - "strong" if win rate vs top competitor is >= 60%, or no competitors tracked
+  - "weak" if win rate vs top competitor is <= 30%, or all deals lost/stalled
+  - "moderate" otherwise
+- top_competitor: name of the most-frequently-appearing competitor, or null if none
+- win_rate_vs_competitor: integer 0-100, percentage of closed deals won vs that competitor, or null if no competitor data
+- positioning_tips: exactly 3 items, each citing a specific metric or action
+- differentiators: exactly 3 items, each a concrete value proposition vs the top competitor\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/competitive-positioning")
+@limiter.limit("5/minute")
+async def contact_competitive_positioning(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Assess this contact's competitive positioning using deal history and competitor data via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+        )
+    )
+    all_deals = deals_result.scalars().all()
+
+    # Tally competitor occurrences and compute win rate vs each
+    competitor_counts: Counter = Counter()
+    competitor_wins: Counter = Counter()
+    competitor_total: Counter = Counter()
+
+    for deal in all_deals:
+        comps = deal.competitors or []
+        for comp in comps:
+            name = str(comp).strip()
+            if not name:
+                continue
+            competitor_counts[name] += 1
+            if deal.stage in ("closed_won", "closed_lost"):
+                competitor_total[name] += 1
+                if deal.stage == "closed_won":
+                    competitor_wins[name] += 1
+
+    top_competitor: str | None = None
+    win_rate_vs_competitor: int | None = None
+    if competitor_counts:
+        top_competitor = competitor_counts.most_common(1)[0][0]
+        total_vs_top = competitor_total.get(top_competitor, 0)
+        if total_vs_top > 0:
+            win_rate_vs_competitor = round(
+                100 * competitor_wins.get(top_competitor, 0) / total_vs_top
+            )
+
+    # Graceful default when no deals or no competitors
+    if not all_deals:
+        return {
+            "positioning_strength": "weak",
+            "top_competitor": None,
+            "win_rate_vs_competitor": None,
+            "positioning_tips": [
+                "No deal history found — establish the first deal to build a competitive baseline.",
+                "Create a deal record and add any known competitors to enable positioning analysis.",
+                "Use the Contact AI summary to craft an outreach strategy before competitors engage.",
+            ],
+            "differentiators": [
+                "NovaCRM's agentic AI gives real-time deal health scoring with no setup required.",
+                "Unified sales + PM intelligence eliminates the need for separate tools.",
+                "Built-in semantic search and lead scoring outperform traditional CRM data silos.",
+            ],
+            "contact_id": str(contact_id),
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    # Determine default positioning strength
+    if not top_competitor:
+        default_strength = "strong"
+    elif win_rate_vs_competitor is not None and win_rate_vs_competitor >= 60:
+        default_strength = "strong"
+    elif win_rate_vs_competitor is not None and win_rate_vs_competitor <= 30:
+        default_strength = "weak"
+    else:
+        default_strength = "moderate"
+
+    open_stages = {"discovery", "qualified", "proposal", "negotiation"}
+    deals_summary = "\n".join(
+        f"- '{d.title}' | stage={d.stage} | value=${d.value or 0:,.0f} "
+        f"| health={d.health_score or 0} | competitors={d.competitors or []}"
+        for d in all_deals
+        if d.stage in open_stages or d.stage in ("closed_won", "closed_lost")
+    )
+
+    context_lines = [
+        f"Contact: {contact.name} ({contact.email}), status={contact.status}",
+        f"Total deals: {len(all_deals)}",
+        f"Top competitor: {top_competitor or 'None identified'}",
+        f"Win rate vs top competitor: {win_rate_vs_competitor}%" if win_rate_vs_competitor is not None else "Win rate vs top competitor: N/A (no closed deals with this competitor)",
+        f"All competitor occurrences: {dict(competitor_counts) or 'none'}",
+        f"Deals:\n{deals_summary or 'No open or closed deals.'}",
+    ]
+    context = "\n".join(context_lines)
+
+    valid_strengths = {"strong", "moderate", "weak"}
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_COMPETITIVE_POSITIONING_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        positioning_strength = data.get("positioning_strength", default_strength)
+        if positioning_strength not in valid_strengths:
+            positioning_strength = default_strength
+
+        returned_top = data.get("top_competitor")
+        if returned_top is not None and str(returned_top).strip():
+            top_competitor = str(returned_top).strip()
+
+        returned_wr = data.get("win_rate_vs_competitor")
+        if returned_wr is not None:
+            try:
+                win_rate_vs_competitor = max(0, min(100, int(returned_wr)))
+            except (ValueError, TypeError):
+                pass
+
+        positioning_tips = data.get("positioning_tips", [])
+        if not isinstance(positioning_tips, list):
+            positioning_tips = []
+        positioning_tips = [str(t) for t in positioning_tips[:3]]
+        while len(positioning_tips) < 3:
+            positioning_tips.append("Review deal notes and run a competitive-response analysis for this contact.")
+
+        differentiators = data.get("differentiators", [])
+        if not isinstance(differentiators, list):
+            differentiators = []
+        differentiators = [str(d) for d in differentiators[:3]]
+        while len(differentiators) < 3:
+            differentiators.append("NovaCRM's agentic AI pipeline intelligence delivers faster deal insights than alternatives.")
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "positioning_strength": positioning_strength,
+        "top_competitor": top_competitor,
+        "win_rate_vs_competitor": win_rate_vs_competitor,
+        "positioning_tips": positioning_tips,
+        "differentiators": differentiators,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

@@ -4050,4 +4050,81 @@ export const apiClient = {
       token,
     )
   },
+
+  getContactCompetitivePositioning: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    positioning_strength: 'strong' | 'moderate' | 'weak'
+    top_competitor: string | null
+    win_rate_vs_competitor: number | null
+    positioning_tips: string[]
+    differentiators: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        positioning_strength: 'strong' | 'moderate' | 'weak'
+        top_competitor: string | null
+        win_rate_vs_competitor: number | null
+        positioning_tips: string[]
+        differentiators: string[]
+      }> = {
+        'c-001': {
+          positioning_strength: 'strong',
+          top_competitor: 'Salesforce',
+          win_rate_vs_competitor: 67,
+          positioning_tips: [
+            'Lead with agentic AI features — Salesforce lacks real-time health scoring for open deals in the same contact context.',
+            'Schedule a competitive comparison call to walk through the AI lead-scoring demo side-by-side.',
+            'Attach a deal note highlighting the closed-won history with this contact as proof of reliable delivery.',
+          ],
+          differentiators: [
+            'NovaCRM\'s AI health scoring updates in real-time without manual data entry — Salesforce requires custom reports.',
+            'Unified sales + PM intelligence in one workspace eliminates the context-switching Salesforce requires.',
+            'Claude-powered semantic contact search surfaces relevant notes 5× faster than Salesforce\'s SOQL-based search.',
+          ],
+        },
+        'c-002': {
+          positioning_strength: 'weak',
+          top_competitor: 'HubSpot',
+          win_rate_vs_competitor: 20,
+          positioning_tips: [
+            'Re-engage the champion directly — HubSpot\'s lower price point is winning on cost; address TCO with implementation savings.',
+            'Run the AI Outreach Sequence planner to craft a differentiated re-engagement campaign this week.',
+            'Add a deal note documenting specific AI capabilities HubSpot cannot match to sharpen the next conversation.',
+          ],
+          differentiators: [
+            'NovaCRM\'s agentic task extraction from Gmail/Slack eliminates the manual logging HubSpot still requires.',
+            'Built-in Celery async processing means bulk operations complete without UI lag, unlike HubSpot\'s synchronous updates.',
+            'Claude Sonnet clarity scoring gives reps instant feedback on message quality — HubSpot has no equivalent.',
+          ],
+        },
+        'c-003': {
+          positioning_strength: 'moderate',
+          top_competitor: null,
+          win_rate_vs_competitor: null,
+          positioning_tips: [
+            'No competitor data tracked yet — add known competitors to the deal record to enable competitive positioning analysis.',
+            'Use the AI Pipeline Summary to identify which deal stages are most vulnerable to competitive pressure.',
+            'Request a competitive landscape briefing from the deal team before the next contact touchpoint.',
+          ],
+          differentiators: [
+            'NovaCRM\'s AI-native architecture delivers insights competitors cannot replicate with bolt-on AI modules.',
+            'Multi-tenant workspace isolation ensures data security standards that surpass legacy CRM providers.',
+            'Real-time Realtime activity feeds and Claude-powered summaries reduce rep context-switching by 40%.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/competitive-positioning`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
