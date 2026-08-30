@@ -123,27 +123,9 @@ export const sequenceStatusConfig: Record<SequenceStatus, { label: string; color
   archived: { label: "Archived", color: "text-zinc-500",    bg: "bg-zinc-800/50",    dot: "bg-zinc-500" },
 };
 
-// Engagement-score band pill (mirrors leadScoreConfig hot/warm/cold).
-export const engagementScoreConfig: Record<EngagementLabel, { bg: string; text: string; dot: string; label: string }> = {
-  hot: {
-    bg: "bg-emerald-500/10",
-    text: "text-emerald-400",
-    dot: "bg-emerald-400",
-    label: "Hot",
-  },
-  warm: {
-    bg: "bg-amber-500/10",
-    text: "text-amber-400",
-    dot: "bg-amber-400",
-    label: "Warm",
-  },
-  cold: {
-    bg: "bg-zinc-700/50",
-    text: "text-zinc-400",
-    dot: "bg-zinc-400",
-    label: "Cold",
-  },
-};
+// Engagement-score band pill — LeadScore and EngagementLabel are the same
+// hot|warm|cold union, so this is just an alias of leadScoreConfig.
+export const engagementScoreConfig: Record<EngagementLabel, { bg: string; text: string; dot: string; label: string }> = leadScoreConfig;
 
 // Map a 0-100 engagement score to its band (matches the scoring worker's
 // thresholds: ≥70 hot, ≥40 warm, else cold).
