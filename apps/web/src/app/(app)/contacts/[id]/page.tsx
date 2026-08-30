@@ -475,6 +475,11 @@ export default function ContactDetailPage() {
   const [meetingAgendaGenerating, setMeetingAgendaGenerating] = useState(false);
   const [meetingAgendaExpanded, setMeetingAgendaExpanded] = useState<number | null>(null);
 
+  type CommGapData = { avg_gap_days: number; longest_silence_days: number; workspace_avg_gap_days: number; gap_assessment: 'frequent' | 'normal' | 'sparse' | 'dark'; risk_level: 'low' | 'medium' | 'high' | 'critical'; recommendations: string[]; contact_id: string; generated_at: string };
+  const [commGap, setCommGap] = useState<CommGapData | null>(null);
+  const [commGapLoading, setCommGapLoading] = useState(false);
+  const [commGapGenerating, setCommGapGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -727,6 +732,13 @@ export default function ContactDetailPage() {
       .then((data) => setMeetingAgenda(data ?? null))
       .catch(() => setMeetingAgenda(null))
       .finally(() => setMeetingAgendaLoading(false));
+
+    setCommGapLoading(true);
+    apiClient
+      .getCommunicationGapAnalysis(workspaceId, contactId, token)
+      .then((data) => setCommGap(data ?? null))
+      .catch(() => setCommGap(null))
+      .finally(() => setCommGapLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -2238,6 +2250,95 @@ export default function ContactDetailPage() {
                 >
                   {meetingAgendaGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Calendar className="h-3 w-3" />}
                   {meetingAgendaGenerating ? "Generating…" : "Generate Agenda"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* ── Communication Gap Card ── */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Radio className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Comms Gap</p>
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || commGapGenerating) return;
+                  setCommGapGenerating(true);
+                  try {
+                    const data = await apiClient.getCommunicationGapAnalysis(workspaceId, contactId, token);
+                    setCommGap(data ?? null);
+                  } catch { /* ignore */ } finally { setCommGapGenerating(false); }
+                }}
+                disabled={commGapGenerating || !commGap}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", commGap ? "" : "hidden")}
+                title="Regenerate"
+              >
+                <RefreshCw className={cn("h-3 w-3", commGapGenerating && "animate-spin")} />
+              </button>
+            </div>
+
+            {commGapLoading ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-3 bg-zinc-800 rounded w-2/3" />
+                <div className="h-3 bg-zinc-800 rounded w-1/2" />
+                <div className="h-3 bg-zinc-800 rounded w-3/4" />
+              </div>
+            ) : commGap ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <p className="text-[10px] text-zinc-500">Avg Gap</p>
+                    <p className="text-sm font-semibold text-zinc-200">{commGap.avg_gap_days}d</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-zinc-500">Longest</p>
+                    <p className="text-sm font-semibold text-zinc-200">{commGap.longest_silence_days}d</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-zinc-500">WS Avg</p>
+                    <p className="text-sm font-semibold text-zinc-200">{commGap.workspace_avg_gap_days}d</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    "text-[10px] font-semibold px-2 py-0.5 rounded-full",
+                    commGap.risk_level === 'low' && "bg-green-500/20 text-green-400",
+                    commGap.risk_level === 'medium' && "bg-yellow-500/20 text-yellow-400",
+                    commGap.risk_level === 'high' && "bg-orange-500/20 text-orange-400",
+                    commGap.risk_level === 'critical' && "bg-red-500/20 text-red-400",
+                  )}>
+                    {commGap.risk_level.toUpperCase()} RISK
+                  </span>
+                  <span className="text-[10px] text-zinc-500 capitalize">{commGap.gap_assessment}</span>
+                </div>
+                <div className="space-y-1.5">
+                  {commGap.recommendations.map((rec, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+                      <p className="text-[11px] text-zinc-400 leading-snug">{rec}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(commGap.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="py-2 flex flex-col gap-2">
+                <p className="text-xs text-zinc-600 italic">No communication gap analysis yet.</p>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={async () => {
+                    if (!token || !workspaceId || commGapGenerating) return;
+                    setCommGapGenerating(true);
+                    try {
+                      const data = await apiClient.getCommunicationGapAnalysis(workspaceId, contactId, token);
+                      setCommGap(data ?? null);
+                    } catch { /* ignore */ } finally { setCommGapGenerating(false); }
+                  }}
+                  disabled={commGapGenerating}
+                >
+                  {commGapGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Radio className="h-3 w-3" />}
+                  {commGapGenerating ? "Analyzing…" : "Analyze Gaps"}
                 </Button>
               </div>
             )}

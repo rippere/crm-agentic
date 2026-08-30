@@ -3757,4 +3757,91 @@ async def test_contact_meeting_agenda_wrong_workspace_returns_403(app_client):
         )
     assert resp.status_code == 403
 
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/contacts/{cid}/communication-gap-analysis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_contact_communication_gap_analysis_returns_structured_response(app_client):
+    import json as _json
+    import datetime as _datetime
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _sone(obj):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = obj
+        return r
+
+    def _scalars(lst):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = lst
+        return r
+
+    contact = _fake_contact(workspace_id)
+
+    dt1 = _datetime.datetime(2026, 8, 1, tzinfo=_datetime.timezone.utc)
+    dt2 = _datetime.datetime(2026, 8, 8, tzinfo=_datetime.timezone.utc)
+    dt3 = _datetime.datetime(2026, 8, 20, tzinfo=_datetime.timezone.utc)
+    ws_dts = [
+        _datetime.datetime(2026, 8, 1, tzinfo=_datetime.timezone.utc),
+        _datetime.datetime(2026, 8, 6, tzinfo=_datetime.timezone.utc),
+        _datetime.datetime(2026, 8, 11, tzinfo=_datetime.timezone.utc),
+        _datetime.datetime(2026, 8, 16, tzinfo=_datetime.timezone.utc),
+        _datetime.datetime(2026, 8, 21, tzinfo=_datetime.timezone.utc),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _sone(contact),
+        _scalars([dt1, dt2, dt3]),
+        _scalars(ws_dts),
+    ])
+
+    response_json = _json.dumps({
+        "recommendations": [
+            "Send a personalised check-in email referencing a recent industry event.",
+            "Schedule a 15-minute reconnect call to surface any unaddressed concerns.",
+            "Share a relevant case study to provide value and re-open the conversation.",
+        ]
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/communication-gap-analysis"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["avg_gap_days"], (int, float))
+    assert isinstance(body["longest_silence_days"], (int, float))
+    assert isinstance(body["workspace_avg_gap_days"], (int, float))
+    assert body["gap_assessment"] in ("frequent", "normal", "sparse", "dark")
+    assert body["risk_level"] in ("low", "medium", "high", "critical")
+    assert isinstance(body["recommendations"], list) and len(body["recommendations"]) == 3
+    assert all(isinstance(r, str) for r in body["recommendations"])
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_communication_gap_analysis_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/communication-gap-analysis"
+        )
+    assert resp.status_code == 403
+
     assert resp.status_code == 403

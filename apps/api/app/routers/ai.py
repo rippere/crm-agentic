@@ -6597,3 +6597,149 @@ async def contact_meeting_agenda(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/contacts/{contact_id}/communication-gap-analysis
+# ---------------------------------------------------------------------------
+
+_COMM_GAP_SYSTEM = """\
+You are a sales communication analyst. Given data about a contact's messaging frequency and gap metrics, \
+produce exactly 3 actionable recommendations to improve communication frequency and re-engage the contact. \
+Reply ONLY with a valid JSON object: {"recommendations": ["…", "…", "…"]}
+No markdown. No explanation. Pure JSON only."""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/communication-gap-analysis")
+@limiter.limit("5/minute")
+async def contact_communication_gap_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_row = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_row.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    msgs_result = await db.execute(
+        select(Message.received_at)
+        .where(
+            Message.contact_id == contact_id,
+            Message.workspace_id == workspace_id,
+            Message.received_at.isnot(None),
+        )
+        .order_by(Message.received_at.desc())
+        .limit(10)
+    )
+    msg_dates = msgs_result.scalars().all()
+
+    ws_msgs_result = await db.execute(
+        select(Message.received_at)
+        .where(Message.workspace_id == workspace_id, Message.received_at.isnot(None))
+        .order_by(Message.received_at.desc())
+        .limit(100)
+    )
+    ws_dates = ws_msgs_result.scalars().all()
+
+    now_utc = datetime.datetime.now(tz=timezone.utc)
+
+    def _make_aware(dt: datetime.datetime) -> datetime.datetime:
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+    if not msg_dates:
+        avg_gap_days = 0.0
+        longest_silence_days = 0.0
+        gap_assessment = "dark"
+        risk_level = "critical"
+    else:
+        sorted_contact = sorted(_make_aware(d) for d in msg_dates)
+        all_pts = sorted_contact + [now_utc]
+        gaps = [(all_pts[i] - all_pts[i - 1]).total_seconds() / 86400.0 for i in range(1, len(all_pts))]
+        avg_gap_days = sum(gaps) / len(gaps)
+        longest_silence_days = max(gaps)
+
+        if avg_gap_days < 7:
+            gap_assessment = "frequent"
+        elif avg_gap_days < 14:
+            gap_assessment = "normal"
+        elif avg_gap_days < 30:
+            gap_assessment = "sparse"
+        else:
+            gap_assessment = "dark"
+
+        if avg_gap_days >= 30:
+            risk_level = "critical"
+        elif avg_gap_days >= 14:
+            risk_level = "high"
+        elif avg_gap_days >= 7:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+
+    if len(ws_dates) >= 2:
+        sorted_ws = sorted(_make_aware(d) for d in ws_dates)
+        ws_gaps = [
+            (sorted_ws[i] - sorted_ws[i - 1]).total_seconds() / 86400.0
+            for i in range(1, len(sorted_ws))
+        ]
+        workspace_avg_gap_days = sum(ws_gaps) / len(ws_gaps)
+    else:
+        workspace_avg_gap_days = avg_gap_days
+
+    context = "\n".join([
+        f"Contact: {contact.name} ({contact.email or 'N/A'})",
+        f"Messages analyzed (last 10): {len(msg_dates)}",
+        f"Average gap between messages: {avg_gap_days:.1f} days",
+        f"Longest silence period: {longest_silence_days:.1f} days",
+        f"Workspace average gap: {workspace_avg_gap_days:.1f} days",
+        f"Gap assessment: {gap_assessment}",
+        f"Risk level: {risk_level}",
+        "Provide 3 specific, actionable recommendations to improve communication with this contact.",
+    ])
+
+    _default_recs = [
+        "Send a personalised check-in email referencing a recent industry trend relevant to their business.",
+        "Schedule a brief 15-minute reconnect call to surface any unaddressed concerns.",
+        "Share a relevant case study or product update to provide value and re-open the conversation.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_COMM_GAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        recs = data.get("recommendations", []) if isinstance(data, dict) else []
+        if not isinstance(recs, list):
+            recs = []
+        recommendations = [str(r) for r in recs[:3]]
+        while len(recommendations) < 3:
+            recommendations.append(_default_recs[len(recommendations) % 3])
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "avg_gap_days": round(avg_gap_days, 1),
+        "longest_silence_days": round(longest_silence_days, 1),
+        "workspace_avg_gap_days": round(workspace_avg_gap_days, 1),
+        "gap_assessment": gap_assessment,
+        "risk_level": risk_level,
+        "recommendations": recommendations,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

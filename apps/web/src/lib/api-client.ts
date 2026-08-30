@@ -4281,4 +4281,72 @@ export const apiClient = {
       token,
     )
   },
+
+  getCommunicationGapAnalysis(
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    avg_gap_days: number;
+    longest_silence_days: number;
+    workspace_avg_gap_days: number;
+    gap_assessment: 'frequent' | 'normal' | 'sparse' | 'dark';
+    risk_level: 'low' | 'medium' | 'high' | 'critical';
+    recommendations: string[];
+    contact_id: string;
+    generated_at: string;
+  } | null> {
+    if (isDemoMode()) {
+      const stubs: Record<string, {
+        avg_gap_days: number; longest_silence_days: number; workspace_avg_gap_days: number;
+        gap_assessment: 'frequent' | 'normal' | 'sparse' | 'dark';
+        risk_level: 'low' | 'medium' | 'high' | 'critical';
+        recommendations: string[];
+      }> = {
+        'c-001': {
+          avg_gap_days: 4.2,
+          longest_silence_days: 8.1,
+          workspace_avg_gap_days: 7.5,
+          gap_assessment: 'frequent',
+          risk_level: 'low',
+          recommendations: [
+            'Continue the current cadence — this contact is highly engaged.',
+            'Consider scheduling a quarterly business review to deepen the relationship.',
+            'Use the high-engagement window to introduce an upsell conversation.',
+          ],
+        },
+        'c-002': {
+          avg_gap_days: 28.5,
+          longest_silence_days: 42.3,
+          workspace_avg_gap_days: 7.5,
+          gap_assessment: 'sparse',
+          risk_level: 'high',
+          recommendations: [
+            'Send a re-engagement email referencing a recent product update or industry trend.',
+            'Schedule a brief 15-minute check-in call to surface any unaddressed concerns.',
+            'Share a relevant case study showing ROI to reignite interest in the product.',
+          ],
+        },
+        'c-003': {
+          avg_gap_days: 11.0,
+          longest_silence_days: 18.5,
+          workspace_avg_gap_days: 7.5,
+          gap_assessment: 'normal',
+          risk_level: 'medium',
+          recommendations: [
+            'Increase touch frequency to weekly check-ins during the onboarding window.',
+            'Set up an automated email drip to maintain visibility between calls.',
+            'Assign a dedicated customer success contact to improve relationship depth.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/communication-gap-analysis`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
