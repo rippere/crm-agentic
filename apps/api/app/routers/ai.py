@@ -6379,3 +6379,221 @@ async def contact_competitive_positioning(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+
+_MEETING_AGENDA_SYSTEM = """\
+You are Nova, the AI meeting preparation expert in NovaCRM.
+
+Generate a structured next-meeting agenda for a contact based on their profile, recent messages, open tasks, and deals.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "opening_hook": "A specific, personalized 1-2 sentence opener referencing something concrete about the contact or their deals.",
+  "agenda_items": [
+    {
+      "topic": "Topic title (3-6 words)",
+      "goal": "One sentence stating what you want to achieve with this topic.",
+      "talking_points": [
+        "First specific talking point with actionable detail.",
+        "Second specific talking point with actionable detail."
+      ],
+      "time_estimate_mins": 10
+    }
+  ]
+}
+
+Rules:
+- opening_hook: a warm, specific opener referencing the contact by name or a recent interaction
+- agenda_items: exactly 4 items covering deal status, open tasks, relationship, and next steps
+- Each topic: 3-6 words
+- Each goal: exactly one sentence
+- talking_points: exactly 2 items per agenda item, each concrete and actionable
+- time_estimate_mins: integer 5, 10, or 15 only
+- Total time should sum to approximately 40-45 minutes\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/meeting-agenda")
+@limiter.limit("5/minute")
+async def contact_meeting_agenda(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Generate a structured next-meeting agenda for a contact via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    msg_result = await db.execute(
+        select(Message, ClarityScore)
+        .outerjoin(ClarityScore, ClarityScore.message_id == Message.id)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+        )
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    msg_rows = msg_result.all()
+
+    tasks_result = await db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status.in_(["open", "in_progress"]),
+        )
+        .limit(5)
+    )
+    open_tasks = tasks_result.scalars().all()
+
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.in_(["discovery", "qualified", "proposal", "negotiation"]),
+        )
+        .limit(3)
+    )
+    open_deals = deals_result.scalars().all()
+
+    msgs_summary = "\n".join(
+        f"- Subject: {m.subject or '(none)'} | Clarity: {cs.score if cs else 'N/A'} | "
+        f"Preview: {(m.body_plain or '')[:120]}"
+        for m, cs in msg_rows
+    ) or "No recent messages."
+
+    tasks_summary = "\n".join(
+        f"- [{t.status}] {t.title} | due: {t.due_date or 'none'}"
+        for t in open_tasks
+    ) or "No open tasks."
+
+    deals_summary = "\n".join(
+        f"- '{d.title}' | stage={d.stage} | value=${d.value or 0:,.0f} | health={d.health_score or 0}"
+        for d in open_deals
+    ) or "No open deals."
+
+    context = "\n".join([
+        f"Contact: {contact.name} ({contact.email}), status={contact.status}, company={contact.company or 'N/A'}",
+        f"Lead score: {contact.ml_score or 0}",
+        f"Open deals:\n{deals_summary}",
+        f"Open tasks:\n{tasks_summary}",
+        f"Recent messages:\n{msgs_summary}",
+    ])
+
+    _default_agenda = [
+        {
+            "topic": "Relationship check-in",
+            "goal": "Reconnect and surface any unaddressed concerns.",
+            "talking_points": [
+                "Ask about recent developments at their company since your last touchpoint.",
+                "Acknowledge any pending tasks and confirm priorities have not shifted.",
+            ],
+            "time_estimate_mins": 10,
+        },
+        {
+            "topic": "Deal status review",
+            "goal": "Confirm the current deal stage and remove any blockers.",
+            "talking_points": [
+                "Walk through open deal health scores and flag any at-risk items.",
+                "Confirm next steps and timeline expectations with the contact.",
+            ],
+            "time_estimate_mins": 15,
+        },
+        {
+            "topic": "Open task follow-up",
+            "goal": "Ensure all outstanding action items are acknowledged and assigned.",
+            "talking_points": [
+                "Review the open task list and confirm ownership for each item.",
+                "Set due-date commitments for any overdue tasks.",
+            ],
+            "time_estimate_mins": 10,
+        },
+        {
+            "topic": "Next steps and close",
+            "goal": "Agree on clear next actions and meeting cadence.",
+            "talking_points": [
+                "Summarise agreed actions and assign owners on both sides.",
+                "Schedule the next touchpoint before leaving the call.",
+            ],
+            "time_estimate_mins": 5,
+        },
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_MEETING_AGENDA_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        opening_hook = str(data.get(
+            "opening_hook",
+            f"Great to connect, {contact.name} — let's make the most of our time today.",
+        )).strip()
+        if not opening_hook:
+            opening_hook = f"Great to connect, {contact.name} — let's align on priorities today."
+
+        raw_items = data.get("agenda_items", [])
+        if not isinstance(raw_items, list):
+            raw_items = []
+
+        agenda_items = []
+        for item in raw_items[:4]:
+            if not isinstance(item, dict):
+                continue
+            topic = str(item.get("topic", "Discussion topic")).strip()
+            goal = str(item.get("goal", "Advance the conversation.")).strip()
+            tps = item.get("talking_points", [])
+            if not isinstance(tps, list):
+                tps = []
+            talking_points = [str(t) for t in tps[:2]]
+            while len(talking_points) < 2:
+                talking_points.append("Confirm next steps before closing this topic.")
+            try:
+                time_est = int(item.get("time_estimate_mins", 10))
+                if time_est not in (5, 10, 15):
+                    time_est = 10
+            except (ValueError, TypeError):
+                time_est = 10
+            agenda_items.append({
+                "topic": topic,
+                "goal": goal,
+                "talking_points": talking_points,
+                "time_estimate_mins": time_est,
+            })
+
+        while len(agenda_items) < 4:
+            agenda_items.append(_default_agenda[len(agenda_items)])
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "opening_hook": opening_hook,
+        "agenda_items": agenda_items,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
