@@ -3679,6 +3679,8 @@ async def test_contact_meeting_agenda_returns_structured_response(app_client):
         r.scalars.return_value.all.return_value = lst
         return r
 
+    import json as _json
+
     contact = _fake_contact(workspace_id)
 
     mock_db.execute = AsyncMock(side_effect=[
