@@ -2325,7 +2325,7 @@ export default function ContactDetailPage() {
               <div className="py-2 flex flex-col gap-2">
                 <p className="text-xs text-zinc-600 italic">No communication gap analysis yet.</p>
                 <Button
-                  size="xs"
+                  size="sm"
                   variant="ghost"
                   onClick={async () => {
                     if (!token || !workspaceId || commGapGenerating) return;

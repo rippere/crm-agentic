@@ -4296,7 +4296,7 @@ export const apiClient = {
     contact_id: string;
     generated_at: string;
   } | null> {
-    if (isDemoMode()) {
+    if (isDemoMode) {
       const stubs: Record<string, {
         avg_gap_days: number; longest_silence_days: number; workspace_avg_gap_days: number;
         gap_assessment: 'frequent' | 'normal' | 'sparse' | 'dark';
