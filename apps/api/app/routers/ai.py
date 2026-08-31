@@ -6743,3 +6743,150 @@ async def contact_communication_gap_analysis(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/contacts/{contact_id}/sentiment-trend
+# ---------------------------------------------------------------------------
+
+_SENTIMENT_TREND_SYSTEM = """\
+You are a sentiment analysis specialist. Given a list of email messages from a contact, score each message's \
+sentiment from -1.0 (very negative) to 1.0 (very positive). Also provide 3 actionable recommendations \
+for improving the relationship based on the overall sentiment trend. \
+Reply ONLY with a valid JSON object: \
+{"sentiment_points": [{"received_at": "<iso>", "score": <float>}, ...], "recommendations": ["…", "…", "…"]} \
+No markdown. No explanation. Pure JSON only."""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/sentiment-trend")
+@limiter.limit("5/minute")
+async def contact_sentiment_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_row = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_row.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    msgs_result = await db.execute(
+        select(Message.received_at, Message.body_plain)
+        .where(
+            Message.contact_id == contact_id,
+            Message.workspace_id == workspace_id,
+            Message.received_at.isnot(None),
+        )
+        .order_by(Message.received_at.desc())
+        .limit(20)
+    )
+    messages = msgs_result.all()
+    messages_analyzed = len(messages)
+
+    _default_recs = [
+        "Schedule a personalised check-in to acknowledge recent concerns and rebuild rapport.",
+        "Share a success story or case study that directly addresses their industry challenges.",
+        "Propose a short roadmap review call to realign on goals and demonstrate commitment.",
+    ]
+
+    if not messages:
+        return {
+            "messages_analyzed": 0,
+            "avg_sentiment": 0.0,
+            "trend_direction": "stable",
+            "recent_sentiment": 0.0,
+            "oldest_sentiment": 0.0,
+            "sentiment_points": [],
+            "recommendations": _default_recs,
+            "contact_id": str(contact_id),
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    ordered = list(reversed(messages))  # oldest first
+    msgs_list = []
+    for received_at, body_plain in ordered:
+        ts = received_at.isoformat() if received_at else "unknown"
+        snippet = (body_plain or "")[:300].strip()
+        msgs_list.append(f"[{ts}] {snippet}")
+
+    context = "\n".join([
+        f"Contact: {contact.name} ({contact.email or 'N/A'})",
+        f"Messages to analyse ({messages_analyzed} total, oldest first):",
+        *msgs_list,
+        "Score each message sentiment from -1.0 (very negative) to 1.0 (very positive).",
+        "Return sentiment_points in chronological order (oldest first).",
+        "Include 3 specific, actionable recommendations based on the overall sentiment trend.",
+    ])
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_SENTIMENT_TREND_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        raw_points = data.get("sentiment_points", []) if isinstance(data, dict) else []
+        sentiment_points = []
+        if isinstance(raw_points, list):
+            for i, pt in enumerate(raw_points[:messages_analyzed]):
+                ts = ordered[i][0].isoformat() if i < len(ordered) else "unknown"
+                score = float(pt.get("score", 0.0)) if isinstance(pt, dict) else 0.0
+                score = max(-1.0, min(1.0, score))
+                sentiment_points.append({"received_at": ts, "score": round(score, 3)})
+
+        recs = data.get("recommendations", []) if isinstance(data, dict) else []
+        if not isinstance(recs, list):
+            recs = []
+        recommendations = [str(r) for r in recs[:3]]
+        while len(recommendations) < 3:
+            recommendations.append(_default_recs[len(recommendations) % 3])
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    if sentiment_points:
+        scores = [pt["score"] for pt in sentiment_points]
+        avg_sentiment = round(sum(scores) / len(scores), 3)
+        recent_sentiment = round(scores[-1], 3)
+        oldest_sentiment = round(scores[0], 3)
+        half = max(1, len(scores) // 2)
+        old_avg = sum(scores[:half]) / half
+        new_avg = sum(scores[-half:]) / half
+        diff = new_avg - old_avg
+        if diff > 0.1:
+            trend_direction = "improving"
+        elif diff < -0.1:
+            trend_direction = "declining"
+        else:
+            trend_direction = "stable"
+    else:
+        avg_sentiment = 0.0
+        recent_sentiment = 0.0
+        oldest_sentiment = 0.0
+        trend_direction = "stable"
+
+    return {
+        "messages_analyzed": messages_analyzed,
+        "avg_sentiment": avg_sentiment,
+        "trend_direction": trend_direction,
+        "recent_sentiment": recent_sentiment,
+        "oldest_sentiment": oldest_sentiment,
+        "sentiment_points": sentiment_points,
+        "recommendations": recommendations,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
