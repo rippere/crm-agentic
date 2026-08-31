@@ -6,6 +6,7 @@ import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import { cn, campaignStatusConfig } from "@/lib/utils";
+import { isDemoMode } from "@/lib/demo-mode";
 import { useCampaigns } from "@/hooks/useCampaigns";
 import { useSegments } from "@/hooks/useSegments";
 import { useSequences } from "@/hooks/useSequences";
@@ -292,7 +293,10 @@ export default function CampaignsPage() {
     if (f.scheduledAt && created && typeof created === "object" && "id" in created) {
       try { await scheduleCampaign(String((created as { id: string }).id), new Date(f.scheduledAt).toISOString()); } catch { /* silent */ }
     }
-    await refetch();
+    // In demo mode refetch re-seeds the static fixture list, discarding the
+    // optimistic insert (which is the source of truth there); only reconcile
+    // against the server in live mode.
+    if (!isDemoMode) await refetch();
   }, [createCampaign, scheduleCampaign, refetch]);
 
   const wrap = useCallback(async (id: string, fn: (id: string) => Promise<unknown>) => {
