@@ -3843,3 +3843,86 @@ async def test_contact_communication_gap_analysis_wrong_workspace_returns_403(ap
             f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/communication-gap-analysis"
         )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/contacts/{cid}/sentiment-trend
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_contact_sentiment_trend_returns_structured_response(app_client):
+    import json as _json
+    import datetime as _datetime
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _sone(obj):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = obj
+        return r
+
+    def _all_rows(rows):
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    contact = _fake_contact(workspace_id)
+
+    dt1 = _datetime.datetime(2026, 8, 1, tzinfo=_datetime.timezone.utc)
+    dt2 = _datetime.datetime(2026, 8, 15, tzinfo=_datetime.timezone.utc)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _sone(contact),
+        _all_rows([(dt2, "Some issues lately."), (dt1, "Great product, very happy!")]),
+    ])
+
+    response_json = _json.dumps({
+        "sentiment_points": [
+            {"received_at": dt1.isoformat(), "score": 0.8},
+            {"received_at": dt2.isoformat(), "score": -0.3},
+        ],
+        "recommendations": [
+            "Address the recent concerns promptly with a personalised follow-up.",
+            "Schedule a review call to rebuild trust and surface blockers.",
+            "Share a success story relevant to their use case to re-engage.",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/sentiment-trend"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["messages_analyzed"] == 2
+    assert isinstance(body["avg_sentiment"], (int, float))
+    assert body["trend_direction"] in ("improving", "stable", "declining")
+    assert isinstance(body["recent_sentiment"], (int, float))
+    assert isinstance(body["oldest_sentiment"], (int, float))
+    assert isinstance(body["sentiment_points"], list)
+    assert isinstance(body["recommendations"], list) and len(body["recommendations"]) == 3
+    assert all(isinstance(r, str) for r in body["recommendations"])
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_sentiment_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/sentiment-trend"
+        )
+    assert resp.status_code == 403

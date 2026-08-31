@@ -480,6 +480,12 @@ export default function ContactDetailPage() {
   const [commGapLoading, setCommGapLoading] = useState(false);
   const [commGapGenerating, setCommGapGenerating] = useState(false);
 
+  type AiSentimentPoint = { received_at: string; score: number };
+  type AiSentimentData = { messages_analyzed: number; avg_sentiment: number; trend_direction: 'improving' | 'stable' | 'declining'; recent_sentiment: number; oldest_sentiment: number; sentiment_points: AiSentimentPoint[]; recommendations: string[]; contact_id: string; generated_at: string };
+  const [aiSentiment, setAiSentiment] = useState<AiSentimentData | null>(null);
+  const [aiSentimentLoading, setAiSentimentLoading] = useState(false);
+  const [aiSentimentGenerating, setAiSentimentGenerating] = useState(false);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -739,6 +745,13 @@ export default function ContactDetailPage() {
       .then((data) => setCommGap(data ?? null))
       .catch(() => setCommGap(null))
       .finally(() => setCommGapLoading(false));
+
+    setAiSentimentLoading(true);
+    apiClient
+      .getAiSentimentTrend(workspaceId, contactId, token)
+      .then((data) => setAiSentiment(data ?? null))
+      .catch(() => setAiSentiment(null))
+      .finally(() => setAiSentimentLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -2339,6 +2352,110 @@ export default function ContactDetailPage() {
                 >
                   {commGapGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Radio className="h-3 w-3" />}
                   {commGapGenerating ? "Analyzing…" : "Analyze Gaps"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Sentiment Trend (AI) */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              {aiSentiment?.trend_direction === 'improving' ? (
+                <TrendingUp className="h-4 w-4 text-emerald-400" />
+              ) : aiSentiment?.trend_direction === 'declining' ? (
+                <TrendingDown className="h-4 w-4 text-rose-400" />
+              ) : (
+                <Minus className="h-4 w-4 text-amber-400" />
+              )}
+              <p className="text-xs font-semibold text-zinc-300">Sentiment Trend</p>
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || aiSentimentGenerating) return;
+                  setAiSentimentGenerating(true);
+                  try {
+                    const data = await apiClient.getAiSentimentTrend(workspaceId, contactId, token);
+                    setAiSentiment(data ?? null);
+                  } catch { /* ignore */ } finally { setAiSentimentGenerating(false); }
+                }}
+                disabled={aiSentimentGenerating || !aiSentiment}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", aiSentiment ? "" : "hidden")}
+                title="Regenerate"
+              >
+                <RefreshCw className={cn("h-3 w-3", aiSentimentGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {aiSentimentLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => <div key={i} className="h-3 rounded bg-zinc-800 animate-pulse" />)}
+              </div>
+            ) : aiSentiment ? (
+              <div className="space-y-3">
+                {/* Avg sentiment badge + trend label */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={cn(
+                    "text-[10px] font-semibold px-2 py-0.5 rounded-full",
+                    aiSentiment.avg_sentiment >= 0.2 && "bg-emerald-500/20 text-emerald-400",
+                    aiSentiment.avg_sentiment < 0.2 && aiSentiment.avg_sentiment > -0.2 && "bg-amber-500/20 text-amber-400",
+                    aiSentiment.avg_sentiment <= -0.2 && "bg-rose-500/20 text-rose-400",
+                  )}>
+                    {aiSentiment.avg_sentiment >= 0 ? "+" : ""}{aiSentiment.avg_sentiment.toFixed(2)} avg
+                  </span>
+                  <span className="text-[10px] text-zinc-500 capitalize">{aiSentiment.trend_direction}</span>
+                  <span className="text-[10px] text-zinc-600 ml-auto">{aiSentiment.messages_analyzed} msgs</span>
+                </div>
+                {/* Sparkline */}
+                {aiSentiment.sentiment_points.length > 1 && (
+                  <div className="h-16 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={aiSentiment.sentiment_points.map((p) => ({ t: p.received_at, score: p.score }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                        <XAxis dataKey="t" hide />
+                        <YAxis domain={[-1, 1]} hide />
+                        <RechartTooltip
+                          contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 6, fontSize: 11 }}
+                          labelFormatter={() => ""}
+                          formatter={(v: number) => [v.toFixed(2), "sentiment"]}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="score"
+                          stroke={aiSentiment.trend_direction === 'improving' ? '#34d399' : aiSentiment.trend_direction === 'declining' ? '#f87171' : '#fbbf24'}
+                          strokeWidth={1.5}
+                          dot={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                {/* Recommendations */}
+                <div className="space-y-1.5">
+                  {aiSentiment.recommendations.map((rec, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500" />
+                      <p className="text-[11px] text-zinc-400 leading-snug">{rec}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(aiSentiment.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="py-2 flex flex-col gap-2">
+                <p className="text-xs text-zinc-600 italic">No sentiment trend analysis yet.</p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={async () => {
+                    if (!token || !workspaceId || aiSentimentGenerating) return;
+                    setAiSentimentGenerating(true);
+                    try {
+                      const data = await apiClient.getAiSentimentTrend(workspaceId, contactId, token);
+                      setAiSentiment(data ?? null);
+                    } catch { /* ignore */ } finally { setAiSentimentGenerating(false); }
+                  }}
+                  disabled={aiSentimentGenerating}
+                >
+                  {aiSentimentGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <TrendingUp className="h-3 w-3" />}
+                  {aiSentimentGenerating ? "Analyzing…" : "Analyze Sentiment"}
                 </Button>
               </div>
             )}

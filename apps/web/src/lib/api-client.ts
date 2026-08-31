@@ -4349,4 +4349,87 @@ export const apiClient = {
       token,
     )
   },
+
+  getAiSentimentTrend: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    messages_analyzed: number
+    avg_sentiment: number
+    trend_direction: 'improving' | 'stable' | 'declining'
+    recent_sentiment: number
+    oldest_sentiment: number
+    sentiment_points: { received_at: string; score: number }[]
+    recommendations: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type AiSentimentStub = { messages_analyzed: number; avg_sentiment: number; trend_direction: 'improving' | 'stable' | 'declining'; recent_sentiment: number; oldest_sentiment: number; sentiment_points: { received_at: string; score: number }[]; recommendations: string[] }
+      const stubs: Record<string, AiSentimentStub> = {
+        'c-001': {
+          messages_analyzed: 12,
+          avg_sentiment: 0.42,
+          trend_direction: 'improving',
+          recent_sentiment: 0.65,
+          oldest_sentiment: 0.15,
+          sentiment_points: [
+            { received_at: '2026-06-01T10:00:00Z', score: 0.15 },
+            { received_at: '2026-06-15T10:00:00Z', score: 0.28 },
+            { received_at: '2026-07-01T10:00:00Z', score: 0.41 },
+            { received_at: '2026-07-15T10:00:00Z', score: 0.55 },
+            { received_at: '2026-08-01T10:00:00Z', score: 0.65 },
+          ],
+          recommendations: [
+            'Keep up the positive momentum with a personalised check-in celebrating recent wins.',
+            'Introduce advanced feature adoption to deepen engagement while sentiment is high.',
+            'Request a case study or testimonial to capitalise on the improving relationship.',
+          ],
+        },
+        'c-002': {
+          messages_analyzed: 8,
+          avg_sentiment: -0.21,
+          trend_direction: 'declining',
+          recent_sentiment: -0.55,
+          oldest_sentiment: 0.12,
+          sentiment_points: [
+            { received_at: '2026-06-01T10:00:00Z', score: 0.12 },
+            { received_at: '2026-06-20T10:00:00Z', score: -0.05 },
+            { received_at: '2026-07-10T10:00:00Z', score: -0.28 },
+            { received_at: '2026-07-28T10:00:00Z', score: -0.55 },
+          ],
+          recommendations: [
+            'Schedule an urgent call to surface and address the root cause of declining sentiment.',
+            'Assign a dedicated success manager to provide white-glove support and rebuild trust.',
+            'Offer a tailored roadmap session showing concrete plans to resolve open blockers.',
+          ],
+        },
+        'c-003': {
+          messages_analyzed: 5,
+          avg_sentiment: 0.08,
+          trend_direction: 'stable',
+          recent_sentiment: 0.10,
+          oldest_sentiment: 0.05,
+          sentiment_points: [
+            { received_at: '2026-07-01T10:00:00Z', score: 0.05 },
+            { received_at: '2026-07-15T10:00:00Z', score: 0.12 },
+            { received_at: '2026-08-01T10:00:00Z', score: 0.10 },
+          ],
+          recommendations: [
+            'Increase touch frequency to move sentiment from neutral to positive during onboarding.',
+            'Share relevant industry insights to provide value and spark a more enthusiastic response.',
+            'Invite the contact to a user community or webinar to build broader relationship depth.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/sentiment-trend`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
