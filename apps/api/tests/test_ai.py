@@ -3843,5 +3843,3 @@ async def test_contact_communication_gap_analysis_wrong_workspace_returns_403(ap
             f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/communication-gap-analysis"
         )
     assert resp.status_code == 403
-
-    assert resp.status_code == 403
