@@ -46,9 +46,66 @@ async function seed() {
     console.log(`  Created workspace: ${workspaceId}`);
   }
 
-  // TODO: create a real user row — requires a Supabase auth user to exist first.
-  // Example (run after auth.signUp):
-  //   await supabase.from("users").insert({ supabase_uid: "<auth-user-id>", workspace_id: workspaceId, email: "you@example.com", role: "admin" })
+  // ── 1b. Demo login — auth user pinned to the demo workspace ────────────────
+  // The walkthrough demo works by logging in as this user. auth.py reads the
+  // server-only app_metadata.workspace_id off the JWT and binds the user to THAT
+  // workspace on first /auth/verify (it never trusts user_metadata). So the whole
+  // trick is: create a Supabase auth user whose app_metadata.workspace_id is the
+  // demo workspace, and the app serves this seeded data on login. Idempotent:
+  // re-running re-pins the workspace and resets the password.
+  const demoEmail = process.env.DEMO_USER_EMAIL ?? "demo@riphere.com";
+  const demoPassword = process.env.DEMO_USER_PASSWORD ?? "novacrm-demo-2026";
+  console.log(`  Provisioning demo login (${demoEmail})...`);
+
+  let demoUid: string | undefined;
+  const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+    email: demoEmail,
+    password: demoPassword,
+    email_confirm: true,
+    app_metadata: { workspace_id: workspaceId },
+  });
+
+  if (created?.user) {
+    demoUid = created.user.id;
+    console.log(`  Created auth user: ${demoUid}`);
+  } else {
+    // Already registered (or another error) — find and update it so re-runs re-pin
+    // the workspace and reset the password to the known demo credential.
+    const { data: list } = await supabase.auth.admin.listUsers({ perPage: 1000 });
+    const found = list?.users.find((u) => u.email?.toLowerCase() === demoEmail.toLowerCase());
+    if (!found) {
+      console.error(`  Demo auth user: ${createErr?.message ?? "createUser failed and user not found"}`);
+      process.exit(1);
+    }
+    demoUid = found.id;
+    const { error: updErr } = await supabase.auth.admin.updateUserById(demoUid, {
+      password: demoPassword,
+      app_metadata: { ...(found.app_metadata ?? {}), workspace_id: workspaceId },
+    });
+    if (updErr) { console.error("  Demo auth user update:", updErr.message); process.exit(1); }
+    console.log(`  Reusing + re-pinning auth user: ${demoUid}`);
+  }
+
+  // Mirror the binding into the app's users table. auth.py would auto-provision
+  // this on first login, but seeding it directly means the demo works immediately
+  // (and stays idempotent — skip if a row for this uid already exists).
+  const { data: existingUser } = await supabase
+    .from("users")
+    .select("id")
+    .eq("supabase_uid", demoUid)
+    .maybeSingle();
+  if (existingUser) {
+    await supabase
+      .from("users")
+      .update({ workspace_id: workspaceId, email: demoEmail, role: "admin" })
+      .eq("supabase_uid", demoUid);
+  } else {
+    const { error: uErr } = await supabase
+      .from("users")
+      .insert({ supabase_uid: demoUid, workspace_id: workspaceId, email: demoEmail, role: "admin" });
+    if (uErr) { console.error("  users row:", uErr.message); process.exit(1); }
+  }
+  console.log("  Demo login bound to workspace.");
 
   // ── 2. Clear existing seeded data for this workspace ──────────────────────
   console.log("  Clearing existing workspace data...");
@@ -260,7 +317,8 @@ async function seed() {
   console.log(`  ${activity.length} events`);
 
   console.log(`\nSeed complete! Workspace ID: ${workspaceId}`);
-  console.log("Next: create a Supabase auth user, then insert a users row with the workspace_id above.");
+  console.log(`Demo login → ${demoEmail} / ${demoPassword}  (override with DEMO_USER_EMAIL / DEMO_USER_PASSWORD)`);
+  console.log("Log in at the app with these credentials to see the seeded walkthrough data.");
 }
 
 seed().catch(console.error);
