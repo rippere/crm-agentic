@@ -22,6 +22,7 @@ from app.models.sequence_step import SequenceStep
 from app.models.campaign import Campaign
 from app.models.sequence_enrollment import SequenceEnrollment
 from app.models.engagement_event import EngagementEvent
+from app.models.deal_health_history import DealHealthHistory
 
 __all__ = [
     "Workspace",
@@ -48,4 +49,5 @@ __all__ = [
     "Campaign",
     "SequenceEnrollment",
     "EngagementEvent",
+    "DealHealthHistory",
 ]

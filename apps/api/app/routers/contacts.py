@@ -33,6 +33,8 @@ from app.services.contact_context import (
 
 logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -699,12 +701,47 @@ async def compose_email(
         system_prompt += f" Write the email in a {body.tone} tone."
 
     client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_content}],
-    )
+    try:
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
+        )
+    except _anthropic.APIStatusError as exc:
+        # Anthropic returned a definite error (out-of-credits 400, auth 401,
+        # rate-limit 429, etc.). Surface it as a recoverable 503 with an
+        # actionable detail rather than letting it bubble up as an opaque 500 —
+        # the compose-email UI can then show "AI drafting temporarily
+        # unavailable" instead of a generic crash. See the credit-exhaustion
+        # incident 2026-08-23 where this masked as "the connectors are broken".
+        # Anthropic error bodies nest the human-readable message under
+        # `error.message` ({"type": "error", "error": {"message": ...}}), not at
+        # the top level — read the nested field so the log captures the actual
+        # cause (e.g. "credit balance is too low") instead of a generic repr.
+        detail_msg = ""
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):
+                detail_msg = str(err.get("message", ""))
+        logger.warning(
+            "compose_email anthropic_error contact_id=%s status=%s message=%s",
+            contact_id,
+            getattr(exc, "status_code", "?"),
+            detail_msg or str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI email drafting is temporarily unavailable. Please try again shortly, or check the Anthropic API credit balance.",
+        ) from exc
+    except _anthropic.APIError as exc:
+        # Connection/timeout errors that aren't a definite HTTP status.
+        logger.warning("compose_email anthropic_conn_error contact_id=%s exc=%s", contact_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI email drafting is temporarily unavailable. Please try again shortly.",
+        ) from exc
 
     raw = message.content[0].text if message.content else "{}"
 
@@ -997,7 +1034,7 @@ async def send_email(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     from app.models.connector import Connector
-    from app.services.gmail_client import GmailClient
+    from app.services.gmail_client import GmailClient, GmailReauthRequired
     from app.config import settings
 
     result = await db.execute(
@@ -1019,7 +1056,39 @@ async def send_email(
 
     try:
         sent = await client.send_message(to=body.to, subject=body.subject, body=body.body)
+    except GmailReauthRequired as exc:
+        logger.warning(
+            "send_email gmail_reauth_required workspace_id=%s contact_id=%s connector_id=%s exc=%s",
+            workspace_id, contact_id, connector.id, exc,
+        )
+        # Persist an auth-error event so GET /connectors reports this connector as
+        # "error" and the UI can steer the user to reconnect (mirrors slack_ingest).
+        try:
+            db.add(ActivityEvent(
+                workspace_id=workspace_id,
+                type="connector_auth_error",
+                agent_name="Gmail",
+                description=f"Gmail connector authorization failed: {exc}. Reconnect required.",
+                meta=f"connector_id={connector.id} code={getattr(exc, 'code', 'reauth_required')}",
+                severity="error",
+            ))
+            await db.commit()
+        except Exception:  # noqa: BLE001 — best-effort; never mask the reauth error
+            await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "gmail_reauth_required",
+                "message": "Gmail connection expired. Please reconnect Gmail to send email.",
+            },
+        ) from exc
     except Exception as exc:
+        # Surface the real Gmail failure to the server log — the 502 body alone was
+        # opaque, hiding the actual cause (bad scope, quota, network, API error).
+        logger.warning(
+            "send_email gmail_error workspace_id=%s contact_id=%s connector_id=%s exc_type=%s exc=%s",
+            workspace_id, contact_id, connector.id, type(exc).__name__, exc,
+        )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Gmail error: {exc}") from exc
 
     event = ActivityEvent(
@@ -1783,3 +1852,340 @@ async def contact_last_touch(
         "most_recent_type": most_recent_type,
         "days_ago": days_ago,
     }
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/response-time")
+async def contact_response_time(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Compute average response time (hours) from inbound to outbound messages for a contact."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+
+    msg_result = await db.execute(
+        select(Message.sender_email, Message.received_at, Message.created_at)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.asc().nullslast())
+    )
+    messages = msg_result.all()
+
+    contact_email = (contact.email or "").lower().strip()
+
+    inbound: list[datetime] = []
+    outbound: list[datetime] = []
+    for sender_email, received_at, created_at in messages:
+        ts = received_at or created_at
+        if ts is None:
+            continue
+        sender = (sender_email or "").lower().strip()
+        if sender == contact_email:
+            inbound.append(ts.replace(tzinfo=None) if ts.tzinfo else ts)
+        else:
+            outbound.append(ts.replace(tzinfo=None) if ts.tzinfo else ts)
+
+    pairs: list[float] = []
+    now = datetime.utcnow()
+    cutoff_30d = now - timedelta(days=30)
+    pairs_recent: list[float] = []
+
+    out_idx = 0
+    for in_ts in inbound:
+        while out_idx < len(outbound) and outbound[out_idx] <= in_ts:
+            out_idx += 1
+        if out_idx < len(outbound):
+            hours = (outbound[out_idx] - in_ts).total_seconds() / 3600
+            pairs.append(hours)
+            if in_ts >= cutoff_30d:
+                pairs_recent.append(hours)
+
+    if not pairs:
+        return {
+            "avg_response_hours": None,
+            "p50_response_hours": None,
+            "p90_response_hours": None,
+            "message_pairs_count": 0,
+            "trend_30d": None,
+        }
+
+    pairs_sorted = sorted(pairs)
+    n = len(pairs_sorted)
+    avg = sum(pairs_sorted) / n
+    p50 = pairs_sorted[n // 2]
+    p90 = pairs_sorted[min(int(n * 0.9), n - 1)]
+
+    trend_30d: float | None = None
+    if pairs_recent:
+        trend_30d = round(sum(pairs_recent) / len(pairs_recent), 1)
+
+    return {
+        "avg_response_hours": round(avg, 1),
+        "p50_response_hours": round(p50, 1),
+        "p90_response_hours": round(p90, 1),
+        "message_pairs_count": n,
+        "trend_30d": trend_30d,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/sentiment-trend  (Phase 13g)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/sentiment-trend")
+async def contact_sentiment_trend(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Weekly average sentiment score (−1 to +1) over last 12 weeks via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.message import Message
+    from datetime import timezone
+    from app.services.sentiment import score_weekly_sentiment
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(weeks=12)
+
+    msgs_result = await db.execute(
+        select(Message.body_plain, Message.received_at)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= cutoff,
+        )
+        .order_by(Message.received_at.asc())
+        .limit(200)
+    )
+    rows = msgs_result.all()
+
+    if not rows:
+        return {"weeks": []}
+
+    week_map: dict[str, list[str]] = {}
+    for body, received_at in rows:
+        if not body or not received_at:
+            continue
+        ts = received_at.replace(tzinfo=timezone.utc) if received_at.tzinfo is None else received_at
+        year, week, _ = ts.isocalendar()
+        key = f"{year}-W{week:02d}"
+        week_map.setdefault(key, []).append(body)
+
+    if not week_map:
+        return {"weeks": []}
+
+    week_batches = sorted(week_map.items())
+    scored = score_weekly_sentiment(week_batches)
+
+    return {
+        "weeks": [
+            {
+                "week": item["week"],
+                "score": item["score"],
+                "message_count": len(week_map.get(item["week"], [])),
+            }
+            for item in scored
+        ]
+    }
+
+
+# GET /workspaces/{wid}/contacts/{cid}/win-rate-trend  (Phase 13i)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/win-rate-trend")
+async def contact_win_rate_trend(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Quarterly win-rate trend for closed deals associated with this contact (last 2 years)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.deal import Deal
+    from datetime import timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=730)  # 2 years
+
+    deals_result = await db.execute(
+        select(Deal.stage, Deal.stage_changed_at, Deal.created_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= cutoff,
+        )
+        .order_by(Deal.stage_changed_at.asc())
+    )
+    rows = deals_result.all()
+
+    # Group by calendar quarter using stage_changed_at (fall back to created_at)
+    quarter_map: dict[str, dict[str, int]] = {}
+    for stage, stage_changed_at, created_at in rows:
+        ts = stage_changed_at or created_at
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        q = (ts.month - 1) // 3 + 1
+        key = f"{ts.year}-Q{q}"
+        bucket = quarter_map.setdefault(key, {"won": 0, "lost": 0})
+        if stage == "closed_won":
+            bucket["won"] += 1
+        else:
+            bucket["lost"] += 1
+
+    quarters = []
+    for key in sorted(quarter_map.keys()):
+        b = quarter_map[key]
+        total = b["won"] + b["lost"]
+        win_rate = round(b["won"] / total * 100, 1) if total > 0 else 0.0
+        quarters.append({
+            "quarter": key,
+            "won": b["won"],
+            "lost": b["lost"],
+            "total": total,
+            "win_rate": win_rate,
+        })
+
+    return {"quarters": quarters}
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/deal-stage-progression  (Phase 13n)
+# ---------------------------------------------------------------------------
+
+_PROG_STAGE_ORDER = ["discovery", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"]
+_PROG_STAGE_LABELS = {
+    "discovery": "Discovery", "qualified": "Qualified", "proposal": "Proposal",
+    "negotiation": "Negotiation", "closed_won": "Won", "closed_lost": "Lost",
+}
+_PROG_STAGE_RE = __import__("re").compile(r"→\s*([a-z_]+)")
+
+
+@router.get("/workspaces/{workspace_id}/contacts/{contact_id}/deal-stage-progression")
+async def contact_deal_stage_progression(
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """For each deal linked to this contact, return its full stage progression history."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    from app.models.deal import Deal
+    from datetime import timezone
+
+    deals_result = await db.execute(
+        select(Deal).where(Deal.workspace_id == workspace_id, Deal.contact_id == contact_id)
+        .order_by(Deal.created_at.desc())
+    )
+    deals = deals_result.scalars().all()
+
+    now = datetime.now(timezone.utc)
+
+    def _tz(t):
+        if t is None:
+            return now
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+    def _build_stages(deal) -> list[dict]:
+        """Reconstruct stage history for a single deal from activity events."""
+        # Find deal_moved events referencing this deal title
+        # (same approach as /deals/{id}/stage-history)
+        # Because we can't do a separate DB call per deal in a loop (N+1),
+        # we use the deal's stage_changed_at and created_at as best-effort.
+        # A full per-deal query would need the events filtered by deal title.
+        deal_created = _tz(deal.created_at)
+        current_stage = deal.stage or "discovery"
+        stage_changed = _tz(deal.stage_changed_at or deal.created_at)
+
+        if current_stage not in _PROG_STAGE_ORDER:
+            return [{
+                "stage": current_stage,
+                "label": _PROG_STAGE_LABELS.get(current_stage, current_stage),
+                "entered_at": stage_changed.isoformat(),
+                "days_in_stage": max(0, (now - stage_changed).days),
+                "is_current": True,
+            }]
+
+        stage_idx = _PROG_STAGE_ORDER.index(current_stage)
+
+        stages = []
+        for i, s in enumerate(_PROG_STAGE_ORDER[: stage_idx + 1]):
+            is_current = i == stage_idx
+            is_closed = s in ("closed_won", "closed_lost")
+
+            if is_current:
+                entered = stage_changed
+                days = max(0, (now - entered).days) if not is_closed else 0
+            else:
+                # Infer earlier stages from deal age proportionally
+                span = (stage_changed - deal_created).total_seconds()
+                proportion = i / max(1, stage_idx)
+                entered = deal_created + timedelta(seconds=span * proportion)
+                if i < stage_idx - 1:
+                    next_proportion = (i + 1) / max(1, stage_idx)
+                    next_entered = deal_created + timedelta(seconds=span * next_proportion)
+                    days = max(0, (next_entered - entered).days)
+                else:
+                    days = max(0, (stage_changed - entered).days)
+
+            stages.append({
+                "stage": s,
+                "label": _PROG_STAGE_LABELS.get(s, s),
+                "entered_at": entered.isoformat(),
+                "days_in_stage": days,
+                "is_current": is_current,
+            })
+        return stages
+
+    result = []
+    for deal in deals:
+        result.append({
+            "id": str(deal.id),
+            "title": deal.title or "Untitled",
+            "stage": deal.stage,
+            "value": float(deal.value or 0),
+            "stages": _build_stages(deal),
+        })
+
+    return {"deals": result}

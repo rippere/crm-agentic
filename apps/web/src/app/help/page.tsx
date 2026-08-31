@@ -19,10 +19,10 @@ const steps = [
 const capabilities = [
   { icon: Sparkles, title: "Semantic Contact Sorting", how: "Embeds every contact and classifies them by intent, role, and buying stage.", tech: "all-MiniLM-L6-v2 embeddings" },
   { icon: Brain, title: "Lead Scoring", how: "Scores leads 0–100 from engagement, firmographic, and deal-history signals.", tech: "Transparent heuristics" },
-  { icon: Mail, title: "Email Composer", how: "Drafts personalized outreach grounded in deal stage and contact history.", tech: "Claude Sonnet" },
+  { icon: Mail, title: "Email Composer", how: "Drafts personalized outreach grounded in deal stage and contact history.", tech: "Claude Haiku" },
   { icon: Mic, title: "Call Summarization", how: "Transcribes calls, then extracts action items, objections, and sentiment.", tech: "Whisper + Claude" },
   { icon: TrendingUp, title: "Pipeline Intelligence", how: "Flags stalled deals and recommends the next best action to keep things moving.", tech: "Heuristics over deal velocity" },
-  { icon: Heart, title: "Churn Risk", how: "Reads emails, tickets, and transcripts to flag at-risk accounts early.", tech: "Claude Haiku sentiment" },
+  { icon: Heart, title: "Sentiment Analysis", how: "Scores the sentiment of incoming messages and call summaries so a cooling relationship shows up in the contact record.", tech: "Claude Haiku sentiment" },
 ];
 
 const faqs = [

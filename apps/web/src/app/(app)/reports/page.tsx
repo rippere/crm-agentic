@@ -9,11 +9,11 @@ import { cn, formatCurrency, stageConfig, dealStageOrder } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import {
-  BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend, ComposedChart, Line,
+  BarChart, Bar, LineChart, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
 } from "recharts";
 import {
-  TrendingUp, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -82,6 +82,47 @@ export default function ReportsPage() {
     initial_revenue: number;
     months: Array<{ month_offset: number; revenue: number; deal_count: number; pct_of_initial: number | null }>;
   }>>([]);
+  const [velocityTrends, setVelocityTrends] = useState<Array<{
+    month: string;
+    avg_cycle_days: number | null;
+    deal_count: number;
+    closed_won: number;
+    closed_lost: number;
+  }>>([]);
+  const [messageVolume, setMessageVolume] = useState<Array<{ week_start: string; gmail: number; slack: number; teams: number; unknown: number; total: number }>>([]);
+  const [pipelineHealth, setPipelineHealth] = useState<{
+    health_score: number;
+    rating: 'strong' | 'healthy' | 'at_risk' | 'critical';
+    briefing: string;
+    priorities: string[];
+    generated_at: string;
+  } | null>(null);
+  const [pipelineHealthLoading, setPipelineHealthLoading] = useState(false);
+  const [pipelineHealthOpen, setPipelineHealthOpen] = useState(true);
+  const [teamPerf, setTeamPerf] = useState<{
+    performance_rating: 'excellent' | 'good' | 'needs_improvement' | 'critical';
+    highlights: string[];
+    areas_for_improvement: string[];
+    summary_sentence: string;
+    metrics: {
+      agent_runs: number;
+      task_completion_rate: number;
+      messages_processed: number;
+      deals_moved: number;
+      active_contacts: number;
+    };
+    generated_at: string;
+  } | null>(null);
+  const [teamPerfLoading, setTeamPerfLoading] = useState(false);
+  const [teamPerfOpen, setTeamPerfOpen] = useState(true);
+  const [competitiveLandscape, setCompetitiveLandscape] = useState<{
+    top_competitors: Array<{ name: string; deal_count: number; stages_present: string[]; threat_level: 'low' | 'medium' | 'high'; positioning_note: string }>
+    competitive_summary: string
+    win_strategies: string[]
+    generated_at: string
+  } | null>(null);
+  const [competitiveLandscapeLoading, setCompetitiveLandscapeLoading] = useState(false);
+  const [competitiveLandscapeOpen, setCompetitiveLandscapeOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -105,6 +146,14 @@ export default function ReportsPage() {
       apiClient.getActivityTrends("demo-workspace-1", "demo-token").then(setActivityTrends).catch(() => {});
       apiClient.getContactReengagementSummary("demo-workspace-1", "demo-token").then(setReengagementSummary).catch(() => {});
       apiClient.getRevenueCohort("demo-workspace-1", "demo-token").then(setRevenueCohort).catch(() => {});
+      apiClient.getDealVelocityTrends("demo-workspace-1", "demo-token").then(setVelocityTrends).catch(() => {});
+      apiClient.getMessageVolumeTrends("demo-workspace-1", "demo-token").then(setMessageVolume).catch(() => {});
+      setPipelineHealthLoading(true);
+      apiClient.getPipelineHealthBriefing("demo-workspace-1", "demo-token").then(setPipelineHealth).catch(() => {}).finally(() => setPipelineHealthLoading(false));
+      setTeamPerfLoading(true);
+      apiClient.getTeamPerformance("demo-workspace-1", "demo-token").then(setTeamPerf).catch(() => {}).finally(() => setTeamPerfLoading(false));
+      setCompetitiveLandscapeLoading(true);
+      apiClient.getCompetitiveLandscape("demo-workspace-1", "demo-token").then(setCompetitiveLandscape).catch(() => {}).finally(() => setCompetitiveLandscapeLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -132,6 +181,14 @@ export default function ReportsPage() {
       apiClient.getActivityTrends(workspaceId, session.access_token).then(setActivityTrends).catch(() => {});
       apiClient.getContactReengagementSummary(workspaceId, session.access_token).then(setReengagementSummary).catch(() => {});
       apiClient.getRevenueCohort(workspaceId, session.access_token).then(setRevenueCohort).catch(() => {});
+      apiClient.getDealVelocityTrends(workspaceId, session.access_token).then(setVelocityTrends).catch(() => {});
+      apiClient.getMessageVolumeTrends(workspaceId, session.access_token).then(setMessageVolume).catch(() => {});
+      setPipelineHealthLoading(true);
+      apiClient.getPipelineHealthBriefing(workspaceId, session.access_token).then(setPipelineHealth).catch(() => {}).finally(() => setPipelineHealthLoading(false));
+      setTeamPerfLoading(true);
+      apiClient.getTeamPerformance(workspaceId, session.access_token).then(setTeamPerf).catch(() => {}).finally(() => setTeamPerfLoading(false));
+      setCompetitiveLandscapeLoading(true);
+      apiClient.getCompetitiveLandscape(workspaceId, session.access_token).then(setCompetitiveLandscape).catch(() => {}).finally(() => setCompetitiveLandscapeLoading(false));
     });
   }, []);
 
@@ -230,6 +287,83 @@ export default function ReportsPage() {
     return { won, lost, active, winRate, wonValue, pipelineValue, avgDealSize, stale, byStage, topDeals, healthBuckets, revenueChart, avgCycleTime };
   }, [deals]);
 
+  const regeneratePipelineHealth = () => {
+    setPipelineHealthLoading(true);
+    const doFetch = (workspaceId: string, token: string) => {
+      apiClient.getPipelineHealthBriefing(workspaceId, token)
+        .then(setPipelineHealth)
+        .catch(() => {})
+        .finally(() => setPipelineHealthLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPipelineHealthLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPipelineHealthLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateTeamPerf = () => {
+    setTeamPerfLoading(true);
+    const doFetch = (workspaceId: string, token: string) => {
+      apiClient.getTeamPerformance(workspaceId, token)
+        .then(setTeamPerf)
+        .catch(() => {})
+        .finally(() => setTeamPerfLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setTeamPerfLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setTeamPerfLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateCompetitiveLandscape = () => {
+    setCompetitiveLandscapeLoading(true);
+    const doFetch = (workspaceId: string, token: string) => {
+      apiClient.getCompetitiveLandscape(workspaceId, token)
+        .then(setCompetitiveLandscape)
+        .catch(() => {})
+        .finally(() => setCompetitiveLandscapeLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCompetitiveLandscapeLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCompetitiveLandscapeLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const RATING_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+    strong:   { label: "Strong",   color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
+    healthy:  { label: "Healthy",  color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
+    at_risk:  { label: "At Risk",  color: "text-amber-400",   bg: "bg-amber-500/10 border-amber-500/20"   },
+    critical: { label: "Critical", color: "text-rose-400",    bg: "bg-rose-500/10 border-rose-500/20"     },
+  };
+
+  const TEAM_PERF_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+    excellent:          { label: "Excellent",          color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
+    good:               { label: "Good",               color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
+    needs_improvement:  { label: "Needs Improvement",  color: "text-amber-400",   bg: "bg-amber-500/10 border-amber-500/20"   },
+    critical:           { label: "Critical",           color: "text-rose-400",    bg: "bg-rose-500/10 border-rose-500/20"     },
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col gap-6 p-4 md:p-6">
@@ -244,6 +378,237 @@ export default function ReportsPage() {
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header title="Reports" subtitle={`${deals.length} total deals · win rate ${stats.winRate}%`} />
+
+      {/* Pipeline Health AI Briefing */}
+      <Card className="border-indigo-500/20">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-zinc-100">Pipeline Health Briefing</span>
+            {pipelineHealth && (
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${RATING_CONFIG[pipelineHealth.rating]?.bg} ${RATING_CONFIG[pipelineHealth.rating]?.color}`}>
+                {RATING_CONFIG[pipelineHealth.rating]?.label}
+                <span className="font-mono">{pipelineHealth.health_score}</span>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePipelineHealth}
+              disabled={pipelineHealthLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`h-3 w-3 ${pipelineHealthLoading ? "animate-spin" : ""}`} />
+              {pipelineHealthLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button
+              onClick={() => setPipelineHealthOpen((o) => !o)}
+              className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              {pipelineHealthOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+
+        {pipelineHealthOpen && (
+          <div className="mt-4">
+            {pipelineHealthLoading && !pipelineHealth && (
+              <div className="space-y-2">
+                <div className="h-4 w-full rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-4/5 rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-3/5 rounded bg-zinc-800 animate-pulse" />
+              </div>
+            )}
+            {pipelineHealth && (
+              <div className={`transition-opacity ${pipelineHealthLoading ? "opacity-40" : "opacity-100"}`}>
+                <p className="text-sm text-zinc-300 leading-relaxed mb-4">{pipelineHealth.briefing}</p>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Top Priorities</p>
+                  {pipelineHealth.priorities.map((p, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-indigo-500/15 text-xs font-bold text-indigo-400">{i + 1}</span>
+                      <p className="text-sm text-zinc-300">{p}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs text-zinc-600">
+                  Generated {new Date(pipelineHealth.generated_at).toLocaleString()} · Claude Haiku
+                </p>
+              </div>
+            )}
+            {!pipelineHealth && !pipelineHealthLoading && (
+              <p className="text-sm text-zinc-500">Click Regenerate to generate a pipeline health briefing.</p>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Team Performance AI Card */}
+      <Card className="border-teal-500/20">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-teal-400" />
+            <span className="text-sm font-semibold text-zinc-100">Team Performance</span>
+            {teamPerf && (
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${TEAM_PERF_CONFIG[teamPerf.performance_rating]?.bg} ${TEAM_PERF_CONFIG[teamPerf.performance_rating]?.color}`}>
+                {TEAM_PERF_CONFIG[teamPerf.performance_rating]?.label}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateTeamPerf}
+              disabled={teamPerfLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`h-3 w-3 ${teamPerfLoading ? "animate-spin" : ""}`} />
+              {teamPerfLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button
+              onClick={() => setTeamPerfOpen((o) => !o)}
+              className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              {teamPerfOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+
+        {teamPerfOpen && (
+          <div className="mt-4">
+            {teamPerfLoading && !teamPerf && (
+              <div className="space-y-2">
+                <div className="h-4 w-full rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-4/5 rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-3/5 rounded bg-zinc-800 animate-pulse" />
+              </div>
+            )}
+            {teamPerf && (
+              <div className={`transition-opacity ${teamPerfLoading ? "opacity-40" : "opacity-100"}`}>
+                {/* Summary */}
+                <p className="text-sm text-zinc-300 leading-relaxed mb-4">{teamPerf.summary_sentence}</p>
+
+                {/* Metrics mini-grid */}
+                <div className="grid grid-cols-5 gap-2 mb-4">
+                  {[
+                    { label: "Agent Runs", value: teamPerf.metrics.agent_runs, color: "text-teal-300" },
+                    { label: "Task Rate", value: `${teamPerf.metrics.task_completion_rate}%`, color: "text-indigo-300" },
+                    { label: "Messages", value: teamPerf.metrics.messages_processed, color: "text-violet-300" },
+                    { label: "Deals Moved", value: teamPerf.metrics.deals_moved, color: "text-amber-300" },
+                    { label: "Active Contacts", value: teamPerf.metrics.active_contacts, color: "text-emerald-300" },
+                  ].map((m) => (
+                    <div key={m.label} className="rounded-lg bg-zinc-800/50 border border-zinc-700/50 p-2 text-center">
+                      <p className={`text-lg font-mono font-bold ${m.color}`}>{m.value}</p>
+                      <p className="text-[10px] text-zinc-500 leading-tight mt-0.5">{m.label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Highlights + Areas */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">Highlights</p>
+                    <div className="space-y-1.5">
+                      {teamPerf.highlights.map((h, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-400" />
+                          <p className="text-xs text-zinc-300">{h}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">Areas to Improve</p>
+                    <div className="space-y-1.5">
+                      {teamPerf.areas_for_improvement.map((a, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-400" />
+                          <p className="text-xs text-zinc-300">{a}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <p className="mt-3 text-xs text-zinc-600">
+                  Generated {new Date(teamPerf.generated_at).toLocaleString()} · Claude Haiku · Last 30 days
+                </p>
+              </div>
+            )}
+            {!teamPerf && !teamPerfLoading && (
+              <p className="text-sm text-zinc-500">Click Regenerate to generate a team performance summary.</p>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Competitive Landscape AI Card */}
+      <Card className="gap-0 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Trophy className="h-4 w-4 text-amber-400" />
+            <span className="text-sm font-semibold text-zinc-100">Competitive Landscape</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateCompetitiveLandscape}
+              disabled={competitiveLandscapeLoading}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`h-3 w-3 ${competitiveLandscapeLoading ? "animate-spin" : ""}`} />
+              {competitiveLandscapeLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setCompetitiveLandscapeOpen((o) => !o)} className="text-zinc-500 hover:text-zinc-300 transition-colors">
+              {competitiveLandscapeOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {competitiveLandscapeOpen && (
+          <div className="p-4 space-y-4">
+            {competitiveLandscapeLoading && !competitiveLandscape && (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => <div key={i} className="h-10 rounded-lg bg-zinc-800 animate-pulse" />)}
+              </div>
+            )}
+            {competitiveLandscape && (
+              <div className={`space-y-4 transition-opacity ${competitiveLandscapeLoading ? "opacity-40" : "opacity-100"}`}>
+                <p className="text-sm text-zinc-300 leading-relaxed">{competitiveLandscape.competitive_summary}</p>
+                {competitiveLandscape.top_competitors.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">Top Competitors</p>
+                    {competitiveLandscape.top_competitors.map((c) => {
+                      const threatColor = c.threat_level === 'high' ? 'text-rose-400 bg-rose-500/10 border-rose-500/20' : c.threat_level === 'medium' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' : 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+                      return (
+                        <div key={c.name} className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-zinc-100">{c.name}</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${threatColor}`}>{c.threat_level}</span>
+                          </div>
+                          <p className="text-xs text-zinc-400">{c.deal_count} deal{c.deal_count !== 1 ? 's' : ''} · stages: {c.stages_present.join(', ')}</p>
+                          <p className="text-xs text-zinc-500 italic">{c.positioning_note}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">Win Strategies</p>
+                  <ol className="space-y-1.5">
+                    {competitiveLandscape.win_strategies.map((s, i) => (
+                      <li key={i} className="flex gap-2 text-sm text-zinc-300">
+                        <span className="flex-shrink-0 font-mono text-xs text-amber-400 mt-0.5">{i + 1}.</span>
+                        <span>{s}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              </div>
+            )}
+            {!competitiveLandscape && !competitiveLandscapeLoading && (
+              <p className="text-sm text-zinc-500">Click Regenerate to generate a competitive landscape analysis.</p>
+            )}
+          </div>
+        )}
+      </Card>
 
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -1169,6 +1534,128 @@ export default function ReportsPage() {
           </p>
         </Card>
       )}
+
+      {/* Deal Velocity Trends — Phase 13d */}
+      {velocityTrends.length > 0 && velocityTrends.some((r) => r.avg_cycle_days !== null) && (() => {
+        const first = velocityTrends.find((r) => r.avg_cycle_days !== null)?.avg_cycle_days ?? null;
+        const last  = [...velocityTrends].reverse().find((r) => r.avg_cycle_days !== null)?.avg_cycle_days ?? null;
+        const delta = first !== null && last !== null ? Math.round(last - first) : null;
+        const improved = delta !== null && delta < 0;
+        return (
+          <Card>
+            <div className="flex items-center gap-2 mb-4">
+              {improved
+                ? <TrendingDown className="h-4 w-4 text-emerald-400" />
+                : <TrendingUp className="h-4 w-4 text-indigo-400" />}
+              <h3 className="text-sm font-semibold text-zinc-200">Deal Velocity Trends</h3>
+              <span className="ml-auto text-xs text-zinc-500">avg days to close · last {velocityTrends.length} months</span>
+              {delta !== null && (
+                <span className={`text-xs font-mono font-bold ${improved ? "text-emerald-400" : "text-rose-400"}`}>
+                  {improved ? "↓" : "↑"} {Math.abs(delta)}d MoM
+                </span>
+              )}
+            </div>
+            <ResponsiveContainer width="100%" height={180}>
+              <LineChart data={velocityTrends} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+                <XAxis
+                  dataKey="month"
+                  tick={{ fill: "#71717a", fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: string) => v.slice(5)}
+                />
+                <YAxis
+                  tick={{ fill: "#71717a", fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: number) => `${v}d`}
+                />
+                <Tooltip
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null;
+                    const p = payload[0];
+                    const row = velocityTrends.find((r) => r.month === label);
+                    return (
+                      <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                        <p className="font-mono text-zinc-400 mb-1">{label}</p>
+                        {p.value !== null
+                          ? <p className="text-indigo-300 font-mono font-bold">{p.value}d avg cycle</p>
+                          : <p className="text-zinc-600">No closed deals</p>}
+                        {row && (
+                          <>
+                            <p className="text-emerald-400 mt-1">{row.closed_won} won</p>
+                            <p className="text-rose-400">{row.closed_lost} lost</p>
+                          </>
+                        )}
+                      </div>
+                    );
+                  }}
+                />
+                <ReferenceLine
+                  y={velocityTrends.filter((r) => r.avg_cycle_days !== null).reduce((s, r) => s + (r.avg_cycle_days ?? 0), 0) / Math.max(1, velocityTrends.filter((r) => r.avg_cycle_days !== null).length)}
+                  stroke="#52525b"
+                  strokeDasharray="4 4"
+                  label={{ value: "avg", position: "right", fill: "#52525b", fontSize: 9 }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="avg_cycle_days"
+                  name="Avg cycle days"
+                  stroke="#6366f1"
+                  strokeWidth={2}
+                  dot={{ fill: "#6366f1", r: 3, strokeWidth: 0 }}
+                  activeDot={{ r: 5, fill: "#818cf8" }}
+                  connectNulls={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+            <p className="mt-2 text-[10px] text-zinc-600 font-mono">Days from deal creation to closed_won / closed_lost, averaged per calendar month</p>
+          </Card>
+        );
+      })()}
+
+      {/* Message Volume by Source */}
+      {messageVolume.length > 0 && (() => {
+        const hasTeams = messageVolume.some((w) => w.teams > 0);
+        const hasUnknown = messageVolume.some((w) => w.unknown > 0);
+        const display = messageVolume.map((w) => ({
+          ...w,
+          label: w.week_start.slice(5), // MM-DD
+        }));
+        return (
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-indigo-400" />
+              <p className="text-sm font-semibold text-zinc-200">Message Volume by Source</p>
+              <span className="ml-auto text-[10px] font-mono text-zinc-500">Last 12 weeks</span>
+            </div>
+            <div className="flex items-center gap-4 text-[10px]">
+              <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-indigo-400" />Gmail</span>
+              <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-violet-400" />Slack</span>
+              {hasTeams   && <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-sky-400"    />Teams</span>}
+              {hasUnknown && <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-zinc-500"   />Other</span>}
+            </div>
+            <div className="h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={display} margin={{ top: 4, right: 4, bottom: 0, left: -24 }} barSize={8} barGap={1}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fill: "#71717A", fontSize: 9 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                  <YAxis tick={{ fill: "#71717A", fontSize: 9 }} axisLine={false} tickLine={false} width={28} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }}
+                    formatter={(v, name) => [v ?? 0, String(name).charAt(0).toUpperCase() + String(name).slice(1)]}
+                  />
+                  <Bar dataKey="gmail"   stackId="a" fill="#6366F1" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="slack"   stackId="a" fill="#8B5CF6" radius={[0, 0, 0, 0]} />
+                  {hasTeams   && <Bar dataKey="teams"   stackId="a" fill="#38BDF8" radius={[0, 0, 0, 0]} />}
+                  {hasUnknown && <Bar dataKey="unknown" stackId="a" fill="#52525B" radius={[2, 2, 0, 0]} />}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* Stale alert */}
       {stats.stale > 0 && (

@@ -15,6 +15,22 @@ from app.services.crypto import decrypt_token, encrypt_token
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
+
+class GmailReauthRequired(Exception):
+    """The Gmail connector's refresh token is missing, expired, or revoked.
+
+    Google returns HTTP 400 ``{"error": "invalid_grant"}`` when a refresh token
+    is no longer valid (e.g. the 7-day expiry that applies while the OAuth app is
+    in Testing mode). This is a user-actionable reauth condition, not a transient
+    failure, so callers should surface a "reconnect Gmail" path rather than a
+    generic 502. ``code`` carries the specific cause for logging/triage.
+    """
+
+    def __init__(self, message: str, code: str = "reauth_required"):
+        super().__init__(message)
+        self.code = code
+
+
 # Default query: Primary inbox + your own sent mail, skipping automated senders.
 #
 # `in:sent` is load-bearing, not a nicety. Reciprocity (do they write back?) and
@@ -43,7 +59,9 @@ class GmailClient:
 
     async def _refresh_access_token(self) -> str:
         if not self._connector.refresh_token:
-            raise ValueError("No refresh token available for connector")
+            raise GmailReauthRequired(
+                "No refresh token stored for this Gmail connector", code="no_refresh_token"
+            )
 
         refresh_plain = decrypt_token(self._connector.refresh_token)
 
@@ -57,8 +75,25 @@ class GmailClient:
                     "grant_type": "refresh_token",
                 },
             )
+
+        if resp.status_code >= 400:
+            error_code = ""
+            try:
+                error_code = str(resp.json().get("error", ""))
+            except Exception:  # noqa: BLE001 — body may not be JSON
+                pass
+            # Only invalid_grant (refresh token expired/revoked) is user-fixable by
+            # reconnecting. Other errors — invalid_client (bad GOOGLE_CLIENT_SECRET),
+            # invalid_request, etc. — are server-side config bugs; let them surface
+            # via raise_for_status() so they're logged, not hidden behind a pointless
+            # "Reconnect Gmail" loop.
+            if error_code == "invalid_grant":
+                raise GmailReauthRequired(
+                    "Gmail refresh token expired or revoked", code="invalid_grant"
+                )
             resp.raise_for_status()
-            data = resp.json()
+
+        data = resp.json()
 
         new_access_token: str = data["access_token"]
         self._connector.encrypted_token = encrypt_token(new_access_token)

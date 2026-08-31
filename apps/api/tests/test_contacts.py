@@ -1673,3 +1673,247 @@ async def test_reengagement_summary_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/contacts/reengagement-summary")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/response-time — Phase 13e
+# ---------------------------------------------------------------------------
+
+
+def _make_all_result(rows):
+    """Mock for execute().all() returning a list of tuples (column-level select)."""
+    r = MagicMock()
+    r.all.return_value = rows
+    return r
+
+
+@pytest.mark.asyncio
+async def test_response_time_computes_avg_p50_p90(app_client):
+    """Returns avg/p50/p90 response hours based on inbound→outbound message pairs."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id, email="alice@example.com")
+    contact_id = contact.id
+
+    now = datetime.utcnow()
+    # 3 inbound messages from contact, each followed by an outbound reply
+    # Reply times: 1h, 2h, 3h
+    messages = [
+        ("alice@example.com", now - timedelta(hours=10), now - timedelta(hours=10)),
+        ("rep@company.com",   now - timedelta(hours=9),  now - timedelta(hours=9)),
+        ("alice@example.com", now - timedelta(hours=6),  now - timedelta(hours=6)),
+        ("rep@company.com",   now - timedelta(hours=4),  now - timedelta(hours=4)),
+        ("alice@example.com", now - timedelta(hours=3),  now - timedelta(hours=3)),
+        ("rep@company.com",   now - timedelta(hours=0),  now - timedelta(hours=0)),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_all_result(messages),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact_id}/response-time")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["message_pairs_count"] == 3
+    assert data["avg_response_hours"] == pytest.approx(2.0, abs=0.2)
+    assert data["p50_response_hours"] is not None
+    assert data["p90_response_hours"] is not None
+
+
+@pytest.mark.asyncio
+async def test_response_time_contact_not_found_returns_404(app_client):
+    """Returns 404 when contact does not exist in the workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    missing_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{missing_id}/response-time")
+
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/sentiment-trend — Phase 13g
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sentiment_trend_returns_weekly_scores(app_client):
+    """Returns per-week sentiment scores bucketed from messages in last 12 weeks."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    now = datetime.utcnow()
+    # Two messages in week A, one in week B (different ISO weeks)
+    week_a_ts = now - timedelta(days=14)
+    week_b_ts = now - timedelta(days=7)
+    messages = [
+        ("Great progress on the deal!", week_a_ts),
+        ("Looking forward to our call.", week_a_ts + timedelta(hours=2)),
+        ("Let me know if you have questions.", week_b_ts),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_all_result(messages),
+    ])
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text='[{"week": "2026-W26", "score": 0.7}, {"week": "2026-W27", "score": 0.4}]')]
+    mock_client_instance = MagicMock()
+    mock_client_instance.messages.create.return_value = mock_response
+
+    with patch("anthropic.Anthropic", return_value=mock_client_instance):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact.id}/sentiment-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "weeks" in data
+    assert len(data["weeks"]) == 2
+    assert all("week" in w and "score" in w and "message_count" in w for w in data["weeks"])
+    assert all(-1.0 <= w["score"] <= 1.0 for w in data["weeks"])
+
+
+@pytest.mark.asyncio
+async def test_sentiment_trend_contact_not_found_returns_404(app_client):
+    """Returns 404 when contact does not exist in the workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    missing_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{missing_id}/sentiment-trend")
+
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/win-rate-trend — Phase 13i
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_win_rate_trend_groups_deals_by_quarter(app_client):
+    """Groups closed deals by calendar quarter and computes per-quarter win rate."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    # Q1 2026: 2 won, 1 lost → 66.7%; Q2 2026: 1 won, 1 lost → 50%
+    q1_ts = datetime(2026, 2, 15)
+    q2_ts = datetime(2026, 5, 10)
+    deals = [
+        ("closed_won",  q1_ts,                         q1_ts),
+        ("closed_won",  q1_ts + timedelta(days=5),     q1_ts + timedelta(days=5)),
+        ("closed_lost", q1_ts + timedelta(days=10),    q1_ts + timedelta(days=10)),
+        ("closed_won",  q2_ts,                         q2_ts),
+        ("closed_lost", q2_ts + timedelta(days=3),     q2_ts + timedelta(days=3)),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_all_result(deals),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/{contact.id}/win-rate-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "quarters" in data
+    quarters = {q["quarter"]: q for q in data["quarters"]}
+
+    assert "2026-Q1" in quarters
+    assert quarters["2026-Q1"]["won"] == 2
+    assert quarters["2026-Q1"]["total"] == 3
+    assert quarters["2026-Q1"]["win_rate"] == pytest.approx(66.7, abs=0.2)
+
+    assert "2026-Q2" in quarters
+    assert quarters["2026-Q2"]["won"] == 1
+    assert quarters["2026-Q2"]["total"] == 2
+    assert quarters["2026-Q2"]["win_rate"] == pytest.approx(50.0, abs=0.2)
+
+
+@pytest.mark.asyncio
+async def test_win_rate_trend_wrong_workspace_returns_403(app_client):
+    """Returns 403 when the contact belongs to a different workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    other_workspace_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact = _fake_contact(other_workspace_id)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(contact))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{other_workspace_id}/contacts/{contact.id}/win-rate-trend")
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/{cid}/deal-stage-progression — Phase 13n
+# ---------------------------------------------------------------------------
+
+
+def _fake_deal_for_contact(workspace_id, contact_id, stage="proposal", **kwargs):
+    d = MagicMock()
+    d.id = uuid.uuid4()
+    d.workspace_id = workspace_id
+    d.contact_id = contact_id
+    d.title = kwargs.get("title", "Acme Deal")
+    d.stage = stage
+    d.value = kwargs.get("value", 25000.0)
+    d.created_at = datetime(2026, 1, 1)
+    d.stage_changed_at = kwargs.get("stage_changed_at", datetime(2026, 3, 15))
+    return d
+
+
+@pytest.mark.asyncio
+async def test_deal_stage_progression_returns_stages(app_client):
+    """Returns a deal list with reconstructed stage history up to current stage."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+    deal = _fake_deal_for_contact(workspace_id, contact.id, stage="proposal")
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_scalars_result([deal]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/contacts/{contact.id}/deal-stage-progression"
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "deals" in data
+    assert len(data["deals"]) == 1
+    deal_data = data["deals"][0]
+    assert deal_data["stage"] == "proposal"
+    stages = deal_data["stages"]
+    stage_names = [s["stage"] for s in stages]
+    assert "discovery" in stage_names
+    assert "qualified" in stage_names
+    assert "proposal" in stage_names
+    # Should NOT include stages after current
+    assert "negotiation" not in stage_names
+    # Exactly one stage marked current
+    assert sum(1 for s in stages if s["is_current"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_deal_stage_progression_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting a contact that belongs to a different workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    other_workspace_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact = _fake_contact(other_workspace_id)
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(contact))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{other_workspace_id}/contacts/{contact.id}/deal-stage-progression"
+        )
+
+    assert resp.status_code == 403

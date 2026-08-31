@@ -16,8 +16,13 @@ import {
   ArrowLeft, Mail, Brain, Zap, TrendingUp, TrendingDown, Minus,
   CheckCircle2, Clock, Building2, Briefcase, Tag, ListTodo,
   Loader2, AlertTriangle, FileText, XCircle, Phone, ChevronRight,
-  Star, Calendar, X, Plus, Send, BarChart2, Download,
+  Star, Calendar, X, Plus, Send, BarChart2, Download, Layers, Sparkles,
+  Route, MessageSquare, PhoneCall, RefreshCw, Radio, Target, Trophy,
 } from "lucide-react";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip as RechartTooltip, ResponsiveContainer,
+} from "recharts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -101,6 +106,70 @@ type DealSummary = {
   win_rate: number | null;
   avg_deal_size: number | null;
   total_deals: number;
+};
+
+type ResponseTime = {
+  avg_response_hours: number | null;
+  p50_response_hours: number | null;
+  p90_response_hours: number | null;
+  message_pairs_count: number;
+  trend_30d: number | null;
+};
+
+type SentimentWeek = {
+  week: string;
+  score: number;
+  message_count: number;
+};
+
+type WinRateQuarter = {
+  quarter: string;
+  won: number;
+  lost: number;
+  total: number;
+  win_rate: number;
+};
+
+type DealStageStep = {
+  stage: string;
+  label: string;
+  entered_at: string;
+  days_in_stage: number;
+  is_current: boolean;
+};
+
+type DealProgression = {
+  id: string;
+  title: string;
+  stage: string;
+  value: number;
+  stages: DealStageStep[];
+};
+
+type RelationshipHealth = {
+  health_rating: 'strong' | 'neutral' | 'at_risk';
+  summary: string;
+  action_items: Array<{ priority: 'high' | 'medium' | 'low'; action: string }>;
+  contact_id: string;
+  generated_at: string;
+};
+
+type ContactSummaryData = {
+  relationship_status: 'strong' | 'warm' | 'cold' | 'at_risk';
+  summary: string;
+  next_best_action: string;
+  deal_value: number;
+  contact_id: string;
+  generated_at: string;
+};
+
+type OutreachStep = {
+  step: number;
+  channel: 'email' | 'slack' | 'call';
+  timing: 'now' | '3d' | '7d' | '14d';
+  subject: string | null;
+  body_preview: string;
+  goal: string;
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -339,6 +408,89 @@ export default function ContactDetailPage() {
   const [engagementScore, setEngagementScore] = useState<EngagementScore | null>(null);
   const [engagementLoading, setEngagementLoading] = useState(false);
   const [dealSummary, setDealSummary] = useState<DealSummary | null>(null);
+  const [responseTime, setResponseTime] = useState<ResponseTime | null>(null);
+  const [sentimentTrend, setSentimentTrend] = useState<SentimentWeek[] | null>(null);
+  const [sentimentLoading, setSentimentLoading] = useState(false);
+  const [winRateTrend, setWinRateTrend] = useState<WinRateQuarter[] | null>(null);
+  const [dealProgression, setDealProgression] = useState<DealProgression[] | null>(null);
+  const [relHealth, setRelHealth] = useState<RelationshipHealth | null>(null);
+  const [relHealthLoading, setRelHealthLoading] = useState(false);
+
+  const [contactSummary, setContactSummary] = useState<ContactSummaryData | null>(null);
+  const [contactSummaryLoading, setContactSummaryLoading] = useState(false);
+  const [contactSummaryGenerating, setContactSummaryGenerating] = useState(false);
+
+  type CommsStyleData = { style: 'direct' | 'analytical' | 'relational' | 'expressive'; preferred_channel: 'email' | 'slack' | 'call'; best_time: 'morning' | 'afternoon' | 'end_of_day'; tone_tips: string[]; contact_id: string; generated_at: string };
+  const [commsStyle, setCommsStyle] = useState<CommsStyleData | null>(null);
+  const [commsStyleLoading, setCommsStyleLoading] = useState(false);
+  const [commsStyleGenerating, setCommsStyleGenerating] = useState(false);
+
+  type LeadScoreExplanation = { score_assessment: 'accurate' | 'overestimated' | 'underestimated'; score_summary: string; key_signals: string[]; improvement_tips: string[]; contact_id: string; generated_at: string };
+  const [leadScoreExp, setLeadScoreExp] = useState<LeadScoreExplanation | null>(null);
+  const [leadScoreExpLoading, setLeadScoreExpLoading] = useState(false);
+  const [leadScoreExpGenerating, setLeadScoreExpGenerating] = useState(false);
+
+  type OnboardingChecklistItem = { step: string; detail: string; category: 'data' | 'outreach' | 'research' | 'relationship'; priority: 'high' | 'medium' | 'low' };
+  type OnboardingChecklistData = { checklist: OnboardingChecklistItem[]; readiness: 'new' | 'in_progress' | 'ready'; readiness_reason: string; contact_id: string; generated_at: string };
+  const [onboardingChecklist, setOnboardingChecklist] = useState<OnboardingChecklistData | null>(null);
+  const [onboardingChecklistLoading, setOnboardingChecklistLoading] = useState(false);
+  const [onboardingChecklistGenerating, setOnboardingChecklistGenerating] = useState(false);
+  const [checkedItems, setCheckedItems] = useState<Set<number>>(new Set());
+
+  type GrowthForecastData = { forecast_revenue_3m: number; forecast_revenue_12m: number; growth_trajectory: 'declining' | 'flat' | 'growing' | 'accelerating'; key_drivers: string[]; contact_id: string; generated_at: string };
+  const [growthForecast, setGrowthForecast] = useState<GrowthForecastData | null>(null);
+  const [growthForecastLoading, setGrowthForecastLoading] = useState(false);
+  const [growthForecastGenerating, setGrowthForecastGenerating] = useState(false);
+
+  type ChurnRiskData = { risk_level: 'low' | 'medium' | 'high' | 'critical'; churn_signals: string[]; retention_actions: string[]; contact_id: string; generated_at: string };
+  const [churnRisk, setChurnRisk] = useState<ChurnRiskData | null>(null);
+  const [churnRiskLoading, setChurnRiskLoading] = useState(false);
+  const [churnRiskGenerating, setChurnRiskGenerating] = useState(false);
+
+  type VelocityStageRow = { stage: string; contact_days: number | null; workspace_days: number | null };
+  type VelocityBenchmarkData = { contact_avg_days: number | null; workspace_avg_days: number | null; velocity_rating: 'fast' | 'on_par' | 'slow'; stage_breakdown: VelocityStageRow[]; insight: string; contact_id: string; generated_at: string };
+  const [velocityBenchmark, setVelocityBenchmark] = useState<VelocityBenchmarkData | null>(null);
+  const [velocityBenchmarkLoading, setVelocityBenchmarkLoading] = useState(false);
+  const [velocityBenchmarkGenerating, setVelocityBenchmarkGenerating] = useState(false);
+
+  type DealOutcomePredictorData = { predicted_outcome: 'win' | 'loss' | 'stalled'; confidence: 'high' | 'medium' | 'low'; key_risks: string[]; recommended_actions: string[]; contact_id: string; generated_at: string };
+  const [dealOutcomePredictor, setDealOutcomePredictor] = useState<DealOutcomePredictorData | null>(null);
+  const [dealOutcomePredictorLoading, setDealOutcomePredictorLoading] = useState(false);
+  const [dealOutcomePredictorGenerating, setDealOutcomePredictorGenerating] = useState(false);
+
+  type DealPortfolioOverviewData = { pipeline_health: 'strong' | 'at_risk' | 'mixed'; total_pipeline_value: number; open_deal_count: number; highlights: string[]; risks: string[]; contact_id: string; generated_at: string };
+  const [dealPortfolio, setDealPortfolio] = useState<DealPortfolioOverviewData | null>(null);
+  const [dealPortfolioLoading, setDealPortfolioLoading] = useState(false);
+  const [dealPortfolioGenerating, setDealPortfolioGenerating] = useState(false);
+
+  type CompetitivePositioningData = { positioning_strength: 'strong' | 'moderate' | 'weak'; top_competitor: string | null; win_rate_vs_competitor: number | null; positioning_tips: string[]; differentiators: string[]; contact_id: string; generated_at: string };
+  const [competitivePositioning, setCompetitivePositioning] = useState<CompetitivePositioningData | null>(null);
+  const [competitivePositioningLoading, setCompetitivePositioningLoading] = useState(false);
+  const [competitivePositioningGenerating, setCompetitivePositioningGenerating] = useState(false);
+
+  type MeetingAgendaItem = { topic: string; goal: string; talking_points: string[]; time_estimate_mins: number };
+  type MeetingAgendaData = { opening_hook: string; agenda_items: MeetingAgendaItem[]; contact_id: string; generated_at: string };
+  const [meetingAgenda, setMeetingAgenda] = useState<MeetingAgendaData | null>(null);
+  const [meetingAgendaLoading, setMeetingAgendaLoading] = useState(false);
+  const [meetingAgendaGenerating, setMeetingAgendaGenerating] = useState(false);
+  const [meetingAgendaExpanded, setMeetingAgendaExpanded] = useState<number | null>(null);
+
+  type CommGapData = { avg_gap_days: number; longest_silence_days: number; workspace_avg_gap_days: number; gap_assessment: 'frequent' | 'normal' | 'sparse' | 'dark'; risk_level: 'low' | 'medium' | 'high' | 'critical'; recommendations: string[]; contact_id: string; generated_at: string };
+  const [commGap, setCommGap] = useState<CommGapData | null>(null);
+  const [commGapLoading, setCommGapLoading] = useState(false);
+  const [commGapGenerating, setCommGapGenerating] = useState(false);
+
+  type AiSentimentPoint = { received_at: string; score: number };
+  type AiSentimentData = { messages_analyzed: number; avg_sentiment: number; trend_direction: 'improving' | 'stable' | 'declining'; recent_sentiment: number; oldest_sentiment: number; sentiment_points: AiSentimentPoint[]; recommendations: string[]; contact_id: string; generated_at: string };
+  const [aiSentiment, setAiSentiment] = useState<AiSentimentData | null>(null);
+  const [aiSentimentLoading, setAiSentimentLoading] = useState(false);
+  const [aiSentimentGenerating, setAiSentimentGenerating] = useState(false);
+
+  const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
+  const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
+  const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
+  const [outreachSeqExpanded, setOutreachSeqExpanded] = useState<number | null>(null);
+  const [addedSeqSteps, setAddedSeqSteps] = useState<Set<number>>(new Set());
 
   const [brief, setBrief] = useState<{ contact_name: string; brief: string } | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -346,6 +498,15 @@ export default function ContactDetailPage() {
 
   const [emailDraft, setEmailDraft] = useState<{ subject: string; body: string } | null>(null);
   const [emailLoading, setEmailLoading] = useState(false);
+
+  const [outreachDraft, setOutreachDraft] = useState<{ subject: string; body: string } | null>(null);
+  const [outreachLoading, setOutreachLoading] = useState(false);
+
+  type TaskSuggestion = { title: string; due_days: number; priority: 'high' | 'medium' | 'low' };
+  const [taskSuggestions, setTaskSuggestions] = useState<TaskSuggestion[] | null>(null);
+  const [taskSuggestionsLoading, setTaskSuggestionsLoading] = useState(false);
+  const [taskSuggestionsOpen, setTaskSuggestionsOpen] = useState(false);
+  const [addedSuggestions, setAddedSuggestions] = useState<Set<number>>(new Set());
 
   const scorePoller = useJobPoller();
   const enrichPoller = useJobPoller();
@@ -471,6 +632,126 @@ export default function ContactDetailPage() {
       .getContactDealSummary(workspaceId, contactId, token)
       .then((data: DealSummary) => setDealSummary(data))
       .catch(() => setDealSummary(null));
+
+    apiClient
+      .getContactResponseTime(workspaceId, contactId, token)
+      .then((data: ResponseTime) => setResponseTime(data))
+      .catch(() => setResponseTime(null));
+
+    setSentimentLoading(true);
+    apiClient
+      .getSentimentTrend(workspaceId, contactId, token)
+      .then((data) => setSentimentTrend(data?.weeks ?? null))
+      .catch(() => setSentimentTrend(null))
+      .finally(() => setSentimentLoading(false));
+
+    apiClient
+      .getContactWinRateTrend(workspaceId, contactId, token)
+      .then((data) => setWinRateTrend(data?.quarters ?? null))
+      .catch(() => setWinRateTrend(null));
+
+    apiClient
+      .getContactDealStageProgression(workspaceId, contactId, token)
+      .then((data) => setDealProgression(data?.deals ?? null))
+      .catch(() => setDealProgression(null));
+
+    setRelHealthLoading(true);
+    apiClient
+      .getRelationshipHealth(workspaceId, contactId, token)
+      .then((data: RelationshipHealth) => setRelHealth(data))
+      .catch(() => setRelHealth(null))
+      .finally(() => setRelHealthLoading(false));
+
+    setContactSummaryLoading(true);
+    apiClient
+      .getContactSummary(workspaceId, contactId, token)
+      .then((data: ContactSummaryData) => setContactSummary(data))
+      .catch(() => setContactSummary(null))
+      .finally(() => setContactSummaryLoading(false));
+
+    setCommsStyleLoading(true);
+    apiClient
+      .getCommunicationStyle(workspaceId, contactId, token)
+      .then((data) => setCommsStyle(data ?? null))
+      .catch(() => setCommsStyle(null))
+      .finally(() => setCommsStyleLoading(false));
+
+    setLeadScoreExpLoading(true);
+    apiClient
+      .getLeadScoreExplanation(workspaceId, contactId, token)
+      .then((data) => setLeadScoreExp(data ?? null))
+      .catch(() => setLeadScoreExp(null))
+      .finally(() => setLeadScoreExpLoading(false));
+
+    setOnboardingChecklistLoading(true);
+    apiClient
+      .getContactOnboardingChecklist(workspaceId, contactId, token)
+      .then((data) => setOnboardingChecklist(data ?? null))
+      .catch(() => setOnboardingChecklist(null))
+      .finally(() => setOnboardingChecklistLoading(false));
+
+    setGrowthForecastLoading(true);
+    apiClient
+      .getContactGrowthForecast(workspaceId, contactId, token)
+      .then((data) => setGrowthForecast(data ?? null))
+      .catch(() => setGrowthForecast(null))
+      .finally(() => setGrowthForecastLoading(false));
+
+    setChurnRiskLoading(true);
+    apiClient
+      .getChurnRisk(workspaceId, contactId, token)
+      .then((data) => setChurnRisk(data ?? null))
+      .catch(() => setChurnRisk(null))
+      .finally(() => setChurnRiskLoading(false));
+
+    setVelocityBenchmarkLoading(true);
+    apiClient
+      .getDealVelocityBenchmark(workspaceId, contactId, token)
+      .then((data) => setVelocityBenchmark(data ?? null))
+      .catch(() => setVelocityBenchmark(null))
+      .finally(() => setVelocityBenchmarkLoading(false));
+
+    setDealOutcomePredictorLoading(true);
+    apiClient
+      .getDealOutcomePredictor(workspaceId, contactId, token)
+      .then((data) => setDealOutcomePredictor(data ?? null))
+      .catch(() => setDealOutcomePredictor(null))
+      .finally(() => setDealOutcomePredictorLoading(false));
+
+    setDealPortfolioLoading(true);
+    apiClient
+      .getDealPortfolioOverview(workspaceId, contactId, token)
+      .then((data) => setDealPortfolio(data ?? null))
+      .catch(() => setDealPortfolio(null))
+      .finally(() => setDealPortfolioLoading(false));
+
+    setCompetitivePositioningLoading(true);
+    apiClient
+      .getContactCompetitivePositioning(workspaceId, contactId, token)
+      .then((data) => setCompetitivePositioning(data ?? null))
+      .catch(() => setCompetitivePositioning(null))
+      .finally(() => setCompetitivePositioningLoading(false));
+
+    setMeetingAgendaLoading(true);
+    apiClient
+      .getMeetingAgenda(workspaceId, contactId, token)
+      .then((data) => setMeetingAgenda(data ?? null))
+      .catch(() => setMeetingAgenda(null))
+      .finally(() => setMeetingAgendaLoading(false));
+
+    setCommGapLoading(true);
+    apiClient
+      .getCommunicationGapAnalysis(workspaceId, contactId, token)
+      .then((data) => setCommGap(data ?? null))
+      .catch(() => setCommGap(null))
+      .finally(() => setCommGapLoading(false));
+
+    setAiSentimentLoading(true);
+    apiClient
+      .getAiSentimentTrend(workspaceId, contactId, token)
+      .then((data) => setAiSentiment(data ?? null))
+      .catch(() => setAiSentiment(null))
+      .finally(() => setAiSentimentLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -504,6 +785,82 @@ export default function ContactDetailPage() {
     }
   };
 
+  const handleDraftOutreach = async () => {
+    if (!token || !workspaceId) return;
+    setOutreachLoading(true);
+    try {
+      const data = await apiClient.getDraftOutreach(workspaceId, contactId, token);
+      setOutreachDraft({ subject: data.subject, body: data.body });
+    } catch {
+      // ignore
+    } finally {
+      setOutreachLoading(false);
+    }
+  };
+
+  const handleSuggestTasks = async () => {
+    if (!token || !workspaceId) return;
+    setTaskSuggestionsOpen(true);
+    if (taskSuggestions) return;
+    setTaskSuggestionsLoading(true);
+    try {
+      const data = await apiClient.suggestContactTasks(workspaceId, contactId, token);
+      setTaskSuggestions(data.suggestions);
+    } catch {
+      setTaskSuggestions(null);
+    } finally {
+      setTaskSuggestionsLoading(false);
+    }
+  };
+
+  const handleAddSuggestion = async (suggestion: TaskSuggestion, index: number) => {
+    if (!token || !workspaceId || addedSuggestions.has(index)) return;
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + suggestion.due_days);
+    try {
+      await apiClient.createTask(workspaceId, {
+        title: suggestion.title,
+        contact_id: contactId,
+        due_date: dueDate.toISOString().split("T")[0],
+        status: "open",
+      }, token);
+      setAddedSuggestions((prev) => new Set([...prev, index]));
+    } catch { /* ignore */ }
+  };
+
+  const handleSuggestOutreachSeq = async () => {
+    if (!token || !workspaceId) return;
+    setOutreachSeqOpen(true);
+    if (outreachSeq) return;
+    setOutreachSeqLoading(true);
+    try {
+      const data = await apiClient.getSuggestedOutreachSequence(workspaceId, contactId, token);
+      setOutreachSeq(data.steps);
+    } catch {
+      setOutreachSeq(null);
+    } finally {
+      setOutreachSeqLoading(false);
+    }
+  };
+
+  const handleAddSeqStep = async (step: OutreachStep, index: number) => {
+    if (!token || !workspaceId || addedSeqSteps.has(index)) return;
+    const dueDate = new Date();
+    const daysMap: Record<string, number> = { now: 0, "3d": 3, "7d": 7, "14d": 14 };
+    dueDate.setDate(dueDate.getDate() + (daysMap[step.timing] ?? 7));
+    try {
+      await apiClient.createTask(workspaceId, {
+        title: step.subject
+          ? `[${step.channel.toUpperCase()}] ${step.subject}`
+          : `[${step.channel.toUpperCase()}] Step ${step.step}: ${step.goal.slice(0, 60)}`,
+        contact_id: contactId,
+        due_date: dueDate.toISOString().split("T")[0],
+        status: "open",
+      }, token);
+      setAddedSeqSteps((prev) => new Set([...prev, index]));
+    } catch { /* ignore */ }
+  };
+
   const handleScoreContact = async () => {
     if (!token || !workspaceId) return;
     try {
@@ -518,6 +875,39 @@ export default function ContactDetailPage() {
       const res = await apiClient.enrichContact(workspaceId, contactId, token) as { job_id?: string };
       if (res?.job_id) enrichPoller.start(res.job_id);
     } catch { /* ignore */ }
+  };
+
+  const handleRegenerateContactSummary = async () => {
+    if (!token || !workspaceId || contactSummaryGenerating) return;
+    setContactSummaryGenerating(true);
+    try {
+      const data = await apiClient.getContactSummary(workspaceId, contactId, token);
+      setContactSummary(data as ContactSummaryData);
+    } catch { /* ignore */ } finally {
+      setContactSummaryGenerating(false);
+    }
+  };
+
+  const handleRegenerateCommsStyle = async () => {
+    if (!token || !workspaceId || commsStyleGenerating) return;
+    setCommsStyleGenerating(true);
+    try {
+      const data = await apiClient.getCommunicationStyle(workspaceId, contactId, token);
+      setCommsStyle(data ?? null);
+    } catch { /* ignore */ } finally {
+      setCommsStyleGenerating(false);
+    }
+  };
+
+  const handleRegenerateLeadScoreExp = async () => {
+    if (!token || !workspaceId || leadScoreExpGenerating) return;
+    setLeadScoreExpGenerating(true);
+    try {
+      const data = await apiClient.getLeadScoreExplanation(workspaceId, contactId, token);
+      setLeadScoreExp(data ?? null);
+    } catch { /* ignore */ } finally {
+      setLeadScoreExpGenerating(false);
+    }
   };
 
   const handleExportTimeline = async () => {
@@ -609,6 +999,36 @@ export default function ContactDetailPage() {
         >
           {emailLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
           Compose Email
+        </Button>
+
+        <Button
+          variant="secondary"
+          onClick={handleDraftOutreach}
+          disabled={outreachLoading}
+          className="gap-1.5"
+        >
+          {outreachLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+          Draft Outreach
+        </Button>
+
+        <Button
+          variant="secondary"
+          onClick={handleSuggestTasks}
+          disabled={taskSuggestionsLoading}
+          className="gap-1.5"
+        >
+          {taskSuggestionsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListTodo className="h-3.5 w-3.5" />}
+          Suggest Tasks
+        </Button>
+
+        <Button
+          variant="secondary"
+          onClick={handleSuggestOutreachSeq}
+          disabled={outreachSeqLoading}
+          className="gap-1.5"
+        >
+          {outreachSeqLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Route className="h-3.5 w-3.5" />}
+          Outreach Sequence
         </Button>
 
         <Button
@@ -907,6 +1327,1185 @@ export default function ContactDetailPage() {
               </div>
             </Card>
           )}
+
+          {/* Response Time */}
+          {/* Contact AI summary card */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Brain className="h-4 w-4 text-sky-400" />
+              <p className="text-xs font-semibold text-zinc-300">Contact AI</p>
+              {contactSummary && (() => {
+                const cfg: Record<string, { label: string; cls: string }> = {
+                  strong: { label: "Strong", cls: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" },
+                  warm:   { label: "Warm",   cls: "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" },
+                  cold:   { label: "Cold",   cls: "bg-amber-500/15 text-amber-400 border border-amber-500/30" },
+                  at_risk:{ label: "At Risk", cls: "bg-rose-500/15 text-rose-400 border border-rose-500/30" },
+                };
+                const s = cfg[contactSummary.relationship_status] ?? cfg.warm;
+                return (
+                  <span className={cn("ml-1 rounded-md px-2 py-0.5 text-[10px] font-semibold tracking-wide", s.cls)}>
+                    {s.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={handleRegenerateContactSummary}
+                disabled={contactSummaryGenerating || contactSummaryLoading}
+                className="ml-auto text-[10px] text-zinc-500 hover:text-zinc-300 disabled:opacity-40 transition-colors flex items-center gap-1"
+              >
+                {contactSummaryGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                Regenerate
+              </button>
+            </div>
+
+            {contactSummaryLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-4 w-4 text-sky-400 animate-spin" />
+              </div>
+            ) : contactSummary === null ? (
+              <p className="text-xs text-zinc-600 italic py-2">Unable to load contact summary.</p>
+            ) : (
+              <div className="space-y-2.5">
+                <p className="text-xs text-zinc-300 leading-relaxed">{contactSummary.summary}</p>
+                {contactSummary.next_best_action && (
+                  <div className="rounded-lg bg-sky-500/10 border border-sky-500/20 px-3 py-2">
+                    <p className="text-[10px] font-mono text-sky-400 uppercase tracking-wider mb-0.5">Next best action</p>
+                    <p className="text-xs text-sky-200">{contactSummary.next_best_action}</p>
+                  </div>
+                )}
+                {contactSummary.deal_value > 0 && (
+                  <p className="text-[10px] text-zinc-500 flex items-center gap-1">
+                    <TrendingUp className="h-3 w-3 text-zinc-600" />
+                    {formatCurrency(contactSummary.deal_value)} open pipeline
+                  </p>
+                )}
+                <p className="text-[10px] text-zinc-600">
+                  Generated {formatRelative(contactSummary.generated_at)}
+                </p>
+              </div>
+            )}
+          </Card>
+
+          {/* Comms Style card */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Radio className="h-4 w-4 text-violet-400" />
+              <p className="text-xs font-semibold text-zinc-300">Comms Style</p>
+              <button
+                onClick={handleRegenerateCommsStyle}
+                disabled={commsStyleGenerating || commsStyleLoading}
+                className="ml-auto p-1 rounded text-zinc-500 hover:text-violet-400 disabled:opacity-40 transition-colors"
+              >
+                {commsStyleGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              </button>
+            </div>
+            {commsStyleLoading ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-3 bg-zinc-800 rounded w-1/2" />
+                <div className="h-3 bg-zinc-800 rounded w-3/4" />
+                <div className="h-3 bg-zinc-800 rounded w-2/3" />
+              </div>
+            ) : commsStyle === null ? (
+              <p className="text-xs text-zinc-600 italic py-2">Unable to load comms style.</p>
+            ) : (
+              <div className="space-y-3 opacity-100 transition-opacity" style={{ opacity: commsStyleGenerating ? 0.5 : 1 }}>
+                {/* Style + channel + best time badges */}
+                <div className="flex flex-wrap gap-1.5">
+                  {(() => {
+                    const styleColors: Record<string, string> = {
+                      direct: 'bg-rose-500/15 text-rose-300 border-rose-500/25',
+                      analytical: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/25',
+                      relational: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/25',
+                      expressive: 'bg-amber-500/15 text-amber-300 border-amber-500/25',
+                    };
+                    return (
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${styleColors[commsStyle.style] ?? 'bg-zinc-700 text-zinc-300 border-zinc-600'}`}>
+                        {commsStyle.style.charAt(0).toUpperCase() + commsStyle.style.slice(1)}
+                      </span>
+                    );
+                  })()}
+                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full border bg-zinc-800 text-zinc-300 border-zinc-700 flex items-center gap-1">
+                    {commsStyle.preferred_channel === 'email' && <Mail className="h-2.5 w-2.5" />}
+                    {commsStyle.preferred_channel === 'slack' && <MessageSquare className="h-2.5 w-2.5" />}
+                    {commsStyle.preferred_channel === 'call' && <Phone className="h-2.5 w-2.5" />}
+                    {commsStyle.preferred_channel}
+                  </span>
+                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full border bg-zinc-800 text-zinc-300 border-zinc-700 flex items-center gap-1">
+                    <Clock className="h-2.5 w-2.5" />
+                    {commsStyle.best_time.replace('_', ' ')}
+                  </span>
+                </div>
+                {/* Tone tips */}
+                <ul className="space-y-1.5">
+                  {commsStyle.tone_tips.map((tip, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-4 w-4 shrink-0 rounded-full bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-[9px] font-bold text-violet-300">{i + 1}</span>
+                      {tip}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(commsStyle.generated_at)}</p>
+              </div>
+            )}
+          </Card>
+
+          {/* Lead Score Explainer card */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-amber-400" />
+              <p className="text-xs font-semibold text-zinc-300">Lead Score Explainer</p>
+              {leadScoreExp && (() => {
+                const assessCfg = {
+                  accurate:       { label: "Accurate",       cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" },
+                  overestimated:  { label: "Overestimated",  cls: "bg-rose-500/15 text-rose-400 border-rose-500/30" },
+                  underestimated: { label: "Underestimated", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
+                };
+                const cfg = assessCfg[leadScoreExp.score_assessment] ?? assessCfg.accurate;
+                return (
+                  <span className={cn("rounded-md px-2 py-0.5 text-[10px] font-semibold tracking-wide border", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={handleRegenerateLeadScoreExp}
+                disabled={leadScoreExpGenerating || leadScoreExpLoading}
+                className="ml-auto p-1 rounded text-zinc-500 hover:text-amber-400 disabled:opacity-40 transition-colors"
+              >
+                {leadScoreExpGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              </button>
+            </div>
+            {leadScoreExpLoading ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-3 bg-zinc-800 rounded w-full" />
+                <div className="h-3 bg-zinc-800 rounded w-4/5" />
+                <div className="h-3 bg-zinc-800 rounded w-3/5" />
+              </div>
+            ) : leadScoreExp === null ? (
+              <p className="text-xs text-zinc-600 italic py-2">Unable to load lead score explanation.</p>
+            ) : (
+              <div className="space-y-3" style={{ opacity: leadScoreExpGenerating ? 0.5 : 1 }}>
+                <p className="text-xs text-zinc-300 leading-relaxed">{leadScoreExp.score_summary}</p>
+                {leadScoreExp.key_signals.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider mb-1.5">Key signals</p>
+                    <ul className="space-y-1.5">
+                      {leadScoreExp.key_signals.map((sig, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                          <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
+                          {sig}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {leadScoreExp.improvement_tips.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider mb-1.5">Improvement tips</p>
+                    <ul className="space-y-1.5">
+                      {leadScoreExp.improvement_tips.map((tip, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                          <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                          {tip}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(leadScoreExp.generated_at)}</p>
+              </div>
+            )}
+          </Card>
+
+          {/* Onboarding Checklist */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <ListTodo className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Onboarding Checklist</p>
+              {onboardingChecklist && (
+                <span className={cn(
+                  "ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full",
+                  onboardingChecklist.readiness === 'ready' ? "bg-emerald-500/15 text-emerald-400" :
+                  onboardingChecklist.readiness === 'in_progress' ? "bg-indigo-500/15 text-indigo-400" :
+                  "bg-zinc-700/50 text-zinc-400"
+                )}>
+                  {onboardingChecklist.readiness === 'ready' ? 'Ready' :
+                   onboardingChecklist.readiness === 'in_progress' ? 'In Progress' : 'New'}
+                </span>
+              )}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId) return;
+                  setOnboardingChecklistGenerating(true);
+                  try {
+                    const data = await apiClient.getContactOnboardingChecklist(workspaceId, contactId, token);
+                    setOnboardingChecklist(data ?? null);
+                    setCheckedItems(new Set());
+                  } catch { /* ignore */ } finally {
+                    setOnboardingChecklistGenerating(false);
+                  }
+                }}
+                disabled={onboardingChecklistGenerating}
+                className={cn("ml-1 text-zinc-500 hover:text-zinc-300 transition", onboardingChecklist ? "" : "hidden")}
+              >
+                <RefreshCw className={cn("h-3 w-3", onboardingChecklistGenerating && "animate-spin")} />
+              </button>
+            </div>
+
+            {onboardingChecklistLoading ? (
+              <div className="space-y-2">
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} className="h-10 rounded-lg bg-zinc-800 animate-pulse" />
+                ))}
+              </div>
+            ) : onboardingChecklist ? (
+              <div className="space-y-2">
+                {onboardingChecklist.readiness_reason && (
+                  <p className="text-[10px] text-zinc-500 italic">{onboardingChecklist.readiness_reason}</p>
+                )}
+                {onboardingChecklist.checklist.map((item, i) => {
+                  const checked = checkedItems.has(i);
+                  const catColor = item.category === 'data' ? 'text-sky-400' :
+                                   item.category === 'outreach' ? 'text-violet-400' :
+                                   item.category === 'research' ? 'text-amber-400' : 'text-emerald-400';
+                  const priColor = item.priority === 'high' ? 'bg-rose-500/15 text-rose-400' :
+                                   item.priority === 'medium' ? 'bg-amber-500/15 text-amber-400' :
+                                   'bg-zinc-700/50 text-zinc-400';
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setCheckedItems(prev => {
+                        const next = new Set(prev);
+                        if (next.has(i)) next.delete(i); else next.add(i);
+                        return next;
+                      })}
+                      className={cn(
+                        "w-full text-left flex items-start gap-3 rounded-lg border p-3 transition-all",
+                        checked
+                          ? "border-zinc-700/30 bg-zinc-800/30 opacity-50"
+                          : "border-zinc-700 bg-zinc-800 hover:border-zinc-600"
+                      )}
+                    >
+                      <div className="mt-0.5 flex-shrink-0">
+                        {checked
+                          ? <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                          : <div className="h-4 w-4 rounded-full border-2 border-zinc-600" />
+                        }
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className={cn("text-xs font-medium", checked ? "line-through text-zinc-500" : "text-zinc-200")}>{item.step}</p>
+                          <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium", priColor)}>{item.priority}</span>
+                          <span className={cn("text-[10px] font-medium", catColor)}>{item.category}</span>
+                        </div>
+                        <p className="text-[10px] text-zinc-500 mt-0.5 leading-relaxed">{item.detail}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(onboardingChecklist.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">Generate an AI-powered onboarding checklist for this contact.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setOnboardingChecklistGenerating(true);
+                    try {
+                      const data = await apiClient.getContactOnboardingChecklist(workspaceId, contactId, token);
+                      setOnboardingChecklist(data ?? null);
+                    } catch { /* ignore */ } finally {
+                      setOnboardingChecklistGenerating(false);
+                    }
+                  }}
+                  disabled={onboardingChecklistGenerating}
+                >
+                  {onboardingChecklistGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <ListTodo className="h-3 w-3" />}
+                  {onboardingChecklistGenerating ? "Generating…" : "Generate Checklist"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Growth Forecast */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-emerald-400" />
+              <p className="text-xs font-semibold text-zinc-300">Growth Forecast</p>
+              {growthForecast && (() => {
+                const traj = growthForecast.growth_trajectory;
+                const cfg = {
+                  accelerating: { label: 'Accelerating', cls: 'bg-emerald-500/15 text-emerald-400' },
+                  growing:      { label: 'Growing',      cls: 'bg-indigo-500/15 text-indigo-400'  },
+                  flat:         { label: 'Flat',         cls: 'bg-zinc-700/50 text-zinc-400'      },
+                  declining:    { label: 'Declining',    cls: 'bg-rose-500/15 text-rose-400'      },
+                }[traj] ?? { label: traj, cls: 'bg-zinc-700/50 text-zinc-400' };
+                return (
+                  <span className={cn("ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || growthForecastGenerating) return;
+                  setGrowthForecastGenerating(true);
+                  try {
+                    const data = await apiClient.getContactGrowthForecast(workspaceId, contactId, token);
+                    setGrowthForecast(data ?? null);
+                  } catch { /* ignore */ } finally { setGrowthForecastGenerating(false); }
+                }}
+                disabled={growthForecastGenerating}
+                className={cn("ml-1 text-zinc-500 hover:text-zinc-300 transition", growthForecast ? "" : "hidden")}
+              >
+                <RefreshCw className={cn("h-3 w-3", growthForecastGenerating && "animate-spin")} />
+              </button>
+            </div>
+
+            {growthForecastLoading ? (
+              <div className="space-y-2">
+                <div className="h-14 rounded-lg bg-zinc-800 animate-pulse" />
+                <div className="h-10 rounded-lg bg-zinc-800 animate-pulse" />
+              </div>
+            ) : growthForecast ? (
+              <div className="space-y-3">
+                {/* Revenue stats grid */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-lg bg-zinc-800/60 p-3 text-center">
+                    <p className="text-[10px] text-zinc-500 mb-1">3-Month</p>
+                    <p className="text-base font-bold text-emerald-400">{formatCurrency(growthForecast.forecast_revenue_3m)}</p>
+                  </div>
+                  <div className="rounded-lg bg-zinc-800/60 p-3 text-center">
+                    <p className="text-[10px] text-zinc-500 mb-1">12-Month</p>
+                    <p className="text-base font-bold text-indigo-400">{formatCurrency(growthForecast.forecast_revenue_12m)}</p>
+                  </div>
+                </div>
+                {/* Key drivers */}
+                <div className="space-y-1">
+                  <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">Key Drivers</p>
+                  {growthForecast.key_drivers.map((driver, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="text-emerald-500 text-[10px] font-bold mt-0.5">{i + 1}.</span>
+                      <p className="text-xs text-zinc-400 leading-relaxed">{driver}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(growthForecast.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">AI-powered revenue growth forecast for this contact.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setGrowthForecastGenerating(true);
+                    try {
+                      const data = await apiClient.getContactGrowthForecast(workspaceId, contactId, token);
+                      setGrowthForecast(data ?? null);
+                    } catch { /* ignore */ } finally { setGrowthForecastGenerating(false); }
+                  }}
+                  disabled={growthForecastGenerating}
+                >
+                  {growthForecastGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <TrendingUp className="h-3 w-3" />}
+                  {growthForecastGenerating ? "Forecasting…" : "Generate Forecast"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Churn Risk */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-rose-400" />
+              <p className="text-xs font-semibold text-zinc-300">Churn Risk</p>
+              {churnRisk && (() => {
+                const cfg = {
+                  low:      { label: 'Low',      cls: 'bg-emerald-500/15 text-emerald-400' },
+                  medium:   { label: 'Medium',   cls: 'bg-amber-500/15 text-amber-400'    },
+                  high:     { label: 'High',     cls: 'bg-rose-500/15 text-rose-400'      },
+                  critical: { label: 'Critical', cls: 'bg-rose-600/20 text-rose-300'      },
+                }[churnRisk.risk_level] ?? { label: churnRisk.risk_level, cls: 'bg-zinc-700/50 text-zinc-400' };
+                return (
+                  <span className={cn("ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || churnRiskGenerating) return;
+                  setChurnRiskGenerating(true);
+                  try {
+                    const data = await apiClient.getChurnRisk(workspaceId, contactId, token);
+                    setChurnRisk(data ?? null);
+                  } catch { /* ignore */ } finally { setChurnRiskGenerating(false); }
+                }}
+                disabled={churnRiskGenerating}
+                className={cn("ml-1 text-zinc-500 hover:text-zinc-300 transition", churnRisk ? "" : "hidden")}
+              >
+                <RefreshCw className={cn("h-3 w-3", churnRiskGenerating && "animate-spin")} />
+              </button>
+            </div>
+
+            {churnRiskLoading ? (
+              <div className="space-y-2">
+                <div className="h-12 rounded-lg bg-zinc-800 animate-pulse" />
+                <div className="h-12 rounded-lg bg-zinc-800 animate-pulse" />
+              </div>
+            ) : churnRisk ? (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">Churn Signals</p>
+                  {churnRisk.churn_signals.map((signal, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="mt-1 h-1.5 w-1.5 rounded-full bg-rose-500 flex-shrink-0" />
+                      <p className="text-xs text-zinc-400 leading-relaxed">{signal}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">Retention Actions</p>
+                  {churnRisk.retention_actions.map((action, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="mt-1 h-1.5 w-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                      <p className="text-xs text-zinc-400 leading-relaxed">{action}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(churnRisk.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">AI churn risk assessment for this contact.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setChurnRiskGenerating(true);
+                    try {
+                      const data = await apiClient.getChurnRisk(workspaceId, contactId, token);
+                      setChurnRisk(data ?? null);
+                    } catch { /* ignore */ } finally { setChurnRiskGenerating(false); }
+                  }}
+                  disabled={churnRiskGenerating}
+                >
+                  {churnRiskGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <AlertTriangle className="h-3 w-3" />}
+                  {churnRiskGenerating ? "Assessing…" : "Assess Churn Risk"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Deal Velocity Benchmark */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Deal Velocity</p>
+              {velocityBenchmark && (() => {
+                const cfg = {
+                  fast:   { label: 'Faster than avg', cls: 'bg-emerald-500/15 text-emerald-400' },
+                  on_par: { label: 'On par',          cls: 'bg-indigo-500/15 text-indigo-400'   },
+                  slow:   { label: 'Slower than avg', cls: 'bg-rose-500/15 text-rose-400'       },
+                }[velocityBenchmark.velocity_rating] ?? { label: velocityBenchmark.velocity_rating, cls: 'bg-zinc-700/50 text-zinc-400' };
+                return (
+                  <span className={cn("ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || velocityBenchmarkGenerating) return;
+                  setVelocityBenchmarkGenerating(true);
+                  try {
+                    const data = await apiClient.getDealVelocityBenchmark(workspaceId, contactId, token);
+                    setVelocityBenchmark(data ?? null);
+                  } catch { /* ignore */ } finally { setVelocityBenchmarkGenerating(false); }
+                }}
+                disabled={velocityBenchmarkGenerating}
+                className={cn("ml-1 text-zinc-500 hover:text-zinc-300 transition", velocityBenchmark ? "" : "hidden")}
+              >
+                <RefreshCw className={cn("h-3 w-3", velocityBenchmarkGenerating && "animate-spin")} />
+              </button>
+            </div>
+
+            {velocityBenchmarkLoading ? (
+              <div className="space-y-2">
+                <div className="h-10 rounded-lg bg-zinc-800 animate-pulse" />
+                <div className="h-10 rounded-lg bg-zinc-800 animate-pulse" />
+              </div>
+            ) : velocityBenchmark ? (
+              <div className="space-y-3">
+                {velocityBenchmark.contact_avg_days !== null && velocityBenchmark.workspace_avg_days !== null ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-center">
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">This Contact</p>
+                        <p className="text-base font-semibold text-zinc-100">{velocityBenchmark.contact_avg_days}d</p>
+                      </div>
+                      <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-center">
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Workspace Avg</p>
+                        <p className="text-base font-semibold text-zinc-100">{velocityBenchmark.workspace_avg_days}d</p>
+                      </div>
+                    </div>
+                    {velocityBenchmark.stage_breakdown.length > 0 && (
+                      <div className="space-y-1">
+                        <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">By Stage</p>
+                        {velocityBenchmark.stage_breakdown.map((row) => (
+                          <div key={row.stage} className="flex items-center justify-between">
+                            <span className="text-[11px] text-zinc-500 capitalize">{row.stage.replace('_', ' ')}</span>
+                            <span className="text-[11px] text-zinc-300">
+                              {row.contact_days !== null ? `${row.contact_days}d` : '—'}
+                              {row.workspace_days !== null ? <span className="text-zinc-600"> / {row.workspace_days}d avg</span> : null}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-zinc-600 italic">No closed deals to benchmark yet.</p>
+                )}
+                <p className="text-[11px] text-zinc-400 leading-relaxed italic">{velocityBenchmark.insight}</p>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(velocityBenchmark.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">Benchmark deal velocity against workspace average.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setVelocityBenchmarkGenerating(true);
+                    try {
+                      const data = await apiClient.getDealVelocityBenchmark(workspaceId, contactId, token);
+                      setVelocityBenchmark(data ?? null);
+                    } catch { /* ignore */ } finally { setVelocityBenchmarkGenerating(false); }
+                  }}
+                  disabled={velocityBenchmarkGenerating}
+                >
+                  {velocityBenchmarkGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <TrendingUp className="h-3 w-3" />}
+                  {velocityBenchmarkGenerating ? "Benchmarking…" : "Benchmark Velocity"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* ── Deal Outcome Predictor ── */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Target className="h-4 w-4 text-sky-400" />
+              <p className="text-xs font-semibold text-zinc-300">Deal Outcome</p>
+              {dealOutcomePredictor && (() => {
+                const cfg = {
+                  win:     { label: 'Win',     cls: 'bg-emerald-500/20 text-emerald-300' },
+                  loss:    { label: 'Loss',    cls: 'bg-rose-500/20 text-rose-300' },
+                  stalled: { label: 'Stalled', cls: 'bg-amber-500/20 text-amber-300' },
+                }[dealOutcomePredictor.predicted_outcome] ?? { label: dealOutcomePredictor.predicted_outcome, cls: 'bg-zinc-700/50 text-zinc-400' };
+                return (
+                  <span className={cn("ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || dealOutcomePredictorGenerating) return;
+                  setDealOutcomePredictorGenerating(true);
+                  try {
+                    const data = await apiClient.getDealOutcomePredictor(workspaceId, contactId, token);
+                    setDealOutcomePredictor(data ?? null);
+                  } catch { /* ignore */ } finally { setDealOutcomePredictorGenerating(false); }
+                }}
+                disabled={dealOutcomePredictorGenerating}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", dealOutcomePredictor ? "" : "hidden")}
+                aria-label="Regenerate deal outcome prediction"
+              >
+                <RefreshCw className={cn("h-3 w-3", dealOutcomePredictorGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {dealOutcomePredictorLoading ? (
+              <div className="h-20 rounded-lg bg-zinc-800/50 animate-pulse" />
+            ) : dealOutcomePredictor ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    "text-[10px] font-semibold px-1.5 py-0.5 rounded-full",
+                    { high: 'bg-emerald-500/20 text-emerald-400', medium: 'bg-amber-500/20 text-amber-400', low: 'bg-zinc-700/50 text-zinc-400' }[dealOutcomePredictor.confidence]
+                  )}>
+                    {dealOutcomePredictor.confidence.charAt(0).toUpperCase() + dealOutcomePredictor.confidence.slice(1)} confidence
+                  </span>
+                </div>
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Key Risks</p>
+                  <ul className="space-y-1">
+                    {dealOutcomePredictor.key_risks.map((risk, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-500" />
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{risk}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Recommended Actions</p>
+                  <ol className="space-y-1 list-none">
+                    {dealOutcomePredictor.recommended_actions.map((action, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-0.5 flex-shrink-0 w-4 h-4 rounded-full bg-sky-500/20 text-sky-300 text-[9px] font-bold flex items-center justify-center">{i + 1}</span>
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{action}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(dealOutcomePredictor.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">Predict deal outcome from open pipeline for this contact.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setDealOutcomePredictorGenerating(true);
+                    try {
+                      const data = await apiClient.getDealOutcomePredictor(workspaceId, contactId, token);
+                      setDealOutcomePredictor(data ?? null);
+                    } catch { /* ignore */ } finally { setDealOutcomePredictorGenerating(false); }
+                  }}
+                  disabled={dealOutcomePredictorGenerating}
+                >
+                  {dealOutcomePredictorGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Target className="h-3 w-3" />}
+                  {dealOutcomePredictorGenerating ? "Predicting…" : "Predict Outcome"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Deal Portfolio Overview */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Layers className="h-4 w-4 text-teal-400" />
+              <p className="text-xs font-semibold text-zinc-300">Deal Portfolio</p>
+              {dealPortfolio && (() => {
+                const cfg = {
+                  strong: { label: 'Strong', cls: 'bg-emerald-500/20 text-emerald-400' },
+                  at_risk: { label: 'At Risk', cls: 'bg-rose-500/20 text-rose-400' },
+                  mixed: { label: 'Mixed', cls: 'bg-amber-500/20 text-amber-400' },
+                }[dealPortfolio.pipeline_health];
+                return (
+                  <span className={cn("ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full", cfg.cls)}>
+                    {cfg.label}
+                  </span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || dealPortfolioGenerating) return;
+                  setDealPortfolioGenerating(true);
+                  try {
+                    const data = await apiClient.getDealPortfolioOverview(workspaceId, contactId, token);
+                    setDealPortfolio(data ?? null);
+                  } catch { /* ignore */ } finally { setDealPortfolioGenerating(false); }
+                }}
+                disabled={dealPortfolioGenerating}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", dealPortfolio ? "" : "hidden")}
+                aria-label="Regenerate deal portfolio overview"
+              >
+                <RefreshCw className={cn("h-3 w-3", dealPortfolioGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {dealPortfolioLoading ? (
+              <div className="h-20 rounded-lg bg-zinc-800/50 animate-pulse" />
+            ) : dealPortfolio ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-3 text-[11px] text-zinc-400">
+                  <span><span className="font-semibold text-zinc-200">{dealPortfolio.open_deal_count}</span> open {dealPortfolio.open_deal_count === 1 ? 'deal' : 'deals'}</span>
+                  <span className="text-zinc-600">·</span>
+                  <span><span className="font-semibold text-teal-300">${(dealPortfolio.total_pipeline_value / 1000).toFixed(0)}K</span> pipeline</span>
+                </div>
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Highlights</p>
+                  <ul className="space-y-1">
+                    {dealPortfolio.highlights.map((h, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500" />
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{h}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Risks</p>
+                  <ul className="space-y-1">
+                    {dealPortfolio.risks.map((r, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-500" />
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{r}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(dealPortfolio.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">Analyze this contact&apos;s full deal portfolio across all stages.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setDealPortfolioGenerating(true);
+                    try {
+                      const data = await apiClient.getDealPortfolioOverview(workspaceId, contactId, token);
+                      setDealPortfolio(data ?? null);
+                    } catch { /* ignore */ } finally { setDealPortfolioGenerating(false); }
+                  }}
+                  disabled={dealPortfolioGenerating}
+                >
+                  {dealPortfolioGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Layers className="h-3 w-3" />}
+                  {dealPortfolioGenerating ? "Analyzing…" : "View Portfolio"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* ── Competitive Positioning Card ── */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Trophy className="h-4 w-4 text-amber-400" />
+              <p className="text-xs font-semibold text-zinc-300">Competitive Position</p>
+              {competitivePositioning && (
+                <span className={cn(
+                  "ml-1 px-1.5 py-0.5 rounded text-[10px] font-semibold",
+                  competitivePositioning.positioning_strength === 'strong' ? "bg-emerald-500/15 text-emerald-400" :
+                  competitivePositioning.positioning_strength === 'moderate' ? "bg-amber-500/15 text-amber-400" :
+                  "bg-rose-500/15 text-rose-400"
+                )}>
+                  {competitivePositioning.positioning_strength.charAt(0).toUpperCase() + competitivePositioning.positioning_strength.slice(1)}
+                </span>
+              )}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || competitivePositioningGenerating) return;
+                  setCompetitivePositioningGenerating(true);
+                  try {
+                    const data = await apiClient.getContactCompetitivePositioning(workspaceId, contactId, token);
+                    setCompetitivePositioning(data ?? null);
+                  } catch { /* ignore */ } finally { setCompetitivePositioningGenerating(false); }
+                }}
+                disabled={competitivePositioningGenerating}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", competitivePositioning ? "" : "hidden")}
+                aria-label="Regenerate competitive positioning"
+              >
+                <RefreshCw className={cn("h-3 w-3", competitivePositioningGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {competitivePositioningLoading ? (
+              <div className="h-20 rounded-lg bg-zinc-800/50 animate-pulse" />
+            ) : competitivePositioning ? (
+              <div className="space-y-3">
+                {competitivePositioning.top_competitor && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">vs</span>
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 border border-amber-500/20 text-amber-300">
+                      {competitivePositioning.top_competitor}
+                    </span>
+                    {competitivePositioning.win_rate_vs_competitor !== null && (
+                      <span className={cn(
+                        "px-2 py-0.5 rounded-full text-[11px] font-mono font-semibold",
+                        competitivePositioning.win_rate_vs_competitor >= 60 ? "bg-emerald-500/10 text-emerald-400" :
+                        competitivePositioning.win_rate_vs_competitor >= 40 ? "bg-amber-500/10 text-amber-400" :
+                        "bg-rose-500/10 text-rose-400"
+                      )}>
+                        {competitivePositioning.win_rate_vs_competitor}% win rate
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Positioning Tips</p>
+                  <ul className="space-y-1">
+                    {competitivePositioning.positioning_tips.map((tip, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-500" />
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{tip}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Differentiators</p>
+                  <ul className="space-y-1">
+                    {competitivePositioning.differentiators.map((d, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-indigo-500" />
+                        <span className="text-[11px] text-zinc-400 leading-relaxed">{d}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(competitivePositioning.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-xs text-zinc-600 mb-3">Analyze competitive positioning based on deal history and tracked competitors.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId) return;
+                    setCompetitivePositioningGenerating(true);
+                    try {
+                      const data = await apiClient.getContactCompetitivePositioning(workspaceId, contactId, token);
+                      setCompetitivePositioning(data ?? null);
+                    } catch { /* ignore */ } finally { setCompetitivePositioningGenerating(false); }
+                  }}
+                  disabled={competitivePositioningGenerating}
+                >
+                  {competitivePositioningGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trophy className="h-3 w-3" />}
+                  {competitivePositioningGenerating ? "Analyzing…" : "View Positioning"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* ── Meeting Agenda Card ── */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Meeting Agenda</p>
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || meetingAgendaGenerating) return;
+                  setMeetingAgendaGenerating(true);
+                  try {
+                    const data = await apiClient.getMeetingAgenda(workspaceId, contactId, token);
+                    setMeetingAgenda(data ?? null);
+                  } catch { /* ignore */ } finally { setMeetingAgendaGenerating(false); }
+                }}
+                aria-label="Regenerate meeting agenda"
+                disabled={meetingAgendaGenerating || !meetingAgenda}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", meetingAgenda ? "" : "hidden")}
+              >
+                <RefreshCw className={cn("h-3 w-3", meetingAgendaGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {meetingAgendaLoading ? (
+              <div className="animate-pulse space-y-2">
+                <div className="h-3 bg-zinc-800 rounded w-4/5" />
+                <div className="h-3 bg-zinc-800 rounded w-3/5" />
+              </div>
+            ) : meetingAgenda ? (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-3 py-2.5">
+                  <p className="text-[10px] font-mono text-indigo-400 uppercase tracking-widest mb-1">Opening Hook</p>
+                  <p className="text-xs text-zinc-300 italic leading-relaxed">&ldquo;{meetingAgenda.opening_hook}&rdquo;</p>
+                </div>
+                <div className="space-y-1.5">
+                  {meetingAgenda.agenda_items.map((item, i) => {
+                    const isOpen = meetingAgendaExpanded === i;
+                    return (
+                      <div key={i} className="rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+                        <button
+                          onClick={() => setMeetingAgendaExpanded(isOpen ? null : i)}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 text-left cursor-pointer hover:bg-zinc-800/40 transition-colors"
+                        >
+                          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-500/15 text-indigo-400 text-[10px] font-semibold flex items-center justify-center">{i + 1}</span>
+                          <span className="flex-1 text-xs font-medium text-zinc-200 truncate">{item.topic}</span>
+                          <span className="flex-shrink-0 text-[10px] font-mono text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5">{item.time_estimate_mins}m</span>
+                          <ChevronRight className={cn("h-3 w-3 text-zinc-600 flex-shrink-0 transition-transform", isOpen && "rotate-90")} />
+                        </button>
+                        {isOpen && (
+                          <div className="px-3 pb-3 space-y-2 border-t border-zinc-800/60 pt-2">
+                            <p className="text-[11px] text-zinc-400 italic">{item.goal}</p>
+                            <ul className="space-y-1">
+                              {item.talking_points.map((tp, j) => (
+                                <li key={j} className="flex items-start gap-2">
+                                  <span className="flex-shrink-0 mt-1 h-1.5 w-1.5 rounded-full bg-indigo-400" />
+                                  <span className="text-[11px] text-zinc-300 leading-snug">{tp}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(meetingAgenda.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4 space-y-3">
+                <p className="text-xs text-zinc-600">Generate a personalised meeting agenda based on recent messages, tasks, and deals.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId || meetingAgendaGenerating) return;
+                    setMeetingAgendaGenerating(true);
+                    try {
+                      const data = await apiClient.getMeetingAgenda(workspaceId, contactId, token);
+                      setMeetingAgenda(data ?? null);
+                    } catch { /* ignore */ } finally { setMeetingAgendaGenerating(false); }
+                  }}
+                  disabled={meetingAgendaGenerating}
+                >
+                  {meetingAgendaGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Calendar className="h-3 w-3" />}
+                  {meetingAgendaGenerating ? "Generating…" : "Generate Agenda"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* ── Communication Gap Card ── */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Radio className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Comms Gap</p>
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || commGapGenerating) return;
+                  setCommGapGenerating(true);
+                  try {
+                    const data = await apiClient.getCommunicationGapAnalysis(workspaceId, contactId, token);
+                    setCommGap(data ?? null);
+                  } catch { /* ignore */ } finally { setCommGapGenerating(false); }
+                }}
+                disabled={commGapGenerating || !commGap}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", commGap ? "" : "hidden")}
+                title="Regenerate"
+              >
+                <RefreshCw className={cn("h-3 w-3", commGapGenerating && "animate-spin")} />
+              </button>
+            </div>
+
+            {commGapLoading ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-3 bg-zinc-800 rounded w-2/3" />
+                <div className="h-3 bg-zinc-800 rounded w-1/2" />
+                <div className="h-3 bg-zinc-800 rounded w-3/4" />
+              </div>
+            ) : commGap ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <p className="text-[10px] text-zinc-500">Avg Gap</p>
+                    <p className="text-sm font-semibold text-zinc-200">{commGap.avg_gap_days}d</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-zinc-500">Longest</p>
+                    <p className="text-sm font-semibold text-zinc-200">{commGap.longest_silence_days}d</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-zinc-500">WS Avg</p>
+                    <p className="text-sm font-semibold text-zinc-200">{commGap.workspace_avg_gap_days}d</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    "text-[10px] font-semibold px-2 py-0.5 rounded-full",
+                    commGap.risk_level === 'low' && "bg-green-500/20 text-green-400",
+                    commGap.risk_level === 'medium' && "bg-yellow-500/20 text-yellow-400",
+                    commGap.risk_level === 'high' && "bg-orange-500/20 text-orange-400",
+                    commGap.risk_level === 'critical' && "bg-red-500/20 text-red-400",
+                  )}>
+                    {commGap.risk_level.toUpperCase()} RISK
+                  </span>
+                  <span className="text-[10px] text-zinc-500 capitalize">{commGap.gap_assessment}</span>
+                </div>
+                <div className="space-y-1.5">
+                  {commGap.recommendations.map((rec, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+                      <p className="text-[11px] text-zinc-400 leading-snug">{rec}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(commGap.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="py-2 flex flex-col gap-2">
+                <p className="text-xs text-zinc-600 italic">No communication gap analysis yet.</p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={async () => {
+                    if (!token || !workspaceId || commGapGenerating) return;
+                    setCommGapGenerating(true);
+                    try {
+                      const data = await apiClient.getCommunicationGapAnalysis(workspaceId, contactId, token);
+                      setCommGap(data ?? null);
+                    } catch { /* ignore */ } finally { setCommGapGenerating(false); }
+                  }}
+                  disabled={commGapGenerating}
+                >
+                  {commGapGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Radio className="h-3 w-3" />}
+                  {commGapGenerating ? "Analyzing…" : "Analyze Gaps"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Sentiment Trend (AI) */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              {aiSentiment?.trend_direction === 'improving' ? (
+                <TrendingUp className="h-4 w-4 text-emerald-400" />
+              ) : aiSentiment?.trend_direction === 'declining' ? (
+                <TrendingDown className="h-4 w-4 text-rose-400" />
+              ) : (
+                <Minus className="h-4 w-4 text-amber-400" />
+              )}
+              <p className="text-xs font-semibold text-zinc-300">Sentiment Trend</p>
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || aiSentimentGenerating) return;
+                  setAiSentimentGenerating(true);
+                  try {
+                    const data = await apiClient.getAiSentimentTrend(workspaceId, contactId, token);
+                    setAiSentiment(data ?? null);
+                  } catch { /* ignore */ } finally { setAiSentimentGenerating(false); }
+                }}
+                disabled={aiSentimentGenerating || !aiSentiment}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", aiSentiment ? "" : "hidden")}
+                title="Regenerate"
+              >
+                <RefreshCw className={cn("h-3 w-3", aiSentimentGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {aiSentimentLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => <div key={i} className="h-3 rounded bg-zinc-800 animate-pulse" />)}
+              </div>
+            ) : aiSentiment ? (
+              <div className="space-y-3">
+                {/* Avg sentiment badge + trend label */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={cn(
+                    "text-[10px] font-semibold px-2 py-0.5 rounded-full",
+                    aiSentiment.avg_sentiment >= 0.2 && "bg-emerald-500/20 text-emerald-400",
+                    aiSentiment.avg_sentiment < 0.2 && aiSentiment.avg_sentiment > -0.2 && "bg-amber-500/20 text-amber-400",
+                    aiSentiment.avg_sentiment <= -0.2 && "bg-rose-500/20 text-rose-400",
+                  )}>
+                    {aiSentiment.avg_sentiment >= 0 ? "+" : ""}{aiSentiment.avg_sentiment.toFixed(2)} avg
+                  </span>
+                  <span className="text-[10px] text-zinc-500 capitalize">{aiSentiment.trend_direction}</span>
+                  <span className="text-[10px] text-zinc-600 ml-auto">{aiSentiment.messages_analyzed} msgs</span>
+                </div>
+                {/* Sparkline */}
+                {aiSentiment.sentiment_points.length > 1 && (
+                  <div className="h-16 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={aiSentiment.sentiment_points.map((p) => ({ t: p.received_at, score: p.score }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                        <XAxis dataKey="t" hide />
+                        <YAxis domain={[-1, 1]} hide />
+                        <RechartTooltip
+                          contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 6, fontSize: 11 }}
+                          labelFormatter={() => ""}
+                          formatter={(v) => [typeof v === 'number' ? v.toFixed(2) : '0.00', "sentiment"]}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="score"
+                          stroke={aiSentiment.trend_direction === 'improving' ? '#34d399' : aiSentiment.trend_direction === 'declining' ? '#f87171' : '#fbbf24'}
+                          strokeWidth={1.5}
+                          dot={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                {/* Recommendations */}
+                <div className="space-y-1.5">
+                  {aiSentiment.recommendations.map((rec, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500" />
+                      <p className="text-[11px] text-zinc-400 leading-snug">{rec}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(aiSentiment.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="py-2 flex flex-col gap-2">
+                <p className="text-xs text-zinc-600 italic">No sentiment trend analysis yet.</p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={async () => {
+                    if (!token || !workspaceId || aiSentimentGenerating) return;
+                    setAiSentimentGenerating(true);
+                    try {
+                      const data = await apiClient.getAiSentimentTrend(workspaceId, contactId, token);
+                      setAiSentiment(data ?? null);
+                    } catch { /* ignore */ } finally { setAiSentimentGenerating(false); }
+                  }}
+                  disabled={aiSentimentGenerating}
+                >
+                  {aiSentimentGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <TrendingUp className="h-3 w-3" />}
+                  {aiSentimentGenerating ? "Analyzing…" : "Analyze Sentiment"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {responseTime !== null && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-indigo-400" />
+                <p className="text-xs font-semibold text-zinc-300">Response Time</p>
+                {responseTime.message_pairs_count > 0 && (
+                  <span className="ml-auto text-[10px] text-zinc-500">{responseTime.message_pairs_count} pairs</span>
+                )}
+              </div>
+
+              {responseTime.message_pairs_count === 0 ? (
+                <p className="text-xs text-zinc-600 italic py-1">No message pairs to analyze yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {[
+                    { label: "Avg", value: responseTime.avg_response_hours },
+                    { label: "Median", value: responseTime.p50_response_hours },
+                    { label: "P90", value: responseTime.p90_response_hours },
+                  ].map(({ label, value }) => {
+                    const hrs = value ?? 0;
+                    const display = hrs < 1 ? `${Math.round(hrs * 60)}m` : hrs < 24 ? `${hrs}h` : `${(hrs / 24).toFixed(1)}d`;
+                    const color = hrs <= 4 ? "text-emerald-400" : hrs <= 24 ? "text-amber-400" : "text-rose-400";
+                    return (
+                      <div key={label} className="flex items-center justify-between">
+                        <span className="text-[11px] text-zinc-500">{label}</span>
+                        <span className={cn("text-sm font-mono font-semibold", color)}>{display}</span>
+                      </div>
+                    );
+                  })}
+                  {responseTime.trend_30d !== null && (
+                    <div className="border-t border-zinc-800 pt-2 flex items-center justify-between">
+                      <span className="text-[10px] text-zinc-600">30-day avg</span>
+                      <span className="text-[11px] font-mono text-zinc-400">
+                        {responseTime.trend_30d < 1
+                          ? `${Math.round(responseTime.trend_30d * 60)}m`
+                          : responseTime.trend_30d < 24
+                          ? `${responseTime.trend_30d}h`
+                          : `${(responseTime.trend_30d / 24).toFixed(1)}d`}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
         </div>
 
         {/* ── Right: Timeline, Deals, Tasks ── */}
@@ -1039,6 +2638,247 @@ export default function ContactDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* Sentiment Trend Sparkline */}
+          {(sentimentLoading || (sentimentTrend !== null && sentimentTrend.length > 0)) && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Sentiment Trend</p>
+                <span className="ml-auto text-[10px] font-mono text-zinc-500">12 weeks</span>
+              </div>
+              {sentimentLoading ? (
+                <div className="flex gap-1 items-end h-8">
+                  {Array.from({ length: 12 }).map((_, i) => (
+                    <div key={i} className="flex-1 rounded-sm bg-zinc-800 animate-pulse" style={{ height: "32px" }} />
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex gap-1 items-end h-10">
+                    {(sentimentTrend ?? []).map((w) => {
+                      const pct = Math.round(((w.score + 1) / 2) * 100);
+                      const color =
+                        w.score > 0.2
+                          ? "bg-emerald-600"
+                          : w.score < -0.2
+                          ? "bg-rose-600"
+                          : "bg-amber-500";
+                      return (
+                        <div
+                          key={w.week}
+                          title={`${w.week}: ${w.score > 0 ? "+" : ""}${w.score.toFixed(2)} (${w.message_count} msg)`}
+                          className={cn("flex-1 rounded-sm cursor-default transition-opacity hover:opacity-75", color)}
+                          style={{ height: `${Math.max(10, pct)}%` }}
+                        />
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[10px] text-zinc-600">{sentimentTrend?.[0]?.week ?? ""}</span>
+                    <span className="text-[10px] text-zinc-600">This week</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-sm bg-rose-600" />
+                    <span className="text-[10px] text-zinc-500">Negative</span>
+                    <span className="h-2 w-2 rounded-sm bg-amber-500 ml-2" />
+                    <span className="text-[10px] text-zinc-500">Neutral</span>
+                    <span className="h-2 w-2 rounded-sm bg-emerald-600 ml-2" />
+                    <span className="text-[10px] text-zinc-500">Positive</span>
+                  </div>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Quarterly Win Rate Trend */}
+          {winRateTrend !== null && winRateTrend.length > 0 && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Win Rate by Quarter</p>
+                <span className="ml-auto text-[10px] font-mono text-zinc-500">2 years</span>
+              </div>
+              <ResponsiveContainer width="100%" height={110}>
+                <LineChart data={winRateTrend} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis
+                    dataKey="quarter"
+                    tick={{ fontSize: 9, fill: "#71717a" }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    domain={[0, 100]}
+                    tick={{ fontSize: 9, fill: "#71717a" }}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v) => `${v}%`}
+                  />
+                  <RechartTooltip
+                    contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 6, fontSize: 11 }}
+                    labelStyle={{ color: "#e4e4e7", marginBottom: 4 }}
+                    formatter={(v, _n, props) => {
+                      const q = props.payload as WinRateQuarter | undefined;
+                      return [`${v ?? 0}% (${q?.won ?? 0}W / ${q?.total ?? 0} deals)`, "Win rate"];
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="win_rate"
+                    stroke="#6366f1"
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: "#6366f1", strokeWidth: 0 }}
+                    activeDot={{ r: 5 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
+
+          {/* Relationship Health */}
+          {(relHealthLoading || relHealth !== null) && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Relationship Health</p>
+                {relHealth && !relHealthLoading && (
+                  <button
+                    onClick={() => {
+                      setRelHealth(null);
+                      setRelHealthLoading(true);
+                      apiClient
+                        .getRelationshipHealth(workspaceId!, contactId, token!)
+                        .then((data: RelationshipHealth) => setRelHealth(data))
+                        .catch(() => setRelHealth(null))
+                        .finally(() => setRelHealthLoading(false));
+                    }}
+                    className="ml-auto text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                    title="Regenerate"
+                  >
+                    ↺
+                  </button>
+                )}
+              </div>
+
+              {relHealthLoading ? (
+                <div className="space-y-2">
+                  <div className="h-5 w-24 rounded bg-zinc-800 animate-pulse" />
+                  <div className="h-10 rounded bg-zinc-800 animate-pulse" />
+                  <div className="h-8 rounded bg-zinc-800 animate-pulse" />
+                </div>
+              ) : relHealth ? (
+                <div className="space-y-3">
+                  {/* Rating badge */}
+                  <div className="flex items-center gap-2">
+                    <span className={cn(
+                      "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold border",
+                      relHealth.health_rating === 'strong'
+                        ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                        : relHealth.health_rating === 'at_risk'
+                        ? "bg-rose-500/10 border-rose-500/30 text-rose-300"
+                        : "bg-amber-500/10 border-amber-500/30 text-amber-300"
+                    )}>
+                      {relHealth.health_rating === 'strong' ? '● Strong' : relHealth.health_rating === 'at_risk' ? '● At Risk' : '● Neutral'}
+                    </span>
+                    <span className="text-[10px] text-zinc-600">
+                      {new Date(relHealth.generated_at).toLocaleDateString()}
+                    </span>
+                  </div>
+
+                  {/* Summary */}
+                  <p className="text-xs text-zinc-300 leading-relaxed">{relHealth.summary}</p>
+
+                  {/* Action items */}
+                  {relHealth.action_items.length > 0 && (
+                    <div className="space-y-1.5 border-t border-zinc-800 pt-2.5">
+                      <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Actions</p>
+                      {relHealth.action_items.map((item, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className={cn(
+                            "flex-shrink-0 mt-0.5 text-[9px] font-mono px-1.5 py-0.5 rounded border",
+                            item.priority === 'high'
+                              ? "text-rose-400 bg-rose-500/10 border-rose-500/20"
+                              : item.priority === 'medium'
+                              ? "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                              : "text-zinc-400 bg-zinc-700/30 border-zinc-700/50"
+                          )}>
+                            {item.priority}
+                          </span>
+                          <p className="text-xs text-zinc-400 leading-snug">{item.action}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </Card>
+          )}
+
+          {/* Deal Stage Progression */}
+          {dealProgression !== null && dealProgression.length > 0 && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Layers className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Deal Stage Journeys</p>
+                <span className="ml-auto text-[10px] font-mono text-zinc-500">
+                  {dealProgression.length} deal{dealProgression.length !== 1 ? "s" : ""}
+                </span>
+              </div>
+              <div className="space-y-3">
+                {dealProgression.map((deal) => {
+                  const stageColors: Record<string, string> = {
+                    discovery: "bg-zinc-600",
+                    qualified: "bg-sky-700",
+                    proposal: "bg-indigo-600",
+                    negotiation: "bg-violet-600",
+                    closed_won: "bg-emerald-600",
+                    closed_lost: "bg-rose-700",
+                  };
+                  return (
+                    <div key={deal.id} className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-medium text-zinc-300 truncate max-w-[60%]">{deal.title}</p>
+                        <span className="text-[10px] text-zinc-500">{formatCurrency(deal.value)}</span>
+                      </div>
+                      <div className="flex gap-0.5 items-center">
+                        {deal.stages.map((s, i) => (
+                          <div key={s.stage} className="flex items-center gap-0.5 flex-1 min-w-0">
+                            <div
+                              title={`${s.label}: ${s.days_in_stage}d`}
+                              className={cn(
+                                "h-4 w-full rounded-sm transition-opacity cursor-default",
+                                stageColors[s.stage] ?? "bg-zinc-600",
+                                s.is_current ? "opacity-100 ring-1 ring-white/30" : "opacity-50",
+                              )}
+                            />
+                            {i < deal.stages.length - 1 && (
+                              <ChevronRight className="h-2.5 w-2.5 text-zinc-700 flex-shrink-0" />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-1 flex-wrap">
+                        {deal.stages.map((s) => (
+                          <span
+                            key={s.stage}
+                            className={cn(
+                              "text-[9px] font-mono px-1 rounded",
+                              s.is_current
+                                ? "text-zinc-100 bg-zinc-700"
+                                : "text-zinc-500 bg-zinc-900",
+                            )}
+                          >
+                            {s.label} {s.days_in_stage}d
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
 
           {/* 12-Week Activity Heatmap */}
           <Card className="p-4 space-y-3">
@@ -1187,6 +3027,287 @@ export default function ContactDetailPage() {
                 className="w-full justify-center"
                 onClick={() => {
                   navigator.clipboard.writeText(`Subject: ${emailDraft.subject}\n\n${emailDraft.body}`);
+                }}
+              >
+                <Phone className="h-3.5 w-3.5" />
+                Copy to Clipboard
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Outreach Sequence Panel ── */}
+      {outreachSeqOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setOutreachSeqOpen(false)}
+        >
+          <div
+            className="w-full max-w-xl rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Route className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-100">Outreach Sequence</p>
+                <span className="text-[10px] font-mono text-zinc-600 ml-1">3-step plan</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    setOutreachSeq(null);
+                    setAddedSeqSteps(new Set());
+                    setOutreachSeqExpanded(null);
+                    setOutreachSeqLoading(true);
+                    if (token && workspaceId) {
+                      apiClient
+                        .getSuggestedOutreachSequence(workspaceId, contactId, token)
+                        .then((data) => setOutreachSeq(data.steps))
+                        .catch(() => setOutreachSeq(null))
+                        .finally(() => setOutreachSeqLoading(false));
+                    }
+                  }}
+                  disabled={outreachSeqLoading}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                  title="Regenerate"
+                >
+                  {outreachSeqLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "↺"}
+                </button>
+                <button
+                  onClick={() => setOutreachSeqOpen(false)}
+                  className="text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors"
+                  aria-label="Close"
+                >
+                  <XCircle className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="p-5 space-y-3 max-h-[75vh] overflow-y-auto">
+              {outreachSeqLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-20 rounded-xl bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : outreachSeq && outreachSeq.length > 0 ? (
+                outreachSeq.map((step, i) => {
+                  const added = addedSeqSteps.has(i);
+                  const isExpanded = outreachSeqExpanded === i;
+                  const timingLabel: Record<string, string> = { now: "Send now", "3d": "In 3 days", "7d": "In 7 days", "14d": "In 14 days" };
+                  const ChannelIcon = step.channel === "call" ? PhoneCall : step.channel === "slack" ? MessageSquare : Mail;
+                  const channelColor =
+                    step.channel === "call"
+                      ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+                      : step.channel === "slack"
+                      ? "text-violet-400 bg-violet-500/10 border-violet-500/20"
+                      : "text-indigo-400 bg-indigo-500/10 border-indigo-500/20";
+                  const timingColor =
+                    step.timing === "now"
+                      ? "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                      : "text-zinc-400 bg-zinc-700/30 border-zinc-700/50";
+
+                  return (
+                    <div
+                      key={i}
+                      className="rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden"
+                    >
+                      <button
+                        className="w-full text-left px-3.5 py-3 flex items-start gap-3 cursor-pointer hover:bg-zinc-800/30 transition-colors"
+                        onClick={() => setOutreachSeqExpanded(isExpanded ? null : i)}
+                      >
+                        <span className="flex-shrink-0 mt-0.5 w-5 h-5 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-[10px] font-mono text-zinc-400">
+                          {step.step}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={cn("inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border", channelColor)}>
+                              <ChannelIcon className="h-2.5 w-2.5" />
+                              {step.channel}
+                            </span>
+                            <span className={cn("text-[10px] font-mono px-1.5 py-0.5 rounded border", timingColor)}>
+                              {timingLabel[step.timing] ?? step.timing}
+                            </span>
+                          </div>
+                          {step.subject && (
+                            <p className="text-xs font-medium text-zinc-200 mt-1.5 leading-snug truncate">
+                              {step.subject}
+                            </p>
+                          )}
+                          <p className="text-[11px] text-zinc-500 mt-0.5 leading-snug">{step.goal}</p>
+                        </div>
+                        <ChevronRight className={cn("h-3.5 w-3.5 text-zinc-600 flex-shrink-0 mt-1 transition-transform", isExpanded && "rotate-90")} />
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t border-zinc-800 px-3.5 py-2.5 space-y-2.5">
+                          <p className="text-xs text-zinc-400 leading-relaxed italic">{step.body_preview}</p>
+                          <button
+                            onClick={() => handleAddSeqStep(step, i)}
+                            disabled={added}
+                            className={cn(
+                              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all",
+                              added
+                                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 cursor-default"
+                                : "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 cursor-pointer"
+                            )}
+                          >
+                            {added ? (
+                              <><CheckCircle2 className="h-3 w-3" /> Added to Tasks</>
+                            ) : (
+                              <><Plus className="h-3 w-3" /> Add to Tasks</>
+                            )}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-sm text-zinc-500 text-center py-8">Failed to generate sequence.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Task Suggestions Modal ── */}
+      {taskSuggestionsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setTaskSuggestionsOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <ListTodo className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-100">AI Task Suggestions</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setTaskSuggestions(null); setAddedSuggestions(new Set()); handleSuggestTasks(); }}
+                  disabled={taskSuggestionsLoading}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                  title="Regenerate"
+                >
+                  {taskSuggestionsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "↺"}
+                </button>
+                <button
+                  onClick={() => setTaskSuggestionsOpen(false)}
+                  className="text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors"
+                  aria-label="Close"
+                >
+                  <XCircle className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
+              {taskSuggestionsLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-14 rounded-xl bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : taskSuggestions && taskSuggestions.length > 0 ? (
+                taskSuggestions.map((s, i) => {
+                  const added = addedSuggestions.has(i);
+                  const priorityColor =
+                    s.priority === "high"
+                      ? "text-rose-400 bg-rose-500/10 border-rose-500/20"
+                      : s.priority === "medium"
+                      ? "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                      : "text-zinc-400 bg-zinc-700/30 border-zinc-700/50";
+                  return (
+                    <div
+                      key={i}
+                      className="flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2.5"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-xs font-medium ${added ? "text-zinc-500 line-through" : "text-zinc-200"} leading-snug`}>
+                          {s.title}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${priorityColor}`}>
+                            {s.priority}
+                          </span>
+                          <span className="text-[10px] text-zinc-500 flex items-center gap-1">
+                            <Clock className="h-2.5 w-2.5" /> due in {s.due_days}d
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleAddSuggestion(s, i)}
+                        disabled={added}
+                        className={`flex-shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                          added
+                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 cursor-default"
+                            : "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 cursor-pointer"
+                        }`}
+                      >
+                        {added ? (
+                          <><CheckCircle2 className="h-3 w-3" /> Added</>
+                        ) : (
+                          <><Plus className="h-3 w-3" /> Add</>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-sm text-zinc-500 text-center py-8">Failed to generate suggestions.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Outreach Draft Panel ── */}
+      {outreachDraft && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setOutreachDraft(null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-100">Outreach Draft</p>
+              </div>
+              <button
+                onClick={() => setOutreachDraft(null)}
+                className="text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors"
+                aria-label="Close outreach draft"
+              >
+                <XCircle className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Subject</p>
+                <p className="text-sm text-zinc-100 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+                  {outreachDraft.subject}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Body</p>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-3 max-h-64 overflow-y-auto">
+                  <div
+                    className="text-sm text-zinc-200 leading-relaxed [&_strong]:font-semibold [&_ul]:my-1 [&_li]:ml-4 [&_li]:list-disc [&_p]:mt-2 first:[&_p]:mt-0"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(outreachDraft.body) }}
+                  />
+                </div>
+              </div>
+              <Button
+                variant="primary"
+                className="w-full justify-center"
+                onClick={() => {
+                  navigator.clipboard.writeText(`Subject: ${outreachDraft.subject}\n\n${outreachDraft.body}`);
                 }}
               >
                 <Phone className="h-3.5 w-3.5" />

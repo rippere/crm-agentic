@@ -24,7 +24,7 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { apiClient } from "@/lib/api-client";
-import { Plus, Brain, Calendar, X, GripVertical, AlertTriangle, RefreshCw } from "lucide-react";
+import { Plus, Brain, Calendar, X, GripVertical, AlertTriangle, RefreshCw, Sparkles, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Task {
@@ -188,6 +188,86 @@ function TaskDetailModal({ task, onClose }: { task: Task; onClose: () => void })
   );
 }
 
+interface PriorityItem {
+  task_id: string;
+  priority_rank: number;
+  urgency: "critical" | "high" | "medium" | "low";
+  reason: string;
+}
+
+const URGENCY_COLORS: Record<string, string> = {
+  critical: "border-rose-500/40 bg-rose-500/10 text-rose-400",
+  high: "border-amber-500/40 bg-amber-500/10 text-amber-400",
+  medium: "border-indigo-500/40 bg-indigo-600/10 text-indigo-400",
+  low: "border-zinc-700 bg-zinc-800/50 text-zinc-500",
+};
+
+function PrioritizeModal({
+  items,
+  summaryNote,
+  tasks,
+  onClose,
+}: {
+  items: PriorityItem[];
+  summaryNote: string;
+  tasks: Task[];
+  onClose: () => void;
+}) {
+  const taskMap = Object.fromEntries(tasks.map((t) => [t.id, t]));
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-400" />
+            <h2 className="text-sm font-semibold text-zinc-100">AI Task Prioritization</h2>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 cursor-pointer">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {summaryNote && (
+          <div className="mx-5 mt-4 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3 text-xs text-violet-300 leading-relaxed">
+            {summaryNote}
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2 p-5">
+          {items.map((item) => {
+            const task = taskMap[item.task_id];
+            return (
+              <div
+                key={item.task_id}
+                className="flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3"
+              >
+                <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-zinc-800 text-xs font-bold text-zinc-400">
+                  {item.priority_rank}
+                </span>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="text-sm font-medium text-zinc-100 truncate">
+                    {task?.title ?? item.task_id}
+                  </p>
+                  <p className="text-xs text-zinc-500 leading-relaxed">{item.reason}</p>
+                </div>
+                <span className={cn("flex-shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium capitalize", URGENCY_COLORS[item.urgency])}>
+                  {item.urgency}
+                </span>
+              </div>
+            );
+          })}
+          {items.length === 0 && (
+            <p className="py-8 text-center text-sm text-zinc-500">No open tasks to prioritize.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TasksPageInner() {
   const searchParams = useSearchParams();
   const contactFilter = searchParams.get("contact");
@@ -204,6 +284,8 @@ function TasksPageInner() {
   const [creating, setCreating] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [prioritizing, setPrioritizing] = useState(false);
+  const [priorityResult, setPriorityResult] = useState<{ items: PriorityItem[]; summaryNote: string } | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -317,6 +399,19 @@ function TasksPageInner() {
 
   const totalVisible = Object.values(tasksByColumn).flat().length;
 
+  const handlePrioritize = async () => {
+    if (!workspaceId || !token || prioritizing) return;
+    setPrioritizing(true);
+    try {
+      const result = await apiClient.prioritizeWorkspaceTasks(workspaceId, token);
+      setPriorityResult({ items: result.items, summaryNote: result.summary_note });
+    } catch {
+      // silently ignore
+    } finally {
+      setPrioritizing(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header
@@ -344,10 +439,22 @@ function TasksPageInner() {
             )
           )}
         </div>
-        <Button variant="cta" size="sm" className="ml-auto" onClick={() => setShowNewForm(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          New Task
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handlePrioritize}
+            disabled={prioritizing || tasks.length === 0}
+            className="text-violet-400 border-violet-500/30 hover:bg-violet-500/10"
+          >
+            {prioritizing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            {prioritizing ? "Analyzing…" : "AI Prioritize"}
+          </Button>
+          <Button variant="cta" size="sm" onClick={() => setShowNewForm(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            New Task
+          </Button>
+        </div>
       </div>
 
       {/* New task inline form */}
@@ -456,6 +563,16 @@ function TasksPageInner() {
       {/* Task detail modal */}
       {detailTask && (
         <TaskDetailModal task={detailTask} onClose={() => setDetailTask(null)} />
+      )}
+
+      {/* AI prioritization modal */}
+      {priorityResult && (
+        <PrioritizeModal
+          items={priorityResult.items}
+          summaryNote={priorityResult.summaryNote}
+          tasks={tasks}
+          onClose={() => setPriorityResult(null)}
+        />
       )}
     </div>
   );

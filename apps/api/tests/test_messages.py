@@ -125,3 +125,69 @@ async def test_list_messages_wrong_workspace_returns_403(app_client):
         resp = await ac.get(f"/workspaces/{wrong_id}/messages")
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/messages/volume-trends
+# ---------------------------------------------------------------------------
+
+
+def _fake_msg_with_service(workspace_id: uuid.UUID, received_at: datetime, service: str | None = "gmail") -> tuple:
+    """Return a (Message mock, service_string) pair as the JOIN query would yield."""
+    msg = MagicMock()
+    msg.id = uuid.uuid4()
+    msg.workspace_id = workspace_id
+    msg.connector_id = uuid.uuid4()
+    msg.received_at = received_at
+    return (msg, service)
+
+
+@pytest.mark.asyncio
+async def test_message_volume_trends_groups_by_week_and_source(app_client):
+    """GET /messages/volume-trends returns 12 weekly rows with correct source counts."""
+    from datetime import timedelta
+    from unittest.mock import MagicMock
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.now(tz=timezone.utc)
+    # Two messages in the most recent week: one gmail, one slack
+    monday = now - timedelta(days=now.weekday())
+    monday = monday.replace(hour=12, minute=0, second=0, microsecond=0)
+    rows = [
+        _fake_msg_with_service(workspace_id, monday, "gmail"),
+        _fake_msg_with_service(workspace_id, monday, "slack"),
+    ]
+    # Endpoint calls execute().all() (not .scalars().all())
+    join_result = MagicMock()
+    join_result.all.return_value = rows
+    mock_db.execute = AsyncMock(return_value=join_result)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/messages/volume-trends")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 12
+    assert "week_start" in data[0]
+    assert "gmail" in data[0]
+    assert "slack" in data[0]
+    assert "teams" in data[0]
+    assert "unknown" in data[0]
+    assert "total" in data[0]
+    # The most recent week should have the 2 messages we injected
+    last_week = data[-1]
+    assert last_week["gmail"] + last_week["slack"] == 2
+    assert last_week["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_message_volume_trends_wrong_workspace_returns_403(app_client):
+    """GET /messages/volume-trends returns 403 for a different workspace."""
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/messages/volume-trends")
+
+    assert resp.status_code == 403

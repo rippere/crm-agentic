@@ -170,7 +170,20 @@ async function apiFetch(path: string, options: RequestInit = {}, token?: string,
   }
   if (!res.ok) {
     console.error(`[api] ${options.method ?? 'GET'} ${path} → ${res.status}`)
-    throw new Error(`API error ${res.status}`)
+    // Attach status + machine-readable detail so callers can distinguish cases
+    // (e.g. a 409 { code: "gmail_reauth_required" }) without changing the thrown
+    // type. Backwards-compatible: still an Error with the same message.
+    let detail: unknown
+    try { detail = (await res.json())?.detail } catch { /* body absent or not JSON */ }
+    const err = new Error(`API error ${res.status}`) as Error & {
+      status?: number; detail?: unknown; code?: string
+    }
+    err.status = res.status
+    err.detail = detail
+    if (detail && typeof detail === 'object' && 'code' in (detail as Record<string, unknown>)) {
+      err.code = String((detail as Record<string, unknown>).code)
+    }
+    throw err
   }
   return res.json()
 }
@@ -1522,6 +1535,22 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/last-touch`, {}, token)
   },
 
+  getContactResponseTime: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{ avg_response_hours: number | null; p50_response_hours: number | null; p90_response_hours: number | null; message_pairs_count: number; trend_30d: number | null }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { avg_response_hours: number | null; p50_response_hours: number | null; p90_response_hours: number | null; message_pairs_count: number; trend_30d: number | null }> = {
+        'c-001': { avg_response_hours: 3.2,  p50_response_hours: 2.1,  p90_response_hours: 7.5,  message_pairs_count: 12, trend_30d: 2.8 },
+        'c-002': { avg_response_hours: 18.4, p50_response_hours: 14.0, p90_response_hours: 38.0, message_pairs_count: 5,  trend_30d: 20.1 },
+        'c-003': { avg_response_hours: null,  p50_response_hours: null,  p90_response_hours: null,  message_pairs_count: 0,  trend_30d: null },
+      }
+      return Promise.resolve(stubs[contactId] ?? { avg_response_hours: null, p50_response_hours: null, p90_response_hours: null, message_pairs_count: 0, trend_30d: null })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/response-time`, {}, token)
+  },
+
   getDealRevenueForecast: (workspaceId: string, token: string): Promise<Array<{ month: string; expected_revenue: number; deal_count: number; total_value: number }>> => {
     if (isDemoMode) {
       return Promise.resolve([
@@ -1640,6 +1669,40 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/activity/trends?weeks=${weeks}`, {}, token)
   },
 
+  getDealVelocityTrends: (workspaceId: string, token: string, months = 6): Promise<Array<{
+    month: string;
+    avg_cycle_days: number | null;
+    deal_count: number;
+    closed_won: number;
+    closed_lost: number;
+  }>> => {
+    if (isDemoMode) {
+      const now = new Date()
+      const result = []
+      // Deterministic seeded demo: avg cycle time trending downward (improving) over 6 months
+      const baseDays = [72, 65, 58, 54, 49, 44]
+      const wonCounts = [2, 3, 2, 4, 3, 5]
+      const lostCounts = [1, 1, 2, 1, 2, 1]
+      for (let i = months - 1; i >= 0; i--) {
+        let m = now.getMonth() + 1 - i
+        let y = now.getFullYear()
+        while (m <= 0) { m += 12; y -= 1 }
+        const idx = months - 1 - i
+        const won = wonCounts[idx % wonCounts.length]
+        const lost = lostCounts[idx % lostCounts.length]
+        result.push({
+          month: `${y}-${String(m).padStart(2, '0')}`,
+          avg_cycle_days: baseDays[idx % baseDays.length],
+          deal_count: won + lost,
+          closed_won: won,
+          closed_lost: lost,
+        })
+      }
+      return Promise.resolve(result)
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/velocity-trends?months=${months}`, {}, token)
+  },
+
   getContactReengagementSummary: (workspaceId: string, token: string, weeks = 12): Promise<Array<{ week_start: string; reengaged: number }>> => {
     if (isDemoMode) {
       const now = new Date()
@@ -1699,6 +1762,2683 @@ export const apiClient = {
     return apiFetch(
       `/workspaces/${workspaceId}/deals/revenue-cohort?cohort_months=${cohortMonths}&lookforward_months=${lookforwardMonths}`,
       {},
+      token,
+    )
+  },
+
+  getDealResponseLag: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{ cells: { dow: number; hour: number; avg_lag_hours: number; count: number }[]; max_lag_hours: number }> => {
+    if (isDemoMode) {
+      // Deterministic demo: seed by last char of dealId
+      const seed = dealId.charCodeAt(dealId.length - 1)
+      const cells: { dow: number; hour: number; avg_lag_hours: number; count: number }[] = []
+      // Populate business hours with realistic lags; weekends/nights get high lag
+      for (let dow = 0; dow < 7; dow++) {
+        for (let hour = 8; hour < 19; hour++) {
+          const isWeekend = dow >= 5
+          const isOffHours = hour < 9 || hour > 17
+          const base = isWeekend ? 18 : isOffHours ? 8 : 2
+          const jitter = ((seed + dow * 7 + hour) % 5) * 0.8
+          const avg = parseFloat((base + jitter).toFixed(2))
+          if ((dow + hour + seed) % 4 !== 0) { // ~75% coverage
+            cells.push({ dow, hour, avg_lag_hours: avg, count: Math.max(1, (seed + dow + hour) % 6) })
+          }
+        }
+      }
+      const max_lag_hours = cells.reduce((m, c) => Math.max(m, c.avg_lag_hours), 0)
+      return Promise.resolve({ cells, max_lag_hours })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/response-lag`, {}, token)
+  },
+
+  getSentimentTrend: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{ weeks: { week: string; score: number; message_count: number }[] }> => {
+    if (isDemoMode) {
+      const seed = contactId.charCodeAt(contactId.length - 1)
+      const weeks: { week: string; score: number; message_count: number }[] = []
+      const now = new Date()
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(now)
+        d.setDate(d.getDate() - i * 7)
+        const jan4 = new Date(d.getFullYear(), 0, 4)
+        const week = Math.ceil(((d.getTime() - jan4.getTime()) / 86400000 + jan4.getDay() + 1) / 7)
+        const weekKey = `${d.getFullYear()}-W${String(week).padStart(2, "0")}`
+        const raw = ((seed + i * 13) % 200 - 100) / 100
+        const score = parseFloat(Math.max(-1, Math.min(1, raw)).toFixed(3))
+        weeks.push({ week: weekKey, score, message_count: 1 + ((seed + i) % 8) })
+      }
+      return Promise.resolve({ weeks })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/sentiment-trend`, {}, token)
+  },
+
+  getPredictedClose: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    predicted_date: string;
+    lower_bound: string;
+    upper_bound: string;
+    confidence_level: string;
+    confidence_pct: number;
+    data_points: number;
+    avg_cycle_days: number | null;
+  }> => {
+    if (isDemoMode) {
+      // Deterministic stub: seed by last char of dealId
+      const seed = dealId.charCodeAt(dealId.length - 1)
+      const today = new Date()
+      const avgDays = 45 + (seed % 40)  // 45–84 days
+      const std = 10 + (seed % 10)
+      const predicted = new Date(today)
+      predicted.setDate(today.getDate() + avgDays)
+      const lower = new Date(today)
+      lower.setDate(today.getDate() + Math.max(0, avgDays - std))
+      const upper = new Date(today)
+      upper.setDate(today.getDate() + avgDays + std)
+      const n = 4 + (seed % 9)  // 4–12 data points
+      const confidenceLevel = n >= 10 ? "high" : n >= 3 ? "medium" : "low"
+      const confidencePct = n >= 10 ? 85 : n >= 3 ? 65 : 40
+      const fmt = (d: Date) => d.toISOString().slice(0, 10)
+      return Promise.resolve({
+        predicted_date: fmt(predicted),
+        lower_bound: fmt(lower),
+        upper_bound: fmt(upper),
+        confidence_level: confidenceLevel,
+        confidence_pct: confidencePct,
+        data_points: n,
+        avg_cycle_days: avgDays,
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/predicted-close`, {}, token)
+  },
+
+  getContactWinRateTrend: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    quarters: { quarter: string; won: number; lost: number; total: number; win_rate: number }[];
+  }> => {
+    if (isDemoMode) {
+      // Deterministic stub seeded by last char of contactId — 8 quarters of data
+      const seed = contactId.charCodeAt(contactId.length - 1)
+      const now = new Date()
+      const quarters: { quarter: string; won: number; lost: number; total: number; win_rate: number }[] = []
+      for (let i = 7; i >= 0; i--) {
+        const d = new Date(now)
+        d.setMonth(d.getMonth() - i * 3)
+        const q = Math.floor(d.getMonth() / 3) + 1
+        const key = `${d.getFullYear()}-Q${q}`
+        const total = 2 + ((seed + i * 7) % 5)  // 2–6 deals
+        const won = Math.round(total * (0.3 + ((seed + i * 3) % 50) / 100))  // 30–80%
+        const lost = total - won
+        const win_rate = parseFloat((won / total * 100).toFixed(1))
+        quarters.push({ quarter: key, won, lost, total, win_rate })
+      }
+      return Promise.resolve({ quarters })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/${contactId}/win-rate-trend`, {}, token)
+  },
+
+  getDealMentions: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{ mentions: Array<{ name: string; type: string }> }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, Array<{ name: string; type: string }>> = {
+        'd-001': [{ name: '@alice', type: 'teammate' }, { name: '@bob', type: 'teammate' }],
+        'd-002': [{ name: 'Sarah Chen', type: 'contact' }],
+        'd-003': [],
+      }
+      return Promise.resolve({ mentions: stubs[dealId] ?? [] })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/mentions`, {}, token)
+  },
+
+  updateDealMentions: (
+    workspaceId: string,
+    dealId: string,
+    mentions: Array<{ name: string; type: string }>,
+    token: string,
+  ): Promise<{ mentions: Array<{ name: string; type: string }> }> => {
+    if (isDemoMode) {
+      return Promise.resolve({ mentions })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/mentions`, {
+      method: 'POST',
+      body: JSON.stringify({ mentions }),
+    }, token)
+  },
+
+  // Deal engagement score (messages, notes, task completion)
+  getDealEngagementScore: (workspaceId: string, dealId: string, token: string): Promise<{
+    score: number;
+    message_count: number;
+    note_count: number;
+    tasks_total: number;
+    tasks_done: number;
+    components: { messages: number; notes: number; tasks: number };
+  }> => {
+    if (isDemoMode) {
+      const seed = (dealId.charCodeAt(0) + (dealId.charCodeAt(1) ?? 0)) % 50
+      const msgCount = 3 + (seed % 5)
+      const noteCount = 1 + (seed % 3)
+      const tasksTotal = 2 + (seed % 4)
+      const tasksDone = Math.floor(tasksTotal * 0.6)
+      const messagesScore = Math.min(40, msgCount * 8)
+      const notesScore = Math.min(30, noteCount * 10)
+      const tasksScore = Math.round(30 * tasksDone / tasksTotal)
+      return Promise.resolve({
+        score: messagesScore + notesScore + tasksScore,
+        message_count: msgCount,
+        note_count: noteCount,
+        tasks_total: tasksTotal,
+        tasks_done: tasksDone,
+        components: { messages: messagesScore, notes: notesScore, tasks: tasksScore },
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/engagement-score`, {}, token)
+  },
+
+  getDealHealthScoreHistory: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+    limit = 30,
+  ): Promise<Array<{ recorded_at: string; score: number }>> => {
+    if (isDemoMode) {
+      const seed = dealId.charCodeAt(dealId.length - 1)
+      const now = Date.now()
+      const points = Array.from({ length: 14 }, (_, i) => {
+        const base = 75 - ((seed % 20))
+        const variance = ((seed * (i + 1)) % 25) - 12
+        return {
+          recorded_at: new Date(now - (13 - i) * 2 * 86400000).toISOString(),
+          score: Math.max(10, Math.min(100, base + variance)),
+        }
+      })
+      return Promise.resolve(points)
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/health-score-history?limit=${limit}`,
+      {},
+      token,
+    )
+  },
+
+  getMessageVolumeTrends: (
+    workspaceId: string,
+    token: string,
+  ): Promise<Array<{ week_start: string; gmail: number; slack: number; teams: number; unknown: number; total: number }>> => {
+    if (isDemoMode) {
+      const today = new Date()
+      const dow = today.getDay()
+      const diffToMon = dow === 0 ? -6 : 1 - dow
+      const mon = new Date(today)
+      mon.setDate(today.getDate() + diffToMon)
+      mon.setHours(0, 0, 0, 0)
+      return Promise.resolve(
+        Array.from({ length: 12 }, (_, i) => {
+          const d = new Date(mon)
+          d.setDate(mon.getDate() - (11 - i) * 7)
+          const gmail   = 4 + Math.round(Math.sin(i * 0.7) * 3 + 3)
+          const slack   = 2 + Math.round(Math.cos(i * 0.5) * 2 + 2)
+          const teams   = i > 6 ? Math.round(Math.abs(Math.sin(i)) + 0.5) : 0
+          const unknown = i % 4 === 0 ? 1 : 0
+          return {
+            week_start: d.toISOString().slice(0, 10),
+            gmail,
+            slack,
+            teams,
+            unknown,
+            total: gmail + slack + teams + unknown,
+          }
+        }),
+      )
+    }
+    return apiFetch(`/workspaces/${workspaceId}/messages/volume-trends`, {}, token)
+  },
+
+  getContactDealStageProgression: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    deals: Array<{
+      id: string
+      title: string
+      stage: string
+      value: number
+      stages: Array<{ stage: string; label: string; entered_at: string; days_in_stage: number; is_current: boolean }>
+    }>
+  }> => {
+    if (isDemoMode) {
+      const seed = contactId.charCodeAt(contactId.length - 1)
+      const STAGE_ORDER = ['discovery', 'qualified', 'proposal', 'negotiation', 'closed_won', 'closed_lost']
+      const STAGE_LABELS: Record<string, string> = {
+        discovery: 'Discovery', qualified: 'Qualified', proposal: 'Proposal',
+        negotiation: 'Negotiation', closed_won: 'Won', closed_lost: 'Lost',
+      }
+      const dealCount = 1 + (seed % 3)  // 1–3 deals
+      const deals = Array.from({ length: dealCount }, (_, di) => {
+        const stageIdx = (seed + di * 3) % 5  // 0–4
+        const stage = STAGE_ORDER[stageIdx]
+        const baseDate = new Date('2026-01-01')
+        baseDate.setDate(baseDate.getDate() + di * 30)
+        const stages = STAGE_ORDER.slice(0, stageIdx + 1).map((s, i) => ({
+          stage: s,
+          label: STAGE_LABELS[s],
+          entered_at: new Date(baseDate.getTime() + i * 14 * 86400000).toISOString(),
+          days_in_stage: i === stageIdx ? 7 + (seed % 14) : 10 + i * 5,
+          is_current: i === stageIdx,
+        }))
+        return {
+          id: `d-00${di + 1}`,
+          title: ['Enterprise Expansion', 'Platform License', 'Pro Upgrade'][di % 3],
+          stage,
+          value: 15000 + (seed + di) * 5000,
+          stages,
+        }
+      })
+      return Promise.resolve({ deals })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/contacts/${contactId}/deal-stage-progression`,
+      {},
+      token,
+    )
+  },
+
+  getWorkspaceDigest: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    digest: string
+    generated_at: string
+    contact_count: number
+    active_deal_count: number
+    open_task_count: number
+    message_count: number
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        digest: `**Top Wins**\n- Closed 2 enterprise deals this week totalling $85K, pushing Q3 revenue ahead of forecast.\n- Lead Scorer flagged 3 high-potential contacts from this week's inbound — all added to the pipeline.\n- Email Composer helped the team send 12 personalised follow-ups with an average reply rate of 34%.\n\n**Watch Out**\n- 2 deals in the Negotiation stage have had no activity in 14+ days and health scores below 40.\n- 5 open tasks are overdue — 3 belong to deals in the Proposal stage where timing is critical.\n- Avg clarity score dropped to 61 this week; 4 messages flagged for ambiguous action items.\n\n**Recommended Actions**\n- Run the Pipeline Optimizer agent on the 2 stale Negotiation deals to generate re-engagement suggestions.\n- Use the Task board (/tasks) to triage and reassign the 5 overdue items before end of week.\n- Score the 4 low-clarity messages in /inbox to surface any hidden commitments before they slip.`,
+        generated_at: new Date().toISOString(),
+        contact_count: 48,
+        active_deal_count: 12,
+        open_task_count: 9,
+        message_count: 134,
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/digest`, { method: 'POST' }, token)
+  },
+
+  getDealCoaching: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    urgency: 'low' | 'medium' | 'high'
+    bullets: string[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const seed = dealId.charCodeAt(dealId.length - 1)
+      const urgencies = ['low', 'medium', 'high'] as const
+      const urgency = urgencies[seed % 3]
+      const bulletSets = [
+        [
+          'Schedule a follow-up call this week to re-qualify the decision-maker before the proposal window closes.',
+          'Run the Email Composer agent to generate a personalised value-summary email referencing the contact\'s key pain points.',
+          'Add the two named competitors to the Competitors card so the Pipeline Optimizer can factor them into its next recommendation.',
+        ],
+        [
+          'Use the Pipeline Optimizer agent to generate a re-engagement plan — this deal has been in stage for 18 days.',
+          'Check the Clarity Score on the last three messages in /inbox to ensure no commitments were missed.',
+          'Move the next-action date forward and add a concrete follow-up task in /tasks to keep momentum.',
+        ],
+        [
+          'This deal is healthy — send a timely check-in email via the Email Composer to maintain momentum.',
+          'Enrich the associated contact record to surface additional stakeholders who could accelerate sign-off.',
+          'Review the Win Probability Trend on this page; if probability has dipped, run the Lead Scorer for updated signals.',
+        ],
+      ]
+      return Promise.resolve({
+        urgency,
+        bullets: bulletSets[seed % 3],
+        deal_id: dealId,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/coach`, { method: 'POST' }, token)
+  },
+
+  getDraftOutreach: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{ subject: string; body: string; contact_id: string; generated_at: string }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { subject: string; body: string }> = {
+        'c-001': {
+          subject: 'Quick intro — helping teams like yours',
+          body: 'Hi Alice,\n\nI noticed your team at TechCorp has been expanding rapidly — congrats on the Series B!\n\nWe have been working with several VP-level contacts in your space to streamline their sales workflows, and I thought NovaCRM might be worth a quick look given your growth trajectory.\n\nWould you have 15 minutes this week for a brief call? I can share how similar teams cut their follow-up time by 40%.\n\nLooking forward to connecting,',
+        },
+        'c-002': {
+          subject: 'Following up on our last conversation',
+          body: 'Hi Bob,\n\nThank you for taking the time to connect last month — I have been thinking about the challenges you mentioned around pipeline visibility.\n\nSince we spoke, we launched a new AI-powered deal health feature that flags at-risk deals before they slip. I think it directly addresses what you described.\n\nWould a 20-minute demo be worthwhile? I can work around your schedule.\n\nBest,',
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        subject: `Quick intro — let’s connect`,
+        body: 'Hi there,\n\nI wanted to reach out and introduce NovaCRM — an AI-native CRM built for modern sales teams.\n\nWould you be open to a brief 15-minute call to explore whether it could be a fit?\n\nBest,',
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/outreach`, { method: 'POST' }, token)
+  },
+
+  suggestContactTasks: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{ suggestions: Array<{ title: string; due_days: number; priority: 'high' | 'medium' | 'low' }>; contact_id: string; generated_at: string }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, Array<{ title: string; due_days: number; priority: 'high' | 'medium' | 'low' }>> = {
+        'c-001': [
+          { title: "Send follow-up email referencing Alice's Q3 expansion goals", due_days: 2, priority: 'high' },
+          { title: "Schedule product demo with Alice and her engineering lead", due_days: 5, priority: 'high' },
+          { title: "Share ROI case study relevant to TechCorp's industry", due_days: 7, priority: 'medium' },
+          { title: "Add Alice to the Enterprise nurture sequence in /inbox", due_days: 10, priority: 'medium' },
+          { title: "Run Lead Scorer agent on Alice to refresh her ML score", due_days: 14, priority: 'low' },
+        ],
+        'c-002': [
+          { title: "Re-engage Bob with a personalised check-in after 30-day silence", due_days: 1, priority: 'high' },
+          { title: "Score the last 3 messages from Bob for clarity and action items", due_days: 3, priority: 'medium' },
+          { title: "Update Bob's deal stage in /pipeline to reflect recent progress", due_days: 5, priority: 'medium' },
+        ],
+      }
+      const suggestions = stubs[contactId] ?? [
+        { title: 'Send an introductory email and request a discovery call', due_days: 3, priority: 'high' as const },
+        { title: 'Enrich contact record to surface stakeholder info', due_days: 5, priority: 'medium' as const },
+        { title: 'Score this contact with the Lead Scorer agent', due_days: 7, priority: 'low' as const },
+      ]
+      return Promise.resolve({ suggestions, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/suggest-tasks`, { method: 'POST' }, token)
+  },
+
+  getPipelinePulse: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    total_value: number;
+    at_risk_count: number;
+    top_deal: { title: string; value: number; stage: string } | null;
+    stage_breakdown: { stage: string; count: number; value: number }[];
+    health_avg: number;
+    insight: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        total_value: 285000,
+        at_risk_count: 2,
+        top_deal: { title: 'TechCorp Platform Expansion', value: 145000, stage: 'negotiation' },
+        stage_breakdown: [
+          { stage: 'discovery', count: 1, value: 32000 },
+          { stage: 'qualified', count: 2, value: 58000 },
+          { stage: 'proposal', count: 3, value: 135000 },
+          { stage: 'negotiation', count: 2, value: 195000 },
+        ],
+        health_avg: 68,
+        insight: '$285K active pipeline with strong momentum in Proposal (3 deals, $135K) and Negotiation (2 deals, $195K). Run Deal Health check on the 2 at-risk deals to generate targeted re-engagement plans before month-end.',
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/pipeline-pulse`, {}, token)
+  },
+
+  getPipelineSummary: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{ headline: string; opportunities: string[]; risks: string[]; generated_at: string }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        headline: '$285K active pipeline with strong momentum in Proposal — 2 stale deals need urgent attention.',
+        opportunities: [
+          'The 3 Proposal-stage deals total $135K — use Email Composer to send personalised value-summary emails to each contact before month-end.',
+          'Lead Scorer flagged two high-potential discovery contacts this week; promote them to Qualified to keep the funnel healthy.',
+          'Win probability on the Enterprise Expansion deal jumped to 78% — schedule a closing call now while momentum is high.',
+        ],
+        risks: [
+          '2 deals have health scores below 40 and no stage change in 14+ days — run Pipeline Optimizer to generate re-engagement plans.',
+          'CompetitorX appears in 4 open deals; use the Competitors card on each deal to log counter-positioning notes.',
+          '3 next-action dates are overdue — assign them in the Task board (/tasks) to avoid losing timing-sensitive opportunities.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/pipeline-summary`, { method: 'POST' }, token)
+  },
+
+  getDealWinLossAnalysis: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{ verdict: 'won' | 'lost'; narrative: string; key_factors: string[]; lessons: string[]; deal_id: string; generated_at: string }> => {
+    if (isDemoMode) {
+      const seed = dealId.charCodeAt(dealId.length - 1)
+      const verdict = seed % 2 === 0 ? 'won' : 'lost'
+      return Promise.resolve({
+        verdict,
+        narrative: verdict === 'won'
+          ? 'The deal closed on the strength of a well-engaged champion, competitive pricing, and a fast response to legal concerns in the final week. The prospect had evaluated two alternatives but ranked feature completeness and SLA terms as decisive.'
+          : 'The deal stalled after the primary champion left the company, exposing a lack of executive sponsorship at the decision-making level. Budget was reallocated to a competing priority before a new champion could be identified.',
+        key_factors: verdict === 'won'
+          ? ['Strong internal champion throughout evaluation', 'Matched competitor pricing on enterprise tier', 'SLA uptime guarantee addressed legal blocker']
+          : ['Champion departure mid-cycle removed key sponsor', 'No executive sponsor identified as backup', 'Budget freeze triggered by competing internal priority'],
+        lessons: verdict === 'won'
+          ? ['Multi-thread early to reduce single-champion dependency', 'Involve legal in SLA review two weeks earlier', 'Document competitive positioning for team knowledge base']
+          : ['Identify at least two executive sponsors in discovery', 'Flag champion-departure risk when org changes detected', 'Propose LOI earlier to hold budget commitment'],
+        deal_id: dealId,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/win-loss-analysis`, { method: 'POST' }, token)
+  },
+
+  getRelationshipHealth: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    health_rating: 'strong' | 'neutral' | 'at_risk';
+    summary: string;
+    action_items: Array<{ priority: 'high' | 'medium' | 'low'; action: string }>;
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { health_rating: 'strong' | 'neutral' | 'at_risk'; summary: string; action_items: Array<{ priority: 'high' | 'medium' | 'low'; action: string }> }> = {
+        'c-001': {
+          health_rating: 'strong',
+          summary: 'Alice has been highly engaged over the past 90 days with 8 messages and a median response time under 4 hours. Sentiment has been consistently positive and all tracked tasks are on schedule.',
+          action_items: [
+            { priority: 'medium', action: 'Schedule a QBR with Alice to review progress and expand the Enterprise deal' },
+            { priority: 'low', action: 'Run Lead Scorer to refresh ML probability before month-end pipeline review' },
+          ],
+        },
+        'c-002': {
+          health_rating: 'at_risk',
+          summary: 'Bob has gone dark for 32 days — the last message had a clarity score of 48/100 and his sentiment trend has turned negative. With 2 overdue tasks and no recent engagement, this relationship needs immediate attention.',
+          action_items: [
+            { priority: 'high', action: 'Send a personalised re-engagement email via Draft Outreach now' },
+            { priority: 'high', action: "Reassign Bob's 2 overdue tasks in /tasks before the pipeline deadline" },
+            { priority: 'medium', action: 'Run Lead Scorer to see if ML probability has dropped below threshold' },
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        health_rating: 'neutral' as const,
+        summary: 'This contact has had moderate engagement with a few touches in the past quarter. There is room to increase touchpoints and improve response time consistency.',
+        action_items: [
+          { priority: 'medium' as const, action: 'Use Draft Outreach to send a personalised check-in email' },
+          { priority: 'low' as const, action: 'Add a note capturing your last conversation to preserve context' },
+        ],
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/relationship-health`, { method: 'POST' }, token)
+  },
+
+  getSuggestedOutreachSequence: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    steps: Array<{
+      step: number;
+      channel: 'email' | 'slack' | 'call';
+      timing: 'now' | '3d' | '7d' | '14d';
+      subject: string | null;
+      body_preview: string;
+      goal: string;
+    }>;
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, Array<{
+        step: number; channel: 'email' | 'slack' | 'call'; timing: 'now' | '3d' | '7d' | '14d';
+        subject: string | null; body_preview: string; goal: string;
+      }>> = {
+        'c-001': [
+          { step: 1, channel: 'email', timing: 'now', subject: 'QBR agenda for TechCorp — Q3 review', body_preview: 'Hi Alice, I\'d love to walk through our Q3 results together and align on priorities for the Enterprise CRM rollout.', goal: 'Confirm QBR date and set agenda' },
+          { step: 2, channel: 'call', timing: '3d', subject: null, body_preview: 'Call script: confirm receipt of QBR invite, walk through open tasks on the implementation checklist, identify any procurement blockers.', goal: 'Unblock implementation and confirm executive sponsor availability' },
+          { step: 3, channel: 'email', timing: '7d', subject: 'Enterprise CRM — next steps & resources', body_preview: 'Hi Alice, sharing the onboarding playbook and the ROI case study we discussed — plus a draft SLA for review ahead of go-live.', goal: 'Deliver value assets and move toward contract signature' },
+        ],
+        'c-002': [
+          { step: 1, channel: 'email', timing: 'now', subject: 'Checking in — any update on the platform decision?', body_preview: 'Hi Bob, it\'s been a few weeks since we last connected and I wanted to see if there are any questions I can help address on the platform upgrade.', goal: 'Re-open the conversation after 32 days of silence' },
+          { step: 2, channel: 'slack', timing: '3d', subject: 'Quick note on FinanceFlow upgrade', body_preview: 'Hey Bob — just dropping a quick Slack in case email is noisy. Any blockers I can help clear before end of month?', goal: 'Reach Bob on a different channel to increase response rate' },
+          { step: 3, channel: 'call', timing: '7d', subject: null, body_preview: 'Call script: acknowledge the pause, ask what has changed internally, re-qualify budget and timeline, offer a revised proposal if needed.', goal: 'Diagnose reason for dark period and re-qualify deal' },
+        ],
+      }
+      const stub = stubs[contactId] ?? [
+        { step: 1, channel: 'email' as const, timing: 'now' as const, subject: 'Quick check-in', body_preview: `Hi there, I wanted to follow up and see how things are going on your end.`, goal: 'Re-establish contact and gauge interest' },
+        { step: 2, channel: 'call' as const, timing: '3d' as const, subject: null, body_preview: 'Call script: confirm receipt of email, ask about current priorities and timeline, identify decision-making process.', goal: 'Qualify urgency and identify decision-maker' },
+        { step: 3, channel: 'email' as const, timing: '7d' as const, subject: 'Resources + next steps', body_preview: 'Following our call, I\'m sharing relevant resources and a suggested next step to move forward.', goal: 'Deliver value and propose a meeting' },
+      ]
+      return Promise.resolve({ steps: stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/outreach-sequence`, { method: 'POST' }, token)
+  },
+
+  getContactHealthOverview: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    at_risk_count: number;
+    strong_count: number;
+    summary_sentence: string;
+    contacts: Array<{
+      id: string;
+      name: string;
+      health: 'strong' | 'neutral' | 'at_risk';
+      days_since_touch: number | null;
+      top_action: string;
+      engagement_score: number;
+    }>;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        at_risk_count: 2,
+        strong_count: 3,
+        summary_sentence: '2 contacts at risk of going dark — focus on re-engagement this week to protect pipeline health.',
+        contacts: [
+          { id: 'c-001', name: 'Sarah Chen', health: 'strong', days_since_touch: 5, top_action: 'Maintain cadence and look for expansion', engagement_score: 74 },
+          { id: 'c-002', name: 'Michael Torres', health: 'at_risk', days_since_touch: 42, top_action: 'Re-engage — no contact in 42 days', engagement_score: 18 },
+          { id: 'c-003', name: 'Emma Rodriguez', health: 'neutral', days_since_touch: 18, top_action: 'Add a note or follow-up task', engagement_score: 45 },
+          { id: 'c-004', name: 'James Liu', health: 'strong', days_since_touch: 3, top_action: 'Maintain cadence and look for expansion', engagement_score: 81 },
+          { id: 'c-005', name: 'Priya Patel', health: 'at_risk', days_since_touch: 35, top_action: 'Re-engage — no contact in 35 days', engagement_score: 22 },
+          { id: 'c-006', name: 'Daniel Kim', health: 'strong', days_since_touch: 7, top_action: 'Maintain cadence and look for expansion', engagement_score: 68 },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/health-overview`, {}, token)
+  },
+
+  getRiskNarrative: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    risk_level: 'low' | 'medium' | 'high';
+    narrative: string;
+    top_risks: string[];
+    deal_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { risk_level: 'low' | 'medium' | 'high'; narrative: string; top_risks: string[] }> = {
+        'd-001': {
+          risk_level: 'medium',
+          narrative: 'The Enterprise CRM deal at TechCorp is in the Proposal stage with a health score of 72 and 58% win probability. While engagement has been consistent, two active competitors and a slightly overdue close date introduce moderate risk that requires attention before month-end.',
+          top_risks: [
+            'Two competitors (Salesforce, HubSpot) are actively engaged — a competitive differentiation call should be scheduled this week.',
+            'Close date slipped by 8 days — re-confirm commitment and update the expected timeline with the champion.',
+            'No deal note recorded in the last 14 days — add a progress update to maintain momentum visibility.',
+          ],
+        },
+        'd-002': {
+          risk_level: 'high',
+          narrative: 'The Platform Upgrade at FinanceFlow is severely at risk: health score of 28 and ML win probability of 18% signal declining buyer engagement. The deal has stalled in Negotiation for 38 days with a next action overdue and three tracked competitors applying pressure.',
+          top_risks: [
+            'Win probability at 18% is critically low — escalate to an executive sponsor call immediately to re-qualify the deal.',
+            'Deal stalled in Negotiation for 38 days, well past the 21-day stage average — confirm if budget approval is the blocker.',
+            'Three competitors tracked with no recent note on competitive positioning — run a competitive analysis or risk losing on value perception.',
+          ],
+        },
+        'd-003': {
+          risk_level: 'low',
+          narrative: 'The Professional Services deal at GrowthCo is progressing well with a health score of 84 and win probability of 73%. The deal is on schedule with no overdue actions, a clear champion, and no competitive threats identified.',
+          top_risks: [
+            'No competitors tracked — confirm with the champion that an internal build option is not being explored.',
+            'Close date is 6 days away — ensure contract redlines are returned and procurement approval is in progress.',
+          ],
+        },
+      }
+      const dealNum = parseInt(dealId.replace(/\D+/g, ''), 10) || 1
+      const keys = Object.keys(stubs)
+      const stub = stubs[dealId] ?? stubs[keys[(dealNum - 1) % keys.length]] ?? {
+        risk_level: 'medium' as const,
+        narrative: 'This deal has a moderate risk profile with several factors requiring monitoring. Review the health score trend and ensure next actions are up to date.',
+        top_risks: ['Verify champion engagement and confirm deal priority before next stage.'],
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/risk-narrative`, { method: 'POST' }, token)
+  },
+
+  getDealMomentum: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    momentum: 'gaining' | 'stalling' | 'declining';
+    drivers: string[];
+    recommendation: string;
+    deal_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { momentum: 'gaining' | 'stalling' | 'declining'; drivers: string[]; recommendation: string }> = {
+        'd-001': {
+          momentum: 'gaining',
+          drivers: [
+            'Health score has risen from 65 → 72 → 78 across the last three readings, signalling improving deal quality.',
+            'Champion engaged twice in the last 14 days and legal review completed on schedule.',
+          ],
+          recommendation: 'Maintain cadence — add a Deal Note capturing the legal outcome and confirm next milestone.',
+        },
+        'd-002': {
+          momentum: 'declining',
+          drivers: [
+            'Health score has dropped from 60 → 45 → 28 over the last three readings, a clear deteriorating trend.',
+            'No activity recorded in 22 days and next action is overdue by 5 days.',
+          ],
+          recommendation: 'Re-engage immediately — Draft Outreach email to the champion and update the next action date.',
+        },
+        'd-003': {
+          momentum: 'gaining',
+          drivers: [
+            'Current health score of 84 is the highest recorded in the last 5 readings.',
+            '7 activity events logged in the last 30 days with a touch as recently as 3 days ago.',
+          ],
+          recommendation: 'Accelerate close — schedule a final review call and confirm procurement timeline.',
+        },
+      }
+      const dealNum = parseInt(dealId.replace(/\D+/g, ''), 10) || 1
+      const keys = Object.keys(stubs)
+      const stub = stubs[dealId] ?? stubs[keys[(dealNum - 1) % keys.length]] ?? {
+        momentum: 'stalling' as const,
+        drivers: ['Deal health is stable but no significant change in the last 30 days.', 'Activity frequency is below average for this stage.'],
+        recommendation: 'Add a Deal Note and set a concrete next action date to re-energise this deal.',
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/momentum-check`, { method: 'POST' }, token)
+  },
+
+  getContactSummary: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    relationship_status: 'strong' | 'warm' | 'cold' | 'at_risk';
+    summary: string;
+    next_best_action: string;
+    deal_value: number;
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { relationship_status: 'strong' | 'warm' | 'cold' | 'at_risk'; summary: string; next_best_action: string; deal_value: number }> = {
+        'c-001': {
+          relationship_status: 'strong',
+          summary: 'Sarah Chen has been actively engaged over the past 3 weeks, with 5 messages and 2 notes logged. Her Enterprise deal is at proposal stage with a health score of 88, and all tasks are on track.',
+          next_best_action: 'Schedule a QBR call this week to confirm the legal review timeline and lock in the signature date.',
+          deal_value: 95000,
+        },
+        'c-002': {
+          relationship_status: 'at_risk',
+          summary: 'Marcus Rivera has been unresponsive for 22 days after initial interest. The discovery-stage deal has dropped to a health score of 42 and there are 2 overdue tasks.',
+          next_best_action: 'Draft Outreach email with a value-focused re-engagement message, referencing the original pain point from the discovery call.',
+          deal_value: 30000,
+        },
+        'c-003': {
+          relationship_status: 'warm',
+          summary: 'Emily Watson maintains steady engagement with monthly check-ins and a qualified deal progressing well. Clarity scores on recent messages average 78, indicating aligned communication.',
+          next_best_action: 'Add a Contact Note after the next check-in and update the expected close date in the deal to reflect the revised procurement timeline.',
+          deal_value: 45000,
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        relationship_status: 'warm' as const,
+        summary: 'This contact has moderate engagement with some recent activity. Review recent messages and tasks to determine the next best step.',
+        next_best_action: 'Add a Contact Note to capture the latest status and set a follow-up task for next week.',
+        deal_value: 0,
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/summary`, {}, token)
+  },
+
+  getCommunicationStyle: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    style: 'direct' | 'analytical' | 'relational' | 'expressive';
+    preferred_channel: 'email' | 'slack' | 'call';
+    best_time: 'morning' | 'afternoon' | 'end_of_day';
+    tone_tips: string[];
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { style: 'direct' | 'analytical' | 'relational' | 'expressive'; preferred_channel: 'email' | 'slack' | 'call'; best_time: 'morning' | 'afternoon' | 'end_of_day'; tone_tips: string[] }> = {
+        'c-001': {
+          style: 'analytical',
+          preferred_channel: 'email',
+          best_time: 'morning',
+          tone_tips: [
+            'Lead with data and ROI metrics before any emotional appeal.',
+            'Include agenda items and structured bullet points in every email.',
+            'Avoid vague language — cite specific figures and timelines.',
+            'Follow up in writing after every call to confirm key decisions.',
+          ],
+        },
+        'c-002': {
+          style: 'relational',
+          preferred_channel: 'call',
+          best_time: 'afternoon',
+          tone_tips: [
+            'Open with personal rapport before diving into business topics.',
+            'Reference shared context or previous conversations to build trust.',
+            'Avoid coming across as transactional — show genuine interest.',
+          ],
+        },
+        'c-003': {
+          style: 'direct',
+          preferred_channel: 'slack',
+          best_time: 'end_of_day',
+          tone_tips: [
+            'Keep messages concise — get to the ask within the first two sentences.',
+            'Use Slack for quick check-ins; reserve email for formal updates.',
+            'Offer clear options rather than open-ended questions.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        style: 'relational' as const,
+        preferred_channel: 'email' as const,
+        best_time: 'morning' as const,
+        tone_tips: ['Match their tone in your opening line.', 'Keep follow-ups brief and action-oriented.'],
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/${contactId}/communication-style`, { method: 'POST' }, token)
+  },
+
+  getDealClosePlan: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    phases: { label: string; actions: string[] }[];
+    recommended_close_date: string;
+    deal_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { phases: { label: string; actions: string[] }[]; recommended_close_date: string }> = {
+        'd-001': {
+          recommended_close_date: '2026-08-15',
+          phases: [
+            { label: 'Next 30 days', actions: ['Schedule a QBR call to confirm legal sign-off timeline and remaining SLA concerns.', 'Add a Deal Note capturing the outcome of the legal review and updated close conditions.', 'Run Deal Health check to confirm score stays above 75.'] },
+            { label: '30–60 days', actions: ['Send final contract draft with agreed SLA uptime terms to procurement.', 'Request exec sponsor approval via champion contact Sarah Chen.'] },
+            { label: '60–90 days', actions: ['Close the deal and log the win in Win/Loss Analysis.', 'Schedule onboarding kickoff call within 7 days of signature.'] },
+          ],
+        },
+        'd-002': {
+          recommended_close_date: '2026-09-30',
+          phases: [
+            { label: 'Next 30 days', actions: ['Draft Outreach email to re-engage champion Marcus after 22-day silence.', 'Run Deal Health check and update ML win probability to reflect current risk level.'] },
+            { label: '30–60 days', actions: ['Present executive summary deck to board sponsor.', 'Propose a 60-day pilot with exit clause to reduce commitment risk.'] },
+            { label: '60–90 days', actions: ['Negotiate final terms and issue contract.', 'If no response in 45 days, escalate to a senior sponsor or re-qualify the deal.'] },
+          ],
+        },
+        'd-003': {
+          recommended_close_date: '2026-08-01',
+          phases: [
+            { label: 'Next 30 days', actions: ['Confirm procurement timeline with champion and align on signature process.', 'Add a Deal Note after each weekly check-in to track progress milestones.'] },
+            { label: '30–60 days', actions: ['Send revised pricing summary with volume discount applied.', 'Schedule final stakeholder demo to confirm requirements are met.'] },
+            { label: '60–90 days', actions: ['Issue contract and set a firm signature date.', 'Log win and initiate onboarding handover within 5 business days.'] },
+          ],
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001'] ?? {
+        recommended_close_date: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        phases: [
+          { label: 'Next 30 days', actions: ['Run Deal Health check to establish a score baseline.', 'Schedule a discovery call to confirm current buying timeline.'] },
+          { label: '30–60 days', actions: ["Send a proposal aligned to the champion's stated requirements.", 'Add a Deal Note after each touchpoint to maintain accurate context.'] },
+          { label: '60–90 days', actions: ['Negotiate final terms with the budget owner.', 'Set a concrete close date and confirm with all stakeholders.'] },
+        ],
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/deals/${dealId}/ai/close-plan`, { method: 'POST' }, token)
+  },
+
+  getDealsComparison: (workspaceId: string, dealIds: string[], token: string): Promise<{
+    winner_id: string
+    rationale: string
+    comparison_points: { dimension: string; verdict: string }[]
+    deal_ids: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const key = dealIds.slice().sort().join(',')
+      type CompareStub = { winner_id: string; rationale: string; comparison_points: { dimension: string; verdict: string }[] }
+      const stubs: Record<string, CompareStub> = {
+        'd-001,d-002': {
+          winner_id: 'd-001',
+          rationale: 'TechFlow Solutions leads with a higher health score and stronger win probability at the proposal stage. Momentum Corp carries more competitor risk and a lower deal value, making TechFlow the stronger near-term opportunity.',
+          comparison_points: [
+            { dimension: 'Deal Value', verdict: 'TechFlow ($95K) outpaces Momentum ($42K) by 2.3×' },
+            { dimension: 'Health Score', verdict: 'TechFlow 78 vs Momentum 52 — TechFlow significantly healthier' },
+            { dimension: 'Win Probability', verdict: 'TechFlow 65% vs Momentum 38%' },
+            { dimension: 'Competitor Risk', verdict: 'Momentum has 3 active competitors vs TechFlow\'s 1' },
+          ],
+        },
+      }
+      const fallback: CompareStub = {
+        winner_id: dealIds[0] ?? 'd-001',
+        rationale: 'The first deal shows stronger health metrics and a higher win probability. Prioritising it offers the best return on current sales effort.',
+        comparison_points: [
+          { dimension: 'Deal Value', verdict: 'Deal 1 leads on total pipeline value' },
+          { dimension: 'Health Score', verdict: 'Deal 1 scores higher across health dimensions' },
+          { dimension: 'Win Probability', verdict: 'Deal 1 carries a stronger ML probability' },
+          { dimension: 'Competitor Risk', verdict: 'Comparable competitive landscape across both deals' },
+        ],
+      }
+      const stub = stubs[key] ?? fallback
+      return Promise.resolve({ ...stub, deal_ids: dealIds, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/deals/compare`,
+      { method: 'POST', body: JSON.stringify({ deal_ids: dealIds }) },
+      token,
+    )
+  },
+
+  triageInboxMessages: (workspaceId: string, token: string): Promise<{
+    items: Array<{ message_id: string; priority: 'urgent' | 'high' | 'normal' | 'low'; action: string; rationale: string }>
+    message_count: number
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        message_count: 6,
+        generated_at: new Date().toISOString(),
+        items: [
+          { message_id: 'm-001', priority: 'high', action: 'Review revised SLA draft and send updated terms by Friday.', rationale: 'Contract negotiation with hard Friday deadline.' },
+          { message_id: 'm-002', priority: 'high', action: 'Schedule a 30-minute intro call with Marcus Rivera for Thursday or Friday.', rationale: 'Warm inbound lead with specific availability windows provided.' },
+          { message_id: 'm-003', priority: 'urgent', action: 'Confirm CSV import capability and provide a timeline to unblock BuildRight procurement sign-off.', rationale: 'Blocking procurement sign-off — deal cannot progress without this answer.' },
+          { message_id: 'm-004', priority: 'normal', action: 'Investigate webhook latency and reply with findings or ETA.', rationale: 'Technical issue noted but positive relationship — not blocking.' },
+          { message_id: 'm-005', priority: 'urgent', action: 'Send revised quote for analytics module, seat expansion, and premier support before May 8th.', rationale: 'Hard board deadline May 10th; contract must be signed by May 8th.' },
+          { message_id: 'm-006', priority: 'low', action: 'Read Japan trial update and log any action items in deal notes.', rationale: 'Status update with no immediate action required.' },
+        ],
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/messages/triage`, { method: 'POST' }, token)
+  },
+
+  getReengagementPlan: (workspaceId: string, token: string): Promise<{
+    plan: { contact_id: string; contact_name: string; days_silent: number; channel: 'email' | 'slack' | 'call'; message_template: string; urgency: 'low' | 'medium' | 'high' }[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        plan: [
+          {
+            contact_id: 'c-001',
+            contact_name: 'Sarah Chen',
+            days_silent: 68,
+            channel: 'email',
+            message_template: "Hi Sarah, I wanted to reach out — it's been a while since we last connected. I'd love to hear how things are progressing at TechFlow Solutions and share a few new ideas that might be relevant to your Q4 goals. Would you have 20 minutes this week for a quick catch-up?",
+            urgency: 'high',
+          },
+          {
+            contact_id: 'c-002',
+            contact_name: 'Marcus Johnson',
+            days_silent: 45,
+            channel: 'call',
+            message_template: "Marcus, hope things are going well at Momentum Corp! I noticed we haven't spoken in a while and wanted to reconnect — I have some thoughts on how we can accelerate your enterprise rollout that I'd love to share. Are you free for a quick call later this week?",
+            urgency: 'medium',
+          },
+          {
+            contact_id: 'c-003',
+            contact_name: 'Emily Rodriguez',
+            days_silent: 33,
+            channel: 'email',
+            message_template: "Hi Emily, just checking in from NovaCRM — we've released some new features around task automation that I think would fit well with how your team works. Happy to put together a short summary if that would be useful. Let me know!",
+            urgency: 'low',
+          },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/reengagement-plan`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDealObjectionHandler: (workspaceId: string, dealId: string, token: string): Promise<{
+    objections: { objection: string; response: string; strategy: 'empathize' | 'redirect' | 'prove' | 'challenge' }[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { objection: string; response: string; strategy: 'empathize' | 'redirect' | 'prove' | 'challenge' }[]> = {
+        'd-001': [
+          { objection: "Your pricing is significantly higher than the other vendors we've been evaluating.", response: "That's a fair concern, and I appreciate you raising it directly. When we factor in implementation time, support costs, and churn reduction, our three-year TCO is consistently 20% lower — I can share the comparison our last three enterprise customers ran.", strategy: 'prove' },
+          { objection: "We're not sure now is the right time to switch platforms mid-year.", response: "Timing feels challenging, I get that. What's interesting is that Q3 transitions typically see the fastest ROI because teams build momentum for the rest of the year. Would a phased rollout ease the concern?", strategy: 'redirect' },
+          { objection: "We haven't seen enough evidence this works for our specific industry vertical.", response: "That's completely reasonable to ask for. We work with four companies in your sector — I'll connect you directly with two of the closest comparables so you can hear it in their own words.", strategy: 'prove' },
+          { objection: "Our team is already stretched thin and can't take on another implementation right now.", response: "Capacity is a real constraint, and I hear you. Our white-glove onboarding handles the heavy lifting on our side — the average time commitment from your team is under four hours total during setup.", strategy: 'empathize' },
+        ],
+        'd-002': [
+          { objection: "We're already using a competitor solution and the switching costs feel prohibitive.", response: "Switching costs are real, and I want to be transparent: we'll run a full data migration for you at no additional charge. The breakeven on migration cost is typically under 60 days given the efficiency gains.", strategy: 'prove' },
+          { objection: "I'm not convinced your solution can scale to our enterprise requirements.", response: "That's a critical question at this deal size. Let me arrange a technical deep-dive with our engineering lead — we can walk through exactly how we support companies five times your current scale.", strategy: 'redirect' },
+          { objection: "The ROI timeline you're projecting seems optimistic.", response: "You're right to scrutinize that — healthy skepticism leads to better outcomes. Would it help to walk through the calculation line by line with your CFO? I can adjust every assumption to your actuals.", strategy: 'challenge' },
+          { objection: "We need sign-off from multiple stakeholders and that process could take months.", response: "Multi-stakeholder decisions are common at this level, and we have a dedicated process for it. I'll prepare a tailored business case for each decision-maker and set up individual briefings on their schedules.", strategy: 'empathize' },
+        ],
+      }
+      const objections = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ objections, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/objection-handler`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDealStakeholderMap: (workspaceId: string, dealId: string, token: string): Promise<{
+    stakeholders: { name: string; role: 'decision_maker' | 'champion' | 'blocker' | 'influencer'; engagement: 'high' | 'medium' | 'low'; recommended_action: string }[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { name: string; role: 'decision_maker' | 'champion' | 'blocker' | 'influencer'; engagement: 'high' | 'medium' | 'low'; recommended_action: string }[]> = {
+        'd-001': [
+          { name: 'Sarah Chen', role: 'champion', engagement: 'high', recommended_action: 'Schedule weekly syncs to maintain momentum through legal review' },
+          { name: 'David Park', role: 'decision_maker', engagement: 'medium', recommended_action: 'Prepare exec summary with ROI data for final sign-off meeting' },
+          { name: 'IT Security Team', role: 'blocker', engagement: 'low', recommended_action: 'Send security questionnaire responses and SOC 2 report proactively' },
+          { name: 'Engineering Lead', role: 'influencer', engagement: 'medium', recommended_action: 'Offer a technical deep-dive session to address integration questions' },
+        ],
+        'd-002': [
+          { name: 'Marcus Rivera', role: 'decision_maker', engagement: 'medium', recommended_action: 'Re-engage with a board-ready executive summary and case studies' },
+          { name: 'Procurement Lead', role: 'blocker', engagement: 'high', recommended_action: 'Address contract redlines directly with legal team this week' },
+          { name: 'Operations Director', role: 'champion', engagement: 'medium', recommended_action: 'Arm champion with internal talking points to move board decision' },
+          { name: 'Finance Controller', role: 'influencer', engagement: 'low', recommended_action: 'Send detailed pricing breakdown with multi-year savings projection' },
+        ],
+      }
+      const stakeholders = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ stakeholders, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/stakeholder-map`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDealNegotiationScript: (workspaceId: string, dealId: string, token: string): Promise<{
+    opening_move: string
+    concessions: { offer: string; condition: string; limit: string }[]
+    walk_away_signal: string
+    closing_line: string
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type NegotiationStub = { opening_move: string; concessions: { offer: string; condition: string; limit: string }[]; walk_away_signal: string; closing_line: string }
+      const stubs: Record<string, NegotiationStub> = {
+        'd-001': {
+          opening_move: "We've invested significant time understanding your environment — let's talk final terms so we can move quickly.",
+          concessions: [
+            { offer: '10% first-year discount', condition: 'Sign by end of quarter', limit: 'Max 10% — below this margin we cannot sustain enterprise SLA' },
+            { offer: 'Free premium onboarding package ($8K value)', condition: '3-year commitment', limit: 'Year-one inclusion only — not a perpetual benefit' },
+            { offer: 'Dedicated Customer Success Manager year one', condition: 'Full-suite subscription at list price', limit: 'Year-one only — standard CSM model from year two onward' },
+          ],
+          walk_away_signal: "Buyer demands >15% discount, refuses multi-year commitment, and requests removal of audit logging",
+          closing_line: "Let's lock this in today — I'll send the countersigned paperwork over in the next 30 minutes.",
+        },
+        'd-002': {
+          opening_move: "Given how long we've been in conversation, I want to come to the table with something that makes this easy to say yes to.",
+          concessions: [
+            { offer: 'Free data migration from current platform', condition: 'Sign within 2 weeks', limit: 'Standard connectors only — no custom ETL work' },
+            { offer: '90-day money-back guarantee', condition: 'Pilot with 10 seats before full rollout', limit: 'Guarantee covers license fees only, not implementation services' },
+            { offer: 'Lock in current pricing for 2 years', condition: 'Annual pre-payment on both years', limit: 'Cannot extend beyond 2 years — pricing review required after' },
+          ],
+          walk_away_signal: "Buyer insists on monthly rolling contract with no minimum term and a 60-day exit clause",
+          closing_line: "I can hold these terms until Friday — after that we go back to standard pricing. Want me to send the agreement now?",
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/negotiation-script`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDealSentimentDigest: (workspaceId: string, dealId: string, token: string): Promise<{
+    overall_sentiment: 'positive' | 'neutral' | 'negative'
+    key_signals: string[]
+    sentiment_trend: 'improving' | 'stable' | 'declining'
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type SentimentStub = { overall_sentiment: 'positive' | 'neutral' | 'negative'; key_signals: string[]; sentiment_trend: 'improving' | 'stable' | 'declining' }
+      const stubs: Record<string, SentimentStub> = {
+        'd-001': {
+          overall_sentiment: 'positive',
+          key_signals: [
+            "Sarah confirmed legal review is complete and the SLA language 'looks good overall'.",
+            "She responded to 8 of the last 10 emails — consistent high engagement.",
+            "Most recent message expressed eagerness to close before the May 15 deadline.",
+          ],
+          sentiment_trend: 'improving',
+        },
+        'd-002': {
+          overall_sentiment: 'negative',
+          key_signals: [
+            "Marcus has not replied to 2 follow-up emails in 21 days — radio silence is a churn signal.",
+            "His last message stated 'I need to bring it to the board' without committing to a timeline.",
+            "No inbound messages in over three weeks indicates disengagement.",
+          ],
+          sentiment_trend: 'declining',
+        },
+      }
+      const stub = stubs[dealId] ?? {
+        overall_sentiment: 'neutral' as const,
+        key_signals: [
+          'Recent notes indicate the conversation is progressing without strong positive or negative signals.',
+          'No major objections raised, but no explicit buying signals either.',
+        ],
+        sentiment_trend: 'stable' as const,
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/sentiment-digest`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getWinProbabilityExplainer: (workspaceId: string, dealId: string, token: string): Promise<{
+    probability_assessment: 'on_track' | 'overestimated' | 'underestimated'
+    key_drivers: string[]
+    risk_factors: string[]
+    recommended_adjustment: number | null
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        probability_assessment: 'on_track' | 'overestimated' | 'underestimated'
+        key_drivers: string[]
+        risk_factors: string[]
+        recommended_adjustment: number | null
+      }> = {
+        'd-001': {
+          probability_assessment: 'on_track',
+          key_drivers: ['Champion actively engaged in evaluation', 'Budget confirmed in Q3 planning', 'Timeline aligns with procurement cycle'],
+          risk_factors: ['Legal review may extend timeline'],
+          recommended_adjustment: null,
+        },
+        'd-002': {
+          probability_assessment: 'overestimated',
+          key_drivers: ['Initial enthusiasm from champion', 'Strong product fit for stated requirements'],
+          risk_factors: ['Decision maker not yet engaged', 'Competing vendor offered 20% lower price', 'Next action overdue by 12 days'],
+          recommended_adjustment: -15,
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/win-probability-explainer`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getMeetingPrep: (workspaceId: string, dealId: string, token: string): Promise<{
+    agenda_items: { topic: string; goal: string; talking_points: string[] }[]
+    questions_to_ask: string[]
+    things_to_avoid: string[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        agenda_items: { topic: string; goal: string; talking_points: string[] }[]
+        questions_to_ask: string[]
+        things_to_avoid: string[]
+      }> = {
+        'd-001': {
+          agenda_items: [
+            {
+              topic: 'Partnership Value Review',
+              goal: 'Reinforce ROI and remind the champion why they chose us.',
+              talking_points: ['Recap pilot results and key metrics achieved', 'Map features directly to their Q4 goals', 'Highlight 3 customers with similar profiles who closed'],
+            },
+            {
+              topic: 'Legal & Procurement Status',
+              goal: 'Unblock any review delays before end of quarter.',
+              talking_points: ['Ask which clauses are still open', 'Offer security review call with our CISO'],
+            },
+            {
+              topic: 'Close Plan Confirmation',
+              goal: 'Agree on mutual action plan with dates.',
+              talking_points: ['Propose signing by Sept 15', 'Confirm executive sponsor attendance'],
+            },
+          ],
+          questions_to_ask: [
+            'What would need to be true for you to sign by end of Q3?',
+            'Who else is involved in the final approval decision?',
+            'Are there any outstanding concerns from legal or security review?',
+          ],
+          things_to_avoid: [
+            'Discounting without confirming value alignment first',
+            'Bringing up competitors unless the prospect raises them',
+          ],
+        },
+        'd-002': {
+          agenda_items: [
+            {
+              topic: 'Executive Re-engagement',
+              goal: 'Re-establish urgency and re-confirm strategic fit.',
+              talking_points: ['Reference the original business case they shared', 'Show how their competitors are moving faster'],
+            },
+            {
+              topic: 'Pricing & Timeline Flexibility',
+              goal: 'Explore room to adjust terms without deep discounting.',
+              talking_points: ['Phased rollout option to reduce upfront commitment', 'Multi-year pricing incentive'],
+            },
+            {
+              topic: 'Stakeholder Alignment',
+              goal: 'Identify blockers and decision-maker gaps.',
+              talking_points: ['Ask who is skeptical and why', 'Offer a reference call with a peer company'],
+            },
+          ],
+          questions_to_ask: [
+            'What changed since our last conversation that slowed things down?',
+            'Is budget still available, or has it been reallocated?',
+            'What would accelerate the final decision?',
+          ],
+          things_to_avoid: [
+            'Mentioning competitor by name — keep focus on your own strengths',
+            'Giving any discount without a signed commitment in return',
+          ],
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/meeting-prep`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDraftEmailReply: (workspaceId: string, messageId: string, token: string): Promise<{
+    subject: string
+    body: string
+    tone: 'professional' | 'friendly' | 'urgent'
+    message_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { subject: string; body: string; tone: 'professional' | 'friendly' | 'urgent' }> = {
+        'm-001': {
+          subject: 'Re: Q3 Partnership Proposal',
+          body: "Hi Sarah,\n\nThank you for sending over the Q3 Partnership Proposal — I've had a chance to review it in detail and I'm excited about the potential here.\n\nThe proposed structure aligns well with our current roadmap, particularly the co-marketing component for Q4. I do have a few questions on the revenue-share model that I'd like to clarify before we move forward.\n\nWould you be available for a 30-minute call this week? I have Thursday afternoon or Friday morning open.\n\nLooking forward to connecting.",
+          tone: 'professional',
+        },
+        'm-002': {
+          subject: 'Re: Urgent: Contract Redlines',
+          body: "Hi Marcus,\n\nI've received the redlines from your legal team and I want to address these as quickly as possible — I understand the urgency and I'm fully aligned on getting this resolved before end of week.\n\nI've reviewed all three flagged clauses. Two are straightforward adjustments we can accept immediately. The indemnification clause (Section 8.4) requires a brief check with our counsel but I expect to have a response within 24 hours.\n\nI'll send a revised contract by tomorrow morning. Please let me know if you need anything in the meantime.",
+          tone: 'urgent',
+        },
+      }
+      const stub = stubs[messageId] ?? stubs['m-001']
+      return Promise.resolve({ ...stub, message_id: messageId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/messages/${messageId}/ai/reply`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getLeadScoreExplanation: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    score_assessment: 'accurate' | 'overestimated' | 'underestimated';
+    score_summary: string;
+    key_signals: string[];
+    improvement_tips: string[];
+    contact_id: string;
+    generated_at: string;
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        score_assessment: 'accurate' | 'overestimated' | 'underestimated';
+        score_summary: string;
+        key_signals: string[];
+        improvement_tips: string[];
+      }> = {
+        'c-001': {
+          score_assessment: 'accurate',
+          score_summary: 'Sarah Chen\'s hot score of 82 accurately reflects her active $95K deal in negotiation and consistent high-quality engagement over the past 30 days.',
+          key_signals: [
+            'Active $95K deal in negotiation stage with 78% health score.',
+            'Requested detailed ROI data and pricing breakdown — strong purchase intent.',
+            'Responded to last 3 outreach messages within 4 hours.',
+            'Multiple stakeholders from TechCorp involved in recent email threads.',
+          ],
+          improvement_tips: [
+            'Log notes after each call to reinforce positive scoring signals.',
+            'Set a next-action date within 5 days to prevent deal cooling and maintain momentum.',
+            'Share a formal proposal deck to elevate the contact to decision stage.',
+          ],
+        },
+        'c-002': {
+          score_assessment: 'overestimated',
+          score_summary: 'Marcus Lee\'s warm score of 65 may be inflated — his $30K deal has stalled at discovery for 21 days with no recent message activity.',
+          key_signals: [
+            'Deal has been in discovery stage for 21 days with no stage change.',
+            'No inbound messages from Marcus in the last 30 days.',
+            'Low clarity score (42) on the most recent message suggests disengagement.',
+          ],
+          improvement_tips: [
+            'Re-engage with a direct outreach — ask if priorities have shifted.',
+            'Consider downgrading deal stage to reflect actual progress.',
+            'Schedule a discovery call to requalify the opportunity.',
+          ],
+        },
+        'c-003': {
+          score_assessment: 'underestimated',
+          score_summary: 'Priya Sharma\'s cold score of 38 understates her potential — she recently opened three emails and replied with budget approval questions.',
+          key_signals: [
+            'Replied with budget approval questions — intent signal not yet captured in score.',
+            'Opened all 3 emails in the last week (above average engagement).',
+            'Has an associated $45K deal in qualified stage.',
+          ],
+          improvement_tips: [
+            'Run the Lead Scorer agent to refresh the ML score with recent interaction data.',
+            'Move the deal to proposal stage to reflect the contact\'s buying stage.',
+            'Add a tag "budget-confirmed" to flag readiness for scoring update.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? {
+        score_assessment: 'accurate' as const,
+        score_summary: 'The lead score reflects current engagement and pipeline activity.',
+        key_signals: ['Recent message activity is consistent with score level.', 'Deal pipeline value aligns with the contact status.'],
+        improvement_tips: ['Log more interactions to improve score accuracy.', 'Enrich the contact record for better signal coverage.'],
+      }
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/lead-score-explanation`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  prioritizeWorkspaceTasks: (workspaceId: string, token: string): Promise<{
+    items: {
+      task_id: string
+      priority_rank: number
+      urgency: 'critical' | 'high' | 'medium' | 'low'
+      reason: string
+    }[]
+    summary_note: string
+    workspace_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        items: [
+          { task_id: 't-001', priority_rank: 1, urgency: 'critical', reason: 'Contract review is overdue by 3 days — blocking deal closure with Acme Corp.' },
+          { task_id: 't-002', priority_rank: 2, urgency: 'high', reason: 'Follow-up call scheduled for tomorrow; prep materials must be ready first.' },
+          { task_id: 't-003', priority_rank: 3, urgency: 'high', reason: 'Proposal draft due this week for $45K opportunity — high-value pipeline impact.' },
+          { task_id: 't-004', priority_rank: 4, urgency: 'medium', reason: 'CRM data cleanup improves lead scoring accuracy for the next scoring run.' },
+          { task_id: 't-005', priority_rank: 5, urgency: 'low', reason: 'Research task with no hard deadline; schedule after urgent items are resolved.' },
+        ],
+        summary_note: 'The most urgent priority is the overdue contract review for Acme Corp, which is directly blocking a deal. Clear the two high-urgency tasks before end of day to avoid revenue impact.',
+        workspace_id: workspaceId,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/tasks/prioritize`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getPipelineHealthBriefing: (workspaceId: string, token: string): Promise<{
+    health_score: number
+    rating: 'strong' | 'healthy' | 'at_risk' | 'critical'
+    briefing: string
+    priorities: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        health_score: 72,
+        rating: 'healthy',
+        briefing:
+          'Your pipeline is in a healthy state with strong activity across the proposal and negotiation stages. However, 3 deals are at risk due to low health scores and overdue close dates that require immediate attention. The $285K in open pipeline provides a solid foundation, though velocity in the discovery stage has slowed this month.',
+        priorities: [
+          'Engage the 3 at-risk deals immediately — schedule calls and update next-action dates to avoid further slippage.',
+          'Accelerate 2 overdue-close deals in negotiation by proposing a time-limited incentive or executive sponsorship.',
+          'Enrich and score 5 new contacts added this month to identify which should enter the active pipeline.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/pipeline-health-briefing`,
+      { method: 'GET' },
+      token,
+    )
+  },
+
+  getTeamPerformance: (workspaceId: string, token: string): Promise<{
+    performance_rating: 'excellent' | 'good' | 'needs_improvement' | 'critical'
+    highlights: string[]
+    areas_for_improvement: string[]
+    summary_sentence: string
+    metrics: {
+      agent_runs: number
+      task_completion_rate: number
+      messages_processed: number
+      deals_moved: number
+      active_contacts: number
+    }
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        performance_rating: 'good',
+        highlights: [
+          '21 tasks completed this month — a 70% completion rate, well above the team average.',
+          '12 AI agent runs surfaced key pipeline insights and accelerated deal scoring.',
+          '14 contacts actively engaged with 45 messages processed, keeping relationships warm.',
+        ],
+        areas_for_improvement: [
+          'Increase deal stage velocity — only 7 stage moves in 30 days suggests pipeline momentum is slowing.',
+          'Schedule a weekly pipeline review to surface stalled deals and align on next actions before month end.',
+        ],
+        summary_sentence:
+          'The team is performing well with strong task completion and active contact engagement. Focusing on deal progression will convert current pipeline momentum into closed revenue over the next quarter.',
+        metrics: {
+          agent_runs: 12,
+          task_completion_rate: 70,
+          messages_processed: 45,
+          deals_moved: 7,
+          active_contacts: 14,
+        },
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/team-performance`,
+      { method: 'GET' },
+      token,
+    )
+  },
+
+  getWorkspaceHealthDigest: (workspaceId: string, token: string): Promise<{
+    health_rating: 'excellent' | 'good' | 'needs_attention' | 'critical'
+    summary: string
+    highlights: string[]
+    warnings: string[]
+    recommended_actions: string[]
+    metrics: {
+      total_contacts: number
+      going_dark_count: number
+      open_deal_count: number
+      total_pipeline: number
+      at_risk_deals: number
+      overdue_close_count: number
+      closed_won_count: number
+      closed_won_value: number
+      open_task_count: number
+      overdue_task_count: number
+      agent_run_count: number
+    }
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        health_rating: 'good',
+        summary:
+          'The workspace is performing steadily with 42 contacts in the system and $285K in open pipeline. 3 contacts have gone dark and 2 deals have overdue close dates requiring immediate attention.',
+        highlights: [
+          '2 deals closed won this month — $78K in new revenue booked.',
+          '18 AI agent runs accelerated lead scoring and pipeline analysis.',
+        ],
+        warnings: [
+          '3 customer/prospect contacts have had no touch in 30+ days.',
+          '4 open tasks are past their due dates — assign owners or close.',
+        ],
+        recommended_actions: [
+          'Re-engage the 3 dark contacts with a personalized outreach draft.',
+          'Update expected close dates on 2 overdue pipeline deals.',
+          'Run a clarity score sweep on unscored inbox messages.',
+        ],
+        metrics: {
+          total_contacts: 42,
+          going_dark_count: 3,
+          open_deal_count: 8,
+          total_pipeline: 285000,
+          at_risk_deals: 2,
+          overdue_close_count: 2,
+          closed_won_count: 2,
+          closed_won_value: 78000,
+          open_task_count: 12,
+          overdue_task_count: 4,
+          agent_run_count: 18,
+        },
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/workspace-digest`,
+      { method: 'GET' },
+      token,
+    )
+  },
+
+  getDealRoiProjection: (
+    workspaceId: string,
+    dealId: string,
+    token: string,
+  ): Promise<{
+    roi_multiplier: number
+    payback_months: number
+    year1_value: number
+    year3_value: number
+    assumptions: string[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { roi_multiplier: number; payback_months: number; year1_value: number; year3_value: number; assumptions: string[] }> = {
+        'd-001': {
+          roi_multiplier: 4.2,
+          payback_months: 7,
+          year1_value: 63000,
+          year3_value: 189000,
+          assumptions: [
+            'Acme Corp handles 200+ sales touches/month — automation saves ~15 hrs/rep',
+            'Current manual CRM overhead estimated at $18K/year in lost productivity',
+            'Assumes 70% adoption of AI coaching features by month 3',
+          ],
+        },
+        'd-002': {
+          roi_multiplier: 2.8,
+          payback_months: 11,
+          year1_value: 42000,
+          year3_value: 126000,
+          assumptions: [
+            'Globex operates a 5-person sales team with 150 weekly outbound touches',
+            'CRM consolidation reduces tooling overhead by approximately $8K/year',
+            'Assumes gradual adoption — full ROI realised by month 10',
+          ],
+        },
+      }
+      const stub = stubs[dealId] ?? {
+        roi_multiplier: 3.1,
+        payback_months: 9,
+        year1_value: 45000,
+        year3_value: 135000,
+        assumptions: [
+          'Based on industry-average productivity gains for a 3–10 person sales team',
+          'Estimated 12 hours/week time saving on manual CRM data entry per rep',
+          'Excludes implementation and onboarding costs (typically 1–2 months)',
+        ],
+      }
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/roi-projection`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getContactOnboardingChecklist: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    checklist: { step: string; detail: string; category: 'data' | 'outreach' | 'research' | 'relationship'; priority: 'high' | 'medium' | 'low' }[]
+    readiness: 'new' | 'in_progress' | 'ready'
+    readiness_reason: string
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type ChecklistStub = {
+        checklist: { step: string; detail: string; category: 'data' | 'outreach' | 'research' | 'relationship'; priority: 'high' | 'medium' | 'low' }[]
+        readiness: 'new' | 'in_progress' | 'ready'
+        readiness_reason: string
+      }
+      const stubs: Record<string, ChecklistStub> = {
+        'c-001': {
+          checklist: [
+            { step: 'Schedule quarterly business review', detail: 'Acme Corp is a strategic account — proactive QBR strengthens retention.', category: 'relationship', priority: 'high' },
+            { step: 'Add mobile phone to profile', detail: 'Direct line needed for time-sensitive deal updates.', category: 'data', priority: 'high' },
+            { step: 'Map stakeholder org chart', detail: 'Identify other decision-makers beyond the primary contact.', category: 'research', priority: 'medium' },
+            { step: 'Log meeting notes from last call', detail: 'Capture commitments before they slip through the cracks.', category: 'relationship', priority: 'medium' },
+            { step: 'Send product roadmap PDF', detail: 'They expressed interest in Q4 features — follow through.', category: 'outreach', priority: 'low' },
+          ],
+          readiness: 'ready',
+          readiness_reason: 'Strong engagement history and active pipeline deal — fully ready to advance.',
+        },
+        'c-002': {
+          checklist: [
+            { step: 'Send re-engagement email today', detail: 'Contact has gone dark — a personal note from an exec may revive interest.', category: 'outreach', priority: 'high' },
+            { step: 'Add company size and industry', detail: 'Missing data limits personalization and scoring accuracy.', category: 'data', priority: 'high' },
+            { step: 'Research competitor landscape', detail: 'Understand why they may be evaluating alternatives.', category: 'research', priority: 'medium' },
+            { step: 'Create a follow-up task with due date', detail: 'Set a reminder to check in if no reply within 5 days.', category: 'relationship', priority: 'medium' },
+            { step: 'Review previous message clarity scores', detail: 'Low-clarity messages may have confused or delayed their response.', category: 'research', priority: 'low' },
+          ],
+          readiness: 'in_progress',
+          readiness_reason: 'Some prior outreach but no deal attached and recent silence — needs re-engagement.',
+        },
+        'c-003': {
+          checklist: [
+            { step: 'Send personalised intro email', detail: 'First touch should reference their role and pain points.', category: 'outreach', priority: 'high' },
+            { step: 'Fill in company and LinkedIn URL', detail: 'Key identifiers needed for research and personalization.', category: 'data', priority: 'high' },
+            { step: 'Research their industry use cases', detail: 'Tailor the pitch to resonate with their specific sector.', category: 'research', priority: 'medium' },
+            { step: 'Add to a relevant deal or pipeline', detail: 'Convert initial interest into trackable pipeline.', category: 'relationship', priority: 'medium' },
+            { step: 'Schedule a 15-min discovery call', detail: 'Move from email introduction to live qualification.', category: 'outreach', priority: 'low' },
+          ],
+          readiness: 'new',
+          readiness_reason: 'No messages or notes yet — basic outreach and data collection needed first.',
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/onboarding-checklist`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getContactGrowthForecast: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    forecast_revenue_3m: number
+    forecast_revenue_12m: number
+    growth_trajectory: 'declining' | 'flat' | 'growing' | 'accelerating'
+    key_drivers: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { forecast_revenue_3m: number; forecast_revenue_12m: number; growth_trajectory: 'declining' | 'flat' | 'growing' | 'accelerating'; key_drivers: string[] }> = {
+        'c-001': {
+          forecast_revenue_3m: 28000,
+          forecast_revenue_12m: 120000,
+          growth_trajectory: 'accelerating',
+          key_drivers: [
+            'Two active high-value deals in proposal and negotiation stages',
+            'Consistently strong engagement — 12 messages in last 90 days',
+            'Historical win rate of 67% signals reliable conversion pipeline',
+          ],
+        },
+        'c-002': {
+          forecast_revenue_3m: 5000,
+          forecast_revenue_12m: 22000,
+          growth_trajectory: 'declining',
+          key_drivers: [
+            'No recent messages or notes — contact engagement has dropped off',
+            'Lost deal in Q3 reduces confidence in near-term conversion',
+            'Low ML score (warm) and stalled outreach dampen pipeline outlook',
+          ],
+        },
+        'c-003': {
+          forecast_revenue_3m: 8000,
+          forecast_revenue_12m: 38000,
+          growth_trajectory: 'flat',
+          key_drivers: [
+            'One open deal in discovery stage — early but promising signals',
+            'Moderate engagement pace with consistent note-taking',
+            'Cold status suggests early funnel position; longer runway to close',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/growth-forecast`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getWorkspaceGoalTracker: (workspaceId: string, token: string): Promise<{
+    goals: Array<{
+      name: string
+      target_description: string
+      progress_pct: number
+      status: 'on_track' | 'at_risk' | 'behind'
+      insight: string
+    }>
+    overall_health: 'on_track' | 'at_risk' | 'behind'
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        overall_health: 'at_risk',
+        goals: [
+          {
+            name: 'Close $400K in pipeline',
+            target_description: 'Convert at least $400K of open pipeline to closed-won this quarter',
+            progress_pct: 62,
+            status: 'at_risk',
+            insight: '$285K in open pipeline with 3 at-risk deals and 2 overdue close dates. Current velocity needs to accelerate to hit the quarterly target.',
+          },
+          {
+            name: 'Improve win rate to 55%',
+            target_description: 'Achieve a 55% win rate across all closed deals this quarter',
+            progress_pct: 48,
+            status: 'behind',
+            insight: 'Current win rate sits at 43% across 7 closed deals. Strengthening proposal-stage coaching and reducing time-in-stage should close the gap.',
+          },
+          {
+            name: 'Clear open task backlog',
+            target_description: 'Complete 80%+ of open tasks within their due dates',
+            progress_pct: 71,
+            status: 'on_track',
+            insight: 'Task completion rate is at 71% — above the midpoint target. Focus on the 8 overdue tasks to push past the 80% threshold.',
+          },
+          {
+            name: 'Re-engage silent contacts',
+            target_description: 'Reduce contacts with no touch in 30+ days to under 20%',
+            progress_pct: 55,
+            status: 'at_risk',
+            insight: '4 of 12 tracked contacts have had no messages or notes in the last 30 days. Targeted outreach sequences can recover these relationships.',
+          },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/goal-tracker`,
+      { method: 'GET' },
+      token,
+    )
+  },
+
+  getCompetitiveLandscape: (workspaceId: string, token: string): Promise<{
+    top_competitors: Array<{
+      name: string
+      deal_count: number
+      stages_present: string[]
+      threat_level: 'low' | 'medium' | 'high'
+      positioning_note: string
+    }>
+    competitive_summary: string
+    win_strategies: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        top_competitors: [
+          {
+            name: 'Salesforce',
+            deal_count: 3,
+            stages_present: ['qualified', 'proposal', 'negotiation'],
+            threat_level: 'high',
+            positioning_note: 'Emphasize AI-native automation, lower TCO, and faster onboarding vs Salesforce CRM.',
+          },
+          {
+            name: 'HubSpot',
+            deal_count: 2,
+            stages_present: ['discovery', 'proposal'],
+            threat_level: 'medium',
+            positioning_note: 'Lead with unified sales + PM intelligence that HubSpot cannot match.',
+          },
+          {
+            name: 'Pipedrive',
+            deal_count: 1,
+            stages_present: ['qualified'],
+            threat_level: 'low',
+            positioning_note: 'Highlight AI scoring and team workspace features absent in Pipedrive.',
+          },
+        ],
+        competitive_summary: 'Salesforce is the dominant competitor across proposal and negotiation stages, appearing in 3 of 7 open deals. HubSpot challenges in early funnel stages — lean on AI differentiation to create separation.',
+        win_strategies: [
+          'Open every discovery call with an AI automation demo tailored to the prospect\'s stack.',
+          'Offer a free competitive migration package for teams moving from Salesforce or HubSpot.',
+          'Reference customer success stories where AI coaching reduced sales cycle by 20%+.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/competitive-landscape`,
+      { method: 'GET' },
+      token,
+    )
+  },
+
+  getChampionRisk: (workspaceId: string, dealId: string, token: string): Promise<{
+    risk_level: 'low' | 'medium' | 'high' | 'critical'
+    champion_status: 'active' | 'uncertain' | 'at_risk' | 'unknown'
+    risk_signals: string[]
+    mitigation_steps: string[]
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { risk_level: 'low' | 'medium' | 'high' | 'critical'; champion_status: 'active' | 'uncertain' | 'at_risk' | 'unknown'; risk_signals: string[]; mitigation_steps: string[] }> = {
+        'd-001': {
+          risk_level: 'high',
+          champion_status: 'uncertain',
+          risk_signals: [
+            'No response to the last 2 follow-up emails over 21 days — champion may have lost budget authority.',
+            'Board sign-off cited as the blocker but no update from champion on board timeline.',
+            'Deal stalled in Proposal stage for 3 weeks without a scheduled next meeting.',
+          ],
+          mitigation_steps: [
+            'Request a brief 15-minute sync with Marcus to confirm board review date and re-affirm his internal support.',
+            'Send an executive-level one-pager tailored for the board to make it easy for Marcus to champion internally.',
+            'Identify a secondary champion or technical sponsor within Global Finance who can co-advocate.',
+          ],
+        },
+        'd-002': {
+          risk_level: 'critical',
+          champion_status: 'at_risk',
+          risk_signals: [
+            'No named champion or decision-maker identified in the stakeholder map.',
+            'Health score of 28 suggests severely stalled deal with no recent positive signals.',
+            'No deal notes in the last 30 days — complete radio silence from the prospect.',
+          ],
+          mitigation_steps: [
+            'Escalate to a senior contact at the prospect company to identify who is now responsible for the evaluation.',
+            'Send a value-focused re-engagement email with a time-limited offer to create urgency.',
+            'Consider a last-chance outreach sequence and set a clear expiry date for the deal.',
+          ],
+        },
+      }
+      const stub = stubs[dealId] ?? {
+        risk_level: 'medium' as const,
+        champion_status: 'uncertain' as const,
+        risk_signals: [
+          'Champion engagement has slowed — fewer replies and no meeting scheduled.',
+          'Deal has been in the current stage longer than average without a clear next step.',
+          'No secondary champion identified to backstop the primary contact.',
+        ],
+        mitigation_steps: [
+          'Reach out directly to confirm the champion is still driving the evaluation internally.',
+          'Map a second internal stakeholder who can advocate if the primary contact becomes unavailable.',
+          'Schedule a next touchpoint with a concrete agenda to re-establish momentum.',
+        ],
+      }
+      return Promise.resolve({
+        ...stub,
+        deal_id: dealId,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/champion-risk`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDealFollowupSequence: (workspaceId: string, dealId: string, token: string): Promise<{
+    steps: Array<{
+      step: number
+      timing: 'now' | '3d' | '7d' | '14d'
+      channel: 'email' | 'call' | 'slack'
+      action: string
+      goal: string
+    }>
+    rationale: string
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        steps: Array<{ step: number; timing: 'now' | '3d' | '7d' | '14d'; channel: 'email' | 'call' | 'slack'; action: string; goal: string }>
+        rationale: string
+        deal_id: string
+        generated_at: string
+      }> = {
+        'd-001': {
+          steps: [
+            { step: 1, timing: 'now', channel: 'email', action: 'Send a personalized proposal recap highlighting the ROI analysis and quick-win milestones.', goal: 'Confirm the prospect has reviewed the proposal and surface any initial questions.' },
+            { step: 2, timing: '3d', channel: 'call', action: 'Schedule a 30-minute call to walk through the pricing options and address any legal questions.', goal: 'Remove blockers and align on the preferred contract structure.' },
+            { step: 3, timing: '7d', channel: 'slack', action: 'Share a relevant customer success story from a similar vertical.', goal: 'Build confidence and position NovaCRM as the clear choice before final sign-off.' },
+          ],
+          rationale: 'Multi-channel approach — email to recap value, call to unblock, Slack to maintain momentum — keeps TechCorp engaged without overwhelming their team.',
+          deal_id: 'd-001',
+          generated_at: new Date().toISOString(),
+        },
+        'd-002': {
+          steps: [
+            { step: 1, timing: 'now', channel: 'call', action: 'Call the champion to understand why momentum has stalled and identify internal blockers.', goal: 'Diagnose the cause of inactivity and agree on a concrete next step.' },
+            { step: 2, timing: '7d', channel: 'email', action: 'Send a tailored re-engagement email referencing the specific pain points discussed on the call.', goal: 'Re-anchor the deal around business value and restart the decision process.' },
+            { step: 3, timing: '14d', channel: 'email', action: 'Share a limited-time incentive (e.g. extended onboarding support) to create urgency.', goal: 'Drive a decision before the quarter closes.' },
+          ],
+          rationale: 'Phone-first approach diagnoses the stall, followed by email reinforcement — creates urgency without appearing pushy for a deal that has gone quiet.',
+          deal_id: 'd-002',
+          generated_at: new Date().toISOString(),
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/followup-sequence`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getCompetitiveResponse: (workspaceId: string, dealId: string, token: string): Promise<{
+    primary_competitor: string
+    battle_card: {
+      strengths: string[]
+      weaknesses: string[]
+      key_differentiators: string[]
+      suggested_talk_track: string
+    }
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        primary_competitor: string
+        battle_card: {
+          strengths: string[]
+          weaknesses: string[]
+          key_differentiators: string[]
+          suggested_talk_track: string
+        }
+      }> = {
+        'd-001': {
+          primary_competitor: 'Salesforce',
+          battle_card: {
+            strengths: ['Massive ecosystem and AppExchange marketplace', 'Well-known brand with strong enterprise trust', 'Extensive third-party integrations'],
+            weaknesses: ['High total cost of ownership and complex licensing', 'Steep learning curve requiring dedicated admins', 'Slow implementation timelines for large orgs'],
+            key_differentiators: ['NovaCRM deploys in days, not months, with zero implementation fees', 'AI-native pipeline intelligence out of the box — no plugins required', 'Flat, predictable pricing that scales with headcount, not feature tiers'],
+            suggested_talk_track: "When Salesforce comes up, acknowledge their breadth but pivot to speed: 'Most of our customers were on Salesforce and switched because they were paying for 80% of features they never used. With NovaCRM, you\'re live in a week and the AI works on day one.' Close by asking how long their last CRM implementation took.",
+          },
+        },
+        'd-002': {
+          primary_competitor: 'HubSpot',
+          battle_card: {
+            strengths: ['Strong inbound marketing suite bundled with CRM', 'Generous free tier lowers adoption friction', 'Clean UX familiar to marketing teams'],
+            weaknesses: ['CRM depth is secondary to marketing — limited for complex sales cycles', 'AI features are bolt-ons, not built into the core workflow', 'Pricing escalates sharply beyond the free tier'],
+            key_differentiators: ['NovaCRM is built for sales-led teams, not marketing-led pipelines', 'AI coaching and lead scoring are native, not add-ons requiring higher plans', 'Purpose-built for PM + Sales alignment in a single workspace'],
+            suggested_talk_track: "Position NovaCRM against HubSpot\'s marketing roots: 'HubSpot is great if your sales process starts with inbound. If you\'re running outbound enterprise deals, you need a CRM that\'s built for sales complexity — that\'s where NovaCRM wins.' Ask about their current deal stage management and pipeline review cadence.",
+          },
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/competitive-response`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getExpansionOpportunity: (workspaceId: string, dealId: string, token: string): Promise<{
+    opportunity_score: number
+    upsell_products: string[]
+    cross_sell_signals: string[]
+    recommended_timing: 'immediate' | '3_months' | '6_months'
+    next_step: string
+    deal_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        opportunity_score: number
+        upsell_products: string[]
+        cross_sell_signals: string[]
+        recommended_timing: 'immediate' | '3_months' | '6_months'
+        next_step: string
+      }> = {
+        'd-001': {
+          opportunity_score: 84,
+          upsell_products: [
+            'Enterprise Analytics Suite add-on with advanced reporting',
+            'Dedicated Customer Success Manager package',
+            'Multi-workspace license for subsidiary teams',
+          ],
+          cross_sell_signals: [
+            'Mentioned evaluating a project management tool in post-close debrief',
+            'Team size of 80+ suggests seat expansion opportunity within 6 months',
+            'High adoption score indicates strong platform stickiness for upsell',
+          ],
+          recommended_timing: '3_months',
+          next_step: 'Schedule a 90-day business review to surface new use cases and present the Enterprise Analytics add-on',
+        },
+        'd-002': {
+          opportunity_score: 58,
+          upsell_products: [
+            'Premium API access tier for deeper integrations',
+            'Additional connector seats for Slack and Teams',
+            'Advanced security and compliance package',
+          ],
+          cross_sell_signals: [
+            'Contact asked about API rate limits during implementation — signals deeper integration interest',
+            'Deal notes reference plans to expand the team using the platform next quarter',
+            'Low task completion rate suggests onboarding support package could add value',
+          ],
+          recommended_timing: '6_months',
+          next_step: 'Send a post-implementation health check survey, then book a roadmap call to present the API tier upgrade',
+        },
+      }
+      const stub = stubs[dealId] ?? stubs['d-001']
+      return Promise.resolve({ ...stub, deal_id: dealId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/deals/${dealId}/ai/expansion-opportunity`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getChurnRisk: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    risk_level: 'low' | 'medium' | 'high' | 'critical'
+    churn_signals: string[]
+    retention_actions: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, { risk_level: 'low' | 'medium' | 'high' | 'critical'; churn_signals: string[]; retention_actions: string[] }> = {
+        'c-001': {
+          risk_level: 'low',
+          churn_signals: [
+            'Engagement is strong — 12 messages and 5 notes in the last 90 days',
+            'Two active high-value deals indicate ongoing mutual investment',
+            'ML lead score is "hot" — contact is actively progressing through the funnel',
+          ],
+          retention_actions: [
+            'Send a personalized QBR invite to cement the relationship before close',
+            'Share a relevant case study matching their industry to reinforce value',
+            'Introduce a senior point of contact to deepen the executive relationship',
+          ],
+        },
+        'c-002': {
+          risk_level: 'critical',
+          churn_signals: [
+            'No messages or notes in the last 30 days — contact has gone dark',
+            'Lost deal in Q3 signals unresolved objections or competitive loss',
+            'ML score has declined to "warm" from prior "hot" classification',
+          ],
+          retention_actions: [
+            'Send a re-engagement email acknowledging the silence and offering a fresh conversation',
+            'Offer a complimentary audit or discovery session to reignite interest',
+            'Escalate to a senior relationship manager for a direct outreach call this week',
+          ],
+        },
+        'c-003': {
+          risk_level: 'medium',
+          churn_signals: [
+            'Contact status is "cold" — early funnel with limited recent touchpoints',
+            'Only 3 messages in the last 90 days indicates low engagement frequency',
+            'No notes created recently — internal team awareness of this contact is low',
+          ],
+          retention_actions: [
+            'Initiate a value-add touchpoint: share a relevant industry insight or report',
+            'Add the contact to a nurture sequence with bi-weekly check-ins',
+            'Create a follow-up task with a specific due date to prevent further silence',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/churn-risk`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDealVelocityBenchmark: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    contact_avg_days: number | null
+    workspace_avg_days: number | null
+    velocity_rating: 'fast' | 'on_par' | 'slow'
+    stage_breakdown: Array<{ stage: string; contact_days: number | null; workspace_days: number | null }>
+    insight: string
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        contact_avg_days: number | null
+        workspace_avg_days: number | null
+        velocity_rating: 'fast' | 'on_par' | 'slow'
+        stage_breakdown: Array<{ stage: string; contact_days: number | null; workspace_days: number | null }>
+        insight: string
+      }> = {
+        'c-001': {
+          contact_avg_days: 28,
+          workspace_avg_days: 42,
+          velocity_rating: 'fast',
+          stage_breakdown: [
+            { stage: 'discovery', contact_days: 5, workspace_days: 9 },
+            { stage: 'qualified', contact_days: 7, workspace_days: 12 },
+            { stage: 'proposal', contact_days: 9, workspace_days: 13 },
+            { stage: 'negotiation', contact_days: 7, workspace_days: 8 },
+          ],
+          insight: 'Deals with this contact close 33% faster than the workspace average, driven by shorter discovery and proposal phases — a strong indicator of high alignment and buying intent.',
+        },
+        'c-002': {
+          contact_avg_days: 61,
+          workspace_avg_days: 42,
+          velocity_rating: 'slow',
+          stage_breakdown: [
+            { stage: 'discovery', contact_days: 14, workspace_days: 9 },
+            { stage: 'qualified', contact_days: 18, workspace_days: 12 },
+            { stage: 'proposal', contact_days: 19, workspace_days: 13 },
+            { stage: 'negotiation', contact_days: 10, workspace_days: 8 },
+          ],
+          insight: 'Deals with this contact take 45% longer to close than the workspace average, with particularly prolonged discovery and qualified stages suggesting hesitancy or internal blockers.',
+        },
+        'c-003': {
+          contact_avg_days: null,
+          workspace_avg_days: 42,
+          velocity_rating: 'on_par',
+          stage_breakdown: [],
+          insight: 'Insufficient closed-deal history to benchmark velocity against workspace average.',
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/deal-velocity-benchmark`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDealOutcomePredictor: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    predicted_outcome: 'win' | 'loss' | 'stalled'
+    confidence: 'high' | 'medium' | 'low'
+    key_risks: string[]
+    recommended_actions: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        predicted_outcome: 'win' | 'loss' | 'stalled'
+        confidence: 'high' | 'medium' | 'low'
+        key_risks: string[]
+        recommended_actions: string[]
+      }> = {
+        'c-001': {
+          predicted_outcome: 'win',
+          confidence: 'high',
+          key_risks: [
+            'Competitor pricing pressure may emerge in final negotiations.',
+            'Decision timeline could slip past quarter end.',
+            'Budget approval may require additional stakeholder sign-off.',
+          ],
+          recommended_actions: [
+            'Schedule executive alignment call to confirm timeline and budget.',
+            'Send a customized ROI analysis before next check-in.',
+            'Offer a limited-time incentive to accelerate the signing decision.',
+          ],
+        },
+        'c-002': {
+          predicted_outcome: 'stalled',
+          confidence: 'medium',
+          key_risks: [
+            'No activity in 14+ days signals disengagement.',
+            'Low win probability across all open deals.',
+            'Champion may have lost internal support.',
+          ],
+          recommended_actions: [
+            'Re-engage with a personalized outreach highlighting new value.',
+            'Request a call to understand current blockers.',
+            'Reassess deal viability and consider archiving stalled opportunities.',
+          ],
+        },
+        'c-003': {
+          predicted_outcome: 'loss',
+          confidence: 'low',
+          key_risks: [
+            'Contact has not responded to recent outreach attempts.',
+            'Health scores are declining across open deals.',
+            'No recent note or task activity to anchor next steps.',
+          ],
+          recommended_actions: [
+            'Attempt one final outreach with a clear value proposition.',
+            'Escalate to a senior relationship manager for a fresh perspective.',
+            'Mark deals as at-risk and update pipeline forecast accordingly.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/deal-outcome-predictor`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getDealPortfolioOverview: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    pipeline_health: 'strong' | 'at_risk' | 'mixed'
+    total_pipeline_value: number
+    open_deal_count: number
+    highlights: string[]
+    risks: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        pipeline_health: 'strong' | 'at_risk' | 'mixed'
+        total_pipeline_value: number
+        open_deal_count: number
+        highlights: string[]
+        risks: string[]
+      }> = {
+        'c-001': {
+          pipeline_health: 'strong',
+          total_pipeline_value: 95000,
+          open_deal_count: 2,
+          highlights: [
+            'Two active deals with combined $95K pipeline at proposal and negotiation stages.',
+            'Previously closed $48K deal demonstrates strong revenue track record.',
+            'High average health score of 81 signals strong relationship momentum.',
+          ],
+          risks: [
+            'Both deals in late-stage may create a pipeline gap if neither closes this quarter.',
+            'Heavy reliance on two large deals increases single-point-of-failure risk.',
+            'No early-stage deals to replenish pipeline after current opportunities resolve.',
+          ],
+        },
+        'c-002': {
+          pipeline_health: 'at_risk',
+          total_pipeline_value: 30000,
+          open_deal_count: 1,
+          highlights: [
+            'One open deal keeps the contact engaged in the active pipeline.',
+            'Contact has a history of reaching proposal stage, indicating real buying intent.',
+            'Deal value of $30K aligns with typical deal size for this segment.',
+          ],
+          risks: [
+            'Single open deal with low health score (34) signals stalled momentum.',
+            'No closed-won history increases forecast uncertainty.',
+            'Low win probability (22%) requires urgent re-engagement to rescue the deal.',
+          ],
+        },
+        'c-003': {
+          pipeline_health: 'mixed',
+          total_pipeline_value: 45000,
+          open_deal_count: 1,
+          highlights: [
+            'Active deal at $45K value shows meaningful pipeline presence.',
+            'Contact status as prospect suggests growing interest and qualification.',
+            'Consistent touchpoints in the last 30 days indicate active engagement.',
+          ],
+          risks: [
+            'Medium health score (56) suggests deal is in a fragile state.',
+            'No closed-won deals yet — conversion remains unproven for this contact.',
+            'Competitor presence in deal notes may complicate the close process.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/deal-portfolio-overview`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getContactCompetitivePositioning: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    positioning_strength: 'strong' | 'moderate' | 'weak'
+    top_competitor: string | null
+    win_rate_vs_competitor: number | null
+    positioning_tips: string[]
+    differentiators: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        positioning_strength: 'strong' | 'moderate' | 'weak'
+        top_competitor: string | null
+        win_rate_vs_competitor: number | null
+        positioning_tips: string[]
+        differentiators: string[]
+      }> = {
+        'c-001': {
+          positioning_strength: 'strong',
+          top_competitor: 'Salesforce',
+          win_rate_vs_competitor: 67,
+          positioning_tips: [
+            'Lead with agentic AI features — Salesforce lacks real-time health scoring for open deals in the same contact context.',
+            'Schedule a competitive comparison call to walk through the AI lead-scoring demo side-by-side.',
+            'Attach a deal note highlighting the closed-won history with this contact as proof of reliable delivery.',
+          ],
+          differentiators: [
+            'NovaCRM\'s AI health scoring updates in real-time without manual data entry — Salesforce requires custom reports.',
+            'Unified sales + PM intelligence in one workspace eliminates the context-switching Salesforce requires.',
+            'Claude-powered semantic contact search surfaces relevant notes 5× faster than Salesforce\'s SOQL-based search.',
+          ],
+        },
+        'c-002': {
+          positioning_strength: 'weak',
+          top_competitor: 'HubSpot',
+          win_rate_vs_competitor: 20,
+          positioning_tips: [
+            'Re-engage the champion directly — HubSpot\'s lower price point is winning on cost; address TCO with implementation savings.',
+            'Run the AI Outreach Sequence planner to craft a differentiated re-engagement campaign this week.',
+            'Add a deal note documenting specific AI capabilities HubSpot cannot match to sharpen the next conversation.',
+          ],
+          differentiators: [
+            'NovaCRM\'s agentic task extraction from Gmail/Slack eliminates the manual logging HubSpot still requires.',
+            'Built-in Celery async processing means bulk operations complete without UI lag, unlike HubSpot\'s synchronous updates.',
+            'Claude Sonnet clarity scoring gives reps instant feedback on message quality — HubSpot has no equivalent.',
+          ],
+        },
+        'c-003': {
+          positioning_strength: 'moderate',
+          top_competitor: null,
+          win_rate_vs_competitor: null,
+          positioning_tips: [
+            'No competitor data tracked yet — add known competitors to the deal record to enable competitive positioning analysis.',
+            'Use the AI Pipeline Summary to identify which deal stages are most vulnerable to competitive pressure.',
+            'Request a competitive landscape briefing from the deal team before the next contact touchpoint.',
+          ],
+          differentiators: [
+            'NovaCRM\'s AI-native architecture delivers insights competitors cannot replicate with bolt-on AI modules.',
+            'Multi-tenant workspace isolation ensures data security standards that surpass legacy CRM providers.',
+            'Real-time Realtime activity feeds and Claude-powered summaries reduce rep context-switching by 40%.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/competitive-positioning`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getMeetingAgenda: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    opening_hook: string
+    agenda_items: {
+      topic: string
+      goal: string
+      talking_points: string[]
+      time_estimate_mins: number
+    }[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        opening_hook: string
+        agenda_items: { topic: string; goal: string; talking_points: string[]; time_estimate_mins: number }[]
+      }> = {
+        'c-001': {
+          opening_hook: 'Great to connect, Sarah — I saw the proposal deal is gaining momentum and wanted to ensure we\'re fully aligned on the path to close.',
+          agenda_items: [
+            {
+              topic: 'Deal progress check-in',
+              goal: 'Confirm the proposal has been reviewed internally and surface any blockers.',
+              talking_points: [
+                'Walk through the deal health score (87) and confirm no new objections have emerged since last week.',
+                'Ask whether the proposal has reached the decision-maker and what feedback was received.',
+              ],
+              time_estimate_mins: 15,
+            },
+            {
+              topic: 'Open task review',
+              goal: 'Clear the backlog of outstanding action items and set firm deadlines.',
+              talking_points: [
+                'Review the 2 open tasks — confirm the integration spec document is still top priority.',
+                'Agree on a due date for the security questionnaire to keep the deal on schedule.',
+              ],
+              time_estimate_mins: 10,
+            },
+            {
+              topic: 'Competitive landscape update',
+              goal: 'Understand whether any new competitors have re-entered the evaluation.',
+              talking_points: [
+                'Ask directly if Salesforce has been re-engaged and what their revised pricing looks like.',
+                'Reinforce the AI health-scoring differentiator with a live demo if competitors remain active.',
+              ],
+              time_estimate_mins: 10,
+            },
+            {
+              topic: 'Next steps and timeline',
+              goal: 'Lock in mutual action items and confirm the expected close date.',
+              talking_points: [
+                'Summarise agreed actions and confirm ownership on both sides before ending the call.',
+                'Book the next check-in or contract-review call before hanging up.',
+              ],
+              time_estimate_mins: 5,
+            },
+          ],
+        },
+        'c-002': {
+          opening_hook: 'Hi Marcus — I wanted to touch base and understand what\'s changed on your side, as I notice the deal has been quiet for a few weeks.',
+          agenda_items: [
+            {
+              topic: 'Re-engagement and update',
+              goal: 'Understand what has changed at their organisation and surface any new concerns.',
+              talking_points: [
+                'Ask openly what has been on their plate since your last meeting to rebuild rapport.',
+                'Reference the declining clarity scores and ask if their messaging priorities have shifted.',
+              ],
+              time_estimate_mins: 10,
+            },
+            {
+              topic: 'Deal objection review',
+              goal: 'Identify the primary reason the deal has stalled and address it directly.',
+              talking_points: [
+                'Ask what would need to change internally for the evaluation to move forward this quarter.',
+                'Offer a competitive comparison session to address any pricing concerns about HubSpot.',
+              ],
+              time_estimate_mins: 15,
+            },
+            {
+              topic: 'Value realignment session',
+              goal: 'Reconnect the contact with the key differentiators most relevant to their current needs.',
+              talking_points: [
+                'Walk through the AI task-extraction demo from Gmail/Slack — their pain point from the first call.',
+                'Share a relevant customer story to rebuild confidence in the solution.',
+              ],
+              time_estimate_mins: 10,
+            },
+            {
+              topic: 'Next steps agreement',
+              goal: 'Secure a concrete commitment to a next action before ending the call.',
+              talking_points: [
+                'Propose a specific follow-up: a revised proposal, a pilot, or a technical deep-dive.',
+                'Agree a date for the next touchpoint and confirm it in writing before hanging up.',
+              ],
+              time_estimate_mins: 5,
+            },
+          ],
+        },
+        'c-003': {
+          opening_hook: 'Hi Jordan — thanks for making time. I\'d love to understand your goals better and explore how NovaCRM can support your team\'s workflow.',
+          agenda_items: [
+            {
+              topic: 'Goals and pain points',
+              goal: 'Understand the contact\'s primary CRM and PM pain points before pitching.',
+              talking_points: [
+                'Ask what their current CRM/PM workflow looks like and where the biggest friction is.',
+                'Probe on team size, deal volume, and which channels (Gmail, Slack) they rely on most.',
+              ],
+              time_estimate_mins: 15,
+            },
+            {
+              topic: 'NovaCRM capability walkthrough',
+              goal: 'Demonstrate the top 3 features most relevant to their stated pain points.',
+              talking_points: [
+                'Show the AI lead scoring and deal health dashboard as a real-time intelligence layer.',
+                'Demo Gmail/Slack task extraction to show how NovaCRM automates current manual logging.',
+              ],
+              time_estimate_mins: 15,
+            },
+            {
+              topic: 'Trial or pilot discussion',
+              goal: 'Gauge interest in a proof-of-concept and confirm evaluation criteria.',
+              talking_points: [
+                'Propose a 2-week free pilot with their real data to lower the commitment barrier.',
+                'Ask who else on their team needs to be involved before a trial can be approved.',
+              ],
+              time_estimate_mins: 10,
+            },
+            {
+              topic: 'Next steps agreement',
+              goal: 'Leave with a signed-off next action and a confirmed follow-up date.',
+              talking_points: [
+                'Agree whether the next step is a technical review, a pilot sign-up, or a proposal.',
+                'Schedule a follow-up call before ending and confirm via email immediately after.',
+              ],
+              time_estimate_mins: 5,
+            },
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/meeting-agenda`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getCommunicationGapAnalysis(
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    avg_gap_days: number;
+    longest_silence_days: number;
+    workspace_avg_gap_days: number;
+    gap_assessment: 'frequent' | 'normal' | 'sparse' | 'dark';
+    risk_level: 'low' | 'medium' | 'high' | 'critical';
+    recommendations: string[];
+    contact_id: string;
+    generated_at: string;
+  } | null> {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        avg_gap_days: number; longest_silence_days: number; workspace_avg_gap_days: number;
+        gap_assessment: 'frequent' | 'normal' | 'sparse' | 'dark';
+        risk_level: 'low' | 'medium' | 'high' | 'critical';
+        recommendations: string[];
+      }> = {
+        'c-001': {
+          avg_gap_days: 4.2,
+          longest_silence_days: 8.1,
+          workspace_avg_gap_days: 7.5,
+          gap_assessment: 'frequent',
+          risk_level: 'low',
+          recommendations: [
+            'Continue the current cadence — this contact is highly engaged.',
+            'Consider scheduling a quarterly business review to deepen the relationship.',
+            'Use the high-engagement window to introduce an upsell conversation.',
+          ],
+        },
+        'c-002': {
+          avg_gap_days: 28.5,
+          longest_silence_days: 42.3,
+          workspace_avg_gap_days: 7.5,
+          gap_assessment: 'sparse',
+          risk_level: 'high',
+          recommendations: [
+            'Send a re-engagement email referencing a recent product update or industry trend.',
+            'Schedule a brief 15-minute check-in call to surface any unaddressed concerns.',
+            'Share a relevant case study showing ROI to reignite interest in the product.',
+          ],
+        },
+        'c-003': {
+          avg_gap_days: 11.0,
+          longest_silence_days: 18.5,
+          workspace_avg_gap_days: 7.5,
+          gap_assessment: 'normal',
+          risk_level: 'medium',
+          recommendations: [
+            'Increase touch frequency to weekly check-ins during the onboarding window.',
+            'Set up an automated email drip to maintain visibility between calls.',
+            'Assign a dedicated customer success contact to improve relationship depth.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/communication-gap-analysis`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getAiSentimentTrend: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    messages_analyzed: number
+    avg_sentiment: number
+    trend_direction: 'improving' | 'stable' | 'declining'
+    recent_sentiment: number
+    oldest_sentiment: number
+    sentiment_points: { received_at: string; score: number }[]
+    recommendations: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type AiSentimentStub = { messages_analyzed: number; avg_sentiment: number; trend_direction: 'improving' | 'stable' | 'declining'; recent_sentiment: number; oldest_sentiment: number; sentiment_points: { received_at: string; score: number }[]; recommendations: string[] }
+      const stubs: Record<string, AiSentimentStub> = {
+        'c-001': {
+          messages_analyzed: 12,
+          avg_sentiment: 0.42,
+          trend_direction: 'improving',
+          recent_sentiment: 0.65,
+          oldest_sentiment: 0.15,
+          sentiment_points: [
+            { received_at: '2026-06-01T10:00:00Z', score: 0.15 },
+            { received_at: '2026-06-15T10:00:00Z', score: 0.28 },
+            { received_at: '2026-07-01T10:00:00Z', score: 0.41 },
+            { received_at: '2026-07-15T10:00:00Z', score: 0.55 },
+            { received_at: '2026-08-01T10:00:00Z', score: 0.65 },
+          ],
+          recommendations: [
+            'Keep up the positive momentum with a personalised check-in celebrating recent wins.',
+            'Introduce advanced feature adoption to deepen engagement while sentiment is high.',
+            'Request a case study or testimonial to capitalise on the improving relationship.',
+          ],
+        },
+        'c-002': {
+          messages_analyzed: 8,
+          avg_sentiment: -0.21,
+          trend_direction: 'declining',
+          recent_sentiment: -0.55,
+          oldest_sentiment: 0.12,
+          sentiment_points: [
+            { received_at: '2026-06-01T10:00:00Z', score: 0.12 },
+            { received_at: '2026-06-20T10:00:00Z', score: -0.05 },
+            { received_at: '2026-07-10T10:00:00Z', score: -0.28 },
+            { received_at: '2026-07-28T10:00:00Z', score: -0.55 },
+          ],
+          recommendations: [
+            'Schedule an urgent call to surface and address the root cause of declining sentiment.',
+            'Assign a dedicated success manager to provide white-glove support and rebuild trust.',
+            'Offer a tailored roadmap session showing concrete plans to resolve open blockers.',
+          ],
+        },
+        'c-003': {
+          messages_analyzed: 5,
+          avg_sentiment: 0.08,
+          trend_direction: 'stable',
+          recent_sentiment: 0.10,
+          oldest_sentiment: 0.05,
+          sentiment_points: [
+            { received_at: '2026-07-01T10:00:00Z', score: 0.05 },
+            { received_at: '2026-07-15T10:00:00Z', score: 0.12 },
+            { received_at: '2026-08-01T10:00:00Z', score: 0.10 },
+          ],
+          recommendations: [
+            'Increase touch frequency to move sentiment from neutral to positive during onboarding.',
+            'Share relevant industry insights to provide value and spark a more enthusiastic response.',
+            'Invite the contact to a user community or webinar to build broader relationship depth.',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/sentiment-trend`,
+      { method: 'POST' },
       token,
     )
   },
@@ -2007,3 +4747,4 @@ export const apiClient = {
     return apiFetch(`/jobs/${jobId}`, {}, token)
   },
 }
+

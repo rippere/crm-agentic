@@ -9,7 +9,7 @@ import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import { cn, formatCurrency, stageConfig, dealStageOrder, SIGNAL } from "@/lib/utils";
 import Link from "next/link";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight, Search } from "lucide-react";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight, Search, Sparkles, GitCompare, Trophy } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
 interface PipelineSuggestion {
@@ -404,6 +404,25 @@ export default function PipelinePage() {
   const [bulkStageTarget, setBulkStageTarget] = useState<DealStage | null>(null);
   const [bulkLoading, setBulkLoading] = useState(false);
 
+  type PipelineSummary = { headline: string; opportunities: string[]; risks: string[]; generated_at: string };
+  const [pipelineSummary, setPipelineSummary] = useState<PipelineSummary | null>(null);
+  const [pipelineSummaryLoading, setPipelineSummaryLoading] = useState(false);
+  const [pipelineSummaryOpen, setPipelineSummaryOpen] = useState(false);
+
+  type PulseDeal = { title: string; value: number; stage: string };
+  type PulseStage = { stage: string; count: number; value: number };
+  type PulseData = { total_value: number; at_risk_count: number; top_deal: PulseDeal | null; stage_breakdown: PulseStage[]; health_avg: number; insight: string; generated_at: string };
+  const [pulseData, setPulseData] = useState<PulseData | null>(null);
+  const [pulseLoading, setPulseLoading] = useState(false);
+  const [pulseGenerating, setPulseGenerating] = useState(false);
+  const [pulseOpen, setPulseOpen] = useState(true);
+
+  type ComparePoint = { dimension: string; verdict: string };
+  type CompareResult = { winner_id: string; rationale: string; comparison_points: ComparePoint[]; deal_ids: string[]; generated_at: string };
+  const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareModalOpen, setCompareModalOpen] = useState(false);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSelectedDeal(null); };
     document.addEventListener("keydown", onKey);
@@ -447,6 +466,48 @@ export default function PipelinePage() {
         .catch(() => {});
     });
   }, []);
+
+  useEffect(() => {
+    setPulseLoading(true);
+    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+    if (isDemoMode) {
+      apiClient.getPipelinePulse("demo-workspace-1", "demo-token")
+        .then((data) => setPulseData(data))
+        .catch(() => setPulseData(null))
+        .finally(() => setPulseLoading(false));
+      return;
+    }
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) { setPulseLoading(false); return; }
+      const workspaceId: string | undefined = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id);
+      if (!workspaceId) { setPulseLoading(false); return; }
+      apiClient.getPipelinePulse(workspaceId, session.access_token)
+        .then((data) => setPulseData(data))
+        .catch(() => setPulseData(null))
+        .finally(() => setPulseLoading(false));
+    });
+  }, []);
+
+  const handleRegeneratePulse = async () => {
+    if (pulseGenerating) return;
+    setPulseGenerating(true);
+    try {
+      const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      let workspaceId = "demo-workspace-1";
+      let token = "demo-token";
+      if (!isDemoMode) {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
+        token = session?.access_token ?? "";
+      }
+      if (!workspaceId || !token) return;
+      const data = await apiClient.getPipelinePulse(workspaceId, token);
+      setPulseData(data);
+    } catch { /* ignore */ }
+    finally { setPulseGenerating(false); }
+  };
 
   // Persist search to localStorage
   useEffect(() => { localStorage.setItem(LS_PIPELINE_SEARCH_KEY, dealSearch); }, [dealSearch]);
@@ -493,6 +554,30 @@ export default function PipelinePage() {
   }, []);
 
   const handleClearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  const handleCompareDeals = useCallback(async () => {
+    if (selectedIds.size < 2 || compareLoading) return;
+    setCompareLoading(true);
+    setCompareResult(null);
+    setCompareModalOpen(true);
+    try {
+      const dealIds = Array.from(selectedIds).slice(0, 3);
+      const isDemo = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      let workspaceId = "demo-workspace-1";
+      let token = "demo-token";
+      if (!isDemo) {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
+        token = session?.access_token ?? "";
+      }
+      if (workspaceId && token) {
+        const result = await apiClient.getDealsComparison(workspaceId, dealIds, token);
+        setCompareResult(result);
+      }
+    } catch { /* silent */ }
+    finally { setCompareLoading(false); }
+  }, [selectedIds, compareLoading]);
 
   const handleBulkDelete = useCallback(async () => {
     if (!selectedIds.size || bulkLoading) return;
@@ -559,6 +644,27 @@ export default function PipelinePage() {
     } catch { /* silent */ }
     finally { setExportLoading(false); }
   }, [exportLoading]);
+
+  const handleGetPipelineSummary = useCallback(async () => {
+    setPipelineSummaryOpen(true);
+    if (pipelineSummary) return; // already loaded
+    setPipelineSummaryLoading(true);
+    try {
+      const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      let workspaceId = "demo-workspace-1";
+      let token = "demo-token";
+      if (!isDemoMode) {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        workspaceId = (session?.user?.app_metadata?.workspace_id ?? session?.user?.user_metadata?.workspace_id) ?? "";
+        token = session?.access_token ?? "";
+      }
+      if (!workspaceId || !token) return;
+      const data = await apiClient.getPipelineSummary(workspaceId, token);
+      setPipelineSummary(data);
+    } catch { /* ignore */ }
+    finally { setPipelineSummaryLoading(false); }
+  }, [pipelineSummary]);
 
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6 min-h-screen">
@@ -719,6 +825,91 @@ export default function PipelinePage() {
         </Card>
       </div>
 
+      {/* Pipeline Pulse */}
+      <Card className="p-0 overflow-hidden">
+        <button
+          className="w-full flex items-center gap-2 px-4 py-3 hover:bg-zinc-800/30 transition-colors cursor-pointer"
+          onClick={() => setPulseOpen((o) => !o)}
+        >
+          <Zap className="h-4 w-4 text-teal-400 flex-shrink-0" aria-hidden />
+          <p className="text-sm font-semibold text-zinc-200">Pipeline Pulse</p>
+          {pulseData && (
+            <span className="ml-1 rounded-full border border-teal-500/30 bg-teal-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-teal-300">
+              avg health {pulseData.health_avg}
+            </span>
+          )}
+          {pulseData && pulseData.at_risk_count > 0 && (
+            <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-rose-300">
+              {pulseData.at_risk_count} at risk
+            </span>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); handleRegeneratePulse(); }}
+            disabled={pulseLoading || pulseGenerating}
+            className="ml-auto text-zinc-500 hover:text-teal-400 disabled:opacity-40 transition-colors cursor-pointer"
+            aria-label="Regenerate pipeline pulse"
+            title="Regenerate"
+          >
+            {pulseGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronRight className={`h-3.5 w-3.5 transition-transform ${pulseOpen ? "rotate-90" : ""}`} />}
+          </button>
+        </button>
+
+        {pulseOpen && (
+          <div className="border-t border-zinc-800 px-4 pb-4 pt-3">
+            {pulseLoading ? (
+              <div className="flex gap-4">
+                {[1, 2, 3].map((i) => <div key={i} className="h-8 flex-1 rounded-lg bg-zinc-800/50 animate-pulse" />)}
+              </div>
+            ) : pulseData === null ? (
+              <p className="text-xs text-zinc-600 italic">Unable to load pipeline pulse.</p>
+            ) : (
+              <div className="space-y-3">
+                {/* Stage breakdown bars */}
+                {pulseData.stage_breakdown.length > 0 && (
+                  <div className="flex gap-2 flex-wrap">
+                    {(() => {
+                      const maxVal = Math.max(...pulseData.stage_breakdown.map((s) => s.value), 1);
+                      return pulseData.stage_breakdown.map((s) => (
+                        <div key={s.stage} className="flex-1 min-w-[80px]">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-mono text-zinc-500 uppercase">{s.stage.slice(0, 5)}</span>
+                            <span className="text-[10px] font-mono text-zinc-400">{s.count}</span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-teal-500/60"
+                              style={{ width: `${Math.round((s.value / maxVal) * 100)}%` }}
+                            />
+                          </div>
+                          <p className="text-[10px] font-mono text-zinc-600 mt-0.5">{formatCurrency(s.value)}</p>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                )}
+                {/* Insight */}
+                <p className="text-xs text-zinc-300 leading-relaxed">{pulseData.insight}</p>
+                {/* Top deal + meta row */}
+                <div className="flex items-center justify-between">
+                  {pulseData.top_deal && (
+                    <Link
+                      href={`/pipeline`}
+                      className="flex items-center gap-1 text-[11px] text-teal-400/80 hover:text-teal-300 transition-colors"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Top: {pulseData.top_deal.title} · {formatCurrency(pulseData.top_deal.value)}
+                    </Link>
+                  )}
+                  <p className="text-[10px] text-zinc-600 ml-auto">
+                    Generated {new Date(pulseData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
       {/* Pipeline Board */}
       <div className="flex-1">
         <div className="flex flex-wrap items-center gap-3 mb-4">
@@ -751,6 +942,15 @@ export default function PipelinePage() {
             >
               {exportLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
               Export CSV
+            </button>
+            <button
+              onClick={handleGetPipelineSummary}
+              disabled={pipelineSummaryLoading}
+              className="flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs font-medium text-indigo-400 transition-all hover:border-indigo-500/50 hover:bg-indigo-500/15 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+              title="Get AI pipeline summary"
+            >
+              {pipelineSummaryLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              Pipeline AI
             </button>
             <Button variant="cta" size="sm" onClick={() => setNewDealStage("discovery")}>
               <Plus className="h-3.5 w-3.5" /> New Deal
@@ -826,6 +1026,16 @@ export default function PipelinePage() {
             {bulkLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
             Delete
           </button>
+          {selectedIds.size >= 2 && selectedIds.size <= 3 && (
+            <button
+              onClick={handleCompareDeals}
+              disabled={compareLoading}
+              className="flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs text-indigo-400 hover:bg-indigo-500/20 transition-all disabled:opacity-50"
+            >
+              {compareLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitCompare className="h-3 w-3" />}
+              Compare Deals
+            </button>
+          )}
           <button
             onClick={handleClearSelection}
             className="text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -851,6 +1061,240 @@ export default function PipelinePage() {
           onClose={() => setNewDealStage(null)}
           onCreate={handleCreate}
         />
+      )}
+
+      {/* Pipeline AI summary slide-over */}
+      {pipelineSummaryOpen && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/40 z-30"
+            onClick={() => setPipelineSummaryOpen(false)}
+          />
+          <aside className="fixed right-0 top-0 h-full w-full max-w-[380px] border-l border-zinc-800 bg-zinc-950 z-40 overflow-y-auto">
+            <div className="sticky top-0 flex items-center justify-between border-b border-zinc-800 bg-zinc-950/90 backdrop-blur px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-100">Pipeline AI</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setPipelineSummary(null); handleGetPipelineSummary(); }}
+                  disabled={pipelineSummaryLoading}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                  title="Regenerate"
+                >
+                  {pipelineSummaryLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "↺"}
+                </button>
+                <button
+                  onClick={() => setPipelineSummaryOpen(false)}
+                  className="text-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer"
+                  aria-label="Close Pipeline AI"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {pipelineSummaryLoading ? (
+                <div className="space-y-3">
+                  <div className="h-10 rounded-xl bg-zinc-800/50 animate-pulse" />
+                  <div className="h-24 rounded-xl bg-zinc-800/30 animate-pulse" />
+                  <div className="h-24 rounded-xl bg-zinc-800/30 animate-pulse" />
+                </div>
+              ) : pipelineSummary ? (
+                <>
+                  {/* Headline */}
+                  <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
+                    <p className="text-sm text-indigo-200 leading-relaxed font-medium">
+                      {pipelineSummary.headline}
+                    </p>
+                  </div>
+
+                  {/* Opportunities */}
+                  <div>
+                    <p className="text-[10px] font-mono text-emerald-500/80 uppercase tracking-widest mb-2.5">
+                      Opportunities
+                    </p>
+                    <div className="space-y-2">
+                      {pipelineSummary.opportunities.map((opp, i) => (
+                        <div
+                          key={i}
+                          className="flex gap-2.5 rounded-lg border border-emerald-500/15 bg-emerald-500/5 px-3 py-2.5"
+                        >
+                          <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                          <p className="text-xs text-zinc-300 leading-relaxed">{opp}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Risks */}
+                  <div>
+                    <p className="text-[10px] font-mono text-rose-500/80 uppercase tracking-widest mb-2.5">
+                      Risks
+                    </p>
+                    <div className="space-y-2">
+                      {pipelineSummary.risks.map((risk, i) => (
+                        <div
+                          key={i}
+                          className="flex gap-2.5 rounded-lg border border-rose-500/15 bg-rose-500/5 px-3 py-2.5"
+                        >
+                          <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0" />
+                          <p className="text-xs text-zinc-300 leading-relaxed">{risk}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-600 font-mono text-right">
+                    Generated {new Date(pipelineSummary.generated_at).toLocaleTimeString()}
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-zinc-500 text-center py-8">Failed to generate summary.</p>
+              )}
+            </div>
+          </aside>
+        </>
+      )}
+
+      {/* Deal comparison modal */}
+      {compareModalOpen && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/60 z-40"
+            onClick={() => setCompareModalOpen(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="relative w-full max-w-2xl rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+                <div className="flex items-center gap-2">
+                  <GitCompare className="h-4 w-4 text-indigo-400" />
+                  <p className="text-sm font-semibold text-zinc-100">Deal Comparison</p>
+                  <span className="rounded-full bg-indigo-500/15 px-2 py-0.5 text-[10px] font-mono text-indigo-400">
+                    {Array.from(selectedIds).slice(0, 3).length} deals
+                  </span>
+                </div>
+                <button
+                  onClick={() => setCompareModalOpen(false)}
+                  className="text-zinc-400 hover:text-zinc-100 transition-colors"
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-5 max-h-[75vh] overflow-y-auto">
+                {/* Side-by-side deal cards */}
+                <div className={`grid gap-3 ${Array.from(selectedIds).slice(0, 3).length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+                  {Array.from(selectedIds).slice(0, 3).map((id) => {
+                    const deal = deals.find((d) => d.id === id);
+                    if (!deal) return null;
+                    const isWinner = compareResult?.winner_id === id;
+                    const cfg = stageConfig[deal.stage as DealStage] ?? { label: deal.stage, color: "text-zinc-400" };
+                    return (
+                      <div
+                        key={id}
+                        className={`relative rounded-xl border p-4 space-y-2 ${isWinner ? "border-indigo-500/40 bg-indigo-500/5" : "border-zinc-800 bg-zinc-900/50"}`}
+                      >
+                        {isWinner && (
+                          <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-indigo-500/40 bg-indigo-600 px-2 py-0.5">
+                            <Trophy className="h-2.5 w-2.5 text-yellow-300" />
+                            <span className="text-[9px] font-semibold text-white">Winner</span>
+                          </div>
+                        )}
+                        <p className="text-xs font-semibold text-zinc-100 truncate">{deal.title}</p>
+                        <p className="text-[10px] text-zinc-500 truncate">{deal.company}</p>
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-zinc-500">Value</span>
+                            <span className="text-[10px] font-mono text-emerald-400">{formatCurrency(deal.value ?? 0)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-zinc-500">Health</span>
+                            <span className="text-[10px] font-mono text-zinc-300">{deal.healthScore ?? "—"}/100</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-zinc-500">Win Prob</span>
+                            <span className="text-[10px] font-mono text-zinc-300">{deal.mlWinProbability ?? "—"}%</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-zinc-500">Stage</span>
+                            <span className={`text-[10px] ${cfg.color}`}>{cfg.label}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Loading skeleton or AI result */}
+                {compareLoading ? (
+                  <div className="space-y-3">
+                    <div className="h-6 rounded-lg bg-zinc-800/50 animate-pulse w-1/3" />
+                    <div className="h-14 rounded-xl bg-zinc-800/30 animate-pulse" />
+                    <div className="h-28 rounded-xl bg-zinc-800/20 animate-pulse" />
+                  </div>
+                ) : compareResult ? (
+                  <>
+                    {/* Rationale */}
+                    <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
+                      <p className="text-[10px] font-mono text-indigo-400/70 uppercase tracking-widest mb-1.5">AI Verdict</p>
+                      <p className="text-xs text-zinc-200 leading-relaxed">{compareResult.rationale}</p>
+                    </div>
+
+                    {/* Comparison points table */}
+                    {compareResult.comparison_points.length > 0 && (
+                      <div className="rounded-xl border border-zinc-800 overflow-hidden">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-zinc-800 bg-zinc-900/50">
+                              <th className="text-left px-4 py-2.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wider w-1/3">Dimension</th>
+                              <th className="text-left px-4 py-2.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wider">Verdict</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {compareResult.comparison_points.map((pt, i) => (
+                              <tr key={i} className={`border-b border-zinc-800/50 last:border-0 ${i % 2 === 0 ? "bg-transparent" : "bg-zinc-900/20"}`}>
+                                <td className="px-4 py-2.5 text-zinc-400 font-medium">{pt.dimension}</td>
+                                <td className="px-4 py-2.5 text-zinc-300">{pt.verdict}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    <p className="text-[10px] text-zinc-600 font-mono text-right">
+                      Generated {new Date(compareResult.generated_at).toLocaleTimeString()}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm text-zinc-500 text-center py-6">Failed to generate comparison.</p>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between border-t border-zinc-800 px-5 py-3">
+                <button
+                  onClick={() => { setCompareResult(null); handleCompareDeals(); }}
+                  disabled={compareLoading}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40 flex items-center gap-1"
+                >
+                  {compareLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : "↺"} Regenerate
+                </button>
+                <button
+                  onClick={() => setCompareModalOpen(false)}
+                  className="rounded-lg bg-zinc-800 px-4 py-1.5 text-xs text-zinc-300 hover:bg-zinc-700 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
     </div>

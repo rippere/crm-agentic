@@ -28,6 +28,7 @@ class Deal(Base):
     next_action: Mapped[str | None] = mapped_column(String, nullable=True)
     next_action_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     competitors: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    mentions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     stage_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

@@ -19,7 +19,7 @@ import {
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
   Copy, X, Loader2, Zap, ClipboardList, CheckSquare, Square, Tag,
   ExternalLink, Download, Upload, CheckCircle2, AlertCircle, Trash2,
-  GitMerge,
+  GitMerge, Phone, MessageCircle, RefreshCw,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -315,6 +315,8 @@ function EmailComposerModal({
   const [sending, setSending] = useState(false);
   const [sendSuccess, setSendSuccess] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [needsReauth, setNeedsReauth] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(`Subject: ${draft.subject}\n\n${draft.body}`);
@@ -326,6 +328,7 @@ function EmailComposerModal({
     if (!workspaceId || !token || sending || sendSuccess) return;
     setSending(true);
     setSendError(null);
+    setNeedsReauth(false);
     try {
       await apiClient.sendEmail(workspaceId, contact.id, {
         to: contact.email,
@@ -333,10 +336,35 @@ function EmailComposerModal({
         body: draft.body,
       }, token);
       setSendSuccess(true);
-    } catch {
-      setSendError("Send failed — check Gmail connection");
+    } catch (err) {
+      const e = err as { code?: string; status?: number };
+      if (e?.status === 409 && e?.code === "gmail_reauth_required") {
+        setNeedsReauth(true);
+        setSendError("Gmail connection expired — reconnect to send.");
+      } else {
+        setSendError("Send failed — check Gmail connection");
+      }
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleReconnect = async () => {
+    if (!workspaceId || !token || reconnecting) return;
+    setReconnecting(true);
+    try {
+      const { auth_url } = await apiClient.getGmailAuthUrl(workspaceId, token);
+      // Only navigate to a server-generated https URL — guards against an open
+      // redirect if the endpoint ever returned a non-https/javascript: scheme.
+      if (auth_url && /^https:\/\//.test(auth_url)) {
+        window.location.href = auth_url;
+      } else {
+        setSendError("Could not start Gmail reconnect. Try again from Connectors.");
+        setReconnecting(false);
+      }
+    } catch {
+      setSendError("Could not start Gmail reconnect. Try again from Connectors.");
+      setReconnecting(false);
     }
   };
 
@@ -405,6 +433,20 @@ function EmailComposerModal({
           </div>
           {sendError && (
             <p className="text-xs text-rose-400 text-center">{sendError}</p>
+          )}
+          {needsReauth && (
+            <Button
+              variant="primary"
+              className="w-full justify-center"
+              onClick={handleReconnect}
+              disabled={reconnecting}
+            >
+              {reconnecting ? (
+                <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Redirecting…</>
+              ) : (
+                <><Mail className="h-3.5 w-3.5" /> Reconnect Gmail</>
+              )}
+            </Button>
           )}
         </div>
       </div>
@@ -1010,6 +1052,13 @@ export default function ContactsPage() {
   const [goingDarkDismissed, setGoingDarkDismissed] = useState(false);
   const [goingDarkExpanded, setGoingDarkExpanded] = useState(false);
 
+  type ReengagementItem = { contact_id: string; contact_name: string; days_silent: number; channel: 'email' | 'slack' | 'call'; message_template: string; urgency: 'low' | 'medium' | 'high' };
+  const [reengagementPlan, setReengagementPlan] = useState<ReengagementItem[]>([]);
+  const [reengagementLoading, setReengagementLoading] = useState(false);
+  const [reengagementExpanded, setReengagementExpanded] = useState(false);
+  const [reengagementDismissed, setReengagementDismissed] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   const { contacts, createContact } = useContacts();
 
   useEffect(() => {
@@ -1029,8 +1078,12 @@ export default function ContactsPage() {
 
   useEffect(() => {
     if (!token || !workspaceId) return;
-    apiClient.getConnectors(workspaceId, token).then((connectors: Array<{ provider: string }>) => {
-      setHasGmailConnector(connectors.some((c) => c.provider === 'gmail'));
+    apiClient.getConnectors(workspaceId, token).then((connectors: Array<{ service: string }>) => {
+      // The connectors API serializes the provider under `service` (see
+      // apps/api/app/routers/gmail.py), not `provider`. Reading the wrong key
+      // left hasGmailConnector permanently false, so the "No Gmail" badge and
+      // disabled Send button persisted even after Gmail was connected.
+      setHasGmailConnector(connectors.some((c) => c.service === 'gmail'));
     }).catch(() => {});
   }, [token, workspaceId]);
 
@@ -1047,6 +1100,25 @@ export default function ContactsPage() {
       .then((contacts) => setGoingDarkContacts(contacts))
       .catch(() => {});
   }, [token, workspaceId]);
+
+  async function handleGenerateReengagementPlan() {
+    if (!workspaceId || !token || reengagementLoading) return;
+    setReengagementLoading(true);
+    try {
+      const { plan } = await apiClient.getReengagementPlan(workspaceId, token);
+      setReengagementPlan(plan);
+      setReengagementExpanded(true);
+      setReengagementDismissed(false);
+    } catch { /* silently fail */ }
+    finally { setReengagementLoading(false); }
+  }
+
+  function handleCopyTemplate(id: string, text: string) {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    });
+  }
 
   const handleMergeSuggestion = useCallback(async (pair: SuggestedMergePair) => {
     if (!workspaceId || !token || mergeSugBusy) return;
@@ -1335,6 +1407,99 @@ export default function ContactsPage() {
                 </div>
               ))}
             </div>
+          )}
+        </div>
+      )}
+
+      {/* Re-engagement Plan */}
+      {!reengagementDismissed && (
+        <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-violet-400" />
+              <span className="text-sm font-medium text-violet-300">
+                {reengagementPlan.length > 0
+                  ? `Re-engagement Plan — ${reengagementPlan.length} contact${reengagementPlan.length > 1 ? "s" : ""} to reach`
+                  : "AI Re-engagement Planner"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {reengagementPlan.length > 0 && (
+                <button
+                  onClick={() => setReengagementExpanded((v) => !v)}
+                  className="text-[11px] text-violet-400/70 hover:text-violet-300 transition-colors cursor-pointer"
+                >
+                  {reengagementExpanded ? "▲" : "▼"}
+                </button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleGenerateReengagementPlan}
+                disabled={reengagementLoading}
+                className="text-[11px] h-7 px-2.5 text-violet-400 hover:text-violet-300 border border-violet-500/30"
+              >
+                {reengagementLoading ? (
+                  <RefreshCw className="h-3 w-3 mr-1.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3 w-3 mr-1.5" />
+                )}
+                {reengagementPlan.length > 0 ? "Regenerate" : "Generate Plan"}
+              </Button>
+              <button
+                onClick={() => setReengagementDismissed(true)}
+                className="text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer"
+                title="Dismiss"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {reengagementExpanded && reengagementPlan.length > 0 && (
+            <div className="space-y-2.5">
+              {reengagementPlan.map((item) => {
+                const urgencyColors = {
+                  high: "bg-rose-500/10 border-rose-500/30 text-rose-300",
+                  medium: "bg-amber-500/10 border-amber-500/30 text-amber-300",
+                  low: "bg-zinc-800/60 border-zinc-700/50 text-zinc-400",
+                };
+                const ChannelIcon = item.channel === 'email' ? Mail : item.channel === 'call' ? Phone : MessageCircle;
+                const channelLabel = item.channel === 'email' ? 'Email' : item.channel === 'call' ? 'Call' : 'Slack';
+                return (
+                  <div key={item.contact_id} className="rounded-lg border border-zinc-700/50 bg-zinc-900/60 p-3 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-semibold text-zinc-200">{item.contact_name}</span>
+                      <span className="text-[10px] font-mono text-zinc-500">{item.days_silent}d silent</span>
+                      <div className="flex items-center gap-1 text-[10px] text-zinc-400">
+                        <ChannelIcon className="h-3 w-3" />
+                        {channelLabel}
+                      </div>
+                      <span className={`ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full border ${urgencyColors[item.urgency]}`}>
+                        {item.urgency.charAt(0).toUpperCase() + item.urgency.slice(1)}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed line-clamp-3">{item.message_template}</p>
+                    <button
+                      onClick={() => handleCopyTemplate(item.contact_id, item.message_template)}
+                      className="flex items-center gap-1.5 text-[10px] text-violet-400 hover:text-violet-300 transition-colors cursor-pointer"
+                    >
+                      {copiedId === item.contact_id ? (
+                        <><CheckCircle2 className="h-3 w-3 text-emerald-400" /><span className="text-emerald-400">Copied!</span></>
+                      ) : (
+                        <><Copy className="h-3 w-3" />Copy draft</>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {!reengagementExpanded && reengagementPlan.length === 0 && (
+            <p className="text-[11px] text-zinc-500">
+              Generate a personalised outreach plan for contacts who have gone quiet for 30+ days.
+            </p>
           )}
         </div>
       )}

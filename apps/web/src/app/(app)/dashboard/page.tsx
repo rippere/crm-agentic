@@ -19,6 +19,7 @@ import {
   DollarSign, Briefcase, Brain, Bot, TrendingUp, TrendingDown,
   Minus, Activity, CheckCircle, AlertTriangle, Info,
   ListTodo, Mail, BarChart2, CheckSquare, ExternalLink, Bell,
+  Sparkles, RefreshCw, Target, ChevronDown,
 } from "lucide-react";
 import { cn, SIGNAL } from "@/lib/utils";
 import type { KPI, ActivityEvent, Deal } from "@/lib/types";
@@ -250,6 +251,24 @@ export default function DashboardPage() {
   const [pollToken, setPollToken] = useState<string | null>(null);
   const [pollWorkspaceId, setPollWorkspaceId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [digest, setDigest] = useState<string | null>(null);
+  const [digestGeneratedAt, setDigestGeneratedAt] = useState<string | null>(null);
+  const [digestLoading, setDigestLoading] = useState(false);
+  const [contactHealthOverview, setContactHealthOverview] = useState<{
+    at_risk_count: number;
+    strong_count: number;
+    summary_sentence: string;
+    contacts: Array<{ id: string; name: string; health: 'strong' | 'neutral' | 'at_risk'; days_since_touch: number | null; top_action: string; engagement_score: number }>;
+    generated_at: string;
+  } | null>(null);
+  const [contactHealthLoading, setContactHealthLoading] = useState(false);
+  const [goalTracker, setGoalTracker] = useState<{
+    goals: Array<{ name: string; target_description: string; progress_pct: number; status: 'on_track' | 'at_risk' | 'behind'; insight: string }>;
+    overall_health: 'on_track' | 'at_risk' | 'behind';
+    generated_at: string;
+  } | null>(null);
+  const [goalTrackerLoading, setGoalTrackerLoading] = useState(false);
+  const [goalTrackerOpen, setGoalTrackerOpen] = useState(true);
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
@@ -273,6 +292,19 @@ export default function DashboardPage() {
       apiClient.getDealForecast("demo-workspace-1", "demo-token", 6).then((data) => {
         if (Array.isArray(data)) setForecastData(data);
       }).catch(() => {});
+      setDigestLoading(true);
+      apiClient.getWorkspaceDigest("demo-workspace-1", "demo-token").then((data) => {
+        setDigest(data.digest);
+        setDigestGeneratedAt(data.generated_at);
+      }).catch(() => {}).finally(() => setDigestLoading(false));
+      setContactHealthLoading(true);
+      apiClient.getContactHealthOverview("demo-workspace-1", "demo-token").then((data) => {
+        setContactHealthOverview(data);
+      }).catch(() => {}).finally(() => setContactHealthLoading(false));
+      setGoalTrackerLoading(true);
+      apiClient.getWorkspaceGoalTracker("demo-workspace-1", "demo-token").then((data) => {
+        setGoalTracker(data);
+      }).catch(() => {}).finally(() => setGoalTrackerLoading(false));
       return;
     }
 
@@ -319,13 +351,28 @@ export default function DashboardPage() {
 
       if (!workspaceId) return;
 
-      // Fetch revenue history + forecast
+      // Fetch revenue history + forecast + initial digest
       apiClient.getDealHistory(workspaceId, session.access_token, 6)
         .then((data) => { if (Array.isArray(data)) setRevenueHistory(data); })
         .catch(() => {});
       apiClient.getDealForecast(workspaceId, session.access_token, 6)
         .then((data) => { if (Array.isArray(data)) setForecastData(data); })
         .catch(() => {});
+      setDigestLoading(true);
+      apiClient.getWorkspaceDigest(workspaceId, session.access_token)
+        .then((data) => { setDigest(data.digest); setDigestGeneratedAt(data.generated_at); })
+        .catch(() => {})
+        .finally(() => setDigestLoading(false));
+      setContactHealthLoading(true);
+      apiClient.getContactHealthOverview(workspaceId, session.access_token)
+        .then((data) => { setContactHealthOverview(data); })
+        .catch(() => {})
+        .finally(() => setContactHealthLoading(false));
+      setGoalTrackerLoading(true);
+      apiClient.getWorkspaceGoalTracker(workspaceId, session.access_token)
+        .then((data) => { setGoalTracker(data); })
+        .catch(() => {})
+        .finally(() => setGoalTrackerLoading(false));
 
       // Subscribe to Supabase Realtime for live activity feed
       const channel = supabase
@@ -425,6 +472,70 @@ export default function DashboardPage() {
     return () => clearInterval(id);
   }, [pollWorkspaceId, pollToken]);
 
+  async function regenerateDigest() {
+    if (digestLoading) return;
+    setDigestLoading(true);
+    try {
+      if (DEMO_MODE) {
+        const data = await apiClient.getWorkspaceDigest("demo-workspace-1", "demo-token");
+        setDigest(data.digest);
+        setDigestGeneratedAt(data.generated_at);
+      } else {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        const workspaceId: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!workspaceId) return;
+        const data = await apiClient.getWorkspaceDigest(workspaceId, session.access_token);
+        setDigest(data.digest);
+        setDigestGeneratedAt(data.generated_at);
+      }
+    } catch { /* silently ignore */ } finally {
+      setDigestLoading(false);
+    }
+  }
+
+  async function regenerateGoalTracker() {
+    if (goalTrackerLoading) return;
+    setGoalTrackerLoading(true);
+    try {
+      if (DEMO_MODE) {
+        const data = await apiClient.getWorkspaceGoalTracker("demo-workspace-1", "demo-token");
+        setGoalTracker(data);
+      } else {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        const workspaceId: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!workspaceId) return;
+        const data = await apiClient.getWorkspaceGoalTracker(workspaceId, session.access_token);
+        setGoalTracker(data);
+      }
+    } catch { /* silently ignore */ } finally {
+      setGoalTrackerLoading(false);
+    }
+  }
+
+  function renderDigestMarkdown(text: string) {
+    return text.split("\n").map((line, i) => {
+      if (line.startsWith("**") && line.endsWith("**")) {
+        return (
+          <p key={i} className="text-xs font-semibold text-zinc-300 mt-3 first:mt-0">
+            {line.replace(/\*\*/g, "")}
+          </p>
+        );
+      }
+      if (line.startsWith("- ")) {
+        return (
+          <p key={i} className="text-xs text-zinc-400 pl-3 mt-1 leading-relaxed">
+            <span className="text-indigo-500 mr-1.5">•</span>{line.slice(2)}
+          </p>
+        );
+      }
+      return line ? <p key={i} className="text-xs text-zinc-400 mt-1">{line}</p> : null;
+    });
+  }
+
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header
@@ -499,6 +610,251 @@ export default function DashboardPage() {
             />
           </div>
           )}
+        </section>
+      )}
+
+      {/* AI Weekly Digest */}
+      {(digest !== null || digestLoading) && (
+        <section aria-labelledby="digest-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="digest-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Weekly Digest
+            </h2>
+            <Badge variant="indigo" size="sm" dot>Nova AI</Badge>
+            {digestGeneratedAt && (
+              <span className="text-[11px] text-zinc-600 font-mono ml-auto">
+                {new Date(digestGeneratedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+          <Card className="relative">
+            {/* Regenerate button */}
+            <button
+              onClick={regenerateDigest}
+              disabled={digestLoading}
+              className="absolute top-3 right-3 flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] text-zinc-400 hover:text-indigo-400 hover:border-indigo-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Regenerate digest"
+            >
+              <RefreshCw className={cn("h-3 w-3", digestLoading && "animate-spin")} />
+              {digestLoading ? "Generating…" : "Regenerate"}
+            </button>
+
+            {/* Digest header */}
+            <div className="flex items-center gap-2 mb-4 pr-28">
+              <Sparkles className="h-4 w-4 text-indigo-400 flex-shrink-0" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-100">AI Workspace Summary</p>
+            </div>
+
+            {digestLoading && !digest ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-3 bg-zinc-800 rounded w-1/3" />
+                <div className="h-3 bg-zinc-800 rounded w-full" />
+                <div className="h-3 bg-zinc-800 rounded w-5/6" />
+                <div className="h-3 bg-zinc-800 rounded w-1/3 mt-3" />
+                <div className="h-3 bg-zinc-800 rounded w-full" />
+                <div className="h-3 bg-zinc-800 rounded w-4/5" />
+              </div>
+            ) : digest ? (
+              <div className={cn("transition-opacity", digestLoading && "opacity-50")}>
+                {renderDigestMarkdown(digest)}
+              </div>
+            ) : null}
+          </Card>
+        </section>
+      )}
+
+      {/* Contact Health Overview */}
+      {(contactHealthOverview !== null || contactHealthLoading) && (
+        <section aria-labelledby="contact-health-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="contact-health-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Contact Health
+            </h2>
+            <Badge variant="indigo" size="sm" dot>Nova AI</Badge>
+            {contactHealthOverview && (
+              <>
+                {contactHealthOverview.at_risk_count > 0 && (
+                  <Badge variant="rose" size="sm" dot>{contactHealthOverview.at_risk_count} at risk</Badge>
+                )}
+                {contactHealthOverview.strong_count > 0 && (
+                  <Badge variant="emerald" size="sm" dot>{contactHealthOverview.strong_count} strong</Badge>
+                )}
+              </>
+            )}
+          </div>
+          <Card className="p-0 overflow-hidden">
+            {contactHealthLoading && !contactHealthOverview ? (
+              <div className="space-y-2 animate-pulse p-4">
+                <div className="h-3 bg-zinc-800 rounded w-2/3" />
+                <div className="h-3 bg-zinc-800 rounded w-full" />
+                <div className="h-3 bg-zinc-800 rounded w-1/2" />
+              </div>
+            ) : contactHealthOverview ? (
+              <div className={cn("transition-opacity", contactHealthLoading && "opacity-50")}>
+                {/* Summary sentence */}
+                <div className="flex items-start gap-2 px-4 pt-4 pb-3 border-b border-zinc-800">
+                  <Sparkles className="h-4 w-4 text-indigo-400 flex-shrink-0 mt-0.5" aria-hidden />
+                  <p className="text-sm text-zinc-300">{contactHealthOverview.summary_sentence}</p>
+                </div>
+                {/* Contact rows */}
+                <div className="divide-y divide-zinc-800/60">
+                  {contactHealthOverview.contacts.map((c) => (
+                    <div key={c.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800/40 transition-colors">
+                      {/* Health dot */}
+                      <span
+                        className={cn(
+                          "h-2 w-2 rounded-full flex-shrink-0",
+                          c.health === "strong" && "bg-emerald-400",
+                          c.health === "neutral" && "bg-amber-400",
+                          c.health === "at_risk" && "bg-rose-500",
+                        )}
+                        title={c.health.replace("_", " ")}
+                      />
+                      {/* Name + action */}
+                      <div className="flex-1 min-w-0">
+                        <Link
+                          href={`/contacts/${c.id}`}
+                          className="text-sm font-medium text-zinc-100 hover:text-indigo-400 transition-colors truncate block"
+                        >
+                          {c.name}
+                        </Link>
+                        <p className="text-[11px] text-zinc-500 truncate">{c.top_action}</p>
+                      </div>
+                      {/* Days since touch */}
+                      <div className="flex-shrink-0 text-right hidden sm:block">
+                        {c.days_since_touch !== null ? (
+                          <span className={cn(
+                            "text-xs font-mono",
+                            c.days_since_touch > 30 ? "text-rose-400" : c.days_since_touch > 14 ? "text-amber-400" : "text-zinc-400",
+                          )}>
+                            {c.days_since_touch}d ago
+                          </span>
+                        ) : (
+                          <span className="text-xs font-mono text-zinc-600">no touch</span>
+                        )}
+                      </div>
+                      {/* Engagement score */}
+                      <div className="flex items-center gap-1.5 flex-shrink-0 w-16 hidden lg:flex">
+                        <div className="flex-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className={cn(
+                              "h-full rounded-full",
+                              c.engagement_score >= 60 ? "bg-emerald-400" : c.engagement_score >= 40 ? "bg-amber-400" : "bg-rose-500",
+                            )}
+                            style={{ width: `${c.engagement_score}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] font-mono text-zinc-500 w-5 text-right">{c.engagement_score}</span>
+                      </div>
+                      {/* Link */}
+                      <Link
+                        href={`/contacts/${c.id}`}
+                        className="flex-shrink-0 text-zinc-600 hover:text-indigo-400 transition-colors"
+                        title="View contact"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </Card>
+        </section>
+      )}
+
+      {/* AI Goal Tracker */}
+      {(goalTracker !== null || goalTrackerLoading) && (
+        <section aria-labelledby="goal-tracker-heading">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 id="goal-tracker-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
+              Workspace Goals
+            </h2>
+            <Badge variant="indigo" size="sm" dot>Nova AI</Badge>
+            {goalTracker && (
+              <Badge
+                variant={goalTracker.overall_health === "on_track" ? "emerald" : goalTracker.overall_health === "at_risk" ? "amber" : "rose"}
+                size="sm"
+              >
+                {goalTracker.overall_health.replace("_", " ")}
+              </Badge>
+            )}
+            {goalTracker && (
+              <span className="text-[11px] text-zinc-600 font-mono ml-auto">
+                {new Date(goalTracker.generated_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+          <Card className="relative">
+            <div className="flex items-center gap-2 mb-4 pr-40">
+              <Target className="h-4 w-4 text-indigo-400 flex-shrink-0" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-100">Goal Progress Tracker</p>
+            </div>
+            <div className="absolute top-3 right-3 flex items-center gap-2">
+              <button
+                onClick={regenerateGoalTracker}
+                disabled={goalTrackerLoading}
+                className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] text-zinc-400 hover:text-indigo-400 hover:border-indigo-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Regenerate goals"
+              >
+                <RefreshCw className={cn("h-3 w-3", goalTrackerLoading && "animate-spin")} />
+                {goalTrackerLoading ? "Generating…" : "Regenerate"}
+              </button>
+              <button
+                onClick={() => setGoalTrackerOpen((o) => !o)}
+                className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-zinc-400 hover:text-zinc-200 transition-colors"
+                title={goalTrackerOpen ? "Collapse" : "Expand"}
+              >
+                <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !goalTrackerOpen && "-rotate-90")} />
+              </button>
+            </div>
+            {goalTrackerOpen && (
+              <>
+                {goalTrackerLoading && !goalTracker ? (
+                  <div className="space-y-3 animate-pulse">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div key={i} className="space-y-1.5">
+                        <div className="h-2.5 bg-zinc-800 rounded w-1/4" />
+                        <div className="h-1.5 bg-zinc-800 rounded w-full" />
+                        <div className="h-2 bg-zinc-800 rounded w-2/3" />
+                      </div>
+                    ))}
+                  </div>
+                ) : goalTracker ? (
+                  <div className={cn("space-y-4 transition-opacity", goalTrackerLoading && "opacity-50")}>
+                    {goalTracker.goals.map((goal, idx) => (
+                      <div key={idx} className="space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-zinc-100">{goal.name}</span>
+                          <span className={cn(
+                            "px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide flex-shrink-0",
+                            goal.status === "on_track" && "bg-emerald-400/10 text-emerald-400",
+                            goal.status === "at_risk" && "bg-amber-400/10 text-amber-400",
+                            goal.status === "behind" && "bg-rose-400/10 text-rose-400",
+                          )}>
+                            {goal.status.replace("_", " ")}
+                          </span>
+                          <span className="text-xs font-mono text-zinc-400 ml-auto">{goal.progress_pct}%</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className={cn(
+                              "h-full rounded-full transition-all",
+                              goal.status === "on_track" && "bg-emerald-400",
+                              goal.status === "at_risk" && "bg-amber-400",
+                              goal.status === "behind" && "bg-rose-500",
+                            )}
+                            style={{ width: `${goal.progress_pct}%` }}
+                          />
+                        </div>
+                        <p className="text-[11px] text-zinc-500 leading-relaxed">{goal.insight}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            )}
+          </Card>
         </section>
       )}
 

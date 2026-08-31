@@ -15,10 +15,10 @@ import { useJobPoller } from "@/hooks/useJobPoller";
 import type { DealStage } from "@/lib/types";
 import {
   ArrowLeft, Brain, Heart, AlertTriangle, TrendingUp,
-  Building2, Calendar, ChevronRight, Mail, Zap,
+  Building2, Calendar, CalendarDays, ChevronRight, Mail, Zap,
   ListTodo, Loader2, XCircle, Trash2, CheckCircle2,
   ExternalLink, DollarSign, Clock, User,
-  FileText, Send, BarChart2, History, Swords, Plus, X, Bell,
+  FileText, Send, BarChart2, History, Swords, Plus, X, Bell, Target, Users, Sparkles, RefreshCw, Shield, Repeat,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -80,6 +80,16 @@ type StageHistoryEntry = {
   entered_at: string;
   days_in_stage: number;
   is_current: boolean;
+};
+
+type PredictedClose = {
+  predicted_date: string;
+  lower_bound: string;
+  upper_bound: string;
+  confidence_level: string;
+  confidence_pct: number;
+  data_points: number;
+  avg_cycle_days: number | null;
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -306,10 +316,37 @@ export default function DealDetailPage() {
   const [stageHistory, setStageHistory] = useState<StageHistoryEntry[]>([]);
   const [stageHistoryLoading, setStageHistoryLoading] = useState(false);
 
+  const [responseLag, setResponseLag] = useState<{ cells: { dow: number; hour: number; avg_lag_hours: number; count: number }[]; max_lag_hours: number } | null>(null);
+  const [responseLagLoading, setResponseLagLoading] = useState(false);
+
+  const [predictedClose, setPredictedClose] = useState<PredictedClose | null>(null);
+  const [predictedCloseLoading, setPredictedCloseLoading] = useState(false);
+
+  const [healthHistory, setHealthHistory] = useState<{ recorded_at: string; score: number }[]>([]);
+  const [healthHistoryLoading, setHealthHistoryLoading] = useState(false);
+
+  type EngagementScore = {
+    score: number;
+    message_count: number;
+    note_count: number;
+    tasks_total: number;
+    tasks_done: number;
+    components: { messages: number; notes: number; tasks: number };
+  };
+  const [engagementScore, setEngagementScore] = useState<EngagementScore | null>(null);
+  const [engagementLoading, setEngagementLoading] = useState(false);
+
   const [competitors, setCompetitors] = useState<string[]>([]);
   const [competitorsLoading, setCompetitorsLoading] = useState(false);
   const [competitorInput, setCompetitorInput] = useState("");
   const [competitorSaving, setCompetitorSaving] = useState(false);
+
+  type DealMention = { name: string; type: string };
+  const [mentions, setMentions] = useState<DealMention[]>([]);
+  const [mentionsLoading, setMentionsLoading] = useState(false);
+  const [mentionInput, setMentionInput] = useState("");
+  const [mentionType, setMentionType] = useState<"teammate" | "contact">("teammate");
+  const [mentionSaving, setMentionSaving] = useState(false);
 
   const [nextActionText, setNextActionText] = useState("");
   const [nextActionDate, setNextActionDate] = useState("");
@@ -326,6 +363,96 @@ export default function DealDetailPage() {
 
   const [outcomePickerOpen, setOutcomePickerOpen] = useState(false);
   const [outcomeSaving, setOutcomeSaving] = useState(false);
+
+  type CoachData = { urgency: "low" | "medium" | "high"; bullets: string[]; generated_at: string };
+  const [coachData, setCoachData] = useState<CoachData | null>(null);
+  const [coachLoading, setCoachLoading] = useState(false);
+  const [coachGenerating, setCoachGenerating] = useState(false);
+
+  type WinLossAnalysis = { verdict: "won" | "lost"; narrative: string; key_factors: string[]; lessons: string[]; deal_id: string; generated_at: string };
+  const [winLossData, setWinLossData] = useState<WinLossAnalysis | null>(null);
+  const [winLossLoading, setWinLossLoading] = useState(false);
+  const [winLossGenerating, setWinLossGenerating] = useState(false);
+
+  type RiskNarrative = { risk_level: "low" | "medium" | "high"; narrative: string; top_risks: string[]; deal_id: string; generated_at: string };
+  const [riskNarrative, setRiskNarrative] = useState<RiskNarrative | null>(null);
+  const [riskNarrativeLoading, setRiskNarrativeLoading] = useState(false);
+  const [riskNarrativeGenerating, setRiskNarrativeGenerating] = useState(false);
+  const [riskNarrativeCollapsed, setRiskNarrativeCollapsed] = useState(false);
+
+  type ObjectionItem = { objection: string; response: string; strategy: "empathize" | "redirect" | "prove" | "challenge" };
+  type ObjectionHandlerData = { objections: ObjectionItem[]; deal_id: string; generated_at: string };
+  const [objectionData, setObjectionData] = useState<ObjectionHandlerData | null>(null);
+  const [objectionLoading, setObjectionLoading] = useState(false);
+  const [objectionGenerating, setObjectionGenerating] = useState(false);
+  const [objectionExpandedIdx, setObjectionExpandedIdx] = useState<number | null>(null);
+
+  type StakeholderItem = { name: string; role: "decision_maker" | "champion" | "blocker" | "influencer"; engagement: "high" | "medium" | "low"; recommended_action: string };
+  type StakeholderMapData = { stakeholders: StakeholderItem[]; deal_id: string; generated_at: string };
+  const [stakeholderData, setStakeholderData] = useState<StakeholderMapData | null>(null);
+  const [stakeholderLoading, setStakeholderLoading] = useState(false);
+  const [stakeholderGenerating, setStakeholderGenerating] = useState(false);
+
+  type NegotiationConcession = { offer: string; condition: string; limit: string };
+  type NegotiationScriptData = { opening_move: string; concessions: NegotiationConcession[]; walk_away_signal: string; closing_line: string; deal_id: string; generated_at: string };
+  const [negotiationData, setNegotiationData] = useState<NegotiationScriptData | null>(null);
+  const [negotiationLoading, setNegotiationLoading] = useState(false);
+  const [negotiationGenerating, setNegotiationGenerating] = useState(false);
+
+  type MomentumData = { momentum: "gaining" | "stalling" | "declining"; drivers: string[]; recommendation: string; deal_id: string; generated_at: string };
+  const [momentumData, setMomentumData] = useState<MomentumData | null>(null);
+  const [momentumLoading, setMomentumLoading] = useState(false);
+  const [momentumGenerating, setMomentumGenerating] = useState(false);
+
+  type SentimentDigestData = { overall_sentiment: "positive" | "neutral" | "negative"; key_signals: string[]; sentiment_trend: "improving" | "stable" | "declining"; deal_id: string; generated_at: string };
+  const [sentimentDigest, setSentimentDigest] = useState<SentimentDigestData | null>(null);
+  const [sentimentDigestLoading, setSentimentDigestLoading] = useState(false);
+  const [sentimentDigestGenerating, setSentimentDigestGenerating] = useState(false);
+
+  type ClosePlanData = { phases: { label: string; actions: string[] }[]; recommended_close_date: string; deal_id: string; generated_at: string };
+  const [closePlanData, setClosePlanData] = useState<ClosePlanData | null>(null);
+  const [closePlanLoading, setClosePlanLoading] = useState(false);
+  const [closePlanGenerating, setClosePlanGenerating] = useState(false);
+  const [closePlanOpenPhase, setClosePlanOpenPhase] = useState<number>(0);
+
+  type WinProbExplainerData = { probability_assessment: 'on_track' | 'overestimated' | 'underestimated'; key_drivers: string[]; risk_factors: string[]; recommended_adjustment: number | null; deal_id: string; generated_at: string };
+  const [winProbExplainer, setWinProbExplainer] = useState<WinProbExplainerData | null>(null);
+  const [winProbExplainerLoading, setWinProbExplainerLoading] = useState(false);
+  const [winProbExplainerGenerating, setWinProbExplainerGenerating] = useState(false);
+
+  type RoiProjectionData = { roi_multiplier: number; payback_months: number; year1_value: number; year3_value: number; assumptions: string[]; deal_id: string; generated_at: string };
+  const [roiProjection, setRoiProjection] = useState<RoiProjectionData | null>(null);
+  const [roiProjectionLoading, setRoiProjectionLoading] = useState(false);
+  const [roiProjectionGenerating, setRoiProjectionGenerating] = useState(false);
+
+  type MeetingPrepAgendaItem = { topic: string; goal: string; talking_points: string[] };
+  type MeetingPrepData = { agenda_items: MeetingPrepAgendaItem[]; questions_to_ask: string[]; things_to_avoid: string[]; deal_id: string; generated_at: string };
+  const [meetingPrepData, setMeetingPrepData] = useState<MeetingPrepData | null>(null);
+  const [meetingPrepLoading, setMeetingPrepLoading] = useState(false);
+  const [meetingPrepGenerating, setMeetingPrepGenerating] = useState(false);
+  const [meetingPrepCollapsed, setMeetingPrepCollapsed] = useState(false);
+  const [meetingPrepOpenIdx, setMeetingPrepOpenIdx] = useState<number | null>(null);
+
+  type FollowupStep = { step: number; timing: 'now' | '3d' | '7d' | '14d'; channel: 'email' | 'call' | 'slack'; action: string; goal: string };
+  type FollowupSequenceData = { steps: FollowupStep[]; rationale: string; deal_id: string; generated_at: string };
+  const [followupData, setFollowupData] = useState<FollowupSequenceData | null>(null);
+  const [followupLoading, setFollowupLoading] = useState(false);
+  const [followupGenerating, setFollowupGenerating] = useState(false);
+
+  type ChampionRiskData = { risk_level: 'low' | 'medium' | 'high' | 'critical'; champion_status: 'active' | 'uncertain' | 'at_risk' | 'unknown'; risk_signals: string[]; mitigation_steps: string[]; deal_id: string; generated_at: string };
+  const [championRisk, setChampionRisk] = useState<ChampionRiskData | null>(null);
+  const [championRiskLoading, setChampionRiskLoading] = useState(false);
+  const [championRiskGenerating, setChampionRiskGenerating] = useState(false);
+
+  type CompetitiveResponseData = { primary_competitor: string; battle_card: { strengths: string[]; weaknesses: string[]; key_differentiators: string[]; suggested_talk_track: string }; deal_id: string; generated_at: string };
+  const [competitiveResponse, setCompetitiveResponse] = useState<CompetitiveResponseData | null>(null);
+  const [competitiveResponseLoading, setCompetitiveResponseLoading] = useState(false);
+  const [competitiveResponseGenerating, setCompetitiveResponseGenerating] = useState(false);
+
+  type ExpansionOpportunityData = { opportunity_score: number; upsell_products: string[]; cross_sell_signals: string[]; recommended_timing: 'immediate' | '3_months' | '6_months'; next_step: string; deal_id: string; generated_at: string };
+  const [expansionOpportunity, setExpansionOpportunity] = useState<ExpansionOpportunityData | null>(null);
+  const [expansionOpportunityLoading, setExpansionOpportunityLoading] = useState(false);
+  const [expansionOpportunityGenerating, setExpansionOpportunityGenerating] = useState(false);
 
   const optimizePoller = useJobPoller();
 
@@ -409,12 +536,167 @@ export default function DealDetailPage() {
       .catch(() => setStageHistory([]))
       .finally(() => setStageHistoryLoading(false));
 
+    setResponseLagLoading(true);
+    apiClient
+      .getDealResponseLag(workspaceId, dealId, token)
+      .then((data) => setResponseLag(data ?? null))
+      .catch(() => setResponseLag(null))
+      .finally(() => setResponseLagLoading(false));
+
+    setPredictedCloseLoading(true);
+    apiClient
+      .getPredictedClose(workspaceId, dealId, token)
+      .then((data) => setPredictedClose(data ?? null))
+      .catch(() => setPredictedClose(null))
+      .finally(() => setPredictedCloseLoading(false));
+
+    setEngagementLoading(true);
+    apiClient
+      .getDealEngagementScore(workspaceId, dealId, token)
+      .then((data) => setEngagementScore(data ?? null))
+      .catch(() => setEngagementScore(null))
+      .finally(() => setEngagementLoading(false));
+
     setCompetitorsLoading(true);
     apiClient
       .getDealCompetitors(workspaceId, dealId, token)
       .then((data) => setCompetitors(data.competitors ?? []))
       .catch(() => setCompetitors([]))
       .finally(() => setCompetitorsLoading(false));
+
+    setMentionsLoading(true);
+    apiClient
+      .getDealMentions(workspaceId, dealId, token)
+      .then((data) => setMentions(data.mentions ?? []))
+      .catch(() => setMentions([]))
+      .finally(() => setMentionsLoading(false));
+
+    setHealthHistoryLoading(true);
+    apiClient
+      .getDealHealthScoreHistory(workspaceId, dealId, token)
+      .then((data) => setHealthHistory(Array.isArray(data) ? data : []))
+      .catch(() => setHealthHistory([]))
+      .finally(() => setHealthHistoryLoading(false));
+
+    setCoachLoading(true);
+    apiClient
+      .getDealCoaching(workspaceId, dealId, token)
+      .then((data) => setCoachData(data ?? null))
+      .catch(() => setCoachData(null))
+      .finally(() => setCoachLoading(false));
+
+    if (deal.stage !== "closed_won" && deal.stage !== "closed_lost") {
+      setRiskNarrativeLoading(true);
+      apiClient
+        .getRiskNarrative(workspaceId, dealId, token)
+        .then((data) => setRiskNarrative(data ?? null))
+        .catch(() => setRiskNarrative(null))
+        .finally(() => setRiskNarrativeLoading(false));
+
+      setMomentumLoading(true);
+      apiClient
+        .getDealMomentum(workspaceId, dealId, token)
+        .then((data) => setMomentumData(data ?? null))
+        .catch(() => setMomentumData(null))
+        .finally(() => setMomentumLoading(false));
+
+      setSentimentDigestLoading(true);
+      apiClient
+        .getDealSentimentDigest(workspaceId, dealId, token)
+        .then((data) => setSentimentDigest(data ?? null))
+        .catch(() => setSentimentDigest(null))
+        .finally(() => setSentimentDigestLoading(false));
+
+      setWinProbExplainerLoading(true);
+      apiClient
+        .getWinProbabilityExplainer(workspaceId, dealId, token)
+        .then((data) => setWinProbExplainer(data ?? null))
+        .catch(() => setWinProbExplainer(null))
+        .finally(() => setWinProbExplainerLoading(false));
+
+      setRoiProjectionLoading(true);
+      apiClient
+        .getDealRoiProjection(workspaceId, dealId, token)
+        .then((data) => setRoiProjection(data ?? null))
+        .catch(() => setRoiProjection(null))
+        .finally(() => setRoiProjectionLoading(false));
+
+      setClosePlanLoading(true);
+      apiClient
+        .getDealClosePlan(workspaceId, dealId, token)
+        .then((data) => setClosePlanData(data ?? null))
+        .catch(() => setClosePlanData(null))
+        .finally(() => setClosePlanLoading(false));
+
+      setObjectionLoading(true);
+      apiClient
+        .getDealObjectionHandler(workspaceId, dealId, token)
+        .then((data) => setObjectionData(data ?? null))
+        .catch(() => setObjectionData(null))
+        .finally(() => setObjectionLoading(false));
+
+      setStakeholderLoading(true);
+      apiClient
+        .getDealStakeholderMap(workspaceId, dealId, token)
+        .then((data) => setStakeholderData(data ?? null))
+        .catch(() => setStakeholderData(null))
+        .finally(() => setStakeholderLoading(false));
+
+      if (deal.stage === "proposal" || deal.stage === "negotiation") {
+        setNegotiationLoading(true);
+        apiClient
+          .getDealNegotiationScript(workspaceId, dealId, token)
+          .then((data) => setNegotiationData(data ?? null))
+          .catch(() => setNegotiationData(null))
+          .finally(() => setNegotiationLoading(false));
+      }
+
+      setMeetingPrepLoading(true);
+      apiClient
+        .getMeetingPrep(workspaceId, dealId, token)
+        .then((data) => setMeetingPrepData(data ?? null))
+        .catch(() => setMeetingPrepData(null))
+        .finally(() => setMeetingPrepLoading(false));
+
+      setFollowupLoading(true);
+      apiClient
+        .getDealFollowupSequence(workspaceId, dealId, token)
+        .then((data) => setFollowupData(data ?? null))
+        .catch(() => setFollowupData(null))
+        .finally(() => setFollowupLoading(false));
+
+      setChampionRiskLoading(true);
+      apiClient
+        .getChampionRisk(workspaceId, dealId, token)
+        .then((data) => setChampionRisk(data ?? null))
+        .catch(() => setChampionRisk(null))
+        .finally(() => setChampionRiskLoading(false));
+
+      setCompetitiveResponseLoading(true);
+      apiClient
+        .getCompetitiveResponse(workspaceId, dealId, token)
+        .then((data) => setCompetitiveResponse(data ?? null))
+        .catch(() => setCompetitiveResponse(null))
+        .finally(() => setCompetitiveResponseLoading(false));
+    }
+
+    if (deal.stage === "closed_won" || deal.stage === "closed_lost") {
+      setWinLossLoading(true);
+      apiClient
+        .getDealWinLossAnalysis(workspaceId, dealId, token)
+        .then((data) => setWinLossData(data ?? null))
+        .catch(() => setWinLossData(null))
+        .finally(() => setWinLossLoading(false));
+    }
+
+    if (deal.stage === "closed_won") {
+      setExpansionOpportunityLoading(true);
+      apiClient
+        .getExpansionOpportunity(workspaceId, dealId, token)
+        .then((data) => setExpansionOpportunity(data ?? null))
+        .catch(() => setExpansionOpportunity(null))
+        .finally(() => setExpansionOpportunityLoading(false));
+    }
 
     if (deal.contact_id) {
       apiClient
@@ -501,6 +783,31 @@ export default function DealDetailPage() {
     finally { setCompetitorSaving(false); }
   };
 
+  const handleAddMention = async (name: string) => {
+    const label = name.trim();
+    if (!label || !token || !workspaceId || mentionSaving) return;
+    if (mentions.some((m) => m.name === label)) { setMentionInput(""); return; }
+    const next = [...mentions, { name: label, type: mentionType }];
+    setMentionSaving(true);
+    try {
+      const data = await apiClient.updateDealMentions(workspaceId, dealId, next, token);
+      setMentions(data.mentions ?? next);
+      setMentionInput("");
+    } catch { /* revert silently */ }
+    finally { setMentionSaving(false); }
+  };
+
+  const handleRemoveMention = async (name: string) => {
+    if (!token || !workspaceId || mentionSaving) return;
+    const next = mentions.filter((m) => m.name !== name);
+    setMentionSaving(true);
+    try {
+      const data = await apiClient.updateDealMentions(workspaceId, dealId, next, token);
+      setMentions(data.mentions ?? next);
+    } catch { /* revert silently */ }
+    finally { setMentionSaving(false); }
+  };
+
   const handleDelete = async () => {
     if (!token || !workspaceId || deleteText !== (deal?.title ?? "")) return;
     setDeleting(true);
@@ -536,6 +843,168 @@ export default function DealDetailPage() {
       setBannerDismissed(false);
     } catch { /* ignore */ }
     finally { setNextActionSaving(false); }
+  };
+
+  const handleRegenerateCoach = async () => {
+    if (!token || !workspaceId || coachGenerating) return;
+    setCoachGenerating(true);
+    try {
+      const data = await apiClient.getDealCoaching(workspaceId, dealId, token);
+      setCoachData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setCoachGenerating(false); }
+  };
+
+  const handleRegenerateWinLoss = async () => {
+    if (!token || !workspaceId || winLossGenerating) return;
+    setWinLossGenerating(true);
+    try {
+      const data = await apiClient.getDealWinLossAnalysis(workspaceId, dealId, token);
+      setWinLossData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setWinLossGenerating(false); }
+  };
+
+  const handleRegenerateRiskNarrative = async () => {
+    if (!token || !workspaceId || riskNarrativeGenerating) return;
+    setRiskNarrativeGenerating(true);
+    try {
+      const data = await apiClient.getRiskNarrative(workspaceId, dealId, token);
+      setRiskNarrative(data ?? null);
+    } catch { /* ignore */ }
+    finally { setRiskNarrativeGenerating(false); }
+  };
+
+  const handleRegenerateMomentum = async () => {
+    if (!token || !workspaceId || momentumGenerating) return;
+    setMomentumGenerating(true);
+    try {
+      const data = await apiClient.getDealMomentum(workspaceId, dealId, token);
+      setMomentumData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setMomentumGenerating(false); }
+  };
+
+  const handleRegenerateSentimentDigest = async () => {
+    if (!token || !workspaceId || sentimentDigestGenerating) return;
+    setSentimentDigestGenerating(true);
+    try {
+      const data = await apiClient.getDealSentimentDigest(workspaceId, dealId, token);
+      setSentimentDigest(data ?? null);
+    } catch { /* ignore */ }
+    finally { setSentimentDigestGenerating(false); }
+  };
+
+  const handleRegenerateWinProbExplainer = async () => {
+    if (!token || !workspaceId || winProbExplainerGenerating) return;
+    setWinProbExplainerGenerating(true);
+    try {
+      const data = await apiClient.getWinProbabilityExplainer(workspaceId, dealId, token);
+      setWinProbExplainer(data ?? null);
+    } catch { /* ignore */ }
+    finally { setWinProbExplainerGenerating(false); }
+  };
+
+  const handleRegenerateRoiProjection = async () => {
+    if (!token || !workspaceId || roiProjectionGenerating) return;
+    setRoiProjectionGenerating(true);
+    try {
+      const data = await apiClient.getDealRoiProjection(workspaceId, dealId, token);
+      setRoiProjection(data ?? null);
+    } catch { /* ignore */ }
+    finally { setRoiProjectionGenerating(false); }
+  };
+
+  const handleRegenerateClosePlan = async () => {
+    if (!token || !workspaceId || closePlanGenerating) return;
+    setClosePlanGenerating(true);
+    try {
+      const data = await apiClient.getDealClosePlan(workspaceId, dealId, token);
+      setClosePlanData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setClosePlanGenerating(false); }
+  };
+
+  const handleRegenerateObjections = async () => {
+    if (!token || !workspaceId || objectionGenerating) return;
+    setObjectionGenerating(true);
+    try {
+      const data = await apiClient.getDealObjectionHandler(workspaceId, dealId, token);
+      setObjectionData(data ?? null);
+      setObjectionExpandedIdx(null);
+    } catch { /* ignore */ }
+    finally { setObjectionGenerating(false); }
+  };
+
+  const handleRegenerateStakeholders = async () => {
+    if (!token || !workspaceId || stakeholderGenerating) return;
+    setStakeholderGenerating(true);
+    try {
+      const data = await apiClient.getDealStakeholderMap(workspaceId, dealId, token);
+      setStakeholderData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setStakeholderGenerating(false); }
+  };
+
+  const handleRegenerateNegotiationScript = async () => {
+    if (!token || !workspaceId || negotiationGenerating) return;
+    setNegotiationGenerating(true);
+    try {
+      const data = await apiClient.getDealNegotiationScript(workspaceId, dealId, token);
+      setNegotiationData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setNegotiationGenerating(false); }
+  };
+
+  const handleRegenerateMeetingPrep = async () => {
+    if (!token || !workspaceId || meetingPrepGenerating) return;
+    setMeetingPrepGenerating(true);
+    try {
+      const data = await apiClient.getMeetingPrep(workspaceId, dealId, token);
+      setMeetingPrepData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setMeetingPrepGenerating(false); }
+  };
+
+  const handleRegenerateFollowup = async () => {
+    if (!token || !workspaceId || followupGenerating) return;
+    setFollowupGenerating(true);
+    try {
+      const data = await apiClient.getDealFollowupSequence(workspaceId, dealId, token);
+      setFollowupData(data ?? null);
+    } catch { /* ignore */ }
+    finally { setFollowupGenerating(false); }
+  };
+
+  const handleRegenerateChampionRisk = async () => {
+    if (!token || !workspaceId || championRiskGenerating) return;
+    setChampionRiskGenerating(true);
+    try {
+      const data = await apiClient.getChampionRisk(workspaceId, dealId, token);
+      setChampionRisk(data ?? null);
+    } catch { /* ignore */ }
+    finally { setChampionRiskGenerating(false); }
+  };
+
+  const handleRegenerateExpansionOpportunity = async () => {
+    if (!token || !workspaceId || expansionOpportunityGenerating) return;
+    setExpansionOpportunityGenerating(true);
+    try {
+      const data = await apiClient.getExpansionOpportunity(workspaceId, dealId, token);
+      setExpansionOpportunity(data);
+    } catch { /* noop */ } finally {
+      setExpansionOpportunityGenerating(false);
+    }
+  };
+
+  const handleRegenerateCompetitiveResponse = async () => {
+    if (!token || !workspaceId || competitiveResponseGenerating) return;
+    setCompetitiveResponseGenerating(true);
+    try {
+      const data = await apiClient.getCompetitiveResponse(workspaceId, dealId, token);
+      setCompetitiveResponse(data ?? null);
+    } catch { /* ignore */ }
+    finally { setCompetitiveResponseGenerating(false); }
   };
 
   // ── Render guards ──────────────────────────────────────────────────────────
@@ -844,6 +1313,69 @@ export default function DealDetailPage() {
             </Card>
           )}
 
+          {/* Deal Engagement Score */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-indigo-400" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-200">Engagement Score</p>
+              <span className="ml-auto text-[10px] font-mono text-zinc-500">Last 90 days</span>
+            </div>
+            {engagementLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-4 w-4 text-indigo-400 animate-spin" />
+              </div>
+            ) : engagementScore === null ? (
+              <p className="text-xs text-zinc-600 italic py-2">Unable to load engagement data.</p>
+            ) : (() => {
+              const s = engagementScore.score;
+              const circumference = 2 * Math.PI * 36;
+              const dash = (s / 100) * circumference;
+              const scoreColor = s >= 80 ? "#34d399" : s >= 60 ? "#818cf8" : s >= 30 ? "#fbbf24" : "#f87171";
+              const scoreLabel = s >= 80 ? "High" : s >= 60 ? "Good" : s >= 30 ? "Low" : "Minimal";
+              return (
+                <div className="flex items-center gap-4">
+                  <div className="relative flex-shrink-0">
+                    <svg width="88" height="88" viewBox="0 0 88 88">
+                      <circle cx="44" cy="44" r="36" fill="none" stroke="#27272a" strokeWidth="8" />
+                      <circle
+                        cx="44" cy="44" r="36" fill="none"
+                        stroke={scoreColor} strokeWidth="8"
+                        strokeLinecap="round"
+                        strokeDasharray={`${dash} ${circumference}`}
+                        transform="rotate(-90 44 44)"
+                        style={{ transition: "stroke-dasharray 0.5s ease" }}
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      <span className="text-lg font-bold font-mono" style={{ color: scoreColor }}>{s}</span>
+                      <span className="text-[9px] text-zinc-500 uppercase tracking-wide">{scoreLabel}</span>
+                    </div>
+                  </div>
+                  <div className="flex-1 space-y-1.5">
+                    {[
+                      { label: "Messages", value: engagementScore.components.messages, max: 40, count: engagementScore.message_count },
+                      { label: "Notes", value: engagementScore.components.notes, max: 30, count: engagementScore.note_count },
+                      { label: "Tasks", value: engagementScore.components.tasks, max: 30, count: `${engagementScore.tasks_done}/${engagementScore.tasks_total}` },
+                    ].map(({ label, value, max, count }) => (
+                      <div key={label}>
+                        <div className="flex justify-between text-[10px] text-zinc-500 mb-0.5">
+                          <span>{label}</span>
+                          <span className="font-mono">{count}</span>
+                        </div>
+                        <div className="h-1 rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-indigo-500"
+                            style={{ width: `${(value / max) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+          </Card>
+
           {/* Competitors */}
           <Card className="p-4 space-y-3">
             <div className="flex items-center gap-2">
@@ -898,6 +1430,93 @@ export default function DealDetailPage() {
                       aria-label="Add competitor"
                     >
                       {competitorSaving
+                        ? <Loader2 className="h-3 w-3 animate-spin" />
+                        : <Plus className="h-3 w-3" />}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {/* Mentions */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-indigo-400" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-200">Mentions</p>
+              {mentions.length > 0 && (
+                <span className="ml-auto text-xs font-mono text-zinc-500">{mentions.length}</span>
+              )}
+            </div>
+
+            {mentionsLoading ? (
+              <div className="h-7 rounded-lg bg-zinc-800/50 animate-pulse" />
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {mentions.map((m) => {
+                  const initials = m.name.replace(/^@/, "").slice(0, 2).toUpperCase();
+                  const isTeammate = m.type === "teammate";
+                  return (
+                    <span
+                      key={m.name}
+                      className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                        isTeammate
+                          ? "border-indigo-500/20 bg-indigo-500/10 text-indigo-300"
+                          : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                      }`}
+                    >
+                      <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${
+                        isTeammate ? "bg-indigo-500/30 text-indigo-200" : "bg-emerald-500/30 text-emerald-200"
+                      }`}>
+                        {initials}
+                      </span>
+                      {m.name}
+                      <button
+                        onClick={() => handleRemoveMention(m.name)}
+                        disabled={mentionSaving}
+                        aria-label={`Remove ${m.name}`}
+                        className={`ml-0.5 hover:opacity-80 disabled:opacity-40 cursor-pointer transition-opacity ${
+                          isTeammate ? "text-indigo-400" : "text-emerald-400"
+                        }`}
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  );
+                })}
+
+                {/* Inline add */}
+                <div className="flex items-center gap-1">
+                  <select
+                    value={mentionType}
+                    onChange={(e) => setMentionType(e.target.value as "teammate" | "contact")}
+                    className="h-6 rounded-full border border-zinc-700 bg-zinc-800 px-1.5 text-[10px] text-zinc-400 outline-none cursor-pointer"
+                    aria-label="Mention type"
+                  >
+                    <option value="teammate">Teammate</option>
+                    <option value="contact">Contact</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={mentionInput}
+                    onChange={(e) => setMentionInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === ",") {
+                        e.preventDefault();
+                        handleAddMention(mentionInput);
+                      }
+                    }}
+                    placeholder="+ Add mention"
+                    className="h-6 rounded-full border border-dashed border-zinc-600 bg-transparent px-2.5 text-[11px] text-zinc-400 placeholder:text-zinc-600 outline-none focus:border-indigo-500/50 focus:text-zinc-200 transition-colors w-28"
+                  />
+                  {mentionInput.trim() && (
+                    <button
+                      onClick={() => handleAddMention(mentionInput)}
+                      disabled={mentionSaving}
+                      className="flex-shrink-0 text-zinc-500 hover:text-indigo-300 disabled:opacity-40 cursor-pointer transition-colors"
+                      aria-label="Add mention"
+                    >
+                      {mentionSaving
                         ? <Loader2 className="h-3 w-3 animate-spin" />
                         : <Plus className="h-3 w-3" />}
                     </button>
@@ -1059,6 +1678,67 @@ export default function DealDetailPage() {
             </Card>
           )}
 
+          {/* Health score history */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Heart className="h-4 w-4 text-emerald-400" aria-hidden />
+              <p className="text-sm font-semibold text-zinc-200">Health Score History</p>
+              <span className="ml-auto text-[10px] font-mono text-zinc-500">0–100</span>
+            </div>
+            {healthHistoryLoading ? (
+              <div className="h-28 rounded-xl bg-zinc-800/50 animate-pulse" />
+            ) : healthHistory.length > 0 ? (
+              <div className="h-28">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={healthHistory} margin={{ top: 4, right: 4, bottom: 0, left: -24 }}>
+                    <defs>
+                      <linearGradient id="healthGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#10B981" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#10B981" stopOpacity={0}   />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                    <XAxis
+                      dataKey="recorded_at"
+                      tick={{ fill: "#71717A", fontSize: 9 }}
+                      axisLine={false}
+                      tickLine={false}
+                      interval="preserveStartEnd"
+                      tickFormatter={(v) =>
+                        new Date(v).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                      }
+                    />
+                    <YAxis
+                      domain={[0, 100]}
+                      tick={{ fill: "#71717A", fontSize: 9 }}
+                      axisLine={false}
+                      tickLine={false}
+                      width={28}
+                    />
+                    <RechartTooltip
+                      formatter={(v) => [`${v ?? 0}`, "Health"]}
+                      labelFormatter={(l) =>
+                        new Date(l).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                      }
+                      contentStyle={{ background: "#18181B", border: "1px solid #27272A", borderRadius: 8, fontSize: 11 }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="score"
+                      stroke="#10B981"
+                      strokeWidth={2}
+                      fill="url(#healthGrad)"
+                      dot={false}
+                      activeDot={{ r: 4, fill: "#10B981" }}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-500 text-center py-4">No snapshots recorded yet.</p>
+            )}
+          </Card>
+
           {/* Activity sparkline — 12-week event intensity */}
           <Card className="p-4 space-y-3">
             <div className="flex items-center gap-2">
@@ -1157,6 +1837,79 @@ export default function DealDetailPage() {
             )}
           </Card>
 
+          {/* Response Lag Heatmap — 7×24 grid by day-of-week × hour */}
+          {(() => {
+            const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+            const HOUR_LABELS = ["12a", "3a", "6a", "9a", "12p", "3p", "6p", "9p"];
+
+            const cellMap = new Map<string, { avg_lag_hours: number; count: number }>();
+            (responseLag?.cells ?? []).forEach((c) => cellMap.set(`${c.dow}-${c.hour}`, c));
+            const maxLag = responseLag?.max_lag_hours ?? 1;
+
+            function lagColor(avgLag: number): string {
+              if (avgLag <= 2) return "bg-emerald-700";
+              if (avgLag <= 8) return "bg-amber-600";
+              if (avgLag <= 24) return "bg-rose-700";
+              return "bg-rose-500";
+            }
+
+            return (
+              <Card className="p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-indigo-400" />
+                  <p className="text-sm font-semibold text-zinc-200">Response Lag</p>
+                  <span className="ml-auto text-[10px] font-mono text-zinc-500">Day × Hour</span>
+                </div>
+                {responseLagLoading ? (
+                  <div className="h-24 rounded-xl bg-zinc-800/50 animate-pulse" />
+                ) : !responseLag || responseLag.cells.length === 0 ? (
+                  <p className="text-xs text-zinc-500 text-center py-3">No message data for this contact.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {/* Hour axis labels */}
+                    <div className="flex ml-8">
+                      {HOUR_LABELS.map((l, i) => (
+                        <span key={i} className="flex-1 text-[9px] text-zinc-600 text-center"
+                          style={{ marginLeft: i === 0 ? 0 : undefined }}>{l}</span>
+                      ))}
+                    </div>
+                    {/* Grid rows */}
+                    {DAYS.map((day, dow) => (
+                      <div key={dow} className="flex items-center gap-1">
+                        <span className="w-7 text-[9px] text-zinc-500 text-right flex-shrink-0">{day}</span>
+                        <div className="flex flex-1 gap-px">
+                          {Array.from({ length: 24 }, (_, h) => {
+                            const cell = cellMap.get(`${dow}-${h}`);
+                            const bg = cell ? lagColor(cell.avg_lag_hours) : "bg-zinc-800";
+                            const tip = cell
+                              ? `${day} ${h}:00 — avg ${cell.avg_lag_hours}h (${cell.count} msg${cell.count !== 1 ? "s" : ""})`
+                              : `${day} ${h}:00 — no data`;
+                            return (
+                              <div
+                                key={h}
+                                title={tip}
+                                className={cn("flex-1 h-4 rounded-sm cursor-default transition-opacity hover:opacity-75", bg)}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                    {/* Legend */}
+                    <div className="flex items-center gap-2 pt-0.5">
+                      <span className="text-[9px] text-zinc-500">Fast</span>
+                      {(["bg-emerald-700", "bg-amber-600", "bg-rose-700", "bg-rose-500"] as const).map((c, i) => (
+                        <span key={i} className={cn("h-2.5 w-2.5 rounded-sm", c)} />
+                      ))}
+                      <span className="text-[9px] text-zinc-500">Slow</span>
+                      <span className="ml-auto text-[9px] text-zinc-600">Max {maxLag.toFixed(1)}h</span>
+                    </div>
+                  </div>
+                )}
+              </Card>
+            );
+          })()}
+
           {/* Stage History */}
           <Card className="p-4 space-y-3">
             <div className="flex items-center gap-2">
@@ -1226,6 +1979,1389 @@ export default function DealDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* Predicted Close */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Predicted Close</p>
+                {predictedClose && (
+                  <span className={cn(
+                    "ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded",
+                    predictedClose.confidence_level === "high"
+                      ? "bg-emerald-500/20 text-emerald-300"
+                      : predictedClose.confidence_level === "medium"
+                      ? "bg-amber-500/20 text-amber-300"
+                      : predictedClose.confidence_level === "none"
+                      ? "bg-zinc-700 text-zinc-400"
+                      : "bg-rose-500/20 text-rose-300"
+                  )}>
+                    {predictedClose.confidence_level === "none" ? "estimated" : `${predictedClose.confidence_pct}% conf`}
+                  </span>
+                )}
+              </div>
+              {predictedCloseLoading ? (
+                <div className="h-16 rounded-xl bg-zinc-800/50 animate-pulse" />
+              ) : !predictedClose ? (
+                <p className="text-xs text-zinc-500 text-center py-3">Could not load prediction.</p>
+              ) : (
+                <div className="space-y-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <Calendar className="h-3.5 w-3.5 text-indigo-400 flex-shrink-0" />
+                    <span className="text-xs text-zinc-400">Predicted date</span>
+                    <span className="text-xs font-mono text-zinc-100 ml-auto font-semibold">
+                      {new Date(predictedClose.predicted_date + "T00:00:00").toLocaleDateString("en-US", {
+                        month: "short", day: "numeric", year: "numeric",
+                      })}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <span className="h-3.5 w-3.5 flex-shrink-0" />
+                    <span className="text-xs text-zinc-500">Range</span>
+                    <span className="text-[11px] font-mono text-zinc-400 ml-auto">
+                      {new Date(predictedClose.lower_bound + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                      {" – "}
+                      {new Date(predictedClose.upper_bound + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    </span>
+                  </div>
+                  {predictedClose.avg_cycle_days !== null && (
+                    <div className="flex items-center gap-2.5">
+                      <span className="h-3.5 w-3.5 flex-shrink-0" />
+                      <span className="text-xs text-zinc-500">Avg cycle</span>
+                      <span className="text-[11px] font-mono text-zinc-400 ml-auto">
+                        {predictedClose.avg_cycle_days}d
+                        {predictedClose.data_points > 0 && (
+                          <span className="text-zinc-600"> ({predictedClose.data_points} deals)</span>
+                        )}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Deal Momentum */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-violet-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Deal Momentum</p>
+                {momentumData && (() => {
+                  const m = momentumData.momentum;
+                  const mColor = m === "gaining"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : m === "declining"
+                    ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : "text-amber-300 border-amber-500/30 bg-amber-500/10";
+                  return (
+                    <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${mColor}`}>
+                      {m}
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateMomentum}
+                  disabled={momentumLoading || momentumGenerating}
+                  className="ml-auto text-zinc-500 hover:text-violet-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate momentum"
+                  title="Regenerate"
+                >
+                  {momentumGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {momentumLoading ? (
+                <div className="space-y-2">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : momentumData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load momentum data.</p>
+              ) : (
+                <div className="space-y-3">
+                  {momentumData.drivers.length > 0 && (
+                    <ul className="space-y-1.5">
+                      {momentumData.drivers.map((driver, i) => (
+                        <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                          <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold mt-0.5 ${
+                            momentumData.momentum === "gaining" ? "bg-emerald-500/15 text-emerald-400"
+                            : momentumData.momentum === "declining" ? "bg-rose-500/15 text-rose-400"
+                            : "bg-amber-500/15 text-amber-400"
+                          }`}>
+                            {i + 1}
+                          </span>
+                          <p className="text-xs text-zinc-300 leading-relaxed">{driver}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
+                    <p className="text-[11px] font-semibold text-violet-300 uppercase tracking-wide mb-0.5">Recommendation</p>
+                    <p className="text-xs text-zinc-300">{momentumData.recommendation}</p>
+                  </div>
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(momentumData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Sentiment Digest */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm" aria-hidden>💬</span>
+                <p className="text-sm font-semibold text-zinc-200">Sentiment Digest</p>
+                {sentimentDigest && (() => {
+                  const s = sentimentDigest.overall_sentiment;
+                  const sColor = s === "positive"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : s === "negative"
+                    ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : "text-zinc-400 border-zinc-600/30 bg-zinc-700/20";
+                  return (
+                    <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${sColor}`}>
+                      {s}
+                    </span>
+                  );
+                })()}
+                {sentimentDigest && (() => {
+                  const t = sentimentDigest.sentiment_trend;
+                  const tColor = t === "improving"
+                    ? "text-emerald-400"
+                    : t === "declining"
+                    ? "text-rose-400"
+                    : "text-zinc-500";
+                  const tIcon = t === "improving" ? "↑" : t === "declining" ? "↓" : "→";
+                  return (
+                    <span className={`text-xs font-semibold ${tColor}`} title={`Trend: ${t}`}>{tIcon} {t}</span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateSentimentDigest}
+                  disabled={sentimentDigestLoading || sentimentDigestGenerating}
+                  className="ml-auto text-zinc-500 hover:text-indigo-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate sentiment digest"
+                  title="Regenerate"
+                >
+                  {sentimentDigestGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {sentimentDigestLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-8 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : sentimentDigest === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load sentiment data.</p>
+              ) : (
+                <div className="space-y-3">
+                  {sentimentDigest.key_signals.length > 0 && (
+                    <ul className="space-y-1.5">
+                      {sentimentDigest.key_signals.map((signal, i) => (
+                        <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                          <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-indigo-500" />
+                          <p className="text-xs text-zinc-300 leading-relaxed">{signal}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(sentimentDigest.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Win Probability Explainer */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <BarChart2 className="h-4 w-4 text-emerald-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Win Probability Explainer</p>
+                {winProbExplainer && (() => {
+                  const a = winProbExplainer.probability_assessment;
+                  const aColor = a === "on_track"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : a === "overestimated"
+                    ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : "text-amber-300 border-amber-500/30 bg-amber-500/10";
+                  const aLabel = a === "on_track" ? "On Track" : a === "overestimated" ? "Overestimated" : "Underestimated";
+                  return (
+                    <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${aColor}`}>
+                      {aLabel}
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateWinProbExplainer}
+                  disabled={winProbExplainerLoading || winProbExplainerGenerating}
+                  className="ml-auto text-zinc-500 hover:text-emerald-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate win probability explainer"
+                  title="Regenerate"
+                >
+                  {winProbExplainerGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {winProbExplainerLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-8 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : winProbExplainer === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load win probability data.</p>
+              ) : (
+                <div className="space-y-3">
+                  {winProbExplainer.key_drivers.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">Key Drivers</p>
+                      <ul className="space-y-1.5">
+                        {winProbExplainer.key_drivers.map((driver, i) => (
+                          <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                            <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500" />
+                            <p className="text-xs text-zinc-300 leading-relaxed">{driver}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {winProbExplainer.risk_factors.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">Risk Factors</p>
+                      <ul className="space-y-1.5">
+                        {winProbExplainer.risk_factors.map((risk, i) => (
+                          <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                            <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-500" />
+                            <p className="text-xs text-zinc-300 leading-relaxed">{risk}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {winProbExplainer.recommended_adjustment !== null && (
+                    <div className={`rounded-lg border px-3 py-2 ${winProbExplainer.recommended_adjustment > 0 ? "border-emerald-500/20 bg-emerald-500/5" : "border-rose-500/20 bg-rose-500/5"}`}>
+                      <p className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wide mb-0.5">Suggested Adjustment</p>
+                      <p className={`text-sm font-mono font-bold ${winProbExplainer.recommended_adjustment > 0 ? "text-emerald-300" : "text-rose-300"}`}>
+                        {winProbExplainer.recommended_adjustment > 0 ? "+" : ""}{winProbExplainer.recommended_adjustment}%
+                      </p>
+                    </div>
+                  )}
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(winProbExplainer.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* ROI Projection */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <DollarSign className="h-4 w-4 text-emerald-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">ROI Projection</p>
+                {roiProjection && (
+                  <span className="ml-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-emerald-300">
+                    {roiProjection.roi_multiplier.toFixed(1)}× ROI
+                  </span>
+                )}
+                <button
+                  onClick={handleRegenerateRoiProjection}
+                  disabled={roiProjectionLoading || roiProjectionGenerating}
+                  className="ml-auto text-zinc-500 hover:text-emerald-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate ROI projection"
+                  title="Regenerate"
+                >
+                  {roiProjectionGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {roiProjectionLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-8 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : roiProjection === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load ROI projection.</p>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-end gap-1.5">
+                    <span className="text-3xl font-bold text-emerald-400 tabular-nums">{roiProjection.roi_multiplier.toFixed(1)}×</span>
+                    <span className="text-xs text-zinc-500 mb-1">3-year return on investment</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-lg bg-zinc-800/60 px-2 py-1.5 text-center">
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-wide">Payback</p>
+                      <p className="text-sm font-semibold text-zinc-200 tabular-nums">{roiProjection.payback_months}mo</p>
+                    </div>
+                    <div className="rounded-lg bg-zinc-800/60 px-2 py-1.5 text-center">
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-wide">Yr 1</p>
+                      <p className="text-sm font-semibold text-emerald-300 tabular-nums">${(roiProjection.year1_value / 1000).toFixed(0)}K</p>
+                    </div>
+                    <div className="rounded-lg bg-zinc-800/60 px-2 py-1.5 text-center">
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-wide">Yr 3</p>
+                      <p className="text-sm font-semibold text-emerald-300 tabular-nums">${(roiProjection.year3_value / 1000).toFixed(0)}K</p>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 mb-1.5">Key Assumptions</p>
+                    <ol className="space-y-1">
+                      {roiProjection.assumptions.map((a, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <span className="mt-0.5 flex-shrink-0 h-4 w-4 rounded-full bg-emerald-500/15 flex items-center justify-center text-[9px] font-bold text-emerald-400">{i + 1}</span>
+                          <span className="text-xs text-zinc-400 leading-snug">{a}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(roiProjection.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Close Plan */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-teal-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Close Plan</p>
+                {closePlanData && (
+                  <span className="ml-1 rounded-full border border-teal-500/30 bg-teal-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-teal-300">
+                    {new Date(closePlanData.recommended_close_date + "T00:00:00").toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                  </span>
+                )}
+                <button
+                  onClick={handleRegenerateClosePlan}
+                  disabled={closePlanLoading || closePlanGenerating}
+                  className="ml-auto text-zinc-500 hover:text-teal-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate close plan"
+                  title="Regenerate"
+                >
+                  {closePlanGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {closePlanLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : closePlanData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load close plan.</p>
+              ) : (
+                <div className="space-y-2">
+                  {closePlanData.phases.map((phase, phaseIdx) => (
+                    <div key={phaseIdx} className="rounded-lg border border-zinc-800 overflow-hidden">
+                      <button
+                        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800/50 transition-colors cursor-pointer"
+                        onClick={() => setClosePlanOpenPhase(closePlanOpenPhase === phaseIdx ? -1 : phaseIdx)}
+                      >
+                        <ChevronRight className={`h-3.5 w-3.5 text-zinc-500 flex-shrink-0 transition-transform ${closePlanOpenPhase === phaseIdx ? "rotate-90" : ""}`} />
+                        <span className="text-xs font-semibold text-zinc-300">{phase.label}</span>
+                        <span className="ml-auto text-[10px] text-zinc-600">{phase.actions.length} action{phase.actions.length !== 1 ? "s" : ""}</span>
+                      </button>
+                      {closePlanOpenPhase === phaseIdx && (
+                        <ul className="px-3 pb-3 space-y-1.5 border-t border-zinc-800">
+                          {phase.actions.map((action, actionIdx) => (
+                            <li key={actionIdx} className="flex items-start gap-2 pt-1.5">
+                              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-teal-500/60 mt-0.5" />
+                              <p className="text-xs text-zinc-300 leading-relaxed">{action}</p>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="flex items-center gap-1.5">
+                      <Calendar className="h-3.5 w-3.5 text-teal-400/70" />
+                      <p className="text-[11px] font-semibold text-teal-300/80">
+                        Target close: {new Date(closePlanData.recommended_close_date + "T00:00:00").toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })}
+                      </p>
+                    </div>
+                    <p className="text-[10px] text-zinc-600">
+                      Generated {new Date(closePlanData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* AI Coach */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">AI Coach</p>
+                {coachData && (() => {
+                  const urgency = coachData.urgency;
+                  const urgencyColor = urgency === "high" ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : urgency === "medium" ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                    : "text-emerald-300 border-emerald-500/30 bg-emerald-500/10";
+                  return (
+                    <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${urgencyColor}`}>
+                      {urgency}
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateCoach}
+                  disabled={coachLoading || coachGenerating}
+                  className="ml-auto text-zinc-500 hover:text-indigo-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate coaching"
+                  title="Regenerate"
+                >
+                  {coachGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {coachLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : coachData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load coaching advice.</p>
+              ) : coachData.bullets.length === 0 ? (
+                <p className="text-xs text-zinc-500 italic py-2">No coaching advice available.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {coachData.bullets.map((bullet, i) => (
+                    <li key={i} className="flex items-start gap-2.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5">
+                      <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-indigo-500/15 text-[10px] font-bold text-indigo-400 mt-0.5">
+                        {i + 1}
+                      </span>
+                      <p className="text-xs text-zinc-300 leading-relaxed">{bullet}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {coachData && (
+                <p className="text-[10px] text-zinc-600 text-right">
+                  Generated {new Date(coachData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </p>
+              )}
+            </Card>
+          )}
+
+          {/* Risk Narrative — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-400" aria-hidden />
+                <button
+                  className="flex-1 flex items-center gap-1.5 text-left cursor-pointer"
+                  onClick={() => setRiskNarrativeCollapsed((c) => !c)}
+                  aria-label={riskNarrativeCollapsed ? "Expand Risk Narrative" : "Collapse Risk Narrative"}
+                >
+                  <p className="text-sm font-semibold text-zinc-200">Risk Narrative</p>
+                  <ChevronRight className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${riskNarrativeCollapsed ? "" : "rotate-90"}`} />
+                </button>
+                {riskNarrative && (() => {
+                  const lvl = riskNarrative.risk_level;
+                  const lvlColor = lvl === "high"
+                    ? "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                    : lvl === "low"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : "text-amber-300 border-amber-500/30 bg-amber-500/10";
+                  return (
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${lvlColor}`}>
+                      {lvl}
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={handleRegenerateRiskNarrative}
+                  disabled={riskNarrativeLoading || riskNarrativeGenerating}
+                  className="ml-auto text-zinc-500 hover:text-amber-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate risk narrative"
+                  title="Regenerate"
+                >
+                  {riskNarrativeGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {!riskNarrativeCollapsed && (
+                <>
+                  {riskNarrativeLoading ? (
+                    <div className="space-y-2">
+                      {[1, 2].map((i) => (
+                        <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                      ))}
+                    </div>
+                  ) : riskNarrative === null ? (
+                    <p className="text-xs text-zinc-600 italic py-2">Unable to load risk assessment.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="text-xs text-zinc-300 leading-relaxed">{riskNarrative.narrative}</p>
+
+                      {riskNarrative.top_risks.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Top Risks</p>
+                          <ul className="space-y-1.5">
+                            {riskNarrative.top_risks.map((risk, i) => (
+                              <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                                <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-[9px] font-bold text-amber-400 mt-0.5">
+                                  {i + 1}
+                                </span>
+                                <p className="text-xs text-zinc-300 leading-relaxed">{risk}</p>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-zinc-600 text-right">
+                        Generated {new Date(riskNarrative.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* Objection Handler — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Shield className="h-4 w-4 text-rose-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Objection Handler</p>
+                <button
+                  onClick={handleRegenerateObjections}
+                  disabled={objectionLoading || objectionGenerating}
+                  className="ml-auto text-zinc-500 hover:text-rose-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate objection handler"
+                  title="Regenerate"
+                >
+                  {objectionGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {objectionLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : objectionData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load objection handler.</p>
+              ) : objectionData.objections.length === 0 ? (
+                <p className="text-xs text-zinc-500 italic py-2">No objections generated.</p>
+              ) : (
+                <div className="space-y-2">
+                  {objectionData.objections.map((item, i) => {
+                    const strategyColor: Record<string, string> = {
+                      empathize: "text-violet-300 border-violet-500/30 bg-violet-500/10",
+                      redirect: "text-sky-300 border-sky-500/30 bg-sky-500/10",
+                      prove: "text-emerald-300 border-emerald-500/30 bg-emerald-500/10",
+                      challenge: "text-rose-300 border-rose-500/30 bg-rose-500/10",
+                    };
+                    const isOpen = objectionExpandedIdx === i;
+                    return (
+                      <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+                        <button
+                          className="w-full flex items-start gap-2.5 px-3 py-2.5 text-left cursor-pointer hover:bg-zinc-800/40 transition-colors"
+                          onClick={() => setObjectionExpandedIdx(isOpen ? null : i)}
+                          aria-expanded={isOpen}
+                        >
+                          <span className={`mt-0.5 rounded-full border px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wide flex-shrink-0 ${strategyColor[item.strategy] ?? strategyColor.empathize}`}>
+                            {item.strategy}
+                          </span>
+                          <p className="text-xs text-zinc-300 italic leading-relaxed line-clamp-2 flex-1">{item.objection}</p>
+                          <ChevronRight className={`h-3.5 w-3.5 text-zinc-600 flex-shrink-0 mt-0.5 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                        </button>
+                        {isOpen && (
+                          <div className="px-3 pb-3 pt-1 border-t border-zinc-800">
+                            <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">Response</p>
+                            <p className="text-xs text-zinc-300 leading-relaxed">{item.response}</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(objectionData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Stakeholder Map — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-sky-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Stakeholder Map</p>
+                <button
+                  onClick={handleRegenerateStakeholders}
+                  disabled={stakeholderLoading || stakeholderGenerating}
+                  className="ml-auto text-zinc-500 hover:text-sky-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate stakeholder map"
+                  title="Regenerate"
+                >
+                  {stakeholderGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {stakeholderLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="h-14 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : stakeholderData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load stakeholder map.</p>
+              ) : stakeholderData.stakeholders.length === 0 ? (
+                <p className="text-xs text-zinc-500 italic py-2">No stakeholders identified.</p>
+              ) : (
+                <div className="space-y-2">
+                  {stakeholderData.stakeholders.map((s, i) => {
+                    const roleColor: Record<string, string> = {
+                      decision_maker: "text-amber-300 border-amber-500/30 bg-amber-500/10",
+                      champion: "text-emerald-300 border-emerald-500/30 bg-emerald-500/10",
+                      blocker: "text-rose-300 border-rose-500/30 bg-rose-500/10",
+                      influencer: "text-sky-300 border-sky-500/30 bg-sky-500/10",
+                    };
+                    const engagementDot: Record<string, string> = {
+                      high: "bg-emerald-400",
+                      medium: "bg-amber-400",
+                      low: "bg-zinc-500",
+                    };
+                    return (
+                      <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="h-5 w-5 rounded-full bg-zinc-800 flex items-center justify-center text-[9px] font-bold text-zinc-400 flex-shrink-0">
+                            {s.name.charAt(0).toUpperCase()}
+                          </span>
+                          <p className="text-xs font-medium text-zinc-200 flex-1 truncate">{s.name}</p>
+                          <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-wide flex-shrink-0 ${roleColor[s.role] ?? roleColor.influencer}`}>
+                            {s.role.replace("_", " ")}
+                          </span>
+                          <span className={`h-2 w-2 rounded-full flex-shrink-0 ${engagementDot[s.engagement] ?? engagementDot.medium}`} title={`${s.engagement} engagement`} />
+                        </div>
+                        {s.recommended_action && (
+                          <p className="text-[11px] text-zinc-500 leading-relaxed pl-7">{s.recommended_action}</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(stakeholderData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Negotiation Script — proposal/negotiation stage only */}
+          {(deal.stage === "proposal" || deal.stage === "negotiation") && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Swords className="h-4 w-4 text-indigo-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Negotiation Script</p>
+                <button
+                  onClick={handleRegenerateNegotiationScript}
+                  disabled={negotiationLoading || negotiationGenerating}
+                  className="ml-auto text-zinc-500 hover:text-indigo-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate negotiation script"
+                  title="Regenerate"
+                >
+                  {negotiationGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {negotiationLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : negotiationData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load negotiation script.</p>
+              ) : (
+                <div className="space-y-3">
+                  {/* Opening move */}
+                  <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-400 mb-1">Opening Move</p>
+                    <p className="text-xs text-zinc-300 leading-relaxed">{negotiationData.opening_move}</p>
+                  </div>
+
+                  {/* Concessions */}
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 mb-2">Concessions</p>
+                    <div className="space-y-2">
+                      {negotiationData.concessions.map((c, i) => (
+                        <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 space-y-1">
+                          <div className="flex items-start gap-2">
+                            <span className="h-4 w-4 rounded-full bg-indigo-500/20 flex items-center justify-center text-[9px] font-bold text-indigo-400 flex-shrink-0 mt-0.5">
+                              {i + 1}
+                            </span>
+                            <div className="flex-1 space-y-1">
+                              <p className="text-xs text-zinc-200 font-medium leading-snug">{c.offer}</p>
+                              <p className="text-[11px] text-zinc-500"><span className="text-zinc-400">If:</span> {c.condition}</p>
+                              <p className="text-[11px] text-rose-400/80"><span className="text-zinc-400">Limit:</span> {c.limit}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Walk-away signal */}
+                  <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-400 mb-1">Walk Away If</p>
+                    <p className="text-xs text-zinc-400 leading-relaxed">{negotiationData.walk_away_signal}</p>
+                  </div>
+
+                  {/* Closing line */}
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400 mb-1">Closing Line</p>
+                    <p className="text-xs text-zinc-300 italic leading-relaxed">&ldquo;{negotiationData.closing_line}&rdquo;</p>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(negotiationData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Win/Loss Analysis — closed deals only */}
+          {isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Win/Loss Analysis</p>
+                {winLossData && (
+                  <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${
+                    winLossData.verdict === "won"
+                      ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                      : "text-rose-300 border-rose-500/30 bg-rose-500/10"
+                  }`}>
+                    {winLossData.verdict}
+                  </span>
+                )}
+                <button
+                  onClick={handleRegenerateWinLoss}
+                  disabled={winLossLoading || winLossGenerating}
+                  className="ml-auto text-zinc-500 hover:text-indigo-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate analysis"
+                  title="Regenerate"
+                >
+                  {winLossGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {winLossLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : winLossData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Analysis unavailable for this deal.</p>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs text-zinc-300 leading-relaxed">{winLossData.narrative}</p>
+
+                  {winLossData.key_factors.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Key Factors</p>
+                      <ul className="space-y-1">
+                        {winLossData.key_factors.map((f, i) => (
+                          <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                            <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold mt-0.5 ${
+                              winLossData.verdict === "won"
+                                ? "bg-emerald-500/15 text-emerald-400"
+                                : "bg-rose-500/15 text-rose-400"
+                            }`}>
+                              {i + 1}
+                            </span>
+                            <p className="text-xs text-zinc-300 leading-relaxed">{f}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {winLossData.lessons.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Lessons Learned</p>
+                      <ul className="space-y-1">
+                        {winLossData.lessons.map((l, i) => (
+                          <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-indigo-500/15 text-[9px] font-bold text-indigo-400 mt-0.5">
+                              {i + 1}
+                            </span>
+                            <p className="text-xs text-zinc-300 leading-relaxed">{l}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(winLossData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Expansion Opportunity — closed_won deals only */}
+          {stage === "closed_won" && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-emerald-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Expansion Opportunity</p>
+                {expansionOpportunity && (
+                  <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${
+                    expansionOpportunity.opportunity_score >= 70
+                      ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                      : expansionOpportunity.opportunity_score >= 40
+                      ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                      : "text-zinc-400 border-zinc-600/30 bg-zinc-700/10"
+                  }`}>
+                    Score {expansionOpportunity.opportunity_score}
+                  </span>
+                )}
+                <button
+                  onClick={handleRegenerateExpansionOpportunity}
+                  disabled={expansionOpportunityLoading || expansionOpportunityGenerating}
+                  className="ml-auto text-zinc-500 hover:text-emerald-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate expansion opportunity"
+                  title="Regenerate"
+                >
+                  {expansionOpportunityGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {expansionOpportunityLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : expansionOpportunity === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Unable to load expansion opportunity data.</p>
+              ) : (() => {
+                const s = expansionOpportunity.opportunity_score;
+                const circumference = 2 * Math.PI * 28;
+                const dash = (s / 100) * circumference;
+                const scoreColor = s >= 70 ? "#34d399" : s >= 40 ? "#fbbf24" : "#71717a";
+                const timingLabels: Record<string, string> = { immediate: "Immediate", "3_months": "3 Months", "6_months": "6 Months" };
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-4">
+                      <div className="relative flex-shrink-0">
+                        <svg width="68" height="68" viewBox="0 0 68 68">
+                          <circle cx="34" cy="34" r="28" fill="none" stroke="#27272a" strokeWidth="8" />
+                          <circle
+                            cx="34" cy="34" r="28" fill="none"
+                            stroke={scoreColor} strokeWidth="8"
+                            strokeLinecap="round"
+                            strokeDasharray={`${dash} ${circumference}`}
+                            transform="rotate(-90 34 34)"
+                            style={{ transition: "stroke-dasharray 0.5s ease" }}
+                          />
+                        </svg>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          <span className="text-base font-bold font-mono" style={{ color: scoreColor }}>{s}</span>
+                        </div>
+                      </div>
+                      <div className="flex-1 space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide">Timing</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold ${
+                            expansionOpportunity.recommended_timing === "immediate"
+                              ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                              : expansionOpportunity.recommended_timing === "3_months"
+                              ? "text-indigo-300 border-indigo-500/30 bg-indigo-500/10"
+                              : "text-zinc-300 border-zinc-600/30 bg-zinc-700/10"
+                          }`}>
+                            {timingLabels[expansionOpportunity.recommended_timing] ?? expansionOpportunity.recommended_timing}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-zinc-300 leading-relaxed">{expansionOpportunity.next_step}</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Upsell Products</p>
+                      <ul className="space-y-1">
+                        {expansionOpportunity.upsell_products.map((p, i) => (
+                          <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-[9px] font-bold text-emerald-400 mt-0.5">{i + 1}</span>
+                            <p className="text-xs text-zinc-300 leading-relaxed">{p}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Cross-Sell Signals</p>
+                      <ul className="space-y-1">
+                        {expansionOpportunity.cross_sell_signals.map((sig, i) => (
+                          <li key={i} className="flex items-start gap-2">
+                            <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-indigo-400" />
+                            <p className="text-xs text-zinc-400 leading-relaxed">{sig}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <p className="text-[10px] text-zinc-600 text-right">
+                      Generated {new Date(expansionOpportunity.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+                );
+              })()}
+            </Card>
+          )}
+
+          {/* Meeting Prep — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-indigo-400" aria-hidden />
+                <button
+                  className="flex-1 flex items-center gap-1.5 text-left cursor-pointer"
+                  onClick={() => setMeetingPrepCollapsed((c) => !c)}
+                  aria-label={meetingPrepCollapsed ? "Expand Meeting Prep" : "Collapse Meeting Prep"}
+                >
+                  <p className="text-sm font-semibold text-zinc-200">Meeting Prep</p>
+                  <ChevronRight className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${meetingPrepCollapsed ? "" : "rotate-90"}`} />
+                </button>
+                <button
+                  onClick={handleRegenerateMeetingPrep}
+                  disabled={meetingPrepLoading || meetingPrepGenerating}
+                  className="ml-auto text-zinc-500 hover:text-indigo-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate meeting prep"
+                  title="Regenerate"
+                >
+                  {meetingPrepGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {!meetingPrepCollapsed && (
+                <>
+                  {meetingPrepLoading ? (
+                    <div className="space-y-2">
+                      {[1, 2, 3].map((i) => (
+                        <div key={i} className="h-10 rounded-lg bg-zinc-800/50 animate-pulse" />
+                      ))}
+                    </div>
+                  ) : meetingPrepData === null ? (
+                    <p className="text-xs text-zinc-600 italic py-2">Unable to load meeting prep.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Agenda Items */}
+                      {meetingPrepData.agenda_items.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Agenda</p>
+                          {meetingPrepData.agenda_items.map((item, idx) => (
+                            <div key={idx} className="rounded-lg border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+                              <button
+                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left cursor-pointer hover:bg-zinc-800/40 transition-colors"
+                                onClick={() => setMeetingPrepOpenIdx(meetingPrepOpenIdx === idx ? null : idx)}
+                                aria-expanded={meetingPrepOpenIdx === idx}
+                              >
+                                <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-indigo-500/15 text-[10px] font-bold text-indigo-400">
+                                  {idx + 1}
+                                </span>
+                                <span className="flex-1 text-xs font-medium text-zinc-200">{item.topic}</span>
+                                <ChevronRight className={`h-3 w-3 text-zinc-600 transition-transform ${meetingPrepOpenIdx === idx ? "rotate-90" : ""}`} />
+                              </button>
+                              {meetingPrepOpenIdx === idx && (
+                                <div className="px-3 pb-3 pt-1 space-y-2 border-t border-zinc-800">
+                                  <p className="text-[11px] text-zinc-400 italic">{item.goal}</p>
+                                  {item.talking_points.length > 0 && (
+                                    <ul className="space-y-1">
+                                      {item.talking_points.map((tp, ti) => (
+                                        <li key={ti} className="flex items-start gap-2">
+                                          <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 flex-shrink-0 mt-1.5" />
+                                          <span className="text-xs text-zinc-300">{tp}</span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Questions to Ask */}
+                      {meetingPrepData.questions_to_ask.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Questions to Ask</p>
+                          <ul className="space-y-1">
+                            {meetingPrepData.questions_to_ask.map((q, i) => (
+                              <li key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0 mt-1.5" />
+                                <span className="text-xs text-zinc-300">{q}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Things to Avoid */}
+                      {meetingPrepData.things_to_avoid.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Things to Avoid</p>
+                          <ul className="space-y-1">
+                            {meetingPrepData.things_to_avoid.map((a, i) => (
+                              <li key={i} className="flex items-start gap-2 rounded-lg border border-rose-900/30 bg-rose-500/5 px-3 py-2">
+                                <span className="h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0 mt-1.5" />
+                                <span className="text-xs text-rose-300">{a}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-zinc-600 text-right">
+                        Generated {new Date(meetingPrepData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* Follow-Up Sequence — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Repeat className="h-4 w-4 text-emerald-400" aria-hidden />
+                <p className="text-sm font-semibold text-zinc-200">Follow-Up Sequence</p>
+                <button
+                  onClick={handleRegenerateFollowup}
+                  disabled={followupLoading || followupGenerating}
+                  className="ml-auto text-zinc-500 hover:text-emerald-400 disabled:opacity-40 transition-colors cursor-pointer"
+                  aria-label="Regenerate follow-up sequence"
+                  title="Regenerate"
+                >
+                  {followupGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {followupLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-14 rounded-lg bg-zinc-800/50 animate-pulse" />
+                  ))}
+                </div>
+              ) : followupData === null ? (
+                <p className="text-xs text-zinc-600 italic py-2">Sequence unavailable for this deal.</p>
+              ) : (
+                <div className="space-y-3">
+                  {followupData.steps.map((step) => {
+                    const timingColor = step.timing === 'now'
+                      ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'
+                      : step.timing === '3d'
+                      ? 'text-amber-300 border-amber-500/30 bg-amber-500/10'
+                      : 'text-zinc-300 border-zinc-600/30 bg-zinc-800/40';
+                    const channelIcon = step.channel === 'email'
+                      ? <Mail className="h-3 w-3" />
+                      : step.channel === 'call'
+                      ? <User className="h-3 w-3" />
+                      : <Zap className="h-3 w-3" />;
+                    const channelColor = step.channel === 'email'
+                      ? 'text-indigo-300 border-indigo-500/30 bg-indigo-500/10'
+                      : step.channel === 'call'
+                      ? 'text-sky-300 border-sky-500/30 bg-sky-500/10'
+                      : 'text-violet-300 border-violet-500/30 bg-violet-500/10';
+                    return (
+                      <div key={step.step} className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 space-y-1.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-[10px] font-bold text-emerald-400">
+                            {step.step}
+                          </span>
+                          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wide ${timingColor}`}>
+                            {step.timing}
+                          </span>
+                          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${channelColor}`}>
+                            {channelIcon}
+                            {step.channel}
+                          </span>
+                        </div>
+                        <p className="text-xs font-medium text-zinc-200">{step.action}</p>
+                        <p className="text-[11px] text-zinc-500 italic">Goal: {step.goal}</p>
+                      </div>
+                    );
+                  })}
+
+                  {followupData.rationale && (
+                    <p className="text-[11px] text-zinc-500 leading-relaxed border-t border-zinc-800 pt-2">
+                      {followupData.rationale}
+                    </p>
+                  )}
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(followupData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Champion Risk — open deals only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-amber-400" />
+                <p className="text-sm font-semibold text-zinc-200">Champion Risk</p>
+                {championRisk && (
+                  <button
+                    onClick={handleRegenerateChampionRisk}
+                    disabled={championRiskLoading || championRiskGenerating}
+                    className="ml-auto text-zinc-500 hover:text-amber-400 disabled:opacity-40 transition-colors cursor-pointer"
+                    aria-label="Regenerate champion risk"
+                    title="Regenerate"
+                  >
+                    {championRiskGenerating ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                )}
+              </div>
+
+              {championRiskLoading ? (
+                <div className="space-y-2">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="h-10 rounded-xl border border-zinc-800 bg-zinc-900 animate-pulse" />
+                  ))}
+                </div>
+              ) : championRisk === null ? (
+                <p className="text-xs text-zinc-500 py-4 text-center">Could not assess champion risk.</p>
+              ) : (
+                <>
+                  {/* Risk level + champion status badges */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={cn(
+                      "text-[11px] font-semibold rounded-full px-2.5 py-0.5",
+                      championRisk.risk_level === "critical" ? "bg-rose-900/60 text-rose-300" :
+                      championRisk.risk_level === "high" ? "bg-amber-900/60 text-amber-300" :
+                      championRisk.risk_level === "medium" ? "bg-yellow-900/60 text-yellow-300" :
+                      "bg-emerald-900/60 text-emerald-300"
+                    )}>
+                      {championRisk.risk_level.charAt(0).toUpperCase() + championRisk.risk_level.slice(1)} Risk
+                    </span>
+                    <span className={cn(
+                      "text-[11px] font-medium rounded-full px-2.5 py-0.5",
+                      championRisk.champion_status === "active" ? "bg-emerald-900/40 text-emerald-400" :
+                      championRisk.champion_status === "uncertain" ? "bg-amber-900/40 text-amber-400" :
+                      championRisk.champion_status === "at_risk" ? "bg-rose-900/40 text-rose-400" :
+                      "bg-zinc-800 text-zinc-400"
+                    )}>
+                      {championRisk.champion_status === "at_risk" ? "At Risk" :
+                       championRisk.champion_status.charAt(0).toUpperCase() + championRisk.champion_status.slice(1)}
+                    </span>
+                  </div>
+
+                  {/* Risk signals */}
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Risk Signals</p>
+                    <ul className="space-y-1">
+                      {championRisk.risk_signals.map((signal, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-300 leading-snug">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0 mt-1.5" />
+                          {signal}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Mitigation steps */}
+                  <div className="space-y-1 border-t border-zinc-800 pt-2">
+                    <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Mitigation Steps</p>
+                    <ul className="space-y-1">
+                      {championRisk.mitigation_steps.map((step, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-300 leading-snug">
+                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-indigo-900/60 text-[9px] font-bold text-indigo-300 flex-shrink-0 mt-0.5">{i + 1}</span>
+                          {step}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(championRisk.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* Competitive Response — open deals with competitors only */}
+          {!isClosedStage && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Swords className="h-4 w-4 text-rose-400" />
+                <p className="text-sm font-semibold text-zinc-200">Competitive Response</p>
+                {competitiveResponse && (
+                  <button
+                    onClick={handleRegenerateCompetitiveResponse}
+                    className="ml-auto p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+                    title="Regenerate"
+                  >
+                    {competitiveResponseGenerating
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <RefreshCw className="h-3 w-3" />}
+                  </button>
+                )}
+              </div>
+
+              {competitiveResponseLoading ? (
+                <div className="space-y-2">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="h-10 rounded-xl border border-zinc-800 bg-zinc-900 animate-pulse" />
+                  ))}
+                </div>
+              ) : competitiveResponse === null ? (
+                <p className="text-xs text-zinc-500 py-2 text-center">No competitors tracked or data unavailable.</p>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-rose-300 bg-rose-900/30 border border-rose-800/40 px-2 py-0.5 rounded-full">
+                      vs {competitiveResponse.primary_competitor}
+                    </span>
+                  </div>
+
+                  {/* Strengths */}
+                  <div>
+                    <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide mb-1">Their Strengths</p>
+                    <ul className="space-y-1">
+                      {competitiveResponse.battle_card.strengths.map((s, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-400 leading-snug">
+                          <span className="flex-shrink-0 mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-500/70 mt-1.5" />
+                          {s}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Weaknesses */}
+                  <div>
+                    <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide mb-1">Their Weaknesses</p>
+                    <ul className="space-y-1">
+                      {competitiveResponse.battle_card.weaknesses.map((w, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-400 leading-snug">
+                          <span className="flex-shrink-0 mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500/70 mt-1.5" />
+                          {w}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Key Differentiators */}
+                  <div>
+                    <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wide mb-1">Our Differentiators</p>
+                    <ul className="space-y-1">
+                      {competitiveResponse.battle_card.key_differentiators.map((d, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-zinc-300 leading-snug">
+                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-indigo-900/60 text-[9px] font-bold text-indigo-300 flex-shrink-0 mt-0.5">{i + 1}</span>
+                          {d}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Talk Track */}
+                  <div className="rounded-lg bg-rose-950/30 border border-rose-800/30 p-2.5">
+                    <p className="text-[10px] font-semibold text-rose-400 uppercase tracking-wide mb-1">Suggested Talk Track</p>
+                    <p className="text-xs text-zinc-300 leading-relaxed">{competitiveResponse.battle_card.suggested_talk_track}</p>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-600 text-right">
+                    Generated {new Date(competitiveResponse.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </>
+              )}
+            </Card>
+          )}
 
           {/* Tasks */}
           <Card className="p-4 space-y-3">

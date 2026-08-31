@@ -8,7 +8,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +17,9 @@ from app.dependencies import get_current_user, require_admin
 from app.models.user import User
 from app.models.deal import Deal
 from app.models.deal_note import DealNote
+from app.models.deal_health_history import DealHealthHistory
 from app.models.activity_event import ActivityEvent
+from app.models.message import Message
 
 router = APIRouter()
 
@@ -43,6 +45,12 @@ class DealResponse(BaseModel):
     next_action: str | None = None
     next_action_date: date | None = None
     competitors: list[str] = []
+    mentions: list = []
+
+    @field_validator("competitors", "mentions", mode="before")
+    @classmethod
+    def _none_to_empty_list(cls, v):
+        return v if v is not None else []
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -1139,6 +1147,210 @@ async def deal_revenue_cohort(
     return rows
 
 
+@router.get("/workspaces/{workspace_id}/deals/velocity-trends")
+async def deal_velocity_trends(
+    workspace_id: uuid.UUID,
+    months: int = Query(default=6, ge=1, le=24),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Month-over-month average deal cycle time (creation → close) for the last N months.
+
+    Returns one row per calendar month with avg_cycle_days, deal_count, closed_won,
+    closed_lost. Only closed deals (closed_won or closed_lost) with a valid
+    stage_changed_at are counted.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.now(timezone.utc)
+
+    # Build ordered list of (year, month) tuples — oldest-first
+    month_keys: list[tuple[int, int]] = []
+    for i in range(months - 1, -1, -1):
+        m = now.month - i
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        month_keys.append((y, m))
+    month_set = set(month_keys)
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at.isnot(None),
+        )
+    )
+    closed_deals = list(result.scalars().all())
+
+    # Accumulate per-month cycle days and won/lost counts
+    month_data: dict[tuple[int, int], dict] = {
+        ym: {"cycle_days": [], "closed_won": 0, "closed_lost": 0}
+        for ym in month_keys
+    }
+
+    for deal in closed_deals:
+        closed_at = deal.stage_changed_at
+        if closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=timezone.utc)
+        ym = (closed_at.year, closed_at.month)
+        if ym not in month_set:
+            continue
+
+        created = deal.created_at
+        if created and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+
+        if created:
+            cycle = max(0.0, (closed_at - created).total_seconds() / 86400)
+            month_data[ym]["cycle_days"].append(cycle)
+
+        if deal.stage == "closed_won":
+            month_data[ym]["closed_won"] += 1
+        else:
+            month_data[ym]["closed_lost"] += 1
+
+    rows: list[dict] = []
+    for ym in month_keys:
+        y, m = ym
+        data = month_data[ym]
+        days_list = data["cycle_days"]
+        avg = round(sum(days_list) / len(days_list), 1) if days_list else None
+        rows.append({
+            "month": f"{y}-{m:02d}",
+            "avg_cycle_days": avg,
+            "deal_count": len(days_list),
+            "closed_won": data["closed_won"],
+            "closed_lost": data["closed_lost"],
+        })
+
+    return rows
+
+
+_STAGE_DEFAULT_CYCLE_DAYS: dict[str, int] = {
+    "discovery": 90,
+    "qualified": 60,
+    "proposal": 40,
+    "negotiation": 20,
+}
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/predicted-close")
+async def deal_predicted_close(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Predict close date using historical cycle-time distribution from closed deals.
+
+    Algorithm:
+    1. Fetch all closed (won/lost) deals in the workspace with both created_at and
+       stage_changed_at (which serves as close date).
+    2. Compute cycle time = stage_changed_at − created_at in days.
+    3. Derive mean (μ) and population std-dev (σ).
+    4. predicted_date = deal.created_at + μ days
+    5. lower_bound = deal.created_at + max(0, μ − σ)
+    6. upper_bound = deal.created_at + (μ + σ)
+    7. Confidence: high ≥10 data points, medium ≥3, low ≥1, none → stage defaults.
+
+    NOTE: registered before /{deal_id} to avoid UUID-parse ambiguity.
+    """
+    import math
+
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    # Short-circuit: if already closed, return actual close date
+    if deal.stage in ("closed_won", "closed_lost") and deal.stage_changed_at:
+        close_dt = deal.stage_changed_at if deal.stage_changed_at.tzinfo else deal.stage_changed_at.replace(tzinfo=timezone.utc)
+        return {
+            "predicted_date": close_dt.date().isoformat(),
+            "lower_bound": close_dt.date().isoformat(),
+            "upper_bound": close_dt.date().isoformat(),
+            "confidence_level": "actual",
+            "confidence_pct": 100,
+            "data_points": 0,
+            "avg_cycle_days": None,
+        }
+
+    hist_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at.isnot(None),
+            Deal.created_at.isnot(None),
+        )
+    )
+    closed_deals = hist_result.scalars().all()
+
+    cycle_days: list[float] = []
+    for d in closed_deals:
+        created = d.created_at if d.created_at.tzinfo else d.created_at.replace(tzinfo=timezone.utc)
+        closed = d.stage_changed_at if d.stage_changed_at.tzinfo else d.stage_changed_at.replace(tzinfo=timezone.utc)
+        days = max(0.0, (closed - created).total_seconds() / 86400)
+        if days <= 730:  # exclude >2-year outliers
+            cycle_days.append(days)
+
+    n = len(cycle_days)
+    now = datetime.now(timezone.utc)
+    deal_created = deal.created_at if deal.created_at.tzinfo else deal.created_at.replace(tzinfo=timezone.utc)
+
+    if n == 0:
+        default_days = _STAGE_DEFAULT_CYCLE_DAYS.get(deal.stage or "discovery", 60)
+        predicted = deal_created + timedelta(days=default_days)
+        lower = deal_created + timedelta(days=max(0, default_days - 14))
+        upper = deal_created + timedelta(days=default_days + 14)
+        confidence_level = "none"
+        confidence_pct = 30
+    else:
+        mean = sum(cycle_days) / n
+        variance = sum((x - mean) ** 2 for x in cycle_days) / n
+        std = math.sqrt(variance)
+
+        predicted = deal_created + timedelta(days=mean)
+        lower = deal_created + timedelta(days=max(0.0, mean - std))
+        upper = deal_created + timedelta(days=mean + std)
+
+        if n >= 10:
+            confidence_level = "high"
+            confidence_pct = 85
+        elif n >= 3:
+            confidence_level = "medium"
+            confidence_pct = 65
+        else:
+            confidence_level = "low"
+            confidence_pct = 40
+
+    # Ensure predicted is always in the future relative to today; shift bounds with it
+    if predicted.date() < now.date():
+        shift = (now + timedelta(days=7)) - predicted
+        predicted = now + timedelta(days=7)
+        lower = lower + shift
+        upper = upper + shift
+
+    return {
+        "predicted_date": predicted.date().isoformat(),
+        "lower_bound": lower.date().isoformat(),
+        "upper_bound": upper.date().isoformat(),
+        "confidence_level": confidence_level,
+        "confidence_pct": confidence_pct,
+        "data_points": n,
+        "avg_cycle_days": round(sum(cycle_days) / n, 1) if n > 0 else None,
+    }
+
+
 @router.get("/workspaces/{workspace_id}/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     workspace_id: uuid.UUID,
@@ -1369,6 +1581,111 @@ async def update_deal_competitors(
     await db.commit()
     await db.refresh(deal)
     return {"competitors": deal.competitors or []}
+
+
+class MentionEntry(BaseModel):
+    name: str
+    type: str = "teammate"  # "teammate" | "contact"
+
+
+class MentionUpdateRequest(BaseModel):
+    mentions: list[MentionEntry]
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/mentions")
+async def get_deal_mentions(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return the mention list for a deal."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    return {"mentions": deal.mentions or []}
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/mentions")
+async def update_deal_mentions(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    body: MentionUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Replace the mention list for a deal (full replace, max 30 entries)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    cleaned = [
+        {"name": m.name.strip(), "type": m.type}
+        for m in body.mentions
+        if m.name.strip()
+    ][:30]
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    deal.mentions = cleaned
+    db.add(deal)
+    await db.commit()
+    await db.refresh(deal)
+    return {"mentions": deal.mentions or []}
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/health-score-history")
+async def get_deal_health_score_history(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    limit: int = Query(default=30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Return the recorded health-score snapshots for a deal, oldest first.
+
+    Snapshots are written by a periodic Celery beat task. Returns an empty
+    list when no snapshots have been recorded yet.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    history_result = await db.execute(
+        select(DealHealthHistory)
+        .where(
+            DealHealthHistory.deal_id == deal_id,
+            DealHealthHistory.workspace_id == workspace_id,
+        )
+        .order_by(DealHealthHistory.recorded_at.asc())
+        .limit(limit)
+    )
+    rows = history_result.scalars().all()
+
+    return [
+        {
+            "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
+            "score": row.score,
+        }
+        for row in rows
+    ]
 
 
 @router.delete("/workspaces/{workspace_id}/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1759,3 +2076,150 @@ async def deal_stage_history(
         })
 
     return history
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/response-lag")
+async def deal_response_lag_heatmap(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """7×24 avg-response-lag heatmap for messages linked to the deal's contact."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.contact_id is None:
+        return {"cells": [], "max_lag_hours": 0.0}
+
+    msgs_result = await db.execute(
+        select(Message)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == deal.contact_id,
+        )
+        .order_by(Message.received_at.asc())
+    )
+    msgs = msgs_result.scalars().all()
+
+    if len(msgs) < 2:
+        return {"cells": [], "max_lag_hours": 0.0}
+
+    def _tz(t: datetime | None) -> datetime | None:
+        if t is None:
+            return None
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+    from collections import defaultdict
+    bucket: dict[tuple[int, int], list[float]] = defaultdict(list)
+
+    for i in range(len(msgs) - 1):
+        t0 = _tz(msgs[i].received_at)
+        t1 = _tz(msgs[i + 1].received_at)
+        if t0 is None or t1 is None:
+            continue
+        lag_hours = (t1 - t0).total_seconds() / 3600
+        # Skip negative or outlier lags (> 1 week)
+        if lag_hours <= 0 or lag_hours > 168:
+            continue
+        bucket[(t0.weekday(), t0.hour)].append(lag_hours)
+
+    if not bucket:
+        return {"cells": [], "max_lag_hours": 0.0}
+
+    cells = [
+        {
+            "dow": dow,
+            "hour": hour,
+            "avg_lag_hours": round(sum(lags) / len(lags), 2),
+            "count": len(lags),
+        }
+        for (dow, hour), lags in bucket.items()
+    ]
+    max_lag = max(c["avg_lag_hours"] for c in cells)
+    return {"cells": cells, "max_lag_hours": round(max_lag, 2)}
+
+
+@router.get("/workspaces/{workspace_id}/deals/{deal_id}/engagement-score")
+async def deal_engagement_score(
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Compute a 0–100 engagement score from contact messages, deal notes, and task completion (last 90 days)."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    from app.models.task import Task
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+
+    # Messages from the linked contact
+    message_count = 0
+    if deal.contact_id:
+        msg_result = await db.execute(
+            select(Message).where(
+                Message.workspace_id == workspace_id,
+                Message.contact_id == deal.contact_id,
+                Message.received_at >= cutoff,
+            )
+        )
+        message_count = len(msg_result.scalars().all())
+
+    # Notes on this deal
+    note_result = await db.execute(
+        select(DealNote).where(
+            DealNote.workspace_id == workspace_id,
+            DealNote.deal_id == deal_id,
+            DealNote.created_at >= cutoff,
+        )
+    )
+    note_count = len(note_result.scalars().all())
+
+    # Tasks linked to the deal's contact
+    tasks_total = 0
+    tasks_done = 0
+    if deal.contact_id:
+        task_result = await db.execute(
+            select(Task).where(
+                Task.workspace_id == workspace_id,
+                Task.contact_id == deal.contact_id,
+                Task.created_at >= cutoff,
+            )
+        )
+        tasks = task_result.scalars().all()
+        tasks_total = len(tasks)
+        tasks_done = sum(1 for t in tasks if t.status == "done")
+
+    messages_score = min(40, message_count * 8)
+    notes_score = min(30, note_count * 10)
+    tasks_score = round(30 * tasks_done / tasks_total) if tasks_total > 0 else 0
+    total_score = messages_score + notes_score + tasks_score
+
+    return {
+        "score": total_score,
+        "message_count": message_count,
+        "note_count": note_count,
+        "tasks_total": tasks_total,
+        "tasks_done": tasks_done,
+        "components": {
+            "messages": messages_score,
+            "notes": notes_score,
+            "tasks": tasks_score,
+        },
+    }

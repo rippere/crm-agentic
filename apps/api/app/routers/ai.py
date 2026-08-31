@@ -1,4 +1,8 @@
+import datetime
+import json
 import uuid
+from collections import Counter, defaultdict
+from datetime import timezone
 
 import anthropic as _anthropic
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -12,9 +16,14 @@ from app.dependencies import get_current_user
 from app.limiter import limiter
 from app.models.user import User
 from app.models.contact import Contact
+from app.models.contact_note import ContactNote
+from app.models.clarity_score import ClarityScore
 from app.models.deal import Deal
+from app.models.deal_note import DealNote
+from app.models.message import Message
 from app.models.task import Task
 from app.models.activity_event import ActivityEvent
+from app.models.deal_health_history import DealHealthHistory
 
 router = APIRouter()
 
@@ -127,3 +136,6757 @@ async def ai_query(
         ) from exc
 
     return AIQueryResponse(answer=answer)
+
+
+# ---------------------------------------------------------------------------
+# Workspace digest
+# ---------------------------------------------------------------------------
+
+_DIGEST_SYSTEM = """\
+You are Nova, the AI assistant for NovaCRM. Generate a concise weekly digest for a sales/PM team.
+
+Structure your response in exactly three sections using these headers:
+**Top Wins** — 2-3 bullet points of recent successes (deals moved forward, contacts engaged, tasks completed).
+**Watch Out** — 2-3 bullet points of risks or items needing attention (stale deals, overdue tasks, low clarity messages).
+**Recommended Actions** — 2-3 specific, actionable next steps referencing CRM features where helpful.
+
+Keep each bullet to one crisp sentence. No intro or closing paragraphs outside the three sections.\
+"""
+
+
+class DigestResponse(BaseModel):
+    digest: str
+    generated_at: str
+    contact_count: int
+    active_deal_count: int
+    open_task_count: int
+    message_count: int
+
+
+@router.post("/workspaces/{workspace_id}/ai/digest", response_model=DigestResponse)
+@limiter.limit("5/minute")
+async def generate_digest(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DigestResponse:
+    """Generate a Claude Haiku weekly digest for the workspace."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # Gather counts and summaries
+    contact_count = await db.scalar(
+        select(func.count()).where(Contact.workspace_id == workspace_id)
+    ) or 0
+
+    deal_rows = await db.execute(
+        select(Deal.stage, Deal.title, Deal.company, Deal.value, Deal.health_score, Deal.ml_win_probability)
+        .where(Deal.workspace_id == workspace_id)
+        .limit(30)
+    )
+    deals = deal_rows.all()
+    active_deals = [d for d in deals if d.stage not in ("closed_won", "closed_lost")]
+    won_deals = [d for d in deals if d.stage == "closed_won"]
+    stale_deals = [d for d in active_deals if d.health_score < 40]
+
+    open_task_count = await db.scalar(
+        select(func.count()).where(Task.workspace_id == workspace_id, Task.status == "open")
+    ) or 0
+    overdue_task_count = await db.scalar(
+        select(func.count()).where(
+            Task.workspace_id == workspace_id,
+            Task.status == "open",
+            Task.due_date < datetime.date.today(),
+        )
+    ) or 0
+
+    message_count = await db.scalar(
+        select(func.count()).where(Message.workspace_id == workspace_id)
+    ) or 0
+
+    recent_events = await db.execute(
+        select(ActivityEvent.type, ActivityEvent.description, ActivityEvent.agent_name, ActivityEvent.severity)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .order_by(ActivityEvent.created_at.desc())
+        .limit(10)
+    )
+    events = recent_events.all()
+
+    pipeline_value = sum(d.value for d in active_deals)
+    won_value = sum(d.value for d in won_deals)
+
+    context_lines = [
+        f"Workspace snapshot (as of {datetime.date.today().isoformat()}):",
+        f"- Contacts: {contact_count}",
+        f"- Active deals: {len(active_deals)} (pipeline ${pipeline_value:,.0f})",
+        f"- Closed-won deals: {len(won_deals)} (value ${won_value:,.0f})",
+        f"- Stale deals (health < 40): {len(stale_deals)}",
+        f"- Open tasks: {open_task_count} ({overdue_task_count} overdue)",
+        f"- Messages ingested: {message_count}",
+    ]
+    if stale_deals:
+        context_lines.append("- Stale deal details: " + "; ".join(
+            f"{d.title or 'Untitled'} @ {d.company or '?'} health={d.health_score}" for d in stale_deals[:5]
+        ))
+    if won_deals:
+        context_lines.append("- Recent wins: " + "; ".join(
+            f"{d.title or 'Untitled'} @ {d.company or '?'} ${d.value:,.0f}" for d in won_deals[:3]
+        ))
+    if events:
+        context_lines.append("- Recent activity: " + "; ".join(
+            f"[{e.type}/{e.severity}] {e.agent_name}: {e.description}" for e in events[:5]
+        ))
+
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_DIGEST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        digest_text = msg.content[0].text.strip() if msg.content else "Digest unavailable."
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return DigestResponse(
+        digest=digest_text,
+        generated_at=datetime.datetime.utcnow().isoformat() + "Z",
+        contact_count=contact_count,
+        active_deal_count=len(active_deals),
+        open_task_count=open_task_count,
+        message_count=message_count,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-deal AI coaching
+# ---------------------------------------------------------------------------
+
+_COACH_SYSTEM = """\
+You are Nova, the AI sales coach in NovaCRM. Analyze the provided deal snapshot and return coaching advice.
+
+Respond in exactly this JSON format (no extra text, no markdown fences):
+{
+  "urgency": "low",
+  "bullets": [
+    "First coaching point — one concise sentence with a specific action.",
+    "Second coaching point — one concise sentence with a specific action.",
+    "Third coaching point — one concise sentence with a specific action."
+  ]
+}
+
+Urgency rules:
+- "high": health < 40, OR win_prob < 30, OR next action overdue by 3+ days, OR stuck in stage > 21 days, OR 2+ active competitors
+- "medium": health 40–69, OR win_prob 30–59, OR stuck in stage 14–21 days, OR next action overdue 1–2 days
+- "low": deal is progressing normally with no red flags
+
+Each bullet must name a specific CRM action the rep can take today to improve this deal.\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/coach")
+@limiter.limit("10/minute")
+async def deal_coaching(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate 3-bullet AI coaching advice for a deal using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    # Days stuck in current stage
+    days_in_stage: int | None = None
+    if deal.stage_changed_at:
+        ref = deal.stage_changed_at
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        days_in_stage = (datetime.datetime.now(timezone.utc) - ref).days
+
+    # Next-action overdue
+    days_overdue = 0
+    if deal.next_action_date:
+        today = datetime.date.today()
+        delta = (today - deal.next_action_date).days
+        days_overdue = max(0, delta)
+
+    competitors = deal.competitors or []
+
+    context = (
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${float(deal.value):,.0f}\n"
+        f"Health score: {deal.health_score}/100\n"
+        f"ML win probability: {deal.ml_win_probability}%\n"
+        f"Days in current stage: {days_in_stage if days_in_stage is not None else 'unknown'}\n"
+        f"Competitors tracked: {', '.join(competitors) if competitors else 'none'}\n"
+        f"Next action: {deal.next_action or 'none set'}\n"
+        f"Next action overdue by: {days_overdue} day{'s' if days_overdue != 1 else ''}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_COACH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        urgency = data.get("urgency", "medium")
+        bullets = data.get("bullets", [])
+        if urgency not in ("low", "medium", "high"):
+            urgency = "medium"
+        bullets = [str(b) for b in bullets[:3]]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "urgency": urgency,
+        "bullets": bullets,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Contact outreach draft
+# ---------------------------------------------------------------------------
+
+_OUTREACH_SYSTEM = """\
+You are Nova, the AI writing assistant in NovaCRM. Draft a personalised outreach email for a sales rep.
+
+The email must be:
+- Genuinely personalised — reference the contact's name, role, company, and any recent interaction
+- Concise — subject under 60 chars, body 3–4 short paragraphs maximum
+- Professional but warm in tone, not salesy or generic
+- Action-oriented with a single clear CTA (typically a 15–20 minute call or quick reply)
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "subject": "The email subject line (under 60 chars)",
+  "body": "The email body. Use \\n for line breaks between paragraphs."
+}
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/outreach")
+@limiter.limit("10/minute")
+async def draft_outreach(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a personalised outreach email draft for a contact using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id, Contact.id == contact_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Recent messages from this contact with clarity scores
+    msg_result = await db.execute(
+        select(Message.subject, Message.received_at, ClarityScore.score)
+        .outerjoin(ClarityScore, Message.id == ClarityScore.message_id)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    recent_messages = msg_result.all()
+
+    # Open / in-progress tasks for this contact
+    task_result = await db.execute(
+        select(Task.title, Task.due_date)
+        .where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status.in_(["open", "in_progress"]),
+        )
+        .order_by(Task.due_date.asc())
+        .limit(3)
+    )
+    open_tasks = task_result.all()
+
+    # Build context
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} — {contact.role or 'unknown role'} at {contact.company or 'Unknown Company'}",
+        f"Contact email: {contact.email or 'unknown'}",
+        f"Relationship status: {contact.status}",
+    ]
+    if recent_messages:
+        lines.append("Recent message history:")
+        for msg in recent_messages:
+            clarity = f" (clarity {msg.score}/100)" if msg.score is not None else ""
+            ts = msg.received_at.strftime("%b %d") if msg.received_at else "unknown date"
+            lines.append(f"  - \"{msg.subject or '(no subject)'}\" received {ts}{clarity}")
+    else:
+        lines.append("No prior message history — this is a first-touch outreach.")
+
+    if open_tasks:
+        lines.append("Open tasks linked to this contact:")
+        for task in open_tasks:
+            due = f" (due {task.due_date})" if task.due_date else ""
+            lines.append(f"  - {task.title}{due}")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_OUTREACH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        subject = str(data.get("subject", f"Following up, {contact.name or 'there'}"))
+        body = str(data.get("body", "Hi,\n\nI wanted to reach out and connect.\n\nBest,"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "subject": subject,
+        "body": body,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pipeline AI summary
+# ---------------------------------------------------------------------------
+
+_PIPELINE_SUMMARY_SYSTEM = """\
+You are Nova, the AI pipeline analyst in NovaCRM. Analyse the provided pipeline snapshot and return a structured summary.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "headline": "One compelling sentence summarising overall pipeline health and momentum (max 120 chars).",
+  "opportunities": [
+    "Specific opportunity the team should act on today — one concise sentence.",
+    "Second opportunity — one concise sentence.",
+    "Third opportunity — one concise sentence."
+  ],
+  "risks": [
+    "Specific risk that needs attention — one concise sentence.",
+    "Second risk — one concise sentence.",
+    "Third risk — one concise sentence."
+  ]
+}
+
+Each opportunity or risk must reference specific deals, stages, or metrics from the data, and recommend a concrete CRM action.\
+"""
+
+_STAGE_ORDER = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.post("/workspaces/{workspace_id}/ai/pipeline-summary")
+@limiter.limit("5/minute")
+async def pipeline_summary(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a pipeline AI summary: headline + opportunities + risks, via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals = deal_result.scalars().all()
+
+    today = datetime.date.today()
+    overdue = [d for d in open_deals if d.next_action_date and d.next_action_date < today]
+    stale = [d for d in open_deals if d.health_score is not None and d.health_score < 40]
+
+    all_competitors: list[str] = []
+    for d in open_deals:
+        if d.competitors:
+            all_competitors.extend(d.competitors)
+    top_competitors = [c for c, _ in Counter(all_competitors).most_common(5)]
+
+    by_stage: dict[str, list] = defaultdict(list)
+    for d in open_deals:
+        by_stage[d.stage].append(d)
+
+    pipeline_value = sum(float(d.value) for d in open_deals)
+
+    lines = [
+        f"Pipeline snapshot ({today.isoformat()}):",
+        f"Total active pipeline: ${pipeline_value:,.0f} across {len(open_deals)} open deals",
+        f"Stale deals (health < 40): {len(stale)}",
+        f"Overdue next actions: {len(overdue)}",
+        f"Top competitors: {', '.join(top_competitors) if top_competitors else 'none'}",
+        "",
+        "Deals by stage:",
+    ]
+    for stage in _STAGE_ORDER:
+        stage_deals = by_stage.get(stage, [])
+        if stage_deals:
+            lines.append(f"  {stage.upper()} ({len(stage_deals)} deals):")
+            for d in stage_deals[:5]:
+                lines.append(
+                    f"    - {d.title or 'Untitled'} @ {d.company or '?'}"
+                    f" | ${float(d.value):,.0f} | health={d.health_score} | win_prob={d.ml_win_probability}%"
+                )
+    if stale:
+        lines.append("")
+        lines.append("Stale deals needing attention:")
+        for d in stale[:5]:
+            lines.append(f"  - {d.title or 'Untitled'} @ {d.company or '?'} health={d.health_score}/100")
+    if overdue:
+        lines.append("")
+        lines.append("Overdue next actions:")
+        for d in overdue[:5]:
+            delta = (today - d.next_action_date).days
+            lines.append(f"  - {d.title or 'Untitled'}: \"{d.next_action or 'unset'}\" ({delta}d overdue)")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_PIPELINE_SUMMARY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        headline = str(data.get("headline", "Pipeline summary unavailable."))
+        opportunities = [str(b) for b in (data.get("opportunities") or [])[:3]]
+        risks = [str(b) for b in (data.get("risks") or [])[:3]]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "headline": headline,
+        "opportunities": opportunities,
+        "risks": risks,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI pipeline pulse (structured data + 2-sentence insight)
+# ---------------------------------------------------------------------------
+
+_PIPELINE_PULSE_SYSTEM = """\
+You are Nova, the AI pipeline analyst in NovaCRM. Generate a 2-sentence insight about the provided pipeline.
+
+Respond with exactly this JSON format (no markdown fences, no extra keys):
+{"insight": "First sentence about overall health and momentum. Second sentence with a specific, actionable recommendation referencing a CRM feature."}
+
+Rules:
+- Exactly 2 sentences separated by a period and a space
+- Cite specific numbers from the context (total value, at-risk count, top stage)
+- End with a concrete CRM action: "Run Deal Health check", "Schedule a QBR call", "Draft Outreach email", "Update ML win probability"\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/pipeline-pulse")
+@limiter.limit("10/minute")
+async def pipeline_pulse(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals = deal_result.scalars().all()
+
+    total_value = sum(float(d.value) for d in open_deals)
+    at_risk_count = sum(1 for d in open_deals if (d.health_score or 0) < 50)
+    health_avg = (
+        round(sum(d.health_score or 0 for d in open_deals) / len(open_deals))
+        if open_deals else 0
+    )
+
+    top_deal = None
+    if open_deals:
+        td = max(open_deals, key=lambda d: float(d.value))
+        top_deal = {"title": td.title or "Untitled", "value": float(td.value), "stage": td.stage}
+
+    by_stage: dict[str, dict] = {}
+    for d in open_deals:
+        s = d.stage
+        if s not in by_stage:
+            by_stage[s] = {"stage": s, "count": 0, "value": 0.0}
+        by_stage[s]["count"] += 1
+        by_stage[s]["value"] += float(d.value)
+    stage_breakdown = [by_stage[s] for s in _STAGE_ORDER if s in by_stage]
+
+    lines = [
+        f"Open pipeline: {len(open_deals)} deals, ${total_value:,.0f} total",
+        f"Average health score: {health_avg}/100",
+        f"At-risk deals (health < 50): {at_risk_count}",
+        f"Stage breakdown: " + ", ".join(
+            f"{s['stage'].upper()} {s['count']} deals ${s['value']:,.0f}" for s in stage_breakdown
+        ),
+    ]
+    if top_deal:
+        lines.append(
+            f"Top deal by value: \"{top_deal['title']}\" ${top_deal['value']:,.0f} in {top_deal['stage']}"
+        )
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            system=_PIPELINE_PULSE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        insight = str(data.get("insight", "Pipeline health is nominal. Review at-risk deals and update next actions."))[:300]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "total_value": total_value,
+        "at_risk_count": at_risk_count,
+        "top_deal": top_deal,
+        "stage_breakdown": stage_breakdown,
+        "health_avg": health_avg,
+        "insight": insight,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI task suggestions for a contact
+# ---------------------------------------------------------------------------
+
+_SUGGEST_TASKS_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Suggest specific, actionable follow-up tasks for a sales rep based on their contact's profile and recent interactions.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "suggestions": [
+    {"title": "Task title — specific and actionable (max 80 chars)", "due_days": 3, "priority": "high"},
+    {"title": "Second task", "due_days": 7, "priority": "medium"},
+    {"title": "Third task", "due_days": 14, "priority": "low"}
+  ]
+}
+
+Rules:
+- Return 3–5 suggestions maximum
+- Each title must be specific and name the contact or deal where relevant (max 80 chars)
+- due_days: how many days from today the task should be due (integer, 1–30)
+- priority: exactly "high", "medium", or "low"
+- Follow up on recent messages, open deals, or relationship gaps visible in the data
+- Avoid vague tasks — always name a concrete action\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/suggest-tasks")
+@limiter.limit("10/minute")
+async def suggest_contact_tasks(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Suggest 3–5 actionable follow-up tasks for a contact using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id, Contact.id == contact_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Last 3 messages
+    msg_result = await db.execute(
+        select(Message.subject, Message.received_at)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    recent_messages = msg_result.all()
+
+    # Open deals linked to this contact
+    deal_result = await db.execute(
+        select(Deal.title, Deal.stage, Deal.value, Deal.health_score)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+        .limit(3)
+    )
+    open_deals = deal_result.all()
+
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} ({contact.role or 'unknown role'} at {contact.company or 'Unknown'})",
+        f"Status: {contact.status}",
+        f"Email: {contact.email or 'unknown'}",
+    ]
+    if recent_messages:
+        lines.append("Recent messages:")
+        for m in recent_messages:
+            ts = m.received_at.strftime("%b %d") if m.received_at else "unknown date"
+            lines.append(f"  - \"{m.subject or '(no subject)'}\" on {ts}")
+    else:
+        lines.append("No prior messages — this is a first-touch contact.")
+    if open_deals:
+        lines.append("Open deals:")
+        for d in open_deals:
+            lines.append(f"  - {d.title or 'Untitled'} ({d.stage}) ${float(d.value):,.0f} health={d.health_score}")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_SUGGEST_TASKS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        raw_suggestions = data.get("suggestions") or []
+        suggestions = []
+        for s in raw_suggestions[:5]:
+            priority = str(s.get("priority", "medium"))
+            if priority not in ("high", "medium", "low"):
+                priority = "medium"
+            try:
+                due_days = max(1, min(30, int(s.get("due_days", 7))))
+            except (TypeError, ValueError):
+                due_days = 7
+            suggestions.append({
+                "title": str(s.get("title", "Follow up"))[:80],
+                "due_days": due_days,
+                "priority": priority,
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "suggestions": suggestions,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI win/loss analysis for closed deals
+# ---------------------------------------------------------------------------
+
+_WIN_LOSS_SYSTEM = """\
+You are Nova, the AI sales analyst in NovaCRM. Analyse the provided closed deal data and return a structured win/loss analysis.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "narrative": "2–3 sentence narrative explaining the outcome — be specific about the deal, company, and the deciding factors.",
+  "key_factors": [
+    "Factor 1 — specific one-sentence insight about what drove the outcome.",
+    "Factor 2 — specific one-sentence insight.",
+    "Factor 3 — specific one-sentence insight."
+  ],
+  "lessons": [
+    "Lesson 1 — actionable takeaway for the team going forward.",
+    "Lesson 2 — actionable takeaway.",
+    "Lesson 3 — actionable takeaway."
+  ]
+}
+
+Rules:
+- narrative: 2–3 sentences, specific to this deal (name the company, stage, value, outcome reason)
+- key_factors: 3 items, each naming a specific data point from the deal that drove the outcome
+- lessons: 3 items, each prescribing a concrete change the team can make for future deals
+- Be honest about the data — if a deal was lost, name the real weakness\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/win-loss-analysis")
+@limiter.limit("10/minute")
+async def deal_win_loss_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a win/loss analysis for a closed deal using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage not in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Win/loss analysis is only available for closed deals",
+        )
+
+    # Fetch deal notes
+    from app.models.deal_note import DealNote
+    notes_result = await db.execute(
+        select(DealNote.body, DealNote.author, DealNote.created_at)
+        .where(DealNote.workspace_id == workspace_id, DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(5)
+    )
+    notes = notes_result.all()
+
+    verdict = "won" if deal.stage == "closed_won" else "lost"
+    competitors = deal.competitors or []
+
+    # Days from creation to close
+    days_to_close: int | None = None
+    if deal.stage_changed_at and deal.created_at:
+        ref = deal.stage_changed_at
+        start = deal.created_at
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        days_to_close = (ref - start).days
+
+    lines = [
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}",
+        f"Outcome: {verdict.upper()} (stage: {deal.stage})",
+        f"Value: ${float(deal.value):,.0f}",
+        f"Win/loss reason on record: {deal.win_loss_reason or 'not recorded'}",
+        f"Final health score: {deal.health_score}/100",
+        f"Final ML win probability: {deal.ml_win_probability}%",
+        f"Days to close: {days_to_close if days_to_close is not None else 'unknown'}",
+        f"Competitors tracked: {', '.join(competitors) if competitors else 'none'}",
+    ]
+    if notes:
+        lines.append("Deal notes:")
+        for n in notes:
+            ts = n.created_at.strftime("%b %d") if n.created_at else "unknown"
+            lines.append(f"  - [{ts}] {n.author or 'Unknown'}: {n.body[:120]}")
+    else:
+        lines.append("No deal notes recorded.")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_WIN_LOSS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        narrative = str(data.get("narrative", "Analysis unavailable."))
+        key_factors = [str(f) for f in (data.get("key_factors") or [])[:3]]
+        lessons = [str(l) for l in (data.get("lessons") or [])[:3]]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "verdict": verdict,
+        "narrative": narrative,
+        "key_factors": key_factors,
+        "lessons": lessons,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI deal risk narrative
+# ---------------------------------------------------------------------------
+
+_RISK_NARRATIVE_SYSTEM = """\
+You are Nova, the AI risk analyst in NovaCRM. Analyse the provided open deal data and return a concise risk narrative.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "risk_level": "medium",
+  "narrative": "2–3 sentence prose describing the specific risk profile of this deal — name the company, stage, and the primary risk driver.",
+  "top_risks": [
+    "Risk 1 — one concise sentence naming a specific risk factor and its potential impact.",
+    "Risk 2 — one concise sentence.",
+    "Risk 3 — one concise sentence."
+  ]
+}
+
+Risk level rules (pick exactly one):
+- "high": health score < 40, OR win probability < 25%, OR close date overdue by 14+ days, OR at least 2 of: competitors > 2, days in stage > 30, next-action overdue
+- "low": health score >= 70 AND win probability >= 60% AND no overdue next-action AND close date not slipped
+- "medium": everything else that does not qualify as high or low
+
+Return 2–3 top_risks. Be specific — reference actual data from the deal, not generic advice.\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/risk-narrative")
+@limiter.limit("10/minute")
+async def deal_risk_narrative(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a risk narrative for an open deal using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Risk narrative is only available for open deals",
+        )
+
+    # Days in current stage
+    now = datetime.datetime.now(timezone.utc)
+    stage_ref = deal.stage_changed_at or deal.created_at
+    if stage_ref and stage_ref.tzinfo is None:
+        stage_ref = stage_ref.replace(tzinfo=timezone.utc)
+    days_in_stage = (now - stage_ref).days if stage_ref else 0
+
+    # Close date slippage
+    close_overdue_days: int | None = None
+    if deal.expected_close:
+        try:
+            expected = datetime.date.fromisoformat(str(deal.expected_close))
+            overdue = (datetime.date.today() - expected).days
+            if overdue > 0:
+                close_overdue_days = overdue
+        except (ValueError, TypeError):
+            pass
+
+    # Overdue next action
+    next_action_overdue = False
+    if deal.next_action_date:
+        try:
+            na_date = deal.next_action_date
+            if hasattr(na_date, "isoformat"):
+                next_action_overdue = na_date < datetime.date.today()
+        except (ValueError, TypeError):
+            pass
+
+    competitors = deal.competitors or []
+
+    # Last 3 deal notes
+    from app.models.deal_note import DealNote
+    notes_result = await db.execute(
+        select(DealNote.body, DealNote.author, DealNote.created_at)
+        .where(DealNote.workspace_id == workspace_id, DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = notes_result.all()
+
+    lines = [
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}",
+        f"Stage: {deal.stage}",
+        f"Value: ${float(deal.value):,.0f}",
+        f"Health score: {deal.health_score}/100",
+        f"ML win probability: {deal.ml_win_probability}%",
+        f"Days in current stage: {days_in_stage}",
+        f"Competitors tracked: {', '.join(competitors) if competitors else 'none'} ({len(competitors)} total)",
+        f"Next action overdue: {'yes' if next_action_overdue else 'no'}",
+    ]
+    if close_overdue_days is not None:
+        lines.append(f"Close date overdue by: {close_overdue_days} days")
+    else:
+        lines.append("Close date: not overdue or not set")
+
+    if notes:
+        lines.append("Recent deal notes:")
+        for n in notes:
+            ts = n.created_at.strftime("%b %d") if n.created_at else "unknown"
+            lines.append(f"  - [{ts}] {n.author or 'Unknown'}: {n.body[:120]}")
+    else:
+        lines.append("No deal notes recorded.")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_RISK_NARRATIVE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        risk_level = str(data.get("risk_level", "medium"))
+        if risk_level not in ("low", "medium", "high"):
+            risk_level = "medium"
+        narrative = str(data.get("narrative", "Risk assessment unavailable."))
+        top_risks = [str(r) for r in (data.get("top_risks") or [])[:3]]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "risk_level": risk_level,
+        "narrative": narrative,
+        "top_risks": top_risks,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Contact relationship health summary
+# ---------------------------------------------------------------------------
+
+_RELATIONSHIP_HEALTH_SYSTEM = """\
+You are Nova, the AI relationship intelligence in NovaCRM. Analyse the provided contact relationship data and return a structured health assessment.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "health_rating": "strong",
+  "summary": "Exactly two sentences: first describes the current state of this relationship with specific numbers where available; second identifies the key trend or risk.",
+  "action_items": [
+    {"priority": "high", "action": "Specific, actionable next step — max 80 chars, reference a CRM feature where helpful."},
+    {"priority": "medium", "action": "Second action."},
+    {"priority": "low", "action": "Third action."}
+  ]
+}
+
+Health rating rules (pick exactly one):
+- "strong": 5+ touches (messages + notes) in the last 90 days, AND avg response ≤ 8h or response data unavailable, AND no 30+ day silence
+- "at_risk": 0–1 touches in 90 days, OR avg response > 72h, OR last touch was 30+ days ago
+- "neutral": everything else that doesn't qualify as strong or at_risk
+
+Return 2–3 action_items maximum. Tailor every item specifically to this contact's data — no generic advice.\
+"""
+
+
+# ---------------------------------------------------------------------------
+# AI outreach sequence planner
+# ---------------------------------------------------------------------------
+
+_OUTREACH_SEQUENCE_SYSTEM = """\
+You are Nova, the AI outreach strategist in NovaCRM. Given a contact profile and recent context, \
+design a concise 3-step outreach sequence to re-engage or advance the relationship.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "steps": [
+    {
+      "step": 1,
+      "channel": "email",
+      "timing": "now",
+      "subject": "Quick check-in on <topic>",
+      "body_preview": "Hi <name>, I wanted to follow up on...",
+      "goal": "Re-open the conversation and gauge interest"
+    },
+    {
+      "step": 2,
+      "channel": "call",
+      "timing": "3d",
+      "subject": null,
+      "body_preview": "Call script: confirm receipt of email, ask about timeline and blockers...",
+      "goal": "Qualify urgency and identify decision-maker"
+    },
+    {
+      "step": 3,
+      "channel": "email",
+      "timing": "7d",
+      "subject": "Resources + next steps for <company>",
+      "body_preview": "Hi <name>, sharing the case study we discussed plus a proposal outline...",
+      "goal": "Deliver value and propose a meeting"
+    }
+  ]
+}
+
+Rules:
+- Exactly 3 steps
+- channel must be one of: email, slack, call
+- timing must be one of: now, 3d, 7d, 14d
+- subject is required for email/slack steps; null for call steps
+- body_preview: 1–2 sentences only, personalised with contact name and company
+- goal: one sentence, outcome-focused
+- Base timing on urgency: if last touch > 30 days use "now", otherwise spread across 3d/7d/14d\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/outreach-sequence")
+@limiter.limit("10/minute")
+async def suggest_outreach_sequence(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a 3-step AI outreach sequence for a contact using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id, Contact.id == contact_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Last 3 messages with clarity scores
+    msg_result = await db.execute(
+        select(Message.subject, Message.received_at, ClarityScore.score)
+        .outerjoin(ClarityScore, Message.id == ClarityScore.message_id)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    recent_messages = msg_result.all()
+
+    # Open tasks
+    task_result = await db.execute(
+        select(Task.title, Task.due_date)
+        .where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status.in_(["open", "in_progress"]),
+        )
+        .limit(5)
+    )
+    open_tasks = task_result.all()
+
+    # Days since last touch
+    last_touch_days: int | None = None
+    if recent_messages and recent_messages[0].received_at:
+        ref = recent_messages[0].received_at
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        last_touch_days = (datetime.datetime.now(timezone.utc) - ref).days
+
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} ({contact.role or 'unknown role'} at {contact.company or 'Unknown'})",
+        f"Status: {contact.status}",
+        f"Email: {contact.email or 'unknown'}",
+    ]
+    if last_touch_days is not None:
+        lines.append(f"Days since last touch: {last_touch_days}")
+    else:
+        lines.append("No prior contact history — first-touch sequence.")
+
+    if recent_messages:
+        lines.append("Recent messages (newest first):")
+        for m in recent_messages:
+            clarity = f" — clarity {m.score}/100" if m.score is not None else ""
+            ts = m.received_at.strftime("%b %d") if m.received_at else "unknown"
+            lines.append(f"  - [{ts}] \"{m.subject or '(no subject)'}\"{clarity}")
+    else:
+        lines.append("No messages on record.")
+
+    if open_tasks:
+        lines.append("Open tasks:")
+        for t in open_tasks:
+            due = str(t.due_date) if t.due_date else "no due date"
+            lines.append(f"  - {t.title} (due {due})")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_OUTREACH_SEQUENCE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        raw_steps = data.get("steps") or []
+        valid_channels = {"email", "slack", "call"}
+        valid_timings = {"now", "3d", "7d", "14d"}
+        steps = []
+        for s in raw_steps[:3]:
+            channel = str(s.get("channel", "email"))
+            if channel not in valid_channels:
+                channel = "email"
+            timing = str(s.get("timing", "7d"))
+            if timing not in valid_timings:
+                timing = "7d"
+            steps.append({
+                "step": int(s.get("step", len(steps) + 1)),
+                "channel": channel,
+                "timing": timing,
+                "subject": str(s["subject"])[:120] if s.get("subject") else None,
+                "body_preview": str(s.get("body_preview", ""))[:200],
+                "goal": str(s.get("goal", ""))[:120],
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "steps": steps,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/relationship-health")
+@limiter.limit("10/minute")
+async def contact_relationship_health(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate an AI relationship health summary for a contact using Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.workspace_id == workspace_id, Contact.id == contact_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    cutoff_90 = datetime.datetime.now(timezone.utc) - datetime.timedelta(days=90)
+
+    # Message and note counts for last 90 days
+    msg_count = await db.scalar(
+        select(func.count()).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= cutoff_90,
+        )
+    ) or 0
+
+    note_count = await db.scalar(
+        select(func.count()).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+            ContactNote.created_at >= cutoff_90,
+        )
+    ) or 0
+
+    tasks_total = await db.scalar(
+        select(func.count()).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+        )
+    ) or 0
+
+    tasks_done = await db.scalar(
+        select(func.count()).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status == "done",
+        )
+    ) or 0
+
+    # Last 3 messages with clarity scores
+    msg_result = await db.execute(
+        select(Message.subject, Message.received_at, ClarityScore.score)
+        .outerjoin(ClarityScore, Message.id == ClarityScore.message_id)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    recent_messages = msg_result.all()
+
+    # Days since last touch
+    last_touch_days: int | None = None
+    if recent_messages and recent_messages[0].received_at:
+        ref = recent_messages[0].received_at
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        last_touch_days = (datetime.datetime.now(timezone.utc) - ref).days
+
+    total_touches = msg_count + note_count
+    task_rate = f"{tasks_done}/{tasks_total}" if tasks_total > 0 else "no tasks"
+
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} ({contact.role or 'unknown role'} at {contact.company or 'Unknown'})",
+        f"Status: {contact.status}",
+        f"Last activity: {contact.last_activity}",
+        "",
+        f"Engagement last 90 days:",
+        f"  Messages received: {msg_count}",
+        f"  Notes added: {note_count}",
+        f"  Total touches: {total_touches}",
+        f"  Tasks: {task_rate} completed",
+    ]
+
+    if last_touch_days is not None:
+        lines.append(f"  Days since last touch: {last_touch_days}")
+
+    if recent_messages:
+        lines.append("")
+        lines.append("Recent messages (newest first):")
+        for m in recent_messages:
+            clarity = f" — clarity {m.score}/100" if m.score is not None else ""
+            ts = m.received_at.strftime("%b %d") if m.received_at else "unknown"
+            lines.append(f"  - [{ts}] \"{m.subject or '(no subject)'}\"  {clarity}")
+    else:
+        lines.append("")
+        lines.append("No message history on record.")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_RELATIONSHIP_HEALTH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        health_rating = str(data.get("health_rating", "neutral"))
+        if health_rating not in ("strong", "neutral", "at_risk"):
+            health_rating = "neutral"
+        summary = str(data.get("summary", "Relationship health assessment unavailable."))
+        raw_items = data.get("action_items") or []
+        action_items = []
+        for item in raw_items[:3]:
+            priority = str(item.get("priority", "medium"))
+            if priority not in ("high", "medium", "low"):
+                priority = "medium"
+            action_items.append({
+                "priority": priority,
+                "action": str(item.get("action", "Review relationship data"))[:80],
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "health_rating": health_rating,
+        "summary": summary,
+        "action_items": action_items,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Contact health overview (workspace-level)
+# ---------------------------------------------------------------------------
+
+_HEALTH_OVERVIEW_SYSTEM = """\
+You are Nova, the AI assistant for NovaCRM. Write a single concise summary sentence \
+(max 25 words) describing the overall contact health state for this workspace — \
+mention at-risk count or strong count if notable. No JSON. Plain sentence only.\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/health-overview")
+@limiter.limit("5/minute")
+async def contact_health_overview(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Scan top 10 contacts by pipeline value, compute health, return a structured overview."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # Top 10 contacts by sum of open deal values
+    subq = (
+        select(Deal.contact_id, func.sum(Deal.value).label("pipeline_value"))
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .group_by(Deal.contact_id)
+        .order_by(func.sum(Deal.value).desc())
+        .limit(10)
+        .subquery()
+    )
+    contact_rows = await db.execute(
+        select(Contact, subq.c.pipeline_value)
+        .join(subq, Contact.id == subq.c.contact_id)
+        .where(Contact.workspace_id == workspace_id)
+        .order_by(subq.c.pipeline_value.desc())
+    )
+    contacts_with_value = contact_rows.all()
+
+    if not contacts_with_value:
+        fallback_rows = await db.execute(
+            select(Contact)
+            .where(Contact.workspace_id == workspace_id)
+            .order_by(Contact.created_at.desc())
+            .limit(10)
+        )
+        contacts_with_value = [(c, 0) for c in fallback_rows.scalars().all()]
+
+    cutoff_90 = datetime.datetime.now(timezone.utc) - datetime.timedelta(days=90)
+
+    result_contacts = []
+    for contact, _pipeline_val in contacts_with_value:
+        msg_count = await db.scalar(
+            select(func.count()).where(
+                Message.workspace_id == workspace_id,
+                Message.contact_id == contact.id,
+                Message.received_at >= cutoff_90,
+            )
+        ) or 0
+        note_count = await db.scalar(
+            select(func.count()).where(
+                ContactNote.workspace_id == workspace_id,
+                ContactNote.contact_id == contact.id,
+                ContactNote.created_at >= cutoff_90,
+            )
+        ) or 0
+        tasks_total = await db.scalar(
+            select(func.count()).where(
+                Task.workspace_id == workspace_id,
+                Task.contact_id == contact.id,
+                Task.created_at >= cutoff_90,
+            )
+        ) or 0
+        tasks_done = await db.scalar(
+            select(func.count()).where(
+                Task.workspace_id == workspace_id,
+                Task.contact_id == contact.id,
+                Task.status == "done",
+                Task.created_at >= cutoff_90,
+            )
+        ) or 0
+
+        last_msg_row = await db.execute(
+            select(Message.received_at)
+            .where(Message.workspace_id == workspace_id, Message.contact_id == contact.id)
+            .order_by(Message.received_at.desc())
+            .limit(1)
+        )
+        last_msg_date = last_msg_row.scalar_one_or_none()
+
+        last_note_row = await db.execute(
+            select(ContactNote.created_at)
+            .where(ContactNote.workspace_id == workspace_id, ContactNote.contact_id == contact.id)
+            .order_by(ContactNote.created_at.desc())
+            .limit(1)
+        )
+        last_note_date = last_note_row.scalar_one_or_none()
+
+        dates = [d for d in [last_msg_date, last_note_date] if d is not None]
+        if dates:
+            most_recent = max(
+                d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d for d in dates
+            )
+            days_since_touch = (datetime.datetime.now(timezone.utc) - most_recent).days
+        else:
+            days_since_touch = None
+
+        messages_score = min(40, msg_count * 8)
+        notes_score = min(30, note_count * 10)
+        tasks_score = round(30 * tasks_done / tasks_total) if tasks_total > 0 else 0
+        engagement_score = messages_score + notes_score + tasks_score
+
+        going_dark = days_since_touch is None or days_since_touch > 30
+        if engagement_score >= 60 and not going_dark:
+            health = "strong"
+        elif engagement_score < 40 or going_dark:
+            health = "at_risk"
+        else:
+            health = "neutral"
+
+        if going_dark:
+            if days_since_touch is not None:
+                top_action = f"Re-engage — no contact in {days_since_touch} days"
+            else:
+                top_action = "Re-engage — no contact history found"
+        elif health == "strong":
+            top_action = "Maintain cadence and look for expansion"
+        elif health == "neutral":
+            top_action = "Add a note or follow-up task"
+        else:
+            top_action = "Increase engagement frequency"
+
+        result_contacts.append({
+            "id": str(contact.id),
+            "name": contact.name or "Unknown",
+            "health": health,
+            "days_since_touch": days_since_touch,
+            "top_action": top_action,
+            "engagement_score": engagement_score,
+        })
+
+    at_risk_count = sum(1 for c in result_contacts if c["health"] == "at_risk")
+    strong_count = sum(1 for c in result_contacts if c["health"] == "strong")
+
+    contact_lines = []
+    for c in result_contacts:
+        touch_label = f"{c['days_since_touch']}d ago" if c["days_since_touch"] is not None else "never"
+        contact_lines.append(
+            f"  - {c['name']}: health={c['health']}, last_touch={touch_label}, engagement={c['engagement_score']}/100"
+        )
+    context = (
+        f"Top {len(result_contacts)} contacts by pipeline value:\n"
+        + "\n".join(contact_lines)
+        + f"\n\nSummary: {at_risk_count} at risk, {strong_count} strong, "
+        + f"{len(result_contacts) - at_risk_count - strong_count} neutral."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=60,
+            system=_HEALTH_OVERVIEW_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        summary_sentence = msg.content[0].text.strip() if msg.content else ""
+    except Exception:
+        summary_sentence = ""
+
+    if not summary_sentence:
+        summary_sentence = (
+            f"{at_risk_count} contact{'s' if at_risk_count != 1 else ''} at risk, "
+            f"{strong_count} in strong health."
+        )
+
+    return {
+        "at_risk_count": at_risk_count,
+        "strong_count": strong_count,
+        "summary_sentence": summary_sentence,
+        "contacts": result_contacts,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI deal momentum check
+# ---------------------------------------------------------------------------
+
+_MOMENTUM_SYSTEM = """\
+You are Nova, the AI deal intelligence in NovaCRM. Assess the current momentum of the provided deal.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "momentum": "gaining",
+  "drivers": [
+    "One sentence — specific data point that justifies this momentum direction.",
+    "Second driver — another concrete data point."
+  ],
+  "recommendation": "One specific action to sustain or reverse this momentum — max 100 chars, reference a CRM feature."
+}
+
+Momentum rules (pick exactly one):
+- "gaining": health score trend is improving across last readings, OR high recent activity (5+ events in 30d) AND last touch within 14 days
+- "declining": health score trend is decreasing across 2+ consecutive readings, OR no activity in 30+ days, OR next action overdue and health < 50
+- "stalling": everything else — deal is present but not clearly moving either direction
+
+drivers: 2–3 items, each citing a specific metric from the provided data (score, days, counts)
+recommendation: 1 sentence naming a specific CRM action — e.g. "Schedule a QBR call", "Add a Deal Note to capture latest discussion", "Run Deal Health check"\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/momentum-check")
+@limiter.limit("10/minute")
+async def deal_momentum_check(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Assess deal momentum using health score trend, activity, and engagement signals via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    # Last 5 health score history entries (oldest first for trend)
+    history_result = await db.execute(
+        select(DealHealthHistory.score, DealHealthHistory.recorded_at)
+        .where(DealHealthHistory.workspace_id == workspace_id, DealHealthHistory.deal_id == deal_id)
+        .order_by(DealHealthHistory.recorded_at.desc())
+        .limit(5)
+    )
+    history_rows = list(reversed(history_result.all()))  # oldest→newest
+
+    # Recent activity count (last 30 days)
+    cutoff_30 = datetime.datetime.now(timezone.utc) - datetime.timedelta(days=30)
+    recent_activity = await db.scalar(
+        select(func.count()).where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.created_at >= cutoff_30,
+        ).correlate(False)
+    ) or 0
+
+    # Days in current stage
+    now = datetime.datetime.now(timezone.utc)
+    stage_ref = deal.stage_changed_at or deal.created_at
+    if stage_ref and stage_ref.tzinfo is None:
+        stage_ref = stage_ref.replace(tzinfo=timezone.utc)
+    days_in_stage = (now - stage_ref).days if stage_ref else 0
+
+    # Next-action overdue
+    next_action_overdue_days = 0
+    if deal.next_action_date:
+        try:
+            na_date = deal.next_action_date
+            delta = (datetime.date.today() - na_date).days
+            next_action_overdue_days = max(0, delta)
+        except (ValueError, TypeError):
+            pass
+
+    competitors = deal.competitors or []
+
+    # Build context lines
+    lines = [
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}",
+        f"Stage: {deal.stage}",
+        f"Value: ${float(deal.value):,.0f}",
+        f"Current health score: {deal.health_score}/100",
+        f"ML win probability: {deal.ml_win_probability}%",
+        f"Days in current stage: {days_in_stage}",
+        f"Competitors tracked: {len(competitors)}",
+        f"Next action overdue by: {next_action_overdue_days} day{'s' if next_action_overdue_days != 1 else ''}",
+        f"Recent workspace activity (last 30d): {recent_activity} events",
+    ]
+
+    if history_rows:
+        score_trail = " → ".join(str(h.score) for h in history_rows)
+        lines.append(f"Health score trend (oldest→newest): {score_trail}")
+        if len(history_rows) >= 2:
+            delta = history_rows[-1].score - history_rows[-2].score
+            trend_label = f"up {delta}" if delta > 0 else (f"down {abs(delta)}" if delta < 0 else "flat")
+            lines.append(f"Latest score change: {trend_label}")
+    else:
+        lines.append("Health score history: no prior readings")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_MOMENTUM_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        momentum = str(data.get("momentum", "stalling"))
+        if momentum not in ("gaining", "stalling", "declining"):
+            momentum = "stalling"
+        drivers = [str(d) for d in (data.get("drivers") or [])[:3]]
+        recommendation = str(data.get("recommendation", "Review deal health and update the next action."))[:100]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "momentum": momentum,
+        "drivers": drivers,
+        "recommendation": recommendation,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI deal close plan
+# ---------------------------------------------------------------------------
+
+_CLOSE_PLAN_SYSTEM = """\
+You are Nova, the AI deal intelligence in NovaCRM. Generate a 3-phase close plan for the provided deal.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "phases": [
+    {
+      "label": "Next 30 days",
+      "actions": [
+        "Specific, concrete action referencing the deal context — e.g. Run Deal Health check to confirm score stabilisation.",
+        "Second action — name a CRM feature or meeting type."
+      ]
+    },
+    {
+      "label": "30–60 days",
+      "actions": [
+        "Action for this timeframe.",
+        "Another action."
+      ]
+    },
+    {
+      "label": "60–90 days",
+      "actions": [
+        "Action to finalise or escalate.",
+        "Final action to close the deal."
+      ]
+    }
+  ],
+  "recommended_close_date": "YYYY-MM-DD"
+}
+
+Rules:
+- phases: exactly 3 items, labels must be "Next 30 days", "30–60 days", "60–90 days" in that order
+- actions: 2–4 items per phase, each citing a specific metric or CRM feature from the deal context
+- recommended_close_date: realistic YYYY-MM-DD target based on current stage and expected_close; if expected_close is set and realistic, lean toward it
+- CRM feature references: "Schedule a QBR call", "Add a Deal Note", "Run Deal Health check", "Draft Outreach email", "Update ML win probability"
+- Keep each action concise (max 120 chars)\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/close-plan")
+@limiter.limit("10/minute")
+async def deal_close_plan(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Close plan is not available for closed deals",
+        )
+
+    # Last 3 deal notes (oldest-first for context ordering)
+    notes_result = await db.execute(
+        select(DealNote)
+        .where(DealNote.deal_id == deal_id, DealNote.workspace_id == workspace_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    recent_notes = list(reversed(notes_result.all()))
+
+    # Days in current stage
+    now = datetime.datetime.now(tz=timezone.utc)
+    stage_ref = deal.stage_changed_at or deal.created_at
+    if stage_ref and stage_ref.tzinfo is None:
+        stage_ref = stage_ref.replace(tzinfo=timezone.utc)
+    days_in_stage = (now - stage_ref).days if stage_ref else 0
+
+    # Next-action overdue
+    next_action_overdue_days = 0
+    if deal.next_action_date:
+        try:
+            delta = (datetime.date.today() - deal.next_action_date).days
+            next_action_overdue_days = max(0, delta)
+        except (ValueError, TypeError):
+            pass
+
+    competitors = deal.competitors or []
+
+    lines = [
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}",
+        f"Stage: {deal.stage}",
+        f"Value: ${float(deal.value):,.0f}",
+        f"Current health score: {deal.health_score}/100",
+        f"ML win probability: {deal.ml_win_probability}%",
+        f"Days in current stage: {days_in_stage}",
+        f"Competitors tracked: {len(competitors)}",
+        f"Next action overdue by: {next_action_overdue_days} day{'s' if next_action_overdue_days != 1 else ''}",
+        f"Expected close date: {deal.expected_close or 'Not set'}",
+        f"Today: {datetime.date.today().isoformat()}",
+    ]
+
+    if recent_notes:
+        lines.append("Recent deal notes (oldest→newest):")
+        for note in recent_notes:
+            body_preview = (note.body or "")[:200]
+            lines.append(f"  - {body_preview}")
+    else:
+        lines.append("Recent deal notes: none")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_CLOSE_PLAN_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        valid_labels = ("Next 30 days", "30–60 days", "60–90 days")
+        phases = []
+        for phase in (data.get("phases") or [])[:3]:
+            label = str(phase.get("label", ""))
+            if label not in valid_labels:
+                continue
+            actions = [str(a)[:120] for a in (phase.get("actions") or [])[:4]]
+            phases.append({"label": label, "actions": actions})
+
+        raw_date = str(data.get("recommended_close_date", ""))
+        try:
+            datetime.date.fromisoformat(raw_date)
+            recommended_close_date = raw_date
+        except (ValueError, TypeError):
+            recommended_close_date = (
+                datetime.date.today() + datetime.timedelta(days=60)
+            ).isoformat()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "phases": phases,
+        "recommended_close_date": recommended_close_date,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI contact summary card
+# ---------------------------------------------------------------------------
+
+_CONTACT_SUMMARY_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Generate a concise relationship summary for the provided contact.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "relationship_status": "strong",
+  "summary": "2-3 sentence narrative describing the relationship quality, recent engagement patterns, and deal context.",
+  "next_best_action": "One specific, actionable CRM step referencing a feature name."
+}
+
+Rules:
+- relationship_status must be exactly one of: "strong", "warm", "cold", "at_risk"
+  - strong: active engagement, healthy deals, positive signals
+  - warm: moderate engagement, some open deals, no major red flags
+  - cold: low engagement, few or no recent messages/notes
+  - at_risk: declining engagement, overdue tasks, stalled deals, low health scores
+- summary: 2-3 sentences, plain prose, no markdown; reference specific signals from the context
+- next_best_action: one specific step, max 120 chars, name a CRM feature where helpful
+  (e.g. "Schedule a QBR call", "Draft Outreach email", "Add a Contact Note", "Run Auto-Enrich")\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/{contact_id}/summary")
+@limiter.limit("10/minute")
+async def contact_summary(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    # Contact profile
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Last 3 messages with clarity scores
+    msg_result = await db.execute(
+        select(Message, ClarityScore.score)
+        .outerjoin(ClarityScore, ClarityScore.message_id == Message.id)
+        .where(Message.contact_id == contact_id, Message.workspace_id == workspace_id)
+        .order_by(Message.created_at.desc())
+        .limit(3)
+    )
+    recent_messages = msg_result.all()
+
+    # Open task count
+    open_task_count = await db.scalar(
+        select(func.count()).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status == "open",
+        )
+    ) or 0
+
+    # Open deals + total value
+    deal_result = await db.execute(
+        select(Deal.title, Deal.value, Deal.stage, Deal.health_score)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals = deal_result.all()
+    open_deal_count = len(open_deals)
+    deal_value = sum(float(d.value) for d in open_deals)
+
+    # Last contact note
+    note_result = await db.execute(
+        select(ContactNote)
+        .where(ContactNote.contact_id == contact_id, ContactNote.workspace_id == workspace_id)
+        .order_by(ContactNote.created_at.desc())
+        .limit(1)
+    )
+    last_note = note_result.scalar_one_or_none()
+
+    # Build context
+    lines = [
+        f"Contact: {contact.name or 'Unknown'} ({contact.role or 'Unknown role'} at {contact.company or 'Unknown company'})",
+        f"Email: {contact.email or 'N/A'}",
+        f"Open tasks: {open_task_count}",
+        f"Open deals: {open_deal_count} (total pipeline value: ${deal_value:,.0f})",
+    ]
+    if open_deals:
+        for d in open_deals[:3]:
+            lines.append(f"  - Deal: {d.title or 'Untitled'} | stage={d.stage} | value=${float(d.value):,.0f} | health={d.health_score}")
+    if recent_messages:
+        lines.append("Recent messages (newest first):")
+        for msg, cs in recent_messages:
+            preview = (msg.body_plain or "")[:150]
+            clarity = f", clarity={cs}" if cs is not None else ""
+            lines.append(f"  - [{msg.subject or 'No subject'}{clarity}] {preview}")
+    else:
+        lines.append("Recent messages: none")
+    if last_note:
+        lines.append(f"Last contact note: {(last_note.body or '')[:200]}")
+    else:
+        lines.append("Last contact note: none")
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_CONTACT_SUMMARY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        valid_statuses = ("strong", "warm", "cold", "at_risk")
+        relationship_status = str(data.get("relationship_status", "warm"))
+        if relationship_status not in valid_statuses:
+            relationship_status = "warm"
+        summary = str(data.get("summary", ""))[:500]
+        next_best_action = str(data.get("next_best_action", ""))[:120]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "relationship_status": relationship_status,
+        "summary": summary,
+        "next_best_action": next_best_action,
+        "deal_value": deal_value,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/deals/compare
+# ---------------------------------------------------------------------------
+
+_DEAL_COMPARE_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Compare 2–3 CRM deals and identify which offers the
+strongest sales opportunity. Return ONLY valid JSON in this exact format:
+{"winner_id": "<uuid string of winning deal>",
+ "rationale": "<2-sentence explanation of why this deal should be prioritised>",
+ "comparison_points": [
+   {"dimension": "<dimension name>", "verdict": "<brief comparison verdict>"}
+ ]}
+Include 3–4 comparison_points covering dimensions such as: Deal Value, Health Score,
+Win Probability, Stage Progress, Competitor Risk.
+"""
+
+
+class _DealCompareRequest(BaseModel):
+    deal_ids: list[uuid.UUID]
+
+
+@router.post("/workspaces/{workspace_id}/ai/deals/compare")
+@limiter.limit("10/minute")
+async def compare_deals(
+    request: Request,
+    workspace_id: uuid.UUID,
+    body: _DealCompareRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    if len(body.deal_ids) < 2 or len(body.deal_ids) > 3:
+        raise HTTPException(status_code=400, detail="Provide 2 or 3 deal IDs to compare")
+
+    result = await db.execute(
+        select(Deal).where(
+            Deal.id.in_(body.deal_ids),
+            Deal.workspace_id == workspace_id,
+        )
+    )
+    deals = result.scalars().all()
+
+    if len(deals) < 2:
+        raise HTTPException(status_code=404, detail="Could not find enough deals in this workspace")
+
+    lines: list[str] = ["Compare these deals and identify the strongest opportunity:"]
+    for deal in deals:
+        comp_names: list[str] = []
+        if deal.competitors:
+            try:
+                comp_names = [
+                    c.get("name", str(c)) if isinstance(c, dict) else str(c)
+                    for c in deal.competitors
+                ]
+            except Exception:
+                pass
+        lines.append(
+            f"\nDeal ID: {deal.id}"
+            f"\n  Title: {deal.title}"
+            f"\n  Company: {deal.company}"
+            f"\n  Value: ${deal.value:,.0f}"
+            f"\n  Stage: {deal.stage}"
+            f"\n  Health Score: {deal.health_score}/100"
+            f"\n  Win Probability: {deal.ml_win_probability}%"
+            f"\n  Competitors: {', '.join(comp_names) if comp_names else 'none'}"
+        )
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_COMPARE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        winner_id = str(data.get("winner_id", str(deals[0].id)))
+        rationale = str(data.get("rationale", ""))[:400]
+        raw_points = data.get("comparison_points") or []
+        comparison_points = [
+            {
+                "dimension": str(p.get("dimension", ""))[:60],
+                "verdict": str(p.get("verdict", ""))[:120],
+            }
+            for p in raw_points[:5]
+        ]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "winner_id": winner_id,
+        "rationale": rationale,
+        "comparison_points": comparison_points,
+        "deal_ids": [str(d.id) for d in deals],
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/messages/triage
+# ---------------------------------------------------------------------------
+
+_TRIAGE_SYSTEM = """\
+You are an AI inbox triage assistant for NovaCRM. Given a list of messages, assign each a priority \
+and one-sentence recommended action.
+
+Respond with a JSON array only — no other text, no markdown fences.
+
+Each item must follow this schema exactly:
+{"message_id": "<id>", "priority": "urgent"|"high"|"normal"|"low", "action": "<one-sentence recommended action>", "rationale": "<one short reason for this priority>"}
+
+Priority guidance:
+- urgent: requires same-day response; hard deadlines, escalations, or deal-blocking issues
+- high: important, should be addressed within 24h; active prospects, upsell signals, or specific asks
+- normal: standard follow-up or informational; can be addressed in 2-3 days
+- low: FYI, newsletters, or no clear action needed\
+"""
+
+
+class _TriageItem(BaseModel):
+    message_id: str
+    priority: str
+    action: str
+    rationale: str
+
+
+class TriageResponse(BaseModel):
+    items: list[_TriageItem]
+    message_count: int
+    generated_at: str
+
+
+_VALID_PRIORITIES = {"urgent", "high", "normal", "low"}
+
+
+@router.post("/workspaces/{workspace_id}/ai/messages/triage", response_model=TriageResponse)
+@limiter.limit("5/minute")
+async def triage_messages(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TriageResponse:
+    """Batch-triage up to 20 inbox messages with Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Message)
+        .where(Message.workspace_id == workspace_id)
+        .order_by(Message.received_at.desc())
+        .limit(20)
+    )
+    msgs = result.scalars().all()
+
+    if not msgs:
+        return TriageResponse(
+            items=[],
+            message_count=0,
+            generated_at=datetime.datetime.utcnow().isoformat() + "Z",
+        )
+
+    lines: list[str] = ["Triage these inbox messages. Return a JSON array only.\n"]
+    for m in msgs:
+        snippet = (m.body_plain or "")[:300].replace("\n", " ")
+        lines.append(
+            f"- id: {m.id}"
+            f"  subject: {m.subject or '(no subject)'}"
+            f"  sender: {m.sender_email or 'unknown'}"
+            f"  preview: {snippet}"
+        )
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=_TRIAGE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "[]"
+        items_data = json.loads(raw)
+        items = [
+            _TriageItem(
+                message_id=str(i.get("message_id", "")),
+                priority=i.get("priority", "normal") if i.get("priority") in _VALID_PRIORITIES else "normal",
+                action=str(i.get("action", "Review and respond as needed."))[:200],
+                rationale=str(i.get("rationale", ""))[:200],
+            )
+            for i in items_data
+            if isinstance(i, dict)
+        ]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return TriageResponse(
+        items=items,
+        message_count=len(msgs),
+        generated_at=datetime.datetime.utcnow().isoformat() + "Z",
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/contacts/reengagement-plan
+# ---------------------------------------------------------------------------
+
+_REENGAGEMENT_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Generate a personalised re-engagement plan for contacts who have gone silent.
+
+For each contact provided, return one plan item with:
+- "contact_id": the exact ID string provided
+- "contact_name": the contact's name
+- "days_silent": number of days since last contact (integer)
+- "channel": best outreach channel — exactly one of "email", "slack", or "call"
+- "message_template": a 2-3 sentence personalised outreach draft (warm, professional, not generic)
+- "urgency": exactly one of "low", "medium", or "high"
+
+Urgency rules:
+- high: silent 60+ days or is a customer with open deals
+- medium: silent 30-59 days, prospect or warm lead
+- low: silent 30-45 days, early-stage or low-value contact
+
+Respond with a JSON array only — no markdown fences, no extra keys:
+[{"contact_id": "...", "contact_name": "...", "days_silent": 45, "channel": "email", "message_template": "...", "urgency": "medium"}]
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/reengagement-plan")
+@limiter.limit("5/minute")
+async def contact_reengagement_plan(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a prioritised re-engagement plan for up to 10 going-dark contacts."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_30 = now - datetime.timedelta(days=30)
+    cutoff_90 = now - datetime.timedelta(days=90)
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+        )
+    )
+    contacts = contact_result.scalars().all()
+    if not contacts:
+        return {"plan": [], "generated_at": datetime.datetime.utcnow().isoformat() + "Z"}
+
+    contact_ids = [c.id for c in contacts]
+
+    msg_result = await db.execute(
+        select(Message.contact_id, Message.received_at)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id.in_(contact_ids),
+            Message.received_at >= cutoff_90,
+        )
+    )
+    messages = msg_result.all()
+
+    note_result = await db.execute(
+        select(ContactNote.contact_id, ContactNote.created_at)
+        .where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id.in_(contact_ids),
+            ContactNote.created_at >= cutoff_90,
+        )
+    )
+    notes = note_result.all()
+
+    last_touch: dict = {}
+    for m in messages:
+        if m.contact_id and m.received_at:
+            ts = m.received_at
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
+            if m.contact_id not in last_touch or ts > last_touch[m.contact_id]:
+                last_touch[m.contact_id] = ts
+    for n in notes:
+        if n.contact_id and n.created_at:
+            ts = n.created_at
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
+            if n.contact_id not in last_touch or ts > last_touch[n.contact_id]:
+                last_touch[n.contact_id] = ts
+
+    dark_contacts = []
+    for c in contacts:
+        lt = last_touch.get(c.id)
+        if lt and lt >= cutoff_30:
+            continue
+        days_silent = int((now - lt).total_seconds() / 86400) if lt else 90
+        dark_contacts.append((c, days_silent))
+
+    dark_contacts.sort(key=lambda x: x[1], reverse=True)
+    dark_contacts = dark_contacts[:10]
+
+    if not dark_contacts:
+        return {"plan": [], "generated_at": datetime.datetime.utcnow().isoformat() + "Z"}
+
+    lines: list[str] = ["Generate a re-engagement plan for these contacts:"]
+    for c, days in dark_contacts:
+        lines.append(
+            f"\nID: {c.id}"
+            f"\nName: {c.name or 'Unknown'}"
+            f"\nEmail: {c.email or 'unknown'}"
+            f"\nCompany: {c.company or 'unknown'}"
+            f"\nRole: {c.role or 'unknown'}"
+            f"\nStatus: {c.status}"
+            f"\nDays silent: {days}"
+        )
+
+    context = "\n".join(lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1500,
+            system=_REENGAGEMENT_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "[]"
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            data = []
+
+        _valid_channels = {"email", "slack", "call"}
+        _valid_urgencies = {"low", "medium", "high"}
+        plan = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            channel = str(item.get("channel", "email"))
+            if channel not in _valid_channels:
+                channel = "email"
+            urgency = str(item.get("urgency", "medium"))
+            if urgency not in _valid_urgencies:
+                urgency = "medium"
+            plan.append({
+                "contact_id": str(item.get("contact_id", ""))[:64],
+                "contact_name": str(item.get("contact_name", "Unknown"))[:100],
+                "days_silent": int(item.get("days_silent", 30)),
+                "channel": channel,
+                "message_template": str(item.get("message_template", ""))[:500],
+                "urgency": urgency,
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "plan": plan,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/deals/{deal_id}/ai/objection-handler
+# ---------------------------------------------------------------------------
+
+_OBJECTION_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Generate exactly 4 realistic sales objections this deal might face and concise rep responses.
+
+For each objection return:
+- "objection": the specific concern the buyer might raise (1-2 sentences, realistic and specific to this deal context)
+- "response": a confident, consultative reply the sales rep can use verbatim or adapt (2-3 sentences)
+- "strategy": exactly one of "empathize", "redirect", "prove", or "challenge"
+
+Strategy definitions:
+- empathize: acknowledge the concern, validate it, then reframe toward value
+- redirect: pivot away from the objection toward a stronger value point
+- prove: use evidence, benchmarks, or social proof to overcome the concern
+- challenge: politely question the assumption behind the objection
+
+Respond with a JSON array of exactly 4 items — no markdown fences, no extra keys:
+[{"objection": "...", "response": "...", "strategy": "empathize"}]
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/objection-handler")
+@limiter.limit("5/minute")
+async def deal_objection_handler(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate common objections and tailored responses for an open deal."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in {"closed_won", "closed_lost"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Objection handler is only available for open deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = [r[0] for r in notes_result.fetchall()]
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stage_changed = deal.stage_changed_at
+    if stage_changed and stage_changed.tzinfo is None:
+        stage_changed = stage_changed.replace(tzinfo=datetime.timezone.utc)
+    days_in_stage = (now - stage_changed).days if stage_changed else 0
+
+    competitors = deal.competitors or []
+    next_action_overdue = False
+    if deal.next_action_date:
+        try:
+            nad = datetime.date.fromisoformat(str(deal.next_action_date))
+            next_action_overdue = nad < now.date()
+        except (ValueError, TypeError):
+            pass
+
+    context = (
+        f"Deal: {deal.title}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${deal.value or 0:,.0f}\n"
+        f"Health score: {deal.health_score}/100\n"
+        f"Win probability: {deal.ml_win_probability or 0:.0f}%\n"
+        f"Days in current stage: {days_in_stage}\n"
+        f"Competitors: {', '.join(str(c) for c in competitors) if competitors else 'None known'}\n"
+        f"Next action overdue: {'Yes' if next_action_overdue else 'No'}\n"
+    )
+    if notes:
+        context += "Recent deal notes:\n" + "\n".join(f"- {n}" for n in notes)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            system=_OBJECTION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "[]"
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            data = []
+
+        _valid_strategies = {"empathize", "redirect", "prove", "challenge"}
+        objections = []
+        for item in data[:4]:
+            if not isinstance(item, dict):
+                continue
+            strategy = str(item.get("strategy", "empathize"))
+            if strategy not in _valid_strategies:
+                strategy = "empathize"
+            objections.append({
+                "objection": str(item.get("objection", ""))[:300],
+                "response": str(item.get("response", ""))[:500],
+                "strategy": strategy,
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "objections": objections,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/deals/{deal_id}/ai/stakeholder-map
+# ---------------------------------------------------------------------------
+
+_STAKEHOLDER_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Analyze this deal and generate a stakeholder map with exactly 4 key people involved in the buying process.
+
+For each stakeholder return:
+- "name": the person's name (infer from mentions or use placeholders like "Economic Buyer", "Technical Evaluator" if names are unknown)
+- "role": exactly one of "decision_maker", "champion", "blocker", or "influencer"
+- "engagement": exactly one of "high", "medium", or "low"
+- "recommended_action": one specific CRM action the rep should take with this person (max 100 chars, e.g. "Schedule exec briefing", "Send ROI case study")
+
+Role definitions:
+- decision_maker: holds budget authority and final sign-off
+- champion: internal advocate who wants the deal to succeed
+- blocker: person raising objections or slowing progress
+- influencer: shapes opinion without final authority (e.g. IT, legal, end users)
+
+Respond with a JSON array of exactly 4 items — no markdown fences, no extra keys:
+[{"name": "...", "role": "decision_maker", "engagement": "high", "recommended_action": "..."}]
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/stakeholder-map")
+@limiter.limit("5/minute")
+async def deal_stakeholder_map(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a stakeholder map for an open deal using deal context and mentions."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in {"closed_won", "closed_lost"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Stakeholder map is only available for open deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = [r[0] for r in notes_result.fetchall()]
+
+    mentions = deal.mentions or []
+    competitors = deal.competitors or []
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stage_changed = deal.stage_changed_at
+    if stage_changed and stage_changed.tzinfo is None:
+        stage_changed = stage_changed.replace(tzinfo=datetime.timezone.utc)
+    days_in_stage = (now - stage_changed).days if stage_changed else 0
+
+    mention_lines = ""
+    if mentions:
+        mention_lines = "Known stakeholders (name, type):\n" + "\n".join(
+            f"- {m.get('name', 'Unknown')} ({m.get('type', 'unknown')})"
+            for m in mentions
+            if isinstance(m, dict)
+        )
+
+    context = (
+        f"Deal: {deal.title}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${deal.value or 0:,.0f}\n"
+        f"Health score: {deal.health_score}/100\n"
+        f"Win probability: {deal.ml_win_probability or 0:.0f}%\n"
+        f"Days in current stage: {days_in_stage}\n"
+        f"Competitors: {', '.join(str(c) for c in competitors) if competitors else 'None known'}\n"
+    )
+    if mention_lines:
+        context += f"\n{mention_lines}\n"
+    if notes:
+        context += "\nRecent deal notes:\n" + "\n".join(f"- {n}" for n in notes)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            system=_STAKEHOLDER_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "[]"
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            data = []
+
+        _valid_roles = {"decision_maker", "champion", "blocker", "influencer"}
+        _valid_engagements = {"high", "medium", "low"}
+        stakeholders = []
+        for item in data[:4]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", "influencer"))
+            if role not in _valid_roles:
+                role = "influencer"
+            engagement = str(item.get("engagement", "medium"))
+            if engagement not in _valid_engagements:
+                engagement = "medium"
+            stakeholders.append({
+                "name": str(item.get("name", "Unknown"))[:80],
+                "role": role,
+                "engagement": engagement,
+                "recommended_action": str(item.get("recommended_action", ""))[:120],
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "stakeholders": stakeholders,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/deals/{deal_id}/ai/negotiation-script
+# ---------------------------------------------------------------------------
+
+_NEGOTIATION_SYSTEM = """\
+You are Nova, the AI sales negotiation coach in NovaCRM. Generate a tactical negotiation script for the provided deal.
+
+Return ONLY valid JSON in this exact format:
+{
+  "opening_move": "string — one confident opening statement (max 120 chars)",
+  "concessions": [
+    {"offer": "string", "condition": "string", "limit": "string"},
+    {"offer": "string", "condition": "string", "limit": "string"},
+    {"offer": "string", "condition": "string", "limit": "string"}
+  ],
+  "walk_away_signal": "string — specific behaviour that means the deal is dead (max 120 chars)",
+  "closing_line": "string — one line to use when pushing for signature (max 120 chars)"
+}
+
+Rules:
+- Exactly 3 concessions. No more, no less.
+- Each offer is a tangible concession the rep can make (discount, timeline, feature, support tier, etc.)
+- Each condition is what the buyer must give in return for that concession.
+- Each limit is the maximum the rep should concede before walking away.
+- Keep every string under 120 characters.
+- Return nothing except the JSON object.\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/negotiation-script")
+@limiter.limit("5/minute")
+async def deal_negotiation_script(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate a negotiation script for a proposal or negotiation-stage deal."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage not in {"proposal", "negotiation"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Negotiation script is only available for proposal or negotiation stage deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = [r[0] for r in notes_result.fetchall()]
+    competitors = deal.competitors or []
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stage_changed = deal.stage_changed_at
+    if stage_changed and stage_changed.tzinfo is None:
+        stage_changed = stage_changed.replace(tzinfo=datetime.timezone.utc)
+    days_in_stage = (now - stage_changed).days if stage_changed else 0
+
+    overdue_next_action = False
+    if deal.next_action_date:
+        nad = deal.next_action_date
+        if hasattr(nad, "date"):
+            nad = nad.date()
+        overdue_next_action = nad < datetime.date.today()
+
+    context = (
+        f"Deal: {deal.title}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${deal.value or 0:,.0f}\n"
+        f"Health score: {deal.health_score}/100\n"
+        f"Win probability: {deal.ml_win_probability or 0:.0f}%\n"
+        f"Days in current stage: {days_in_stage}\n"
+        f"Next action overdue: {overdue_next_action}\n"
+        f"Competitors: {', '.join(str(c) for c in competitors) if competitors else 'None known'}\n"
+    )
+    if notes:
+        context += "\nRecent deal notes:\n" + "\n".join(f"- {n}" for n in notes)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            system=_NEGOTIATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        concessions_raw = data.get("concessions", [])
+        if not isinstance(concessions_raw, list):
+            concessions_raw = []
+        concessions = []
+        for c in concessions_raw[:3]:
+            if not isinstance(c, dict):
+                continue
+            concessions.append({
+                "offer": str(c.get("offer", ""))[:120],
+                "condition": str(c.get("condition", ""))[:120],
+                "limit": str(c.get("limit", ""))[:120],
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "opening_move": str(data.get("opening_move", ""))[:200],
+        "concessions": concessions,
+        "walk_away_signal": str(data.get("walk_away_signal", ""))[:200],
+        "closing_line": str(data.get("closing_line", ""))[:200],
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# POST /workspaces/{workspace_id}/deals/{deal_id}/ai/sentiment-digest
+# ---------------------------------------------------------------------------
+
+_SENTIMENT_DIGEST_SYSTEM = """\
+You are Nova, the AI deal intelligence in NovaCRM. Analyse the sentiment signals from recent deal notes \
+and contact messages and return a structured sentiment digest.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "overall_sentiment": "positive",
+  "key_signals": [
+    "One sentence — specific quote or behaviour that signals this sentiment.",
+    "Second signal — another concrete example.",
+    "Third signal — optional third data point."
+  ],
+  "sentiment_trend": "improving"
+}
+
+Rules:
+- "overall_sentiment": exactly one of "positive", "neutral", "negative"
+- "key_signals": 2–4 items, each a concise sentence citing a specific quote or observed behaviour
+- "sentiment_trend": exactly one of "improving", "stable", "declining" — compare earlier vs later signals\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/sentiment-digest")
+@limiter.limit("5/minute")
+async def deal_sentiment_digest(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return an AI sentiment digest for a deal using deal notes and contact messages via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sentiment digest is only available for open deals",
+        )
+
+    # Last 5 deal note bodies (oldest → newest for chronological context)
+    notes_result = await db.execute(
+        select(DealNote.body, DealNote.created_at)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(5)
+    )
+    note_rows = list(reversed(notes_result.all()))  # oldest → newest
+
+    # Last 3 messages from the deal's contact (if any)
+    messages: list[str] = []
+    if deal.contact_id:
+        msg_result = await db.execute(
+            select(Message.body_plain, Message.sender_email, Message.received_at)
+            .where(
+                Message.workspace_id == workspace_id,
+                Message.contact_id == deal.contact_id,
+            )
+            .order_by(Message.received_at.desc())
+            .limit(3)
+        )
+        messages = [
+            f"[{r.sender_email or 'unknown'}] {(r.body_plain or '')[:300]}"
+            for r in reversed(msg_result.all())
+        ]
+
+    context = (
+        f"Deal: {deal.title or 'Untitled'} at {deal.company or 'Unknown Company'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${float(deal.value):,.0f}\n"
+        f"Health score: {deal.health_score}/100\n"
+    )
+
+    if note_rows:
+        context += "\nDeal notes (oldest→newest):\n"
+        for row in note_rows:
+            ts = row.created_at.strftime("%Y-%m-%d") if row.created_at else "unknown date"
+            context += f"  [{ts}] {(row.body or '')[:300]}\n"
+    else:
+        context += "\nDeal notes: none recorded\n"
+
+    if messages:
+        context += "\nRecent contact messages (oldest→newest):\n"
+        for m in messages:
+            context += f"  {m}\n"
+    else:
+        context += "\nRecent contact messages: none available\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_SENTIMENT_DIGEST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        overall_sentiment = str(data.get("overall_sentiment", "neutral"))
+        if overall_sentiment not in ("positive", "neutral", "negative"):
+            overall_sentiment = "neutral"
+
+        key_signals = [str(s)[:200] for s in (data.get("key_signals") or [])[:4]]
+
+        sentiment_trend = str(data.get("sentiment_trend", "stable"))
+        if sentiment_trend not in ("improving", "stable", "declining"):
+            sentiment_trend = "stable"
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "overall_sentiment": overall_sentiment,
+        "key_signals": key_signals,
+        "sentiment_trend": sentiment_trend,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# POST /workspaces/{workspace_id}/messages/{message_id}/ai/reply
+# ---------------------------------------------------------------------------
+
+_REPLY_SYSTEM = """\
+You are Nova, the AI assistant in NovaCRM. Draft a professional email reply to the provided message.
+
+Return a JSON object with exactly these keys:
+- "subject": reply subject line (prefix with "Re: " if not already, keep under 80 chars)
+- "body": the full reply body (2-4 paragraphs, professional, warm, action-oriented)
+- "tone": exactly one of "professional", "friendly", or "urgent" based on the message context
+
+Return valid JSON only — no markdown fences, no extra keys:
+{"subject": "...", "body": "...", "tone": "professional"}
+"""
+
+
+@router.post("/workspaces/{workspace_id}/messages/{message_id}/ai/reply")
+@limiter.limit("10/minute")
+async def draft_message_reply(
+    request: Request,
+    workspace_id: uuid.UUID,
+    message_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Draft an AI email reply for a given inbox message."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    msg_result = await db.execute(
+        select(Message).where(Message.id == message_id, Message.workspace_id == workspace_id)
+    )
+    message = msg_result.scalar_one_or_none()
+    if message is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+
+    contact: Contact | None = None
+    if message.contact_id:
+        contact_result = await db.execute(
+            select(Contact).where(Contact.id == message.contact_id)
+        )
+        contact = contact_result.scalar_one_or_none()
+
+    deal_notes: list[str] = []
+    if contact:
+        notes_result = await db.execute(
+            select(DealNote.body)
+            .join(Deal, DealNote.deal_id == Deal.id)
+            .where(Deal.contact_id == contact.id)
+            .order_by(DealNote.created_at.desc())
+            .limit(2)
+        )
+        deal_notes = [r[0] for r in notes_result.fetchall()]
+
+    context = (
+        f"From: {message.sender_email or 'Unknown'}\n"
+        f"Subject: {message.subject or '(No subject)'}\n"
+        f"Message:\n{(message.body_plain or '')[:1200]}\n"
+    )
+    if contact:
+        context += (
+            f"\nContact profile:\n"
+            f"  Name: {contact.name}\n"
+            f"  Company: {contact.company or 'Unknown'}\n"
+            f"  Role: {contact.role or 'Unknown'}\n"
+        )
+    if deal_notes:
+        context += "\nRecent deal notes:\n" + "\n".join(f"- {n}" for n in deal_notes)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_REPLY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        tone = str(data.get("tone", "professional"))
+        if tone not in {"professional", "friendly", "urgent"}:
+            tone = "professional"
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    subject = str(data.get("subject", f"Re: {message.subject or ''}")[:80])
+    body = str(data.get("body", ""))[:2000]
+
+    return {
+        "subject": subject,
+        "body": body,
+        "tone": tone,
+        "message_id": str(message_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/contacts/{contact_id}/communication-style
+# ---------------------------------------------------------------------------
+
+_COMMS_STYLE_SYSTEM = """\
+You are Nova, the AI communications analyst in NovaCRM. Analyse the provided contact profile \
+and recent messages to determine how this contact prefers to communicate, and return a structured profile.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "style": "direct",
+  "preferred_channel": "email",
+  "best_time": "morning",
+  "tone_tips": ["...", "..."]
+}
+
+Rules:
+- style must be exactly one of: "direct", "analytical", "relational", "expressive"
+  direct = brief, action-oriented; analytical = data-driven, detail-heavy;
+  relational = warm, rapport-first; expressive = enthusiastic, story-driven
+- preferred_channel must be exactly one of: "email", "slack", "call"
+- best_time must be exactly one of: "morning", "afternoon", "end_of_day"
+- tone_tips: 2-4 practical tips for how to communicate effectively with this contact
+- Base conclusions on the message content, response patterns, phrasing choices, and tone
+
+Output only the JSON object, nothing else.\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/communication-style")
+@limiter.limit("5/minute")
+async def contact_communication_style(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return an AI communication style profile for a contact using their recent messages."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    messages_result = await db.execute(
+        select(Message)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(5)
+    )
+    messages = messages_result.scalars().all()
+
+    context = (
+        f"Contact: {contact.name}\n"
+        f"Company: {contact.company or 'Unknown'}\n"
+        f"Role: {contact.role or 'Unknown'}\n"
+        f"Email: {contact.email or 'Unknown'}\n\n"
+    )
+
+    if messages:
+        context += "Recent messages (newest first):\n"
+        for i, msg in enumerate(messages, 1):
+            context += (
+                f"\n[Message {i}]\n"
+                f"Subject: {msg.subject or '(No subject)'}\n"
+                f"From: {msg.sender_email or 'Unknown'}\n"
+                f"Body: {(msg.body_plain or '')[:500]}\n"
+            )
+    else:
+        context += "No recent messages available.\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_COMMS_STYLE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        style = str(data.get("style", "relational"))
+        if style not in {"direct", "analytical", "relational", "expressive"}:
+            style = "relational"
+
+        preferred_channel = str(data.get("preferred_channel", "email"))
+        if preferred_channel not in {"email", "slack", "call"}:
+            preferred_channel = "email"
+
+        best_time = str(data.get("best_time", "morning"))
+        if best_time not in {"morning", "afternoon", "end_of_day"}:
+            best_time = "morning"
+
+        raw_tips = data.get("tone_tips", [])
+        tone_tips = [str(t) for t in raw_tips if isinstance(t, str)][:4]
+        if not tone_tips:
+            tone_tips = ["Adapt your messaging to their preferred communication style."]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "style": style,
+        "preferred_channel": preferred_channel,
+        "best_time": best_time,
+        "tone_tips": tone_tips,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ── Lead Score Explanation ─────────────────────────────────────────────────────
+
+_LEAD_SCORE_SYSTEM = """\
+You are a CRM lead scoring analyst. Given a contact's ML lead score, their recent messages, \
+deal pipeline, and task history, explain whether the score appears accurate and provide actionable advice.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "score_assessment": "accurate",
+  "score_summary": "One or two sentence narrative about the lead score.",
+  "key_signals": ["signal 1", "signal 2", "signal 3"],
+  "improvement_tips": ["tip 1", "tip 2"]
+}
+
+Rules:
+- score_assessment must be exactly one of: "accurate", "overestimated", "underestimated"
+  accurate = score reflects the contact's real buying intent and engagement
+  overestimated = score is too high relative to observed engagement/signals
+  underestimated = score is too low; contact shows stronger potential than score suggests
+- score_summary: 1-2 sentences explaining why the score assessment was made
+- key_signals: 2-4 concrete signals (positive or negative) driving the current score
+- improvement_tips: 2-3 specific CRM actions to improve the contact's score or engagement
+- Base everything on the provided data. Be direct and specific.
+
+Output only the JSON object, nothing else.\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/lead-score-explanation")
+@limiter.limit("5/minute")
+async def contact_lead_score_explanation(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Explain why a contact has their current ML lead score and suggest improvements."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    messages_result = await db.execute(
+        select(Message)
+        .where(Message.workspace_id == workspace_id, Message.contact_id == contact_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    messages = messages_result.scalars().all()
+
+    deals_result = await db.execute(
+        select(Deal)
+        .where(Deal.workspace_id == workspace_id, Deal.contact_id == contact_id)
+        .order_by(Deal.created_at.desc())
+        .limit(5)
+    )
+    deals = deals_result.scalars().all()
+
+    tasks_result = await db.execute(
+        select(Task)
+        .where(Task.workspace_id == workspace_id, Task.contact_id == contact_id)
+    )
+    tasks = tasks_result.scalars().all()
+    task_done = sum(1 for t in tasks if t.status == "done")
+    task_total = len(tasks)
+    task_rate = round(task_done / task_total * 100) if task_total else 0
+
+    ml = contact.ml_score or {}
+    score_value = int(ml.get("value", 50))
+    score_label = str(ml.get("label", "warm"))
+    existing_signals = ml.get("signals", [])
+
+    open_deals = [d for d in deals if d.stage not in ("closed_won", "closed_lost")]
+    pipeline_value = sum(d.value for d in open_deals)
+
+    context = (
+        f"Contact: {contact.name}\n"
+        f"Company: {contact.company or 'Unknown'}\n"
+        f"Role: {contact.role or 'Unknown'}\n"
+        f"Status: {contact.status}\n"
+        f"Current ML lead score: {score_value}/100 ({score_label})\n"
+        f"Existing score signals: {', '.join(existing_signals) if existing_signals else 'none recorded'}\n"
+        f"Open deals: {len(open_deals)} (pipeline value: ${pipeline_value:,.0f})\n"
+        f"Task completion: {task_done}/{task_total} tasks done ({task_rate}%)\n"
+    )
+
+    if messages:
+        context += "\nRecent messages (newest first):\n"
+        for i, msg in enumerate(messages, 1):
+            context += (
+                f"\n[Message {i}]\n"
+                f"Subject: {msg.subject or '(No subject)'}\n"
+                f"From: {msg.sender_email or 'Unknown'}\n"
+                f"Body: {(msg.body_plain or '')[:400]}\n"
+            )
+    else:
+        context += "\nNo recent messages available.\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=450,
+            system=_LEAD_SCORE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        assessment = str(data.get("score_assessment", "accurate"))
+        if assessment not in {"accurate", "overestimated", "underestimated"}:
+            assessment = "accurate"
+
+        score_summary = str(data.get("score_summary", "Score assessment complete."))[:300]
+
+        raw_signals = data.get("key_signals", [])
+        key_signals = [str(s) for s in raw_signals if isinstance(s, str)][:4]
+        if not key_signals:
+            key_signals = ["Engagement level is consistent with current score."]
+
+        raw_tips = data.get("improvement_tips", [])
+        improvement_tips = [str(t) for t in raw_tips if isinstance(t, str)][:3]
+        if not improvement_tips:
+            improvement_tips = ["Log more interactions to refine the score."]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "score_assessment": assessment,
+        "score_summary": score_summary,
+        "key_signals": key_signals,
+        "improvement_tips": improvement_tips,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ── Win Probability Explainer ──────────────────────────────────────────────────
+
+_WIN_PROB_SYSTEM = """\
+You are a sales intelligence assistant analyzing deal win probability accuracy.
+Given deal data, assess whether the ML-predicted win probability is accurate,
+identify key drivers and risk factors, and suggest an adjustment if warranted.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "probability_assessment": "on_track" | "overestimated" | "underestimated",
+  "key_drivers": ["driver1", "driver2", "driver3"],
+  "risk_factors": ["risk1", "risk2"],
+  "recommended_adjustment": <integer -30 to 30, or null if on_track>
+}
+
+Rules:
+- probability_assessment: "on_track" if ML probability seems accurate, "overestimated" if deal is riskier than score suggests, "underestimated" if stronger than score suggests
+- key_drivers: 2-4 specific factors positively influencing the deal
+- risk_factors: 1-3 specific concerns (empty array if none)
+- recommended_adjustment: integer points to add/subtract from ML probability, or null if assessment is "on_track"
+- Be data-driven and specific; reference the actual numbers provided\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/win-probability-explainer")
+@limiter.limit("5/minute")
+async def deal_win_probability_explainer(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Win probability analysis is not available for closed deals.",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote)
+        .where(DealNote.deal_id == deal_id, DealNote.workspace_id == workspace_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = notes_result.scalars().all()
+
+    days_in_stage = 0
+    if deal.stage_changed_at:
+        delta = datetime.datetime.utcnow() - deal.stage_changed_at.replace(tzinfo=None)
+        days_in_stage = max(0, delta.days)
+
+    next_action_overdue = False
+    if deal.next_action_date:
+        next_action_overdue = deal.next_action_date < datetime.date.today()
+
+    competitor_count = len(deal.competitors or [])
+
+    context = (
+        f"Deal Stage: {deal.stage}\n"
+        f"ML Win Probability: {deal.ml_win_probability or 0}%\n"
+        f"Health Score: {deal.health_score or 0}\n"
+        f"Days in Current Stage: {days_in_stage}\n"
+        f"Competitor Count: {competitor_count}\n"
+        f"Next Action Overdue: {'Yes' if next_action_overdue else 'No'}\n"
+    )
+
+    if notes:
+        context += "\nRecent Deal Notes:\n"
+        for i, note in enumerate(notes, 1):
+            context += f"{i}. {(note.body or '')[:300]}\n"
+    else:
+        context += "\nNo recent deal notes available.\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_WIN_PROB_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        assessment = str(data.get("probability_assessment", "on_track"))
+        if assessment not in {"on_track", "overestimated", "underestimated"}:
+            assessment = "on_track"
+
+        raw_drivers = data.get("key_drivers", [])
+        key_drivers = [str(d) for d in raw_drivers if isinstance(d, str)][:4]
+        if not key_drivers:
+            key_drivers = ["Insufficient data for analysis."]
+
+        raw_risks = data.get("risk_factors", [])
+        risk_factors = [str(r) for r in raw_risks if isinstance(r, str)][:3]
+
+        raw_adj = data.get("recommended_adjustment")
+        recommended_adjustment: int | None = None
+        if isinstance(raw_adj, (int, float)) and not isinstance(raw_adj, bool):
+            adj = int(raw_adj)
+            if adj != 0:
+                recommended_adjustment = max(-30, min(30, adj))
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "probability_assessment": assessment,
+        "key_drivers": key_drivers,
+        "risk_factors": risk_factors,
+        "recommended_adjustment": recommended_adjustment,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ── Task Prioritization ────────────────────────────────────────────────────────
+
+_TASK_PRIORITY_SYSTEM = """\
+You are a productivity coach helping a sales or PM team prioritize their open tasks.
+Given a list of tasks with titles, descriptions, and due dates, rank them by urgency and importance.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "items": [
+    {
+      "task_id": "<id string>",
+      "priority_rank": <integer starting at 1>,
+      "urgency": "critical" | "high" | "medium" | "low",
+      "reason": "<one sentence explaining why this rank>"
+    }
+  ],
+  "summary_note": "<2 sentence overall summary of the task load and top recommendation>"
+}
+
+Rules:
+- Include every task_id from the input, no omissions
+- priority_rank 1 = most urgent/important
+- urgency: "critical" = overdue or due today; "high" = due within 3 days; "medium" = due this week or high-impact; "low" = no due date or far out
+- reason: specific, actionable, reference the actual task title
+- summary_note: identify the #1 priority and any bottleneck theme\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/tasks/prioritize")
+@limiter.limit("5/minute")
+async def prioritize_tasks(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    tasks_result = await db.execute(
+        select(Task)
+        .where(Task.workspace_id == workspace_id, Task.status.in_(["open", "in_progress"]))
+        .order_by(Task.due_date.asc().nullslast())
+        .limit(30)
+    )
+    tasks = tasks_result.scalars().all()
+
+    if not tasks:
+        return {
+            "items": [],
+            "summary_note": "No open tasks found. Add tasks to get AI prioritization.",
+            "workspace_id": str(workspace_id),
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    today = datetime.date.today()
+    context_lines = []
+    for t in tasks:
+        due_str = str(t.due_date) if t.due_date else "no due date"
+        overdue = ""
+        if t.due_date and t.due_date < today:
+            overdue = f" (OVERDUE by {(today - t.due_date).days} days)"
+        desc_snippet = (t.description or "")[:120].strip()
+        context_lines.append(
+            f"ID: {t.id} | Title: {t.title} | Status: {t.status} | Due: {due_str}{overdue}"
+            + (f" | Description: {desc_snippet}" if desc_snippet else "")
+        )
+
+    context = f"Today's date: {today}\n\nOpen tasks:\n" + "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            system=_TASK_PRIORITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        raw_items = data.get("items", [])
+        valid_ids = {str(t.id) for t in tasks}
+        items = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            tid = str(item.get("task_id", ""))
+            if tid not in valid_ids:
+                continue
+            urgency = str(item.get("urgency", "medium"))
+            if urgency not in {"critical", "high", "medium", "low"}:
+                urgency = "medium"
+            items.append({
+                "task_id": tid,
+                "priority_rank": int(item.get("priority_rank", 99)),
+                "urgency": urgency,
+                "reason": str(item.get("reason", ""))[:200],
+            })
+        # Sort by rank and fill in any missing tasks
+        items.sort(key=lambda x: x["priority_rank"])
+        seen = {i["task_id"] for i in items}
+        rank = len(items) + 1
+        for t in tasks:
+            if str(t.id) not in seen:
+                items.append({"task_id": str(t.id), "priority_rank": rank, "urgency": "low", "reason": "Not ranked by AI."})
+                rank += 1
+
+        summary_note = str(data.get("summary_note", "Prioritization complete."))[:400]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "items": items,
+        "summary_note": summary_note,
+        "workspace_id": str(workspace_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+_PIPELINE_HEALTH_SYSTEM = """\
+You are Nova, an AI assistant for NovaCRM. You will receive a pipeline snapshot.
+Respond with ONLY a JSON object — no markdown, no prose — with exactly these keys:
+{
+  "health_score": <integer 0-100>,
+  "rating": <"strong"|"healthy"|"at_risk"|"critical">,
+  "briefing": "<2-3 sentence narrative about overall pipeline health>",
+  "priorities": ["<specific action 1>", "<specific action 2>", "<specific action 3>"]
+}
+Score guide: 80-100=strong, 60-79=healthy, 40-59=at_risk, 0-39=critical.
+Priorities must be 3 concrete, actionable CRM recommendations.\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/pipeline-health-briefing")
+@limiter.limit("5/minute")
+async def pipeline_health_briefing(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    # Open deals aggregate
+    open_agg = await db.execute(
+        select(
+            func.count(Deal.id).label("total"),
+            func.coalesce(func.sum(Deal.value), 0).label("pipeline_value"),
+            func.coalesce(func.avg(Deal.ml_win_probability), 0).label("avg_win_prob"),
+        ).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    agg = open_agg.one()
+    total_open = int(agg.total or 0)
+    pipeline_value = float(agg.pipeline_value or 0)
+    avg_win_prob = float(agg.avg_win_prob or 0)
+
+    # At-risk open deals (health_score < 50)
+    at_risk_res = await db.execute(
+        select(func.count(Deal.id)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.health_score < 50,
+        )
+    )
+    at_risk_count = int(at_risk_res.scalar() or 0)
+
+    # Overdue close dates
+    today_str = datetime.date.today().isoformat()
+    overdue_res = await db.execute(
+        select(func.count(Deal.id)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            Deal.expected_close.isnot(None),
+            Deal.expected_close < today_str,
+        )
+    )
+    overdue_count = int(overdue_res.scalar() or 0)
+
+    # Stage breakdown
+    stage_rows = await db.execute(
+        select(
+            Deal.stage,
+            func.count(Deal.id).label("count"),
+            func.coalesce(func.sum(Deal.value), 0).label("value"),
+        ).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        ).group_by(Deal.stage).order_by(func.count(Deal.id).desc()).limit(4)
+    )
+    stage_breakdown = [
+        {"stage": row.stage, "count": int(row.count), "value": float(row.value or 0)}
+        for row in stage_rows.all()
+    ]
+
+    # Closed won totals
+    won_agg = await db.execute(
+        select(
+            func.count(Deal.id).label("count"),
+            func.coalesce(func.sum(Deal.value), 0).label("value"),
+        ).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    won_row = won_agg.one()
+    total_won = int(won_row.count or 0)
+    total_won_value = float(won_row.value or 0)
+
+    context = (
+        f"Pipeline Snapshot:\n"
+        f"- Open deals: {total_open}\n"
+        f"- Total pipeline value: ${pipeline_value:,.0f}\n"
+        f"- Average win probability: {avg_win_prob:.0f}%\n"
+        f"- At-risk deals (health < 50): {at_risk_count}\n"
+        f"- Deals with overdue close dates: {overdue_count}\n"
+        f"- Total closed-won deals: {total_won} (${total_won_value:,.0f})\n"
+        f"- Stage breakdown: {stage_breakdown}\n"
+        "\nGenerate the pipeline health assessment JSON."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_PIPELINE_HEALTH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        score_raw = data.get("health_score")
+        health_score = (
+            int(score_raw)
+            if isinstance(score_raw, (int, float)) and not isinstance(score_raw, bool)
+            else 50
+        )
+        health_score = max(0, min(100, health_score))
+
+        rating = str(data.get("rating", "healthy"))
+        if rating not in {"strong", "healthy", "at_risk", "critical"}:
+            rating = "healthy"
+
+        briefing = str(data.get("briefing", "Pipeline health analysis is in progress."))[:600]
+
+        raw_prio = data.get("priorities", [])
+        priorities = [str(p) for p in raw_prio if isinstance(p, str)][:3]
+        if not priorities:
+            priorities = ["Review at-risk deals and update health scores."]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "health_score": health_score,
+        "rating": rating,
+        "briefing": briefing,
+        "priorities": priorities,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 15c: AI team performance summary
+# ---------------------------------------------------------------------------
+
+_TEAM_PERF_SYSTEM = """\
+You are a CRM performance analyst. Given metrics about a sales/PM team's activity over the last 30 days, \
+produce a JSON object with exactly these fields:
+{
+  "performance_rating": "excellent" | "good" | "needs_improvement" | "critical",
+  "highlights": ["string1", "string2", "string3"],
+  "areas_for_improvement": ["string1", "string2"],
+  "summary_sentence": "A 2-sentence narrative about overall team performance."
+}
+Be specific and data-driven — reference actual numbers. JSON only, no markdown.\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/team-performance")
+@limiter.limit("5/minute")
+async def get_team_performance(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+
+    # Agent runs in last 30 days
+    agent_runs = int(
+        await db.scalar(
+            select(func.count(ActivityEvent.id)).where(
+                ActivityEvent.workspace_id == workspace_id,
+                ActivityEvent.type.like("agent_%"),
+                ActivityEvent.created_at >= thirty_days_ago,
+            )
+        ) or 0
+    )
+
+    # Task metrics (all-time totals for completion rate)
+    task_total = int(
+        await db.scalar(
+            select(func.count(Task.id)).where(Task.workspace_id == workspace_id)
+        ) or 0
+    )
+    task_done = int(
+        await db.scalar(
+            select(func.count(Task.id)).where(
+                Task.workspace_id == workspace_id,
+                Task.status == "done",
+            )
+        ) or 0
+    )
+    task_completion_rate = round(task_done / task_total * 100) if task_total > 0 else 0
+
+    # Messages processed in last 30 days
+    messages_processed = int(
+        await db.scalar(
+            select(func.count(Message.id)).where(
+                Message.workspace_id == workspace_id,
+                Message.received_at >= thirty_days_ago,
+            )
+        ) or 0
+    )
+
+    # Deal stage moves in last 30 days
+    deals_moved = int(
+        await db.scalar(
+            select(func.count(ActivityEvent.id)).where(
+                ActivityEvent.workspace_id == workspace_id,
+                ActivityEvent.type == "deal_moved",
+                ActivityEvent.created_at >= thirty_days_ago,
+            )
+        ) or 0
+    )
+
+    # Distinct contacts with messages in last 30 days
+    active_contacts = int(
+        await db.scalar(
+            select(func.count(func.distinct(Message.contact_id))).where(
+                Message.workspace_id == workspace_id,
+                Message.contact_id.isnot(None),
+                Message.received_at >= thirty_days_ago,
+            )
+        ) or 0
+    )
+
+    context = (
+        f"Team Activity (Last 30 Days):\n"
+        f"- AI agent runs: {agent_runs}\n"
+        f"- Tasks: {task_done} completed out of {task_total} total ({task_completion_rate}% completion rate)\n"
+        f"- Messages processed: {messages_processed}\n"
+        f"- Deals moved to a new stage: {deals_moved}\n"
+        f"- Contacts actively engaged: {active_contacts}\n"
+        "\nGenerate the team performance JSON assessment."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_TEAM_PERF_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        rating = str(data.get("performance_rating", "good"))
+        if rating not in {"excellent", "good", "needs_improvement", "critical"}:
+            rating = "good"
+
+        raw_highlights = data.get("highlights", [])
+        highlights = [str(h) for h in raw_highlights if isinstance(h, str)][:3]
+        if not highlights:
+            highlights = ["Team is actively engaging contacts through the CRM."]
+
+        raw_areas = data.get("areas_for_improvement", [])
+        areas_for_improvement = [str(a) for a in raw_areas if isinstance(a, str)][:2]
+        if not areas_for_improvement:
+            areas_for_improvement = ["Increase AI agent usage to surface insights faster."]
+
+        summary_sentence = str(
+            data.get("summary_sentence", "Team performance data is being compiled.")
+        )[:600]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "performance_rating": rating,
+        "highlights": highlights,
+        "areas_for_improvement": areas_for_improvement,
+        "summary_sentence": summary_sentence,
+        "metrics": {
+            "agent_runs": agent_runs,
+            "task_completion_rate": task_completion_rate,
+            "messages_processed": messages_processed,
+            "deals_moved": deals_moved,
+            "active_contacts": active_contacts,
+        },
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ── Meeting Prep ───────────────────────────────────────────────────────────────
+
+_MEETING_PREP_SYSTEM = """\
+You are an expert sales coach. Given a deal's context, generate concise meeting prep notes.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "agenda_items": [
+    {"topic": "string", "goal": "string (one sentence)", "talking_points": ["string", "string", "string"]},
+    {"topic": "string", "goal": "string", "talking_points": ["string", "string"]},
+    {"topic": "string", "goal": "string", "talking_points": ["string"]}
+  ],
+  "questions_to_ask": ["string", "string", "string"],
+  "things_to_avoid": ["string", "string"]
+}
+Rules:
+- Exactly 3 agenda_items, each with 1-3 talking_points
+- Exactly 3 questions_to_ask
+- Exactly 2 things_to_avoid
+- Keep all strings concise (20 words or fewer)
+- Be specific to the deal context provided
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/meeting-prep")
+@limiter.limit("5/minute")
+async def deal_meeting_prep(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Meeting prep is not available for closed deals.",
+        )
+
+    contact_lines: list[str] = []
+    if deal.contact_id:
+        contact_result = await db.execute(
+            select(Contact).where(Contact.id == deal.contact_id, Contact.workspace_id == workspace_id)
+        )
+        contact = contact_result.scalar_one_or_none()
+        if contact:
+            contact_lines.append(
+                f"Contact: {contact.name or 'Unknown'} — {contact.role or 'unknown role'} at {contact.company or 'Unknown'}"
+            )
+            contact_lines.append(f"Contact email: {contact.email or 'unknown'}")
+
+        msg_result = await db.execute(
+            select(Message.subject, Message.received_at, ClarityScore.score)
+            .outerjoin(ClarityScore, Message.id == ClarityScore.message_id)
+            .where(Message.workspace_id == workspace_id, Message.contact_id == deal.contact_id)
+            .order_by(Message.received_at.desc())
+            .limit(3)
+        )
+        recent_messages = msg_result.all()
+        if recent_messages:
+            contact_lines.append("Recent messages:")
+            for msg in recent_messages:
+                clarity = f" (clarity {msg.score}/100)" if msg.score is not None else ""
+                ts = msg.received_at.strftime("%b %d") if msg.received_at else "?"
+                contact_lines.append(f"  - \"{msg.subject or '(no subject)'}\" received {ts}{clarity}")
+
+    notes_result = await db.execute(
+        select(DealNote)
+        .where(DealNote.deal_id == deal_id, DealNote.workspace_id == workspace_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = notes_result.scalars().all()
+
+    days_in_stage = 0
+    if deal.stage_changed_at:
+        delta = datetime.datetime.utcnow() - deal.stage_changed_at.replace(tzinfo=None)
+        days_in_stage = max(0, delta.days)
+
+    next_action_overdue = bool(deal.next_action_date and deal.next_action_date < datetime.date.today())
+    competitor_count = len(deal.competitors or [])
+
+    context_parts = [
+        f"Deal: {deal.title or 'Untitled'}",
+        f"Stage: {deal.stage}",
+        f"Value: ${deal.value or 0:,.0f}",
+        f"Health Score: {deal.health_score or 0}/100",
+        f"ML Win Probability: {deal.ml_win_probability or 0}%",
+        f"Days in Stage: {days_in_stage}",
+        f"Competitor Count: {competitor_count}",
+        f"Next Action Overdue: {'Yes' if next_action_overdue else 'No'}",
+    ]
+    if contact_lines:
+        context_parts.extend(contact_lines)
+    if notes:
+        context_parts.append("Recent Deal Notes:")
+        for i, note in enumerate(notes, 1):
+            context_parts.append(f"  {i}. {(note.body or '')[:250]}")
+    else:
+        context_parts.append("No deal notes yet.")
+
+    context = "\n".join(context_parts)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_MEETING_PREP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        raw_agenda = data.get("agenda_items", [])
+        agenda_items = []
+        for item in raw_agenda[:3]:
+            if not isinstance(item, dict):
+                continue
+            topic = str(item.get("topic", ""))[:80]
+            goal = str(item.get("goal", ""))[:120]
+            raw_tps = item.get("talking_points", [])
+            talking_points = [str(tp)[:120] for tp in raw_tps if isinstance(tp, str)][:3]
+            if topic:
+                agenda_items.append({"topic": topic, "goal": goal, "talking_points": talking_points})
+        if not agenda_items:
+            agenda_items = [
+                {"topic": "Deal Overview", "goal": "Align on current status and next steps.", "talking_points": ["Recap progress so far"]}
+            ]
+
+        raw_questions = data.get("questions_to_ask", [])
+        questions_to_ask = [str(q)[:150] for q in raw_questions if isinstance(q, str)][:3]
+        if not questions_to_ask:
+            questions_to_ask = ["What is your timeline for a decision?"]
+
+        raw_avoid = data.get("things_to_avoid", [])
+        things_to_avoid = [str(a)[:150] for a in raw_avoid if isinstance(a, str)][:2]
+        if not things_to_avoid:
+            things_to_avoid = ["Pressuring for immediate commitment"]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "agenda_items": agenda_items,
+        "questions_to_ask": questions_to_ask,
+        "things_to_avoid": things_to_avoid,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+# ── Workspace Digest ───────────────────────────────────────────────────────────
+
+_WORKSPACE_DIGEST_SYSTEM = """\
+You are a CRM analytics expert generating a weekly workspace health digest for an admin.
+Given workspace metrics, produce an honest, actionable health report.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "health_rating": "excellent" | "good" | "needs_attention" | "critical",
+  "summary": "2-3 sentence narrative on workspace health",
+  "highlights": ["achievement 1", "achievement 2"],
+  "warnings": ["concern 1", "concern 2"],
+  "recommended_actions": ["action 1", "action 2", "action 3"]
+}
+
+Rules:
+- health_rating: excellent = all KPIs green; good = mostly healthy; needs_attention = 1-2 issues; critical = multiple problems
+- summary: be direct and specific — reference actual numbers from the context
+- highlights: 2 recent wins or positive trends (keep to 15 words each max)
+- warnings: 2 concerns that need admin attention (keep to 15 words each max)
+- recommended_actions: 3 specific, actionable steps (keep to 20 words each max)
+- If metrics are sparse (new workspace), focus on next-step recommendations
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/workspace-digest")
+@limiter.limit("5/minute")
+async def workspace_digest(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    today = datetime.date.today()
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+
+    # Total contacts
+    total_contacts_result = await db.execute(
+        select(func.count(Contact.id)).where(Contact.workspace_id == workspace_id)
+    )
+    total_contacts = total_contacts_result.scalar() or 0
+
+    # Contacts going dark (no touch in 30 days)
+    recent_msg_cids = select(Message.contact_id).where(
+        Message.workspace_id == workspace_id,
+        Message.received_at >= thirty_days_ago,
+        Message.contact_id.isnot(None),
+    )
+    recent_note_cids = select(ContactNote.contact_id).where(
+        ContactNote.workspace_id == workspace_id,
+        ContactNote.created_at >= thirty_days_ago,
+    )
+    going_dark_result = await db.execute(
+        select(func.count(Contact.id)).where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+            Contact.id.not_in(recent_msg_cids),
+            Contact.id.not_in(recent_note_cids),
+        )
+    )
+    going_dark_count = going_dark_result.scalar() or 0
+
+    # Open deals stats
+    open_deals_result = await db.execute(
+        select(Deal.value, Deal.ml_win_probability, Deal.health_score, Deal.stage_changed_at).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals_rows = open_deals_result.all()
+    open_deal_count = len(open_deals_rows)
+    total_pipeline = sum((r.value or 0) for r in open_deals_rows)
+    at_risk_deals = sum(1 for r in open_deals_rows if (r.health_score or 0) < 50)
+    avg_win_prob = (
+        round(sum((r.ml_win_probability or 0) for r in open_deals_rows) / open_deal_count)
+        if open_deal_count else 0
+    )
+
+    # Overdue close dates
+    overdue_close_result = await db.execute(
+        select(func.count(Deal.id)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+            # expected_close is a String column holding ISO dates ("YYYY-MM-DD"),
+            # so compare against a string — comparing to a date object raises
+            # "operator does not exist: text < date". Lexical order matches date
+            # order for ISO strings. Mirrors the /deals overdue query in this file.
+            Deal.expected_close.isnot(None),
+            Deal.expected_close < today.isoformat(),
+        )
+    )
+    overdue_close_count = overdue_close_result.scalar() or 0
+
+    # Open tasks
+    open_tasks_result = await db.execute(
+        select(func.count(Task.id)).where(
+            Task.workspace_id == workspace_id,
+            Task.status.in_(["open", "in_progress"]),
+        )
+    )
+    open_task_count = open_tasks_result.scalar() or 0
+
+    # Overdue tasks
+    overdue_tasks_result = await db.execute(
+        select(func.count(Task.id)).where(
+            Task.workspace_id == workspace_id,
+            Task.status.in_(["open", "in_progress"]),
+            Task.due_date < today,
+        )
+    )
+    overdue_task_count = overdue_tasks_result.scalar() or 0
+
+    # Recent agent runs (last 30 days)
+    agent_runs_result = await db.execute(
+        select(func.count(ActivityEvent.id)).where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "agent_run",
+            ActivityEvent.created_at >= thirty_days_ago,
+        )
+    )
+    agent_run_count = agent_runs_result.scalar() or 0
+
+    # Closed won in last 30 days
+    closed_won_result = await db.execute(
+        select(func.count(Deal.id), func.coalesce(func.sum(Deal.value), 0)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= thirty_days_ago,
+        )
+    )
+    closed_won_row = closed_won_result.one()
+    closed_won_count = closed_won_row[0] or 0
+    closed_won_value = float(closed_won_row[1] or 0)
+
+    context = (
+        f"=== Workspace Health Snapshot (Last 30 Days) ===\n"
+        f"Total Contacts: {total_contacts}\n"
+        f"Contacts Going Dark (no touch in 30d): {going_dark_count}\n"
+        f"\nPipeline:\n"
+        f"  Open Deals: {open_deal_count} (total pipeline ${total_pipeline:,.0f})\n"
+        f"  At-Risk Deals (health < 50): {at_risk_deals}\n"
+        f"  Avg Win Probability: {avg_win_prob}%\n"
+        f"  Overdue Close Dates: {overdue_close_count}\n"
+        f"  Closed Won (last 30d): {closed_won_count} deals worth ${closed_won_value:,.0f}\n"
+        f"\nTasks:\n"
+        f"  Open Tasks: {open_task_count}\n"
+        f"  Overdue Tasks: {overdue_task_count}\n"
+        f"\nAgents:\n"
+        f"  Agent Runs (last 30d): {agent_run_count}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_WORKSPACE_DIGEST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        rating = str(data.get("health_rating", "good"))
+        if rating not in {"excellent", "good", "needs_attention", "critical"}:
+            rating = "good"
+
+        summary = str(data.get("summary", "Workspace health assessment complete."))[:500]
+
+        raw_highlights = data.get("highlights", [])
+        highlights = [str(h) for h in raw_highlights if isinstance(h, str)][:3]
+        if not highlights:
+            highlights = ["Workspace is active and operational."]
+
+        raw_warnings = data.get("warnings", [])
+        warnings = [str(w) for w in raw_warnings if isinstance(w, str)][:3]
+        if not warnings:
+            warnings = ["Review contacts for engagement gaps."]
+
+        raw_actions = data.get("recommended_actions", [])
+        recommended_actions = [str(a) for a in raw_actions if isinstance(a, str)][:4]
+        if not recommended_actions:
+            recommended_actions = ["Connect a Gmail or Slack account to start ingesting messages."]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "health_rating": rating,
+        "summary": summary,
+        "highlights": highlights,
+        "warnings": warnings,
+        "recommended_actions": recommended_actions,
+        "metrics": {
+            "total_contacts": total_contacts,
+            "going_dark_count": going_dark_count,
+            "open_deal_count": open_deal_count,
+            "total_pipeline": total_pipeline,
+            "at_risk_deals": at_risk_deals,
+            "overdue_close_count": overdue_close_count,
+            "closed_won_count": closed_won_count,
+            "closed_won_value": closed_won_value,
+            "open_task_count": open_task_count,
+            "overdue_task_count": overdue_task_count,
+            "agent_run_count": agent_run_count,
+        },
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+# ── Contact Onboarding Checklist ───────────────────────────────────────────────
+
+_ONBOARDING_CHECKLIST_SYSTEM = """\
+You are a CRM onboarding coach. Given a contact's current profile, generate a prioritised
+checklist of next steps the sales rep should take to properly onboard and develop this relationship.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "checklist": [
+    {
+      "step": "short action title (5-8 words)",
+      "detail": "one sentence explaining why this matters",
+      "category": "data" | "outreach" | "research" | "relationship",
+      "priority": "high" | "medium" | "low"
+    }
+  ],
+  "readiness": "new" | "in_progress" | "ready",
+  "readiness_reason": "one sentence explaining the readiness assessment"
+}
+
+Rules:
+- Return exactly 5 steps — not 4, not 6
+- category:
+    data = filling in missing profile fields (email, role, company, LinkedIn)
+    outreach = sending a first/follow-up message or scheduling a call
+    research = understanding the contact's context, company, competitors
+    relationship = tasks that deepen trust (notes, referrals, QBRs)
+- priority: high = should happen today/this week; medium = this month; low = nice-to-have
+- readiness:
+    new = fewer than 2 touches (messages or notes), missing key profile fields
+    in_progress = some engagement but not enough to qualify
+    ready = 5+ touches, key fields filled, open pipeline deal
+- Be specific to the contact's actual data (name, company, status, score)
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/onboarding-checklist")
+@limiter.limit("5/minute")
+async def contact_onboarding_checklist(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_result.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Message count
+    msg_count_result = await db.execute(
+        select(func.count(Message.id)).where(
+            Message.workspace_id == workspace_id, Message.contact_id == contact_id
+        )
+    )
+    msg_count = msg_count_result.scalar() or 0
+
+    # Note count
+    note_count_result = await db.execute(
+        select(func.count(ContactNote.id)).where(
+            ContactNote.workspace_id == workspace_id, ContactNote.contact_id == contact_id
+        )
+    )
+    note_count = note_count_result.scalar() or 0
+
+    # Open deals
+    deals_result = await db.execute(
+        select(Deal.title, Deal.stage, Deal.value).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals = deals_result.all()
+
+    ml = contact.ml_score or {}
+    score_value = int(ml.get("value", 0))
+    score_label = str(ml.get("label", "unknown"))
+
+    missing_fields: list[str] = []
+    if not contact.company:
+        missing_fields.append("company")
+    if not contact.role:
+        missing_fields.append("role")
+    if not contact.email:
+        missing_fields.append("email")
+    if not contact.phone:
+        missing_fields.append("phone")
+
+    context = (
+        f"Contact: {contact.name or 'Unknown'}\n"
+        f"Company: {contact.company or 'Unknown — MISSING'}\n"
+        f"Role: {contact.role or 'Unknown — MISSING'}\n"
+        f"Email: {contact.email or 'Unknown — MISSING'}\n"
+        f"Phone: {contact.phone or 'Unknown — MISSING'}\n"
+        f"Status: {contact.status}\n"
+        f"ML Lead Score: {score_value}/100 ({score_label})\n"
+        f"Messages exchanged: {msg_count}\n"
+        f"Notes recorded: {note_count}\n"
+        f"Open deals: {len(open_deals)}\n"
+        f"Missing profile fields: {', '.join(missing_fields) if missing_fields else 'none — profile complete'}\n"
+    )
+    if open_deals:
+        context += "Open deals:\n"
+        for d in open_deals:
+            context += f"  - {d.title or 'Untitled'} ({d.stage}, ${d.value or 0:,.0f})\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_ONBOARDING_CHECKLIST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        raw_checklist = data.get("checklist", [])
+        checklist = []
+        valid_cats = {"data", "outreach", "research", "relationship"}
+        valid_pris = {"high", "medium", "low"}
+        for item in raw_checklist[:6]:
+            if not isinstance(item, dict):
+                continue
+            step = str(item.get("step", ""))[:80]
+            detail = str(item.get("detail", ""))[:150]
+            category = str(item.get("category", "outreach"))
+            priority = str(item.get("priority", "medium"))
+            if category not in valid_cats:
+                category = "outreach"
+            if priority not in valid_pris:
+                priority = "medium"
+            if step:
+                checklist.append({"step": step, "detail": detail, "category": category, "priority": priority})
+
+        if not checklist:
+            checklist = [{"step": "Add contact details", "detail": "Fill in company, role, and phone.", "category": "data", "priority": "high"}]
+
+        readiness = str(data.get("readiness", "new"))
+        if readiness not in {"new", "in_progress", "ready"}:
+            readiness = "new"
+
+        readiness_reason = str(data.get("readiness_reason", "Contact is newly added."))[:200]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "checklist": checklist,
+        "readiness": readiness,
+        "readiness_reason": readiness_reason,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI deal ROI projection
+# ---------------------------------------------------------------------------
+
+_DEAL_ROI_SYSTEM = """\
+You are Nova, an AI assistant in NovaCRM. Calculate a realistic ROI projection \
+for a deal prospect — the return on investment the CUSTOMER would achieve by \
+purchasing this product.
+
+Return valid JSON (no markdown) in exactly this shape:
+{
+  "roi_multiplier": <float, e.g. 3.2 — total 3-year return divided by total 3-year cost>,
+  "payback_months": <int 1–36, months until the customer breaks even>,
+  "year1_value": <int, estimated first-year value generated in dollars>,
+  "year3_value": <int, estimated 3-year cumulative value in dollars>,
+  "assumptions": [<exactly 3 concise assumption strings, each under 120 chars>]
+}
+
+Base year1_value on the deal notes and deal context. Be conservative — \
+realistic estimates build credibility. The roi_multiplier should reflect \
+year3_value divided by (annual deal value × 3).\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/roi-projection")
+@limiter.limit("5/minute")
+async def deal_roi_projection(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ROI projection is only available for open deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    note_bodies = [row[0] for row in notes_result.all() if row[0]]
+
+    today = datetime.date.today()
+    if deal.stage_changed_at:
+        days_in_stage = (today - deal.stage_changed_at.date()).days
+    else:
+        days_in_stage = 0
+
+    context = (
+        f"Deal: {deal.title or 'Untitled'}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Annual contract value: ${float(deal.value or 0):,.0f}\n"
+        f"Current stage: {deal.stage}\n"
+        f"Health score: {deal.health_score or 0}/100\n"
+        f"Days in current stage: {days_in_stage}\n"
+        f"ML win probability: {deal.ml_win_probability or 0}%\n"
+        f"Competitor count: {len(deal.competitors) if deal.competitors else 0}\n"
+    )
+    if note_bodies:
+        context += "\nRecent deal notes (latest first):\n"
+        for body in note_bodies:
+            context += f"  - {body[:200]}\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_ROI_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        roi_multiplier = round(float(data.get("roi_multiplier", 2.5)), 1)
+        payback_months = max(1, min(36, int(data.get("payback_months", 12))))
+        year1_value = max(0, int(data.get("year1_value", 0)))
+        year3_value = max(0, int(data.get("year3_value", 0)))
+        raw_assumptions = data.get("assumptions") or []
+        assumptions = [str(a)[:120] for a in raw_assumptions[:3]]
+        if not assumptions:
+            assumptions = [
+                "Based on industry-average productivity gains for the buyer's team size",
+                "Assumes 70-80% feature adoption within the first 3 months",
+                "Excludes one-time implementation and onboarding costs",
+            ]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "roi_multiplier": roi_multiplier,
+        "payback_months": payback_months,
+        "year1_value": year1_value,
+        "year3_value": year3_value,
+        "assumptions": assumptions,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 15g: AI contact growth forecast
+# ---------------------------------------------------------------------------
+
+_CONTACT_GROWTH_FORECAST_SYSTEM = """\
+You are a CRM revenue intelligence AI. Given a contact's deal history and
+recent engagement data, produce a realistic growth forecast.
+
+Return ONLY a JSON object with these fields:
+{
+  "forecast_revenue_3m": <int, realistic new pipeline/revenue expected in next 3 months>,
+  "forecast_revenue_12m": <int, realistic cumulative revenue in next 12 months>,
+  "growth_trajectory": "<one of: declining|flat|growing|accelerating>",
+  "key_drivers": ["<driver 1>", "<driver 2>", "<driver 3>"]
+}
+Base estimates on the patterns described. Be conservative and realistic. Never invent
+numbers that contradict the provided data. key_drivers should be specific and actionable.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/growth-forecast")
+@limiter.limit("5/minute")
+async def contact_growth_forecast(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # Fetch all deals for this contact
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+        )
+    )
+    deals = deals_result.scalars().all()
+
+    # Message count last 90 days
+    ninety_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=90)
+    msg_result = await db.execute(
+        select(func.count(Message.id)).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= ninety_days_ago,
+        )
+    )
+    recent_message_count = msg_result.scalar() or 0
+
+    # Note count last 90 days
+    note_result = await db.execute(
+        select(func.count(ContactNote.id)).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+            ContactNote.created_at >= ninety_days_ago,
+        )
+    )
+    recent_note_count = note_result.scalar() or 0
+
+    # Build context
+    open_deals = [d for d in deals if d.stage not in ("closed_won", "closed_lost")]
+    won_deals = [d for d in deals if d.stage == "closed_won"]
+    lost_deals = [d for d in deals if d.stage == "closed_lost"]
+    total_pipeline = sum(d.value or 0 for d in open_deals)
+    closed_won_value = sum(d.value or 0 for d in won_deals)
+
+    context = (
+        f"Contact: {contact.name} ({contact.email})\n"
+        f"Company: {contact.company or 'Unknown'}\n"
+        f"Status: {contact.status}\n"
+        f"ML score: {contact.ml_score or 0} ({contact.ml_score_label or 'unknown'})\n\n"
+        f"Deal history:\n"
+        f"  Open deals: {len(open_deals)} (total pipeline ${total_pipeline:,.0f})\n"
+        f"  Won deals: {len(won_deals)} (total ${closed_won_value:,.0f})\n"
+        f"  Lost deals: {len(lost_deals)}\n\n"
+        f"Recent activity (last 90 days):\n"
+        f"  Messages: {recent_message_count}\n"
+        f"  Notes: {recent_note_count}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_CONTACT_GROWTH_FORECAST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_trajectories = {"declining", "flat", "growing", "accelerating"}
+        trajectory = data.get("growth_trajectory", "flat")
+        if trajectory not in valid_trajectories:
+            trajectory = "flat"
+
+        forecast_3m = max(0, int(data.get("forecast_revenue_3m", 0)))
+        forecast_12m = max(0, int(data.get("forecast_revenue_12m", 0)))
+        raw_drivers = data.get("key_drivers") or []
+        key_drivers = [str(d)[:120] for d in raw_drivers[:3]]
+        if not key_drivers:
+            key_drivers = [
+                "Engagement level and deal activity trend",
+                "Current pipeline stage distribution",
+                "Historical win rate for this contact type",
+            ]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "forecast_revenue_3m": forecast_3m,
+        "forecast_revenue_12m": forecast_12m,
+        "growth_trajectory": trajectory,
+        "key_drivers": key_drivers,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI workspace goal tracker
+# ---------------------------------------------------------------------------
+
+_GOAL_TRACKER_SYSTEM = """\
+You are Nova, the AI workspace intelligence in NovaCRM. Analyze the provided workspace metrics
+and infer 4 implied business goals. For each goal, assess current progress and provide insight.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "goals": [
+    {
+      "name": "<short goal name, max 5 words>",
+      "target_description": "<what success looks like in 1 sentence>",
+      "progress_pct": <integer 0-100>,
+      "status": "<on_track|at_risk|behind>",
+      "insight": "<1-2 sentence specific insight about progress>"
+    }
+  ],
+  "overall_health": "<on_track|at_risk|behind>"
+}
+
+Infer realistic goals from the data (e.g. "Close $X in pipeline", "Improve win rate",
+"Reduce task backlog", "Re-engage dark contacts"). Be specific and actionable. Base
+progress_pct on the real numbers provided. Use "on_track" when progress is solid,
+"at_risk" when momentum is flagging, and "behind" when clearly failing.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/goal-tracker")
+@limiter.limit("5/minute")
+async def workspace_goal_tracker(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    total_contacts = await db.scalar(
+        select(func.count(Contact.id)).where(Contact.workspace_id == workspace_id)
+    ) or 0
+
+    open_deals_result = await db.execute(
+        select(Deal.value, Deal.health_score, Deal.ml_win_probability).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deal_rows = open_deals_result.all()
+    open_deal_count = len(open_deal_rows)
+    total_pipeline = sum(float(r.value or 0) for r in open_deal_rows)
+    at_risk_count = sum(1 for r in open_deal_rows if (r.health_score or 0) < 50)
+
+    cw_result = await db.execute(
+        select(func.count(Deal.id), func.sum(Deal.value)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    cw_row = cw_result.first()
+    closed_won_count = cw_row[0] or 0
+    closed_won_value = float(cw_row[1] or 0)
+
+    total_tasks = await db.scalar(
+        select(func.count(Task.id)).where(Task.workspace_id == workspace_id)
+    ) or 0
+    done_tasks = await db.scalar(
+        select(func.count(Task.id)).where(
+            Task.workspace_id == workspace_id,
+            Task.status == "done",
+        )
+    ) or 0
+    task_completion_rate = round(done_tasks / total_tasks * 100) if total_tasks > 0 else 0
+
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+    contacts_with_recent_msg = await db.scalar(
+        select(func.count(func.distinct(Message.contact_id))).where(
+            Message.workspace_id == workspace_id,
+            Message.received_at >= thirty_days_ago,
+            Message.contact_id.isnot(None),
+        )
+    ) or 0
+
+    context = (
+        f"Workspace metrics:\n"
+        f"  Total contacts: {total_contacts}\n"
+        f"  Active contacts (messaged in 30d): {contacts_with_recent_msg}\n"
+        f"  Open deals: {open_deal_count}\n"
+        f"  Total pipeline value: ${total_pipeline:,.0f}\n"
+        f"  At-risk deals (health < 50): {at_risk_count}\n"
+        f"  Closed-won deals: {closed_won_count} (total ${closed_won_value:,.0f})\n"
+        f"  Open tasks: {total_tasks - done_tasks}\n"
+        f"  Task completion rate: {task_completion_rate}%\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_GOAL_TRACKER_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_statuses = {"on_track", "at_risk", "behind"}
+        raw_goals = data.get("goals", [])
+        goals = []
+        for g in raw_goals[:4]:
+            if not isinstance(g, dict):
+                continue
+            s = g.get("status", "at_risk")
+            if s not in valid_statuses:
+                s = "at_risk"
+            goals.append({
+                "name": str(g.get("name", "Goal"))[:60],
+                "target_description": str(g.get("target_description", ""))[:200],
+                "progress_pct": max(0, min(100, int(g.get("progress_pct", 0)))),
+                "status": s,
+                "insight": str(g.get("insight", ""))[:300],
+            })
+
+        overall = data.get("overall_health", "at_risk")
+        if overall not in valid_statuses:
+            overall = "at_risk"
+
+        if not goals:
+            goals = [{
+                "name": "Close pipeline deals",
+                "target_description": "Convert open deals to closed-won revenue",
+                "progress_pct": min(100, closed_won_count * 10),
+                "status": "at_risk",
+                "insight": "No goal data available. Review open deal health.",
+            }]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "goals": goals,
+        "overall_health": overall,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# AI workspace competitive landscape summary
+# ---------------------------------------------------------------------------
+
+_COMPETITIVE_LANDSCAPE_SYSTEM = """\
+You are Nova, the AI sales intelligence in NovaCRM. Analyze the provided competitor data from
+active deals and produce a concise competitive landscape summary.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "top_competitors": [
+    {
+      "name": "<competitor name>",
+      "deal_count": <integer>,
+      "stages_present": ["<stage1>", "<stage2>"],
+      "threat_level": "<low|medium|high>",
+      "positioning_note": "<1-sentence note on how to counter this competitor>"
+    }
+  ],
+  "competitive_summary": "<2-sentence overall landscape narrative>",
+  "win_strategies": ["<strategy 1>", "<strategy 2>", "<strategy 3>"]
+}
+
+Rate threat_level as "high" if deal_count >= 3, "medium" if 2, "low" if 1.
+Limit top_competitors to the 5 most common. Provide exactly 3 win_strategies.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/competitive-landscape")
+@limiter.limit("5/minute")
+async def workspace_competitive_landscape(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    open_deals_result = await db.execute(
+        select(Deal.title, Deal.stage, Deal.competitors, Deal.value).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+            Deal.competitors.isnot(None),
+        )
+    )
+    open_deals = open_deals_result.all()
+
+    competitor_counts: Counter = Counter()
+    competitor_stages: dict = defaultdict(set)
+    for row in open_deals:
+        competitors = row.competitors or []
+        for comp in competitors:
+            name = comp if isinstance(comp, str) else comp.get("name", "Unknown")
+            competitor_counts[name] += 1
+            competitor_stages[name].add(row.stage)
+
+    top_5 = competitor_counts.most_common(5)
+    total_open = len(open_deals)
+
+    if not top_5:
+        return {
+            "top_competitors": [],
+            "competitive_summary": "No competitor data found in open deals. Add competitor information to deal records for landscape analysis.",
+            "win_strategies": [
+                "Establish unique value proposition early in the sales cycle.",
+                "Track competitor mentions consistently across all open deals.",
+                "Focus on customer success stories to differentiate.",
+            ],
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    context_lines = [
+        f"Open deals analyzed: {total_open}",
+        "Competitor occurrences in open deals:",
+    ]
+    for name, count in top_5:
+        stages = sorted(competitor_stages[name])
+        context_lines.append(f"  - {name}: {count} deal(s), stages: {', '.join(stages)}")
+
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_COMPETITIVE_LANDSCAPE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_threats = {"low", "medium", "high"}
+        raw_competitors = data.get("top_competitors", [])
+        top_competitors = []
+        for c in raw_competitors[:5]:
+            if not isinstance(c, dict):
+                continue
+            threat = c.get("threat_level", "medium")
+            if threat not in valid_threats:
+                threat = "medium"
+            top_competitors.append({
+                "name": str(c.get("name", "Unknown"))[:80],
+                "deal_count": max(0, int(c.get("deal_count", 1))),
+                "stages_present": [str(s) for s in (c.get("stages_present") or [])[:6]],
+                "threat_level": threat,
+                "positioning_note": str(c.get("positioning_note", ""))[:300],
+            })
+
+        strategies = [str(s)[:300] for s in (data.get("win_strategies") or [])[:3]]
+        while len(strategies) < 3:
+            strategies.append("Focus on differentiated value and customer outcomes.")
+
+        summary = str(data.get("competitive_summary", ""))[:500]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "top_competitors": top_competitors,
+        "competitive_summary": summary,
+        "win_strategies": strategies,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# AI deal follow-up sequence
+# ---------------------------------------------------------------------------
+
+_FOLLOWUP_SEQUENCE_SYSTEM = """\
+You are Nova, the AI sales intelligence in NovaCRM. Generate a 3-step follow-up sequence
+for an open sales deal based on its context.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "steps": [
+    {
+      "step": 1,
+      "timing": "<now|3d|7d|14d>",
+      "channel": "<email|call|slack>",
+      "action": "<one specific action to take, max 200 chars>",
+      "goal": "<desired outcome of this step, max 150 chars>"
+    }
+  ],
+  "rationale": "<1-2 sentence explanation of the overall sequence strategy>"
+}
+
+Provide exactly 3 steps with varied timings and channels appropriate to deal context.
+timing must be one of: now, 3d, 7d, 14d.
+channel must be one of: email, call, slack.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/followup-sequence")
+@limiter.limit("5/minute")
+async def deal_followup_sequence(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Follow-up sequences are only available for open deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    recent_notes = [r[0] for r in notes_result.fetchall()]
+
+    stage_changed = deal.stage_changed_at or deal.created_at
+    days_in_stage = 0
+    if stage_changed:
+        days_in_stage = max(0, (datetime.datetime.utcnow() - stage_changed.replace(tzinfo=None)).days)
+
+    next_action_overdue = False
+    if deal.next_action_date:
+        try:
+            na_date = datetime.date.fromisoformat(str(deal.next_action_date))
+            next_action_overdue = na_date < datetime.date.today()
+        except ValueError:
+            pass
+
+    context_lines = [
+        f"Deal: {deal.title or 'Untitled'} | Company: {deal.company or 'Unknown'}",
+        f"Stage: {deal.stage} | Value: ${deal.value:,.0f}",
+        f"Health score: {deal.health_score} | Win probability: {deal.ml_win_probability}%",
+        f"Days in current stage: {days_in_stage}",
+        f"Next action overdue: {next_action_overdue}",
+        f"Competitor count: {len(deal.competitors) if deal.competitors else 0}",
+    ]
+    if recent_notes:
+        context_lines.append("\nRecent deal notes (newest first):")
+        for i, note in enumerate(recent_notes, 1):
+            context_lines.append(f"  Note {i}: {note[:300]}")
+
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_FOLLOWUP_SEQUENCE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_timings = {"now", "3d", "7d", "14d"}
+        valid_channels = {"email", "call", "slack"}
+        steps = []
+        for s in (data.get("steps") or [])[:3]:
+            if not isinstance(s, dict):
+                continue
+            timing = s.get("timing", "3d")
+            if timing not in valid_timings:
+                timing = "3d"
+            channel = s.get("channel", "email")
+            if channel not in valid_channels:
+                channel = "email"
+            steps.append({
+                "step": len(steps) + 1,
+                "timing": timing,
+                "channel": channel,
+                "action": str(s.get("action", ""))[:300],
+                "goal": str(s.get("goal", ""))[:200],
+            })
+
+        while len(steps) < 3:
+            steps.append({
+                "step": len(steps) + 1,
+                "timing": "7d",
+                "channel": "email",
+                "action": "Follow up with the prospect to check on next steps.",
+                "goal": "Maintain momentum and keep the deal moving forward.",
+            })
+
+        rationale = str(data.get("rationale", ""))[:500]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "steps": steps,
+        "rationale": rationale,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 15o: AI deal champion risk assessment
+# ---------------------------------------------------------------------------
+
+_CHAMPION_RISK_SYSTEM = """\
+You are Nova, an AI sales intelligence engine. Assess the champion risk for an \
+open deal — specifically the risk that the internal champion or decision-maker \
+may be weakening, gone silent, or absent.
+
+Return valid JSON (no markdown) in exactly this shape:
+{
+  "risk_level": "<one of: low|medium|high|critical>",
+  "champion_status": "<one of: active|uncertain|at_risk|unknown>",
+  "risk_signals": ["<signal 1>", "<signal 2>", "<signal 3>"],
+  "mitigation_steps": ["<step 1>", "<step 2>", "<step 3>"]
+}
+
+Definitions:
+- risk_level: low = champion clearly engaged; medium = some uncertainty; \
+high = champion likely losing influence or going silent; critical = no champion or key stakeholder gone
+- champion_status: active = confirmed champion actively pushing deal; \
+uncertain = champion present but silent lately; at_risk = champion may have left or lost authority; \
+unknown = no champion identified
+- risk_signals: exactly 3 specific observations from the deal data explaining the risk
+- mitigation_steps: exactly 3 concrete actions to strengthen the champion relationship
+\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/deals/{deal_id}/ai/champion-risk")
+@limiter.limit("5/minute")
+async def deal_champion_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    deal_result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = deal_result.scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Champion risk is only available for open deals",
+        )
+
+    notes_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    note_bodies = [row[0] for row in notes_result.all() if row[0]]
+
+    today = datetime.date.today()
+    if deal.stage_changed_at:
+        days_in_stage = (today - deal.stage_changed_at.date()).days
+    else:
+        days_in_stage = 0
+
+    mentions = deal.mentions or []
+    champion_count = sum(1 for m in mentions if isinstance(m, dict) and m.get("type") == "champion")
+    decision_maker_count = sum(1 for m in mentions if isinstance(m, dict) and m.get("type") == "decision_maker")
+
+    champion_names = [m.get("name", "Unknown") for m in mentions if isinstance(m, dict) and m.get("type") == "champion"]
+    dm_names = [m.get("name", "Unknown") for m in mentions if isinstance(m, dict) and m.get("type") == "decision_maker"]
+
+    context = (
+        f"Deal: {deal.title or 'Untitled'}\n"
+        f"Company: {deal.company or 'Unknown'}\n"
+        f"Stage: {deal.stage}\n"
+        f"Value: ${float(deal.value or 0):,.0f}\n"
+        f"Health score: {deal.health_score or 0}/100\n"
+        f"Days in current stage: {days_in_stage}\n"
+        f"ML win probability: {deal.ml_win_probability or 0}%\n"
+        f"Identified champions: {champion_count} ({', '.join(champion_names) if champion_names else 'none'})\n"
+        f"Identified decision-makers: {decision_maker_count} ({', '.join(dm_names) if dm_names else 'none'})\n"
+        f"Total stakeholders mapped: {len(mentions)}\n"
+    )
+    if note_bodies:
+        context += "\nRecent deal notes (latest first):\n"
+        for body in note_bodies:
+            context += f"  - {body[:200]}\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_CHAMPION_RISK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_risk_levels = {"low", "medium", "high", "critical"}
+        valid_statuses = {"active", "uncertain", "at_risk", "unknown"}
+
+        risk_level = str(data.get("risk_level", "medium"))
+        if risk_level not in valid_risk_levels:
+            risk_level = "medium"
+
+        champion_status = str(data.get("champion_status", "unknown"))
+        if champion_status not in valid_statuses:
+            champion_status = "unknown"
+
+        risk_signals = [str(s)[:200] for s in (data.get("risk_signals") or [])[:3]]
+        while len(risk_signals) < 3:
+            risk_signals.append("Insufficient deal activity to assess champion engagement.")
+
+        mitigation_steps = [str(s)[:200] for s in (data.get("mitigation_steps") or [])[:3]]
+        while len(mitigation_steps) < 3:
+            mitigation_steps.append("Identify and engage a named internal champion.")
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "risk_level": risk_level,
+        "champion_status": champion_status,
+        "risk_signals": risk_signals,
+        "mitigation_steps": mitigation_steps,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/deals/{deal_id}/ai/competitive-response
+# ---------------------------------------------------------------------------
+
+_COMPETITIVE_RESPONSE_SYSTEM = """You are a sales intelligence AI that generates battle cards for competitive deals.
+
+Given the deal context and list of competitors, return a JSON object with exactly these keys:
+{
+  "primary_competitor": "<string — name of the top competitor>",
+  "battle_card": {
+    "strengths": ["<string>", "<string>", "<string>"],
+    "weaknesses": ["<string>", "<string>", "<string>"],
+    "key_differentiators": ["<string>", "<string>", "<string>"],
+    "suggested_talk_track": "<string — 2–3 sentences>"
+  }
+}
+
+All list fields must have exactly 3 items. Output only valid JSON, no prose."""
+
+
+@router.post(
+    "/workspaces/{workspace_id}/deals/{deal_id}/ai/competitive-response",
+    summary="AI deal competitive response battle card",
+)
+@limiter.limit("5/minute")
+async def get_deal_competitive_response(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    if deal.stage in ("closed_won", "closed_lost"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Competitive response not available for closed deals",
+        )
+
+    competitors: list[str] = deal.competitors or []
+    if not competitors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No competitors tracked for this deal",
+        )
+
+    note_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = [row[0] for row in note_result.all()]
+
+    days_in_stage: int = 0
+    if deal.stage_changed_at:
+        days_in_stage = (datetime.datetime.utcnow() - deal.stage_changed_at.replace(tzinfo=None)).days
+
+    competitor_list = ", ".join(competitors)
+    note_snippets = "; ".join(f'"{n[:120]}"' for n in notes) if notes else "none"
+
+    context = (
+        f"Deal: {deal.title}, Company: {deal.company or 'unknown'}, "
+        f"Stage: {deal.stage}, Value: ${deal.value or 0:,.0f}, "
+        f"Health score: {deal.health_score or 0}/100, Days in stage: {days_in_stage}, "
+        f"ML win probability: {deal.ml_win_probability or 0}%, "
+        f"Competitors tracked: {competitor_list}. "
+        f"Recent deal notes: {note_snippets}."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_COMPETITIVE_RESPONSE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = message.content[0].text.strip()
+        parsed = json.loads(raw)
+
+        primary_competitor = str(parsed.get("primary_competitor", competitors[0]))
+        bc = parsed.get("battle_card", {})
+
+        def _pad(lst: list, default: str) -> list:
+            lst = [str(x) for x in lst] if isinstance(lst, list) else []
+            while len(lst) < 3:
+                lst.append(default)
+            return lst[:3]
+
+        strengths = _pad(bc.get("strengths", []), "Established market presence.")
+        weaknesses = _pad(bc.get("weaknesses", []), "Limited customisation options.")
+        key_differentiators = _pad(bc.get("key_differentiators", []), "Superior integrations and support.")
+        suggested_talk_track = str(bc.get("suggested_talk_track", "Focus on our unique value proposition and proven ROI."))
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "primary_competitor": primary_competitor,
+        "battle_card": {
+            "strengths": strengths,
+            "weaknesses": weaknesses,
+            "key_differentiators": key_differentiators,
+            "suggested_talk_track": suggested_talk_track,
+        },
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# Phase 15q: AI deal expansion opportunity
+# ---------------------------------------------------------------------------
+
+_EXPANSION_OPPORTUNITY_SYSTEM = """You are a sales intelligence AI that identifies expansion opportunities for recently closed deals.
+
+Given a closed_won deal context, return a JSON object with exactly these keys:
+{
+  "opportunity_score": <integer 0-100>,
+  "upsell_products": ["<string>", "<string>", "<string>"],
+  "cross_sell_signals": ["<string>", "<string>", "<string>"],
+  "recommended_timing": "<one of: immediate|3_months|6_months>",
+  "next_step": "<string — one specific action to take>"
+}
+
+opportunity_score: 0 = no expansion potential, 100 = very high expansion potential.
+upsell_products: 3 specific product/service upgrades or add-ons relevant to this deal.
+cross_sell_signals: 3 signals from the deal context suggesting adjacent product interest.
+recommended_timing: when to approach the customer about expansion.
+Output only valid JSON, no prose."""
+
+
+@router.post(
+    "/workspaces/{workspace_id}/deals/{deal_id}/ai/expansion-opportunity",
+    summary="AI deal expansion opportunity analysis",
+)
+@limiter.limit("5/minute")
+async def deal_expansion_opportunity(
+    request: Request,
+    workspace_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.workspace_id == workspace_id)
+    )
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    if deal.stage != "closed_won":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expansion opportunity is only available for closed_won deals",
+        )
+
+    contact = None
+    if deal.contact_id:
+        contact_result = await db.execute(
+            select(Contact).where(Contact.id == deal.contact_id)
+        )
+        contact = contact_result.scalar_one_or_none()
+
+    note_result = await db.execute(
+        select(DealNote.body)
+        .where(DealNote.deal_id == deal_id)
+        .order_by(DealNote.created_at.desc())
+        .limit(3)
+    )
+    notes = [row[0] for row in note_result.all()]
+
+    open_task_count = 0
+    if deal.contact_id:
+        open_task_count = await db.scalar(
+            select(func.count()).where(
+                Task.workspace_id == workspace_id,
+                Task.contact_id == deal.contact_id,
+                Task.status.in_(["open", "in_progress"]),
+            )
+        ) or 0
+
+    contact_info = ""
+    if contact:
+        contact_info = (
+            f"Contact: {contact.name or 'unknown'}, Company: {contact.company or 'unknown'}, "
+            f"Status: {contact.status or 'unknown'}, ML Score: {contact.ml_score or 0}/100. "
+        )
+
+    note_snippets = "; ".join(f'"{n[:120]}"' for n in notes) if notes else "none"
+
+    context = (
+        f"Deal: {deal.title}, Company: {deal.company or 'unknown'}, "
+        f"Value: ${deal.value or 0:,.0f}, "
+        f"Health score: {deal.health_score or 0}/100. "
+        f"{contact_info}"
+        f"Open tasks for this contact: {open_task_count}. "
+        f"Recent deal notes: {note_snippets}."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_EXPANSION_OPPORTUNITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = message.content[0].text.strip()
+        parsed = json.loads(raw)
+
+        opportunity_score = max(0, min(100, int(parsed.get("opportunity_score", 50))))
+
+        def _pad3(lst: list, default: str) -> list:
+            lst = [str(x) for x in lst] if isinstance(lst, list) else []
+            while len(lst) < 3:
+                lst.append(default)
+            return lst[:3]
+
+        upsell_products = _pad3(parsed.get("upsell_products", []), "Enterprise tier upgrade")
+        cross_sell_signals = _pad3(
+            parsed.get("cross_sell_signals", []), "Expressed interest in related features"
+        )
+
+        raw_timing = str(parsed.get("recommended_timing", "3_months"))
+        if raw_timing not in ("immediate", "3_months", "6_months"):
+            raw_timing = "3_months"
+        recommended_timing = raw_timing
+
+        next_step = str(
+            parsed.get("next_step", "Schedule a 30-day post-implementation review call")
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "opportunity_score": opportunity_score,
+        "upsell_products": upsell_products,
+        "cross_sell_signals": cross_sell_signals,
+        "recommended_timing": recommended_timing,
+        "next_step": next_step,
+        "deal_id": str(deal_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI contact churn risk assessment
+# ---------------------------------------------------------------------------
+
+_CHURN_RISK_SYSTEM = """\
+You are a CRM analyst specialized in customer retention. Given a contact's engagement
+profile, return a JSON object assessing their churn risk:
+{
+  "risk_level": "<one of: low|medium|high|critical>",
+  "churn_signals": ["<signal 1>", "<signal 2>", "<signal 3>"],
+  "retention_actions": ["<action 1>", "<action 2>", "<action 3>"]
+}
+Rules:
+- risk_level must be exactly one of: low, medium, high, critical
+- churn_signals: 3 specific, evidence-based signals from the data
+- retention_actions: 3 concrete, actionable steps to retain this contact
+- Base risk_level on: days since last touch (>30=elevated, >60=high, >90=critical),
+  message frequency decline, going-dark flag, pipeline value at stake, task neglect
+Return ONLY the JSON object, no markdown, no explanation.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/churn-risk")
+@limiter.limit("5/minute")
+async def contact_churn_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    ninety_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=90)
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+
+    # Message count last 90 days
+    msg_result = await db.execute(
+        select(func.count(Message.id)).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+            Message.received_at >= ninety_days_ago,
+        )
+    )
+    recent_message_count = msg_result.scalar() or 0
+
+    # Note count last 90 days
+    note_result = await db.execute(
+        select(func.count(ContactNote.id)).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+            ContactNote.created_at >= ninety_days_ago,
+        )
+    )
+    recent_note_count = note_result.scalar() or 0
+
+    # Open deal pipeline value
+    deal_result = await db.execute(
+        select(func.coalesce(func.sum(Deal.value), 0)).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    open_pipeline_value = float(deal_result.scalar() or 0)
+
+    # Open task count
+    task_result = await db.execute(
+        select(func.count(Task.id)).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status.in_(["open", "in_progress"]),
+        )
+    )
+    open_task_count = task_result.scalar() or 0
+
+    # Days since last touch (latest of message or note)
+    last_msg_result = await db.execute(
+        select(func.max(Message.received_at)).where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+        )
+    )
+    last_msg_at = last_msg_result.scalar()
+
+    last_note_result = await db.execute(
+        select(func.max(ContactNote.created_at)).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.contact_id == contact_id,
+        )
+    )
+    last_note_at = last_note_result.scalar()
+
+    last_touch = None
+    for ts in (last_msg_at, last_note_at):
+        if ts is not None:
+            if last_touch is None or ts > last_touch:
+                last_touch = ts
+
+    now = datetime.datetime.utcnow()
+    days_since_last_touch = (now - last_touch).days if last_touch else 999
+    going_dark = days_since_last_touch >= 30
+
+    context = (
+        f"Contact: {contact.name} ({contact.email})\n"
+        f"Company: {contact.company or 'Unknown'}\n"
+        f"Status: {contact.status}\n"
+        f"ML score: {contact.ml_score or 0} ({contact.ml_score_label or 'unknown'})\n\n"
+        f"Engagement (last 90 days):\n"
+        f"  Messages: {recent_message_count}\n"
+        f"  Notes: {recent_note_count}\n"
+        f"  Open tasks: {open_task_count}\n\n"
+        f"Last touch: {days_since_last_touch} days ago\n"
+        f"Going dark (30+ days silent): {'Yes' if going_dark else 'No'}\n"
+        f"Open pipeline at risk: ${open_pipeline_value:,.0f}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_CHURN_RISK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        valid_risk_levels = {"low", "medium", "high", "critical"}
+        risk_level = data.get("risk_level", "medium")
+        if risk_level not in valid_risk_levels:
+            risk_level = "medium"
+
+        def _pad3(lst: list, default: str) -> list:
+            lst = [str(x) for x in lst] if isinstance(lst, list) else []
+            while len(lst) < 3:
+                lst.append(default)
+            return lst[:3]
+
+        churn_signals = _pad3(
+            data.get("churn_signals", []),
+            "Reduced engagement activity detected",
+        )
+        retention_actions = _pad3(
+            data.get("retention_actions", []),
+            "Schedule a check-in call to re-engage",
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "risk_level": risk_level,
+        "churn_signals": churn_signals,
+        "retention_actions": retention_actions,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI contact deal velocity benchmark
+# ---------------------------------------------------------------------------
+
+_VELOCITY_BENCHMARK_SYSTEM = """\
+You are a CRM analyst specializing in sales performance benchmarking. Given a contact's
+deal velocity data compared to workspace averages, return a JSON object:
+{
+  "velocity_rating": "<one of: fast|on_par|slow>",
+  "insight": "<one concise sentence explaining the rating and its business implication>"
+}
+Rules:
+- velocity_rating: fast = contact avg is ≥15% faster than workspace avg; slow = ≥15% slower; otherwise on_par
+- insight: exactly one sentence, specific to the numbers provided, no generic platitudes
+Return ONLY the JSON object, no markdown, no explanation.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/deal-velocity-benchmark")
+@limiter.limit("5/minute")
+async def contact_deal_velocity_benchmark(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    # All closed deals for this contact with timing data
+    contact_deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+        )
+    )
+    contact_deals = contact_deals_result.scalars().all()
+
+    # All closed deals in workspace for comparison
+    workspace_deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+        )
+    )
+    workspace_deals = workspace_deals_result.scalars().all()
+
+    def _avg_days(deals: list) -> float | None:
+        deltas = []
+        for d in deals:
+            if d.stage_changed_at and d.created_at:
+                delta = (d.stage_changed_at - d.created_at).days
+                if delta >= 0:
+                    deltas.append(delta)
+        return round(sum(deltas) / len(deltas), 1) if deltas else None
+
+    def _stage_days(deals: list) -> dict:
+        by_stage: dict[str, list[float]] = defaultdict(list)
+        for d in deals:
+            if d.stage_changed_at and d.created_at:
+                delta = (d.stage_changed_at - d.created_at).days
+                if delta >= 0:
+                    by_stage[d.stage].append(float(delta))
+        return {s: round(sum(v) / len(v), 1) for s, v in by_stage.items()}
+
+    contact_avg = _avg_days(contact_deals)
+    workspace_avg = _avg_days(workspace_deals)
+
+    contact_stage_map = _stage_days(contact_deals)
+    workspace_stage_map = _stage_days(workspace_deals)
+
+    all_stages = sorted(set(list(contact_stage_map.keys()) + list(workspace_stage_map.keys())))
+    stage_breakdown = [
+        {
+            "stage": s,
+            "contact_days": contact_stage_map.get(s),
+            "workspace_days": workspace_stage_map.get(s),
+        }
+        for s in all_stages
+    ]
+
+    # Default velocity_rating when we have no data
+    if contact_avg is None or workspace_avg is None or workspace_avg == 0:
+        velocity_rating = "on_par"
+        insight = "Insufficient closed-deal history to benchmark velocity against workspace average."
+    else:
+        pct_diff = (workspace_avg - contact_avg) / workspace_avg
+        if pct_diff >= 0.15:
+            default_rating = "fast"
+        elif pct_diff <= -0.15:
+            default_rating = "slow"
+        else:
+            default_rating = "on_par"
+
+        context = (
+            f"Contact: {contact.name} ({contact.email})\n"
+            f"Contact closed deals: {len(contact_deals)}\n"
+            f"Contact avg days to close: {contact_avg}\n"
+            f"Workspace avg days to close: {workspace_avg}\n"
+            f"Percentage difference: {pct_diff*100:.1f}% ({'faster' if pct_diff > 0 else 'slower'} than average)\n"
+        )
+
+        try:
+            client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=150,
+                system=_VELOCITY_BENCHMARK_SYSTEM,
+                messages=[{"role": "user", "content": context}],
+            )
+            raw = msg.content[0].text.strip() if msg.content else "{}"
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                data = {}
+
+            valid_ratings = {"fast", "on_par", "slow"}
+            velocity_rating = data.get("velocity_rating", default_rating)
+            if velocity_rating not in valid_ratings:
+                velocity_rating = default_rating
+
+            insight = str(data.get("insight", "Velocity assessment completed."))
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"AI unavailable: {exc}",
+            ) from exc
+
+    return {
+        "contact_avg_days": contact_avg,
+        "workspace_avg_days": workspace_avg,
+        "velocity_rating": velocity_rating,
+        "stage_breakdown": stage_breakdown,
+        "insight": insight,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# AI contact deal outcome predictor
+# ---------------------------------------------------------------------------
+
+_DEAL_OUTCOME_PREDICTOR_SYSTEM = """\
+You are an expert CRM analyst predicting deal outcomes. Given a contact's open deals with
+their stage, value, health score, and ML win probability, return a JSON object:
+{
+  "predicted_outcome": "<one of: win|loss|stalled>",
+  "confidence": "<one of: high|medium|low>",
+  "key_risks": ["<risk 1>", "<risk 2>", "<risk 3>"],
+  "recommended_actions": ["<action 1>", "<action 2>", "<action 3>"]
+}
+Rules:
+- predicted_outcome: win = avg win prob ≥60%; loss = avg win prob <30% and low health; stalled = in between or mixed signals
+- confidence: high = clear signal from multiple deals; medium = mixed signals; low = single deal or insufficient data
+- key_risks: exactly 3 specific, actionable risks based on the deal data
+- recommended_actions: exactly 3 concrete next steps to improve the outcome
+Return ONLY the JSON object, no markdown, no explanation.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/deal-outcome-predictor")
+@limiter.limit("5/minute")
+async def contact_deal_outcome_predictor(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    open_stages = ["discovery", "qualified", "proposal", "negotiation"]
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.in_(open_stages),
+        )
+    )
+    open_deals = deals_result.scalars().all()
+
+    if not open_deals:
+        return {
+            "predicted_outcome": "stalled",
+            "confidence": "low",
+            "key_risks": [
+                "No open deals for this contact.",
+                "Contact may have disengaged.",
+                "Pipeline coverage is zero.",
+            ],
+            "recommended_actions": [
+                "Initiate a discovery call to identify new opportunities.",
+                "Review past deal history to understand why deals closed.",
+                "Send a re-engagement message to gauge interest.",
+            ],
+            "contact_id": str(contact_id),
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    deals_summary = "\n".join(
+        f"- Deal '{d.title}' | stage={d.stage} | value=${d.value or 0:,.0f} "
+        f"| health={d.health_score or 0} | ml_win_prob={d.ml_win_probability or 0}%"
+        for d in open_deals
+    )
+    context = (
+        f"Contact: {contact.name} ({contact.email}), status={contact.status}\n"
+        f"Open deals ({len(open_deals)}):\n{deals_summary}\n"
+    )
+
+    valid_outcomes = {"win", "loss", "stalled"}
+    valid_confidences = {"high", "medium", "low"}
+
+    # Compute defaults from data
+    probs = [d.ml_win_probability or 0 for d in open_deals]
+    avg_prob = sum(probs) / len(probs)
+    avg_health = sum(d.health_score or 0 for d in open_deals) / len(open_deals)
+
+    if avg_prob >= 60:
+        default_outcome = "win"
+    elif avg_prob < 30 and avg_health < 40:
+        default_outcome = "loss"
+    else:
+        default_outcome = "stalled"
+    default_confidence = "high" if len(open_deals) >= 3 else ("medium" if len(open_deals) >= 2 else "low")
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_OUTCOME_PREDICTOR_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        predicted_outcome = data.get("predicted_outcome", default_outcome)
+        if predicted_outcome not in valid_outcomes:
+            predicted_outcome = default_outcome
+
+        confidence = data.get("confidence", default_confidence)
+        if confidence not in valid_confidences:
+            confidence = default_confidence
+
+        key_risks = data.get("key_risks", [])
+        if not isinstance(key_risks, list):
+            key_risks = []
+        key_risks = [str(r) for r in key_risks[:3]]
+        while len(key_risks) < 3:
+            key_risks.append("Monitor deal progress closely.")
+
+        recommended_actions = data.get("recommended_actions", [])
+        if not isinstance(recommended_actions, list):
+            recommended_actions = []
+        recommended_actions = [str(a) for a in recommended_actions[:3]]
+        while len(recommended_actions) < 3:
+            recommended_actions.append("Follow up with the contact.")
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "predicted_outcome": predicted_outcome,
+        "confidence": confidence,
+        "key_risks": key_risks,
+        "recommended_actions": recommended_actions,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+_DEAL_PORTFOLIO_OVERVIEW_SYSTEM = """\
+You are an expert CRM analyst reviewing a contact's full deal portfolio across all pipeline stages.
+Given the contact profile and their deals (open and closed), return a JSON object:
+{
+  "pipeline_health": "<one of: strong|at_risk|mixed>",
+  "highlights": ["<highlight 1>", "<highlight 2>", "<highlight 3>"],
+  "risks": ["<risk 1>", "<risk 2>", "<risk 3>"]
+}
+Rules:
+- pipeline_health: strong = open deals healthy + good win probability; at_risk = most deals stalled or low health; mixed = a blend of healthy and struggling deals
+- highlights: exactly 3 positive observations about the contact's portfolio (closed won, high-value stages, strong momentum, etc.)
+- risks: exactly 3 specific risks or gaps in the portfolio (stalled deals, low health, no pipeline, overdue actions, etc.)
+Return ONLY the JSON object, no markdown, no explanation.
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/deal-portfolio-overview")
+@limiter.limit("5/minute")
+async def contact_deal_portfolio_overview(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+        )
+    )
+    all_deals = deals_result.scalars().all()
+
+    open_stages = {"discovery", "qualified", "proposal", "negotiation"}
+    open_deals = [d for d in all_deals if d.stage in open_stages]
+    closed_won = [d for d in all_deals if d.stage == "closed_won"]
+    closed_lost = [d for d in all_deals if d.stage == "closed_lost"]
+
+    total_pipeline_value = sum(d.value or 0 for d in open_deals)
+    closed_won_value = sum(d.value or 0 for d in closed_won)
+    open_deal_count = len(open_deals)
+
+    if not all_deals:
+        return {
+            "pipeline_health": "at_risk",
+            "total_pipeline_value": 0,
+            "open_deal_count": 0,
+            "highlights": [
+                "No deal history found — fresh relationship to develop.",
+                "Opportunity to establish the first deal and set the foundation.",
+                "Contact profile is active and ready for pipeline engagement.",
+            ],
+            "risks": [
+                "Zero pipeline coverage for this contact.",
+                "No historical deal data to benchmark performance.",
+                "Risk of contact disengagement without active opportunities.",
+            ],
+            "contact_id": str(contact_id),
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    avg_health = sum(d.health_score or 0 for d in open_deals) / max(len(open_deals), 1)
+    avg_prob = sum(d.ml_win_probability or 0 for d in open_deals) / max(len(open_deals), 1)
+
+    deals_summary = "\n".join(
+        f"- Deal '{d.title}' | stage={d.stage} | value=${d.value or 0:,.0f} "
+        f"| health={d.health_score or 0} | ml_win_prob={d.ml_win_probability or 0}%"
+        for d in all_deals
+    )
+    context = (
+        f"Contact: {contact.name} ({contact.email}), status={contact.status}\n"
+        f"Total deals: {len(all_deals)} | Open: {open_deal_count} | "
+        f"Closed Won: {len(closed_won)} (${closed_won_value:,.0f}) | "
+        f"Closed Lost: {len(closed_lost)}\n"
+        f"Open pipeline: ${total_pipeline_value:,.0f} | Avg health: {avg_health:.0f} | Avg win prob: {avg_prob:.0f}%\n"
+        f"All deals:\n{deals_summary}\n"
+    )
+
+    if avg_health >= 65 and avg_prob >= 55:
+        default_health = "strong"
+    elif avg_health < 40 or avg_prob < 25:
+        default_health = "at_risk"
+    else:
+        default_health = "mixed"
+
+    valid_health = {"strong", "at_risk", "mixed"}
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_PORTFOLIO_OVERVIEW_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        pipeline_health = data.get("pipeline_health", default_health)
+        if pipeline_health not in valid_health:
+            pipeline_health = default_health
+
+        highlights = data.get("highlights", [])
+        if not isinstance(highlights, list):
+            highlights = []
+        highlights = [str(h) for h in highlights[:3]]
+        while len(highlights) < 3:
+            highlights.append("Portfolio shows consistent engagement with multiple active deals.")
+
+        risks = data.get("risks", [])
+        if not isinstance(risks, list):
+            risks = []
+        risks = [str(r) for r in risks[:3]]
+        while len(risks) < 3:
+            risks.append("Monitor deal progression to prevent pipeline stagnation.")
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "pipeline_health": pipeline_health,
+        "total_pipeline_value": total_pipeline_value,
+        "open_deal_count": open_deal_count,
+        "highlights": highlights,
+        "risks": risks,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI contact competitive positioning
+# ---------------------------------------------------------------------------
+
+_COMPETITIVE_POSITIONING_SYSTEM = """\
+You are Nova, the AI sales positioning expert in NovaCRM.
+
+Analyze this contact's competitive positioning based on their deal history and competitor data.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "positioning_strength": "strong",
+  "top_competitor": "Salesforce",
+  "win_rate_vs_competitor": 67,
+  "positioning_tips": [
+    "Tip 1 — specific tactical advice referencing the competitive situation and deal data.",
+    "Tip 2 — second positioning tip using a specific CRM action (e.g. run competitive-response analysis).",
+    "Tip 3 — third positioning tip."
+  ],
+  "differentiators": [
+    "Differentiator 1 — what sets NovaCRM apart from the top competitor for this deal context.",
+    "Differentiator 2.",
+    "Differentiator 3."
+  ]
+}
+
+Rules:
+- positioning_strength: exactly one of "strong" | "moderate" | "weak"
+  - "strong" if win rate vs top competitor is >= 60%, or no competitors tracked
+  - "weak" if win rate vs top competitor is <= 30%, or all deals lost/stalled
+  - "moderate" otherwise
+- top_competitor: name of the most-frequently-appearing competitor, or null if none
+- win_rate_vs_competitor: integer 0-100, percentage of closed deals won vs that competitor, or null if no competitor data
+- positioning_tips: exactly 3 items, each citing a specific metric or action
+- differentiators: exactly 3 items, each a concrete value proposition vs the top competitor\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/competitive-positioning")
+@limiter.limit("5/minute")
+async def contact_competitive_positioning(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Assess this contact's competitive positioning using deal history and competitor data via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+        )
+    )
+    all_deals = deals_result.scalars().all()
+
+    # Tally competitor occurrences and compute win rate vs each
+    competitor_counts: Counter = Counter()
+    competitor_wins: Counter = Counter()
+    competitor_total: Counter = Counter()
+
+    for deal in all_deals:
+        comps = deal.competitors or []
+        for comp in comps:
+            name = str(comp).strip()
+            if not name:
+                continue
+            competitor_counts[name] += 1
+            if deal.stage in ("closed_won", "closed_lost"):
+                competitor_total[name] += 1
+                if deal.stage == "closed_won":
+                    competitor_wins[name] += 1
+
+    top_competitor: str | None = None
+    win_rate_vs_competitor: int | None = None
+    if competitor_counts:
+        top_competitor = competitor_counts.most_common(1)[0][0]
+        total_vs_top = competitor_total.get(top_competitor, 0)
+        if total_vs_top > 0:
+            win_rate_vs_competitor = round(
+                100 * competitor_wins.get(top_competitor, 0) / total_vs_top
+            )
+
+    # Graceful default when no deals or no competitors
+    if not all_deals:
+        return {
+            "positioning_strength": "weak",
+            "top_competitor": None,
+            "win_rate_vs_competitor": None,
+            "positioning_tips": [
+                "No deal history found — establish the first deal to build a competitive baseline.",
+                "Create a deal record and add any known competitors to enable positioning analysis.",
+                "Use the Contact AI summary to craft an outreach strategy before competitors engage.",
+            ],
+            "differentiators": [
+                "NovaCRM's agentic AI gives real-time deal health scoring with no setup required.",
+                "Unified sales + PM intelligence eliminates the need for separate tools.",
+                "Built-in semantic search and lead scoring outperform traditional CRM data silos.",
+            ],
+            "contact_id": str(contact_id),
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    # Determine default positioning strength
+    if not top_competitor:
+        default_strength = "strong"
+    elif win_rate_vs_competitor is not None and win_rate_vs_competitor >= 60:
+        default_strength = "strong"
+    elif win_rate_vs_competitor is not None and win_rate_vs_competitor <= 30:
+        default_strength = "weak"
+    else:
+        default_strength = "moderate"
+
+    open_stages = {"discovery", "qualified", "proposal", "negotiation"}
+    deals_summary = "\n".join(
+        f"- '{d.title}' | stage={d.stage} | value=${d.value or 0:,.0f} "
+        f"| health={d.health_score or 0} | competitors={d.competitors or []}"
+        for d in all_deals
+        if d.stage in open_stages or d.stage in ("closed_won", "closed_lost")
+    )
+
+    context_lines = [
+        f"Contact: {contact.name} ({contact.email}), status={contact.status}",
+        f"Total deals: {len(all_deals)}",
+        f"Top competitor: {top_competitor or 'None identified'}",
+        f"Win rate vs top competitor: {win_rate_vs_competitor}%" if win_rate_vs_competitor is not None else "Win rate vs top competitor: N/A (no closed deals with this competitor)",
+        f"All competitor occurrences: {dict(competitor_counts) or 'none'}",
+        f"Deals:\n{deals_summary or 'No open or closed deals.'}",
+    ]
+    context = "\n".join(context_lines)
+
+    valid_strengths = {"strong", "moderate", "weak"}
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_COMPETITIVE_POSITIONING_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        positioning_strength = data.get("positioning_strength", default_strength)
+        if positioning_strength not in valid_strengths:
+            positioning_strength = default_strength
+
+        returned_top = data.get("top_competitor")
+        if returned_top is not None and str(returned_top).strip():
+            top_competitor = str(returned_top).strip()
+
+        returned_wr = data.get("win_rate_vs_competitor")
+        if returned_wr is not None:
+            try:
+                win_rate_vs_competitor = max(0, min(100, int(returned_wr)))
+            except (ValueError, TypeError):
+                pass
+
+        positioning_tips = data.get("positioning_tips", [])
+        if not isinstance(positioning_tips, list):
+            positioning_tips = []
+        positioning_tips = [str(t) for t in positioning_tips[:3]]
+        while len(positioning_tips) < 3:
+            positioning_tips.append("Review deal notes and run a competitive-response analysis for this contact.")
+
+        differentiators = data.get("differentiators", [])
+        if not isinstance(differentiators, list):
+            differentiators = []
+        differentiators = [str(d) for d in differentiators[:3]]
+        while len(differentiators) < 3:
+            differentiators.append("NovaCRM's agentic AI pipeline intelligence delivers faster deal insights than alternatives.")
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "positioning_strength": positioning_strength,
+        "top_competitor": top_competitor,
+        "win_rate_vs_competitor": win_rate_vs_competitor,
+        "positioning_tips": positioning_tips,
+        "differentiators": differentiators,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+
+_MEETING_AGENDA_SYSTEM = """\
+You are Nova, the AI meeting preparation expert in NovaCRM.
+
+Generate a structured next-meeting agenda for a contact based on their profile, recent messages, open tasks, and deals.
+
+Respond in exactly this JSON format (no markdown fences, no extra keys):
+{
+  "opening_hook": "A specific, personalized 1-2 sentence opener referencing something concrete about the contact or their deals.",
+  "agenda_items": [
+    {
+      "topic": "Topic title (3-6 words)",
+      "goal": "One sentence stating what you want to achieve with this topic.",
+      "talking_points": [
+        "First specific talking point with actionable detail.",
+        "Second specific talking point with actionable detail."
+      ],
+      "time_estimate_mins": 10
+    }
+  ]
+}
+
+Rules:
+- opening_hook: a warm, specific opener referencing the contact by name or a recent interaction
+- agenda_items: exactly 4 items covering deal status, open tasks, relationship, and next steps
+- Each topic: 3-6 words
+- Each goal: exactly one sentence
+- talking_points: exactly 2 items per agenda item, each concrete and actionable
+- time_estimate_mins: integer 5, 10, or 15 only
+- Total time should sum to approximately 40-45 minutes\
+"""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/meeting-agenda")
+@limiter.limit("5/minute")
+async def contact_meeting_agenda(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Generate a structured next-meeting agenda for a contact via Claude Haiku."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_result = await db.execute(
+        select(Contact).where(
+            Contact.id == contact_id,
+            Contact.workspace_id == workspace_id,
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    msg_result = await db.execute(
+        select(Message, ClarityScore)
+        .outerjoin(ClarityScore, ClarityScore.message_id == Message.id)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id == contact_id,
+        )
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    msg_rows = msg_result.all()
+
+    tasks_result = await db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.contact_id == contact_id,
+            Task.status.in_(["open", "in_progress"]),
+        )
+        .limit(5)
+    )
+    open_tasks = tasks_result.scalars().all()
+
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id == contact_id,
+            Deal.stage.in_(["discovery", "qualified", "proposal", "negotiation"]),
+        )
+        .limit(3)
+    )
+    open_deals = deals_result.scalars().all()
+
+    msgs_summary = "\n".join(
+        f"- Subject: {m.subject or '(none)'} | Clarity: {cs.score if cs else 'N/A'} | "
+        f"Preview: {(m.body_plain or '')[:120]}"
+        for m, cs in msg_rows
+    ) or "No recent messages."
+
+    tasks_summary = "\n".join(
+        f"- [{t.status}] {t.title} | due: {t.due_date or 'none'}"
+        for t in open_tasks
+    ) or "No open tasks."
+
+    deals_summary = "\n".join(
+        f"- '{d.title}' | stage={d.stage} | value=${d.value or 0:,.0f} | health={d.health_score or 0}"
+        for d in open_deals
+    ) or "No open deals."
+
+    context = "\n".join([
+        f"Contact: {contact.name} ({contact.email}), status={contact.status}, company={contact.company or 'N/A'}",
+        f"Lead score: {contact.ml_score or 0}",
+        f"Open deals:\n{deals_summary}",
+        f"Open tasks:\n{tasks_summary}",
+        f"Recent messages:\n{msgs_summary}",
+    ])
+
+    _default_agenda = [
+        {
+            "topic": "Relationship check-in",
+            "goal": "Reconnect and surface any unaddressed concerns.",
+            "talking_points": [
+                "Ask about recent developments at their company since your last touchpoint.",
+                "Acknowledge any pending tasks and confirm priorities have not shifted.",
+            ],
+            "time_estimate_mins": 10,
+        },
+        {
+            "topic": "Deal status review",
+            "goal": "Confirm the current deal stage and remove any blockers.",
+            "talking_points": [
+                "Walk through open deal health scores and flag any at-risk items.",
+                "Confirm next steps and timeline expectations with the contact.",
+            ],
+            "time_estimate_mins": 15,
+        },
+        {
+            "topic": "Open task follow-up",
+            "goal": "Ensure all outstanding action items are acknowledged and assigned.",
+            "talking_points": [
+                "Review the open task list and confirm ownership for each item.",
+                "Set due-date commitments for any overdue tasks.",
+            ],
+            "time_estimate_mins": 10,
+        },
+        {
+            "topic": "Next steps and close",
+            "goal": "Agree on clear next actions and meeting cadence.",
+            "talking_points": [
+                "Summarise agreed actions and assign owners on both sides.",
+                "Schedule the next touchpoint before leaving the call.",
+            ],
+            "time_estimate_mins": 5,
+        },
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_MEETING_AGENDA_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        opening_hook = str(data.get(
+            "opening_hook",
+            f"Great to connect, {contact.name} — let's make the most of our time today.",
+        )).strip()
+        if not opening_hook:
+            opening_hook = f"Great to connect, {contact.name} — let's align on priorities today."
+
+        raw_items = data.get("agenda_items", [])
+        if not isinstance(raw_items, list):
+            raw_items = []
+
+        agenda_items = []
+        for item in raw_items[:4]:
+            if not isinstance(item, dict):
+                continue
+            topic = str(item.get("topic", "Discussion topic")).strip()
+            goal = str(item.get("goal", "Advance the conversation.")).strip()
+            tps = item.get("talking_points", [])
+            if not isinstance(tps, list):
+                tps = []
+            talking_points = [str(t) for t in tps[:2]]
+            while len(talking_points) < 2:
+                talking_points.append("Confirm next steps before closing this topic.")
+            try:
+                time_est = int(item.get("time_estimate_mins", 10))
+                if time_est not in (5, 10, 15):
+                    time_est = 10
+            except (ValueError, TypeError):
+                time_est = 10
+            agenda_items.append({
+                "topic": topic,
+                "goal": goal,
+                "talking_points": talking_points,
+                "time_estimate_mins": time_est,
+            })
+
+        while len(agenda_items) < 4:
+            agenda_items.append(_default_agenda[len(agenda_items)])
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "opening_hook": opening_hook,
+        "agenda_items": agenda_items,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/contacts/{contact_id}/communication-gap-analysis
+# ---------------------------------------------------------------------------
+
+_COMM_GAP_SYSTEM = """\
+You are a sales communication analyst. Given data about a contact's messaging frequency and gap metrics, \
+produce exactly 3 actionable recommendations to improve communication frequency and re-engage the contact. \
+Reply ONLY with a valid JSON object: {"recommendations": ["…", "…", "…"]}
+No markdown. No explanation. Pure JSON only."""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/communication-gap-analysis")
+@limiter.limit("5/minute")
+async def contact_communication_gap_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_row = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_row.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    msgs_result = await db.execute(
+        select(Message.received_at)
+        .where(
+            Message.contact_id == contact_id,
+            Message.workspace_id == workspace_id,
+            Message.received_at.isnot(None),
+        )
+        .order_by(Message.received_at.desc())
+        .limit(10)
+    )
+    msg_dates = msgs_result.scalars().all()
+
+    ws_msgs_result = await db.execute(
+        select(Message.received_at)
+        .where(Message.workspace_id == workspace_id, Message.received_at.isnot(None))
+        .order_by(Message.received_at.desc())
+        .limit(100)
+    )
+    ws_dates = ws_msgs_result.scalars().all()
+
+    now_utc = datetime.datetime.now(tz=timezone.utc)
+
+    def _make_aware(dt: datetime.datetime) -> datetime.datetime:
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+    if not msg_dates:
+        avg_gap_days = 0.0
+        longest_silence_days = 0.0
+        gap_assessment = "dark"
+        risk_level = "critical"
+    else:
+        sorted_contact = sorted(_make_aware(d) for d in msg_dates)
+        all_pts = sorted_contact + [now_utc]
+        gaps = [(all_pts[i] - all_pts[i - 1]).total_seconds() / 86400.0 for i in range(1, len(all_pts))]
+        avg_gap_days = sum(gaps) / len(gaps)
+        longest_silence_days = max(gaps)
+
+        if avg_gap_days < 7:
+            gap_assessment = "frequent"
+        elif avg_gap_days < 14:
+            gap_assessment = "normal"
+        elif avg_gap_days < 30:
+            gap_assessment = "sparse"
+        else:
+            gap_assessment = "dark"
+
+        if avg_gap_days >= 30:
+            risk_level = "critical"
+        elif avg_gap_days >= 14:
+            risk_level = "high"
+        elif avg_gap_days >= 7:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+
+    if len(ws_dates) >= 2:
+        sorted_ws = sorted(_make_aware(d) for d in ws_dates)
+        ws_gaps = [
+            (sorted_ws[i] - sorted_ws[i - 1]).total_seconds() / 86400.0
+            for i in range(1, len(sorted_ws))
+        ]
+        workspace_avg_gap_days = sum(ws_gaps) / len(ws_gaps)
+    else:
+        workspace_avg_gap_days = avg_gap_days
+
+    context = "\n".join([
+        f"Contact: {contact.name} ({contact.email or 'N/A'})",
+        f"Messages analyzed (last 10): {len(msg_dates)}",
+        f"Average gap between messages: {avg_gap_days:.1f} days",
+        f"Longest silence period: {longest_silence_days:.1f} days",
+        f"Workspace average gap: {workspace_avg_gap_days:.1f} days",
+        f"Gap assessment: {gap_assessment}",
+        f"Risk level: {risk_level}",
+        "Provide 3 specific, actionable recommendations to improve communication with this contact.",
+    ])
+
+    _default_recs = [
+        "Send a personalised check-in email referencing a recent industry trend relevant to their business.",
+        "Schedule a brief 15-minute reconnect call to surface any unaddressed concerns.",
+        "Share a relevant case study or product update to provide value and re-open the conversation.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_COMM_GAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+        recs = data.get("recommendations", []) if isinstance(data, dict) else []
+        if not isinstance(recs, list):
+            recs = []
+        recommendations = [str(r) for r in recs[:3]]
+        while len(recommendations) < 3:
+            recommendations.append(_default_recs[len(recommendations) % 3])
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    return {
+        "avg_gap_days": round(avg_gap_days, 1),
+        "longest_silence_days": round(longest_silence_days, 1),
+        "workspace_avg_gap_days": round(workspace_avg_gap_days, 1),
+        "gap_assessment": gap_assessment,
+        "risk_level": risk_level,
+        "recommendations": recommendations,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/contacts/{contact_id}/sentiment-trend
+# ---------------------------------------------------------------------------
+
+_SENTIMENT_TREND_SYSTEM = """\
+You are a sentiment analysis specialist. Given a list of email messages from a contact, score each message's \
+sentiment from -1.0 (very negative) to 1.0 (very positive). Also provide 3 actionable recommendations \
+for improving the relationship based on the overall sentiment trend. \
+Reply ONLY with a valid JSON object: \
+{"sentiment_points": [{"received_at": "<iso>", "score": <float>}, ...], "recommendations": ["…", "…", "…"]} \
+No markdown. No explanation. Pure JSON only."""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/sentiment-trend")
+@limiter.limit("5/minute")
+async def contact_sentiment_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_row = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_row.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    msgs_result = await db.execute(
+        select(Message.received_at, Message.body_plain)
+        .where(
+            Message.contact_id == contact_id,
+            Message.workspace_id == workspace_id,
+            Message.received_at.isnot(None),
+        )
+        .order_by(Message.received_at.desc())
+        .limit(20)
+    )
+    messages = msgs_result.all()
+    messages_analyzed = len(messages)
+
+    _default_recs = [
+        "Schedule a personalised check-in to acknowledge recent concerns and rebuild rapport.",
+        "Share a success story or case study that directly addresses their industry challenges.",
+        "Propose a short roadmap review call to realign on goals and demonstrate commitment.",
+    ]
+
+    if not messages:
+        return {
+            "messages_analyzed": 0,
+            "avg_sentiment": 0.0,
+            "trend_direction": "stable",
+            "recent_sentiment": 0.0,
+            "oldest_sentiment": 0.0,
+            "sentiment_points": [],
+            "recommendations": _default_recs,
+            "contact_id": str(contact_id),
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    ordered = list(reversed(messages))  # oldest first
+    msgs_list = []
+    for received_at, body_plain in ordered:
+        ts = received_at.isoformat() if received_at else "unknown"
+        snippet = (body_plain or "")[:300].strip()
+        msgs_list.append(f"[{ts}] {snippet}")
+
+    context = "\n".join([
+        f"Contact: {contact.name} ({contact.email or 'N/A'})",
+        f"Messages to analyse ({messages_analyzed} total, oldest first):",
+        *msgs_list,
+        "Score each message sentiment from -1.0 (very negative) to 1.0 (very positive).",
+        "Return sentiment_points in chronological order (oldest first).",
+        "Include 3 specific, actionable recommendations based on the overall sentiment trend.",
+    ])
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_SENTIMENT_TREND_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+
+        raw_points = data.get("sentiment_points", []) if isinstance(data, dict) else []
+        sentiment_points = []
+        if isinstance(raw_points, list):
+            for i, pt in enumerate(raw_points[:messages_analyzed]):
+                ts = ordered[i][0].isoformat() if i < len(ordered) else "unknown"
+                score = float(pt.get("score", 0.0)) if isinstance(pt, dict) else 0.0
+                score = max(-1.0, min(1.0, score))
+                sentiment_points.append({"received_at": ts, "score": round(score, 3)})
+
+        recs = data.get("recommendations", []) if isinstance(data, dict) else []
+        if not isinstance(recs, list):
+            recs = []
+        recommendations = [str(r) for r in recs[:3]]
+        while len(recommendations) < 3:
+            recommendations.append(_default_recs[len(recommendations) % 3])
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    if sentiment_points:
+        scores = [pt["score"] for pt in sentiment_points]
+        avg_sentiment = round(sum(scores) / len(scores), 3)
+        recent_sentiment = round(scores[-1], 3)
+        oldest_sentiment = round(scores[0], 3)
+        half = max(1, len(scores) // 2)
+        old_avg = sum(scores[:half]) / half
+        new_avg = sum(scores[-half:]) / half
+        diff = new_avg - old_avg
+        if diff > 0.1:
+            trend_direction = "improving"
+        elif diff < -0.1:
+            trend_direction = "declining"
+        else:
+            trend_direction = "stable"
+    else:
+        avg_sentiment = 0.0
+        recent_sentiment = 0.0
+        oldest_sentiment = 0.0
+        trend_direction = "stable"
+
+    return {
+        "messages_analyzed": messages_analyzed,
+        "avg_sentiment": avg_sentiment,
+        "trend_direction": trend_direction,
+        "recent_sentiment": recent_sentiment,
+        "oldest_sentiment": oldest_sentiment,
+        "sentiment_points": sentiment_points,
+        "recommendations": recommendations,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

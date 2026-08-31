@@ -33,6 +33,7 @@ def _fake_deal(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
     deal.next_action = kwargs.get("next_action", None)
     deal.next_action_date = kwargs.get("next_action_date", None)
     deal.competitors = kwargs.get("competitors", [])
+    deal.mentions = kwargs.get("mentions", [])
     deal.created_at = kwargs.get("created_at", _NOW - timedelta(days=5))
     deal.updated_at = kwargs.get("updated_at", _NOW - timedelta(days=5))
     deal.stage_changed_at = kwargs.get("stage_changed_at", _NOW - timedelta(days=5))
@@ -1325,6 +1326,39 @@ async def test_deal_stage_history_wrong_workspace_returns_403(app_client):
     assert resp.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_deal_stage_history_with_transitions_returns_full_history(app_client):
+    """GET /deals/{id}/stage-history with recorded transitions returns one entry per stage (regression: was 500)."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Multi Stage Deal", stage="proposal")
+    evt1 = _fake_activity(
+        workspace_id,
+        description="Deal 'Multi Stage Deal' updated → qualified",
+        type="deal_moved",
+        created_at=_NOW - timedelta(days=4),
+    )
+    evt2 = _fake_activity(
+        workspace_id,
+        description="Deal 'Multi Stage Deal' updated → proposal",
+        type="deal_moved",
+        created_at=_NOW - timedelta(days=1),
+    )
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(deal),
+        _make_scalars_result([evt1, evt2]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/stage-history")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) >= 2
+    assert data[-1]["stage"] == "proposal"
+    assert data[-1]["is_current"] is True
+
+
 # ---------------------------------------------------------------------------
 # GET /workspaces/{wid}/deals/{did}/competitors
 # PUT /workspaces/{wid}/deals/{did}/competitors
@@ -1796,23 +1830,40 @@ async def test_revenue_cohort_groups_by_contact_acquisition_month(app_client):
     fastapi_app, mock_db, workspace_id = app_client
 
     contact_id = uuid.uuid4()
-    now = datetime(2026, 6, 30, 12, 0, 0, tzinfo=timezone.utc)
 
-    # First deal for this contact — closed May 2026 (cohort month)
+    # Use relative dates so the test doesn't break as calendar months advance.
+    # Cohort month = 2 months before today; expansion month = 1 month before today.
+    today = datetime.now(timezone.utc)
+    cm = today.month - 2
+    cy = today.year
+    if cm <= 0:
+        cm += 12
+        cy -= 1
+    em = today.month - 1
+    ey = today.year
+    if em <= 0:
+        em += 12
+        ey -= 1
+
+    cohort_dt = datetime(cy, cm, 15, 12, 0, 0, tzinfo=timezone.utc)
+    expansion_dt = datetime(ey, em, 10, 12, 0, 0, tzinfo=timezone.utc)
+    expected_cohort_month = f"{cy}-{cm:02d}"
+
+    # First deal for this contact — closed in cohort month (2 months ago)
     first_deal = _fake_deal(
         workspace_id,
         stage="closed_won",
         value=100000.0,
         contact_id=contact_id,
-        stage_changed_at=datetime(2026, 5, 15, 12, 0, 0, tzinfo=timezone.utc),
+        stage_changed_at=cohort_dt,
     )
-    # Expansion deal from same contact — closed June 2026 (month +1)
+    # Expansion deal from same contact — closed month +1 (1 month ago)
     expansion_deal = _fake_deal(
         workspace_id,
         stage="closed_won",
         value=40000.0,
         contact_id=contact_id,
-        stage_changed_at=datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc),
+        stage_changed_at=expansion_dt,
     )
 
     mock_db.execute = AsyncMock(return_value=_make_scalars_result([first_deal, expansion_deal]))
@@ -1827,20 +1878,20 @@ async def test_revenue_cohort_groups_by_contact_acquisition_month(app_client):
     rows = resp.json()
     assert len(rows) == 3
 
-    # Find the May cohort row
-    may_row = next((r for r in rows if r["cohort_month"] == "2026-05"), None)
-    assert may_row is not None
-    assert may_row["initial_revenue"] == 100000.0
+    # Find the cohort row (2 months ago)
+    cohort_row = next((r for r in rows if r["cohort_month"] == expected_cohort_month), None)
+    assert cohort_row is not None
+    assert cohort_row["initial_revenue"] == 100000.0
 
-    # Month +0 (May) should have the first deal
-    assert may_row["months"][0]["month_offset"] == 0
-    assert may_row["months"][0]["revenue"] == 100000.0
-    assert may_row["months"][0]["pct_of_initial"] == 100.0
+    # Month +0 (cohort month) should have the first deal
+    assert cohort_row["months"][0]["month_offset"] == 0
+    assert cohort_row["months"][0]["revenue"] == 100000.0
+    assert cohort_row["months"][0]["pct_of_initial"] == 100.0
 
-    # Month +1 (June) should have the expansion deal attributed to May cohort
-    assert may_row["months"][1]["month_offset"] == 1
-    assert may_row["months"][1]["revenue"] == 40000.0
-    assert may_row["months"][1]["pct_of_initial"] == 40.0
+    # Month +1 should have the expansion deal attributed to cohort
+    assert cohort_row["months"][1]["month_offset"] == 1
+    assert cohort_row["months"][1]["revenue"] == 40000.0
+    assert cohort_row["months"][1]["pct_of_initial"] == 40.0
 
 
 @pytest.mark.asyncio
@@ -1874,4 +1925,344 @@ async def test_revenue_cohort_wrong_workspace_returns_403(app_client):
     wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/deals/revenue-cohort")
+    assert resp.status_code == 403
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/velocity-trends — Phase 13d
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_velocity_trends_returns_monthly_cycle_times(app_client):
+    """Closed deals are bucketed by close month with avg cycle-time computed."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Two closed_won deals closing in the same month, each with known cycle time
+    now = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+    d1 = _fake_deal(
+        workspace_id,
+        stage="closed_won",
+        created_at=now - timedelta(days=40),
+        stage_changed_at=now - timedelta(days=10),  # cycle = 30d
+    )
+    d2 = _fake_deal(
+        workspace_id,
+        stage="closed_lost",
+        created_at=now - timedelta(days=60),
+        stage_changed_at=now - timedelta(days=5),   # cycle = 55d
+    )
+
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([d1, d2]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/deals/velocity-trends",
+            params={"months": 3},
+        )
+
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 3
+
+    # Both deals close in June 2026 (10d and 5d before 2026-07-04)
+    close_month = "2026-06"
+    cur = next((r for r in rows if r["month"] == close_month), None)
+    assert cur is not None
+    assert cur["deal_count"] == 2
+    assert cur["closed_won"] == 1
+    assert cur["closed_lost"] == 1
+    # avg of 30d + 55d = 42.5d
+    assert cur["avg_cycle_days"] == 42.5
+
+
+@pytest.mark.asyncio
+async def test_velocity_trends_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's velocity trends."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/velocity-trends")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/response-lag
+# ---------------------------------------------------------------------------
+
+def _fake_message(workspace_id: uuid.UUID, contact_id: uuid.UUID, **kwargs) -> MagicMock:
+    msg = MagicMock()
+    msg.id = uuid.uuid4()
+    msg.workspace_id = workspace_id
+    msg.contact_id = contact_id
+    msg.external_id = str(uuid.uuid4())
+    msg.sender_email = kwargs.get("sender_email", "contact@example.com")
+    msg.received_at = kwargs.get("received_at", _NOW)
+    msg.body_plain = "test"
+    msg.processed = False
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_response_lag_returns_cells_for_consecutive_messages(app_client):
+    """Consecutive messages produce lag cells bucketed by dow+hour."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact_id = uuid.uuid4()
+
+    deal = _fake_deal(workspace_id, contact_id=contact_id)
+
+    # Three messages at known times: 2h gap, then 5h gap
+    t0 = datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)   # Monday 10:00
+    t1 = t0 + timedelta(hours=2)                                  # Monday 12:00
+    t2 = t1 + timedelta(hours=5)                                  # Monday 17:00
+    m0 = _fake_message(workspace_id, contact_id, received_at=t0)
+    m1 = _fake_message(workspace_id, contact_id, received_at=t1)
+    m2 = _fake_message(workspace_id, contact_id, received_at=t2)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(deal),
+        _make_scalars_result([m0, m1, m2]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/response-lag")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "cells" in body
+    assert "max_lag_hours" in body
+    assert len(body["cells"]) > 0
+    # Both lags land on Monday (dow=0), so all cells have dow=0
+    assert all(c["dow"] == 0 for c in body["cells"])
+    # max lag should be 5h
+    assert body["max_lag_hours"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_response_lag_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's deal response lag."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/{deal_id}/response-lag")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/predicted-close
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_predicted_close_uses_historical_cycle_times(app_client):
+    """With historical closed deals, predicted_date reflects avg cycle time."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    open_deal = _fake_deal(workspace_id, stage="discovery", created_at=_NOW - timedelta(days=10))
+
+    # Two closed deals: 60-day and 80-day cycle → avg 70 days
+    c1 = _fake_deal(workspace_id, stage="closed_won",
+                    created_at=_NOW - timedelta(days=90),
+                    stage_changed_at=_NOW - timedelta(days=30))  # 60-day cycle
+    c2 = _fake_deal(workspace_id, stage="closed_lost",
+                    created_at=_NOW - timedelta(days=100),
+                    stage_changed_at=_NOW - timedelta(days=20))  # 80-day cycle
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(open_deal),
+        _make_scalars_result([c1, c2]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{open_deal.id}/predicted-close")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "predicted_date" in body
+    assert "lower_bound" in body
+    assert "upper_bound" in body
+    assert body["data_points"] == 2
+    assert body["avg_cycle_days"] == 70.0
+    assert body["confidence_level"] == "low"   # 2 data points → low
+    assert body["lower_bound"] <= body["predicted_date"] <= body["upper_bound"]
+
+
+@pytest.mark.asyncio
+async def test_predicted_close_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's deal predicted close."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    deal_id = uuid.uuid4()
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/{deal_id}/predicted-close")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/mentions
+# POST /workspaces/{wid}/deals/{did}/mentions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_deal_mentions_returns_list(app_client):
+    """GET /deals/{id}/mentions returns the stored mention list."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Mention Deal")
+    deal.mentions = [{"name": "@alice", "type": "teammate"}, {"name": "Bob", "type": "contact"}]
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(deal))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/mentions")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "mentions": [{"name": "@alice", "type": "teammate"}, {"name": "Bob", "type": "contact"}]
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_deal_mentions_wrong_workspace_returns_403(app_client):
+    """POST /deals/{id}/mentions returns 403 for a different workspace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/mentions",
+            json={"mentions": [{"name": "@charlie", "type": "teammate"}]},
+        )
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/health-score-history
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_health_score_history_returns_list(app_client):
+    """GET /deals/{id}/health-score-history returns recorded snapshots oldest-first."""
+    fastapi_app, mock_db, workspace_id = app_client
+    deal = _fake_deal(workspace_id, title="Health History Deal")
+
+    row1 = MagicMock()
+    row1.recorded_at = _NOW - timedelta(days=2)
+    row1.score = 90
+
+    row2 = MagicMock()
+    row2.recorded_at = _NOW - timedelta(days=1)
+    row2.score = 75
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(deal),
+        _make_scalars_result([row1, row2]),
+    ])
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{workspace_id}/deals/{deal.id}/health-score-history"
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+    assert data[0]["score"] == 90
+    assert data[1]["score"] == 75
+
+
+@pytest.mark.asyncio
+async def test_health_score_history_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's health score history."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    deal_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/workspaces/{wrong_id}/deals/{deal_id}/health-score-history"
+        )
+
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/deals/{did}/engagement-score
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_engagement_score_returns_components(app_client):
+    """Engagement score combines messages × 8, notes × 10, and task completion (0-30)."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact_id = uuid.uuid4()
+    deal = _fake_deal(workspace_id, title="Engaged Deal", contact_id=contact_id)
+
+    # Build mock messages, notes, and tasks
+    def _msg():
+        m = MagicMock()
+        m.workspace_id = workspace_id
+        m.contact_id = contact_id
+        m.received_at = datetime.now(timezone.utc) - timedelta(days=5)
+        return m
+
+    def _note():
+        n = MagicMock()
+        n.workspace_id = workspace_id
+        n.deal_id = deal.id
+        n.created_at = datetime.now(timezone.utc) - timedelta(days=10)
+        return n
+
+    def _task(done=False):
+        t = MagicMock()
+        t.workspace_id = workspace_id
+        t.contact_id = contact_id
+        t.status = "done" if done else "open"
+        t.created_at = datetime.now(timezone.utc) - timedelta(days=15)
+        return t
+
+    messages = [_msg() for _ in range(3)]   # 3 × 8 = 24 pts
+    notes = [_note() for _ in range(2)]      # 2 × 10 = 20 pts
+    tasks = [_task(done=True), _task(done=True), _task(done=False)]  # 2/3 done → 20 pts
+
+    call_count = 0
+
+    async def _side(*a, **kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_scalar_result(deal)
+        if call_count == 2:
+            return _make_scalars_result(messages)
+        if call_count == 3:
+            return _make_scalars_result(notes)
+        return _make_scalars_result(tasks)
+
+    mock_db.execute = AsyncMock(side_effect=_side)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/deals/{deal.id}/engagement-score")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["message_count"] == 3
+    assert data["note_count"] == 2
+    assert data["tasks_total"] == 3
+    assert data["tasks_done"] == 2
+    assert data["components"]["messages"] == 24
+    assert data["components"]["notes"] == 20
+    assert data["components"]["tasks"] == 20
+    assert data["score"] == 64
+
+
+@pytest.mark.asyncio
+async def test_deal_engagement_score_wrong_workspace_returns_403(app_client):
+    """Returns 403 when requesting another workspace's deal engagement score."""
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-aaaaaaaaaaaa")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/deals/{uuid.uuid4()}/engagement-score")
+
     assert resp.status_code == 403
