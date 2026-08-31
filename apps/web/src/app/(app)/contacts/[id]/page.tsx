@@ -2414,7 +2414,7 @@ export default function ContactDetailPage() {
                         <RechartTooltip
                           contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 6, fontSize: 11 }}
                           labelFormatter={() => ""}
-                          formatter={(v: number) => [v.toFixed(2), "sentiment"]}
+                          formatter={(v) => [typeof v === 'number' ? v.toFixed(2) : '0.00', "sentiment"]}
                         />
                         <Line
                           type="monotone"
