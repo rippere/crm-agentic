@@ -468,6 +468,13 @@ export default function ContactDetailPage() {
   const [competitivePositioningLoading, setCompetitivePositioningLoading] = useState(false);
   const [competitivePositioningGenerating, setCompetitivePositioningGenerating] = useState(false);
 
+  type MeetingAgendaItem = { topic: string; goal: string; talking_points: string[]; time_estimate_mins: number };
+  type MeetingAgendaData = { opening_hook: string; agenda_items: MeetingAgendaItem[]; contact_id: string; generated_at: string };
+  const [meetingAgenda, setMeetingAgenda] = useState<MeetingAgendaData | null>(null);
+  const [meetingAgendaLoading, setMeetingAgendaLoading] = useState(false);
+  const [meetingAgendaGenerating, setMeetingAgendaGenerating] = useState(false);
+  const [meetingAgendaExpanded, setMeetingAgendaExpanded] = useState<number | null>(null);
+
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
   const [outreachSeqOpen, setOutreachSeqOpen] = useState(false);
@@ -713,6 +720,13 @@ export default function ContactDetailPage() {
       .then((data) => setCompetitivePositioning(data ?? null))
       .catch(() => setCompetitivePositioning(null))
       .finally(() => setCompetitivePositioningLoading(false));
+
+    setMeetingAgendaLoading(true);
+    apiClient
+      .getMeetingAgenda(workspaceId, contactId, token)
+      .then((data) => setMeetingAgenda(data ?? null))
+      .catch(() => setMeetingAgenda(null))
+      .finally(() => setMeetingAgendaLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -2136,6 +2150,94 @@ export default function ContactDetailPage() {
                 >
                   {competitivePositioningGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trophy className="h-3 w-3" />}
                   {competitivePositioningGenerating ? "Analyzing…" : "View Positioning"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* ── Meeting Agenda Card ── */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Meeting Agenda</p>
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || meetingAgendaGenerating) return;
+                  setMeetingAgendaGenerating(true);
+                  try {
+                    const data = await apiClient.getMeetingAgenda(workspaceId, contactId, token);
+                    setMeetingAgenda(data ?? null);
+                  } catch { /* ignore */ } finally { setMeetingAgendaGenerating(false); }
+                }}
+                aria-label="Regenerate meeting agenda"
+                disabled={meetingAgendaGenerating || !meetingAgenda}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", meetingAgenda ? "" : "hidden")}
+              >
+                <RefreshCw className={cn("h-3 w-3", meetingAgendaGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {meetingAgendaLoading ? (
+              <div className="animate-pulse space-y-2">
+                <div className="h-3 bg-zinc-800 rounded w-4/5" />
+                <div className="h-3 bg-zinc-800 rounded w-3/5" />
+              </div>
+            ) : meetingAgenda ? (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-3 py-2.5">
+                  <p className="text-[10px] font-mono text-indigo-400 uppercase tracking-widest mb-1">Opening Hook</p>
+                  <p className="text-xs text-zinc-300 italic leading-relaxed">&ldquo;{meetingAgenda.opening_hook}&rdquo;</p>
+                </div>
+                <div className="space-y-1.5">
+                  {meetingAgenda.agenda_items.map((item, i) => {
+                    const isOpen = meetingAgendaExpanded === i;
+                    return (
+                      <div key={i} className="rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+                        <button
+                          onClick={() => setMeetingAgendaExpanded(isOpen ? null : i)}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 text-left cursor-pointer hover:bg-zinc-800/40 transition-colors"
+                        >
+                          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-500/15 text-indigo-400 text-[10px] font-semibold flex items-center justify-center">{i + 1}</span>
+                          <span className="flex-1 text-xs font-medium text-zinc-200 truncate">{item.topic}</span>
+                          <span className="flex-shrink-0 text-[10px] font-mono text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5">{item.time_estimate_mins}m</span>
+                          <ChevronRight className={cn("h-3 w-3 text-zinc-600 flex-shrink-0 transition-transform", isOpen && "rotate-90")} />
+                        </button>
+                        {isOpen && (
+                          <div className="px-3 pb-3 space-y-2 border-t border-zinc-800/60 pt-2">
+                            <p className="text-[11px] text-zinc-400 italic">{item.goal}</p>
+                            <ul className="space-y-1">
+                              {item.talking_points.map((tp, j) => (
+                                <li key={j} className="flex items-start gap-2">
+                                  <span className="flex-shrink-0 mt-1 h-1.5 w-1.5 rounded-full bg-indigo-400" />
+                                  <span className="text-[11px] text-zinc-300 leading-snug">{tp}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-zinc-600">Generated {formatRelative(meetingAgenda.generated_at)}</p>
+              </div>
+            ) : (
+              <div className="text-center py-4 space-y-3">
+                <p className="text-xs text-zinc-600">Generate a personalised meeting agenda based on recent messages, tasks, and deals.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    if (!token || !workspaceId || meetingAgendaGenerating) return;
+                    setMeetingAgendaGenerating(true);
+                    try {
+                      const data = await apiClient.getMeetingAgenda(workspaceId, contactId, token);
+                      setMeetingAgenda(data ?? null);
+                    } catch { /* ignore */ } finally { setMeetingAgendaGenerating(false); }
+                  }}
+                  disabled={meetingAgendaGenerating}
+                >
+                  {meetingAgendaGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Calendar className="h-3 w-3" />}
+                  {meetingAgendaGenerating ? "Generating…" : "Generate Agenda"}
                 </Button>
               </div>
             )}

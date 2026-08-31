@@ -4127,4 +4127,158 @@ export const apiClient = {
       token,
     )
   },
+
+  getMeetingAgenda: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    opening_hook: string
+    agenda_items: {
+      topic: string
+      goal: string
+      talking_points: string[]
+      time_estimate_mins: number
+    }[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const stubs: Record<string, {
+        opening_hook: string
+        agenda_items: { topic: string; goal: string; talking_points: string[]; time_estimate_mins: number }[]
+      }> = {
+        'c-001': {
+          opening_hook: 'Great to connect, Sarah — I saw the proposal deal is gaining momentum and wanted to ensure we\'re fully aligned on the path to close.',
+          agenda_items: [
+            {
+              topic: 'Deal progress check-in',
+              goal: 'Confirm the proposal has been reviewed internally and surface any blockers.',
+              talking_points: [
+                'Walk through the deal health score (87) and confirm no new objections have emerged since last week.',
+                'Ask whether the proposal has reached the decision-maker and what feedback was received.',
+              ],
+              time_estimate_mins: 15,
+            },
+            {
+              topic: 'Open task review',
+              goal: 'Clear the backlog of outstanding action items and set firm deadlines.',
+              talking_points: [
+                'Review the 2 open tasks — confirm the integration spec document is still top priority.',
+                'Agree on a due date for the security questionnaire to keep the deal on schedule.',
+              ],
+              time_estimate_mins: 10,
+            },
+            {
+              topic: 'Competitive landscape update',
+              goal: 'Understand whether any new competitors have re-entered the evaluation.',
+              talking_points: [
+                'Ask directly if Salesforce has been re-engaged and what their revised pricing looks like.',
+                'Reinforce the AI health-scoring differentiator with a live demo if competitors remain active.',
+              ],
+              time_estimate_mins: 10,
+            },
+            {
+              topic: 'Next steps and timeline',
+              goal: 'Lock in mutual action items and confirm the expected close date.',
+              talking_points: [
+                'Summarise agreed actions and confirm ownership on both sides before ending the call.',
+                'Book the next check-in or contract-review call before hanging up.',
+              ],
+              time_estimate_mins: 5,
+            },
+          ],
+        },
+        'c-002': {
+          opening_hook: 'Hi Marcus — I wanted to touch base and understand what\'s changed on your side, as I notice the deal has been quiet for a few weeks.',
+          agenda_items: [
+            {
+              topic: 'Re-engagement and update',
+              goal: 'Understand what has changed at their organisation and surface any new concerns.',
+              talking_points: [
+                'Ask openly what has been on their plate since your last meeting to rebuild rapport.',
+                'Reference the declining clarity scores and ask if their messaging priorities have shifted.',
+              ],
+              time_estimate_mins: 10,
+            },
+            {
+              topic: 'Deal objection review',
+              goal: 'Identify the primary reason the deal has stalled and address it directly.',
+              talking_points: [
+                'Ask what would need to change internally for the evaluation to move forward this quarter.',
+                'Offer a competitive comparison session to address any pricing concerns about HubSpot.',
+              ],
+              time_estimate_mins: 15,
+            },
+            {
+              topic: 'Value realignment session',
+              goal: 'Reconnect the contact with the key differentiators most relevant to their current needs.',
+              talking_points: [
+                'Walk through the AI task-extraction demo from Gmail/Slack — their pain point from the first call.',
+                'Share a relevant customer story to rebuild confidence in the solution.',
+              ],
+              time_estimate_mins: 10,
+            },
+            {
+              topic: 'Next steps agreement',
+              goal: 'Secure a concrete commitment to a next action before ending the call.',
+              talking_points: [
+                'Propose a specific follow-up: a revised proposal, a pilot, or a technical deep-dive.',
+                'Agree a date for the next touchpoint and confirm it in writing before hanging up.',
+              ],
+              time_estimate_mins: 5,
+            },
+          ],
+        },
+        'c-003': {
+          opening_hook: 'Hi Jordan — thanks for making time. I\'d love to understand your goals better and explore how NovaCRM can support your team\'s workflow.',
+          agenda_items: [
+            {
+              topic: 'Goals and pain points',
+              goal: 'Understand the contact\'s primary CRM and PM pain points before pitching.',
+              talking_points: [
+                'Ask what their current CRM/PM workflow looks like and where the biggest friction is.',
+                'Probe on team size, deal volume, and which channels (Gmail, Slack) they rely on most.',
+              ],
+              time_estimate_mins: 15,
+            },
+            {
+              topic: 'NovaCRM capability walkthrough',
+              goal: 'Demonstrate the top 3 features most relevant to their stated pain points.',
+              talking_points: [
+                'Show the AI lead scoring and deal health dashboard as a real-time intelligence layer.',
+                'Demo Gmail/Slack task extraction to show how NovaCRM automates current manual logging.',
+              ],
+              time_estimate_mins: 15,
+            },
+            {
+              topic: 'Trial or pilot discussion',
+              goal: 'Gauge interest in a proof-of-concept and confirm evaluation criteria.',
+              talking_points: [
+                'Propose a 2-week free pilot with their real data to lower the commitment barrier.',
+                'Ask who else on their team needs to be involved before a trial can be approved.',
+              ],
+              time_estimate_mins: 10,
+            },
+            {
+              topic: 'Next steps agreement',
+              goal: 'Leave with a signed-off next action and a confirmed follow-up date.',
+              talking_points: [
+                'Agree whether the next step is a technical review, a pilot sign-up, or a proposal.',
+                'Schedule a follow-up call before ending and confirm via email immediately after.',
+              ],
+              time_estimate_mins: 5,
+            },
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/meeting-agenda`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }

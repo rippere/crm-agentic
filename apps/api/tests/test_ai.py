@@ -3653,5 +3653,108 @@ async def test_contact_competitive_positioning_wrong_workspace_returns_403(app_c
         resp = await ac.post(
             f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/competitive-positioning"
         )
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/contacts/{cid}/meeting-agenda
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_contact_meeting_agenda_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _sone(obj):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = obj
+        return r
+
+    def _all(rows):
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    def _scalars(lst):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = lst
+        return r
+
+    import json as _json
+
+    contact = _fake_contact(workspace_id)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _sone(contact),   # contact lookup
+        _all([]),          # messages + clarity join
+        _scalars([]),      # open tasks
+        _scalars([]),      # open deals
+    ])
+
+    response_json = _json.dumps({
+        "opening_hook": "Great to connect — let's align on the deal and open tasks.",
+        "agenda_items": [
+            {
+                "topic": "Deal status check",
+                "goal": "Confirm progress and remove blockers.",
+                "talking_points": ["Review deal health score.", "Confirm timeline expectations."],
+                "time_estimate_mins": 15,
+            },
+            {
+                "topic": "Open task review",
+                "goal": "Clear outstanding action items.",
+                "talking_points": ["Review open tasks.", "Set due dates."],
+                "time_estimate_mins": 10,
+            },
+            {
+                "topic": "Competitive landscape",
+                "goal": "Understand competitive dynamics.",
+                "talking_points": ["Ask about competitors.", "Reinforce differentiators."],
+                "time_estimate_mins": 10,
+            },
+            {
+                "topic": "Next steps",
+                "goal": "Agree on next actions.",
+                "talking_points": ["Summarise actions.", "Schedule next call."],
+                "time_estimate_mins": 5,
+            },
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/ai/contacts/{contact.id}/meeting-agenda"
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["opening_hook"], str) and len(body["opening_hook"]) > 0
+    assert isinstance(body["agenda_items"], list) and len(body["agenda_items"]) == 4
+    for item in body["agenda_items"]:
+        assert "topic" in item and isinstance(item["topic"], str)
+        assert "goal" in item and isinstance(item["goal"], str)
+        assert isinstance(item["talking_points"], list) and len(item["talking_points"]) == 2
+        assert item["time_estimate_mins"] in (5, 10, 15)
+    assert body["contact_id"] == str(contact.id)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_meeting_agenda_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    contact_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/meeting-agenda"
+        )
+    assert resp.status_code == 403
 
     assert resp.status_code == 403
