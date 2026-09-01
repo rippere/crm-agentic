@@ -4432,4 +4432,94 @@ export const apiClient = {
       token,
     )
   },
+
+  getAccountPlan: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    account_status: 'strategic' | 'growth' | 'maintain' | 'at_risk'
+    plan_horizon: 30 | 90 | 180
+    objectives: { objective: string; metric: string; timeline: string }[]
+    key_risks: string[]
+    recommended_actions: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type AccountPlanStub = {
+        account_status: 'strategic' | 'growth' | 'maintain' | 'at_risk'
+        plan_horizon: 30 | 90 | 180
+        objectives: { objective: string; metric: string; timeline: string }[]
+        key_risks: string[]
+        recommended_actions: string[]
+      }
+      const stubs: Record<string, AccountPlanStub> = {
+        'c-001': {
+          account_status: 'strategic',
+          plan_horizon: 180,
+          objectives: [
+            { objective: 'Close enterprise expansion deal', metric: '$120K ARR uplift', timeline: '60 days' },
+            { objective: 'Onboard executive sponsor', metric: 'Monthly EBR established', timeline: '30 days' },
+            { objective: 'Drive product adoption to 80%', metric: '8/10 modules active', timeline: '90 days' },
+          ],
+          key_risks: [
+            'Competitor Salesforce is actively pitching a renewal alternative',
+            'Budget freeze risk if Q3 targets are missed',
+            'Single point of contact — champion dependency',
+          ],
+          recommended_actions: [
+            'Present ROI case study to CFO before end of quarter',
+            'Schedule executive alignment call with their VP of Sales',
+            'Provide dedicated CSM support to accelerate adoption',
+          ],
+        },
+        'c-002': {
+          account_status: 'at_risk',
+          plan_horizon: 30,
+          objectives: [
+            { objective: 'Prevent churn', metric: 'Re-engagement call held', timeline: '7 days' },
+            { objective: 'Resolve open blockers', metric: '0 outstanding support tickets', timeline: '14 days' },
+            { objective: 'Rebuild executive relationship', metric: 'QBR scheduled', timeline: '30 days' },
+          ],
+          key_risks: [
+            'No contact in 45+ days — relationship going dark',
+            'Open support ticket unresolved for 3 weeks',
+            'HubSpot actively pitching competitive alternative',
+          ],
+          recommended_actions: [
+            'Initiate an urgent outreach call to surface blockers',
+            'Escalate open support issue to VP of Customer Success',
+            'Offer tailored success plan with 30-day milestones',
+          ],
+        },
+        'c-003': {
+          account_status: 'growth',
+          plan_horizon: 90,
+          objectives: [
+            { objective: 'Expand deal to additional team', metric: '2 new user groups active', timeline: '45 days' },
+            { objective: 'Increase average deal size', metric: '$40K+ on next renewal', timeline: '60 days' },
+            { objective: 'Secure referral or case study', metric: '1 testimonial published', timeline: '90 days' },
+          ],
+          key_risks: [
+            'Limited engagement from decision makers above contact',
+            'Competing priorities may delay renewal conversations',
+            'Low task completion rate suggests internal alignment gaps',
+          ],
+          recommended_actions: [
+            'Run a discovery session to identify expansion use cases',
+            'Send personalised ROI report ahead of renewal window',
+            'Invite contact to customer advisory board',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/account-plan`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
