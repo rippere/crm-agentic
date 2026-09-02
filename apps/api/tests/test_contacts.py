@@ -860,11 +860,99 @@ async def test_compose_email_supabase_fallback_path(app_client):
 
     assert resp.status_code == 200
     assert resp.json()["subject"] == "Hello Supabase Alice"
-    # Verify the Supabase row fields were used in the prompt
-    call_args = mock_client_instance.messages.create.call_args
+    # Verify the Supabase row fields were used in the prompt. [0] is the
+    # original grounded-draft call; a second call follows for the humanize pass.
+    call_args = mock_client_instance.messages.create.call_args_list[0]
     user_msg = call_args[1]["messages"][0]["content"]
     assert "Supabase Alice" in user_msg
     assert "Remote Corp" in user_msg
+
+
+@pytest.mark.asyncio
+async def test_compose_email_grounds_prompt_in_rich_context(app_client):
+    """compose feeds the LLM the same rich context the brief uses — recent
+    messages, calls, and active deals — not just the 6 shallow fields."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    msg = MagicMock()
+    msg.subject = "Re: Q3 Proposal"
+
+    call = MagicMock()
+    call.title = "Discovery Call"
+    call.summary = "We discussed pricing and rollout timing."
+
+    deal = MagicMock()
+    deal.title = "Acme Platform Rollout"
+    deal.stage = "proposal"
+    deal.value = 50000.0
+    deal.ml_win_probability = 65
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),   # contact lookup
+        _make_scalars_result([msg]),    # messages
+        _make_scalars_result([call]),   # calls
+        _make_scalars_result([deal]),   # deals
+    ])
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text='{"subject": "Re: Q3 Proposal", "body": "Hi Alice, following up."}')]
+    mock_client_instance = MagicMock()
+    mock_client_instance.messages.create.return_value = mock_response
+
+    with patch("anthropic.Anthropic", return_value=mock_client_instance):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{contact.id}/compose")
+
+    assert resp.status_code == 200
+    # [0] is the original grounded-draft call; a second call follows for the
+    # humanize pass, which call_args (the last call) would otherwise return.
+    call_args = mock_client_instance.messages.create.call_args_list[0]
+    user_msg = call_args[1]["messages"][0]["content"]
+    # Rich context reached the model
+    assert "Re: Q3 Proposal" in user_msg
+    assert "Discovery Call" in user_msg
+    assert "Acme Platform Rollout" in user_msg
+    # And the system prompt carries the fact-grounding instruction
+    assert "Ground every specific factual claim ONLY in the context" in call_args[1]["system"]
+
+
+@pytest.mark.asyncio
+async def test_compose_email_guard_falls_back_on_hallucinated_fact(app_client):
+    """If the model invents a first-party fact absent from the context, the guard
+    discards the draft and returns a safe generic one instead."""
+    fastapi_app, mock_db, workspace_id = app_client
+    contact = _fake_contact(workspace_id)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_scalar_result(contact),
+        _make_scalars_result([]),
+        _make_scalars_result([]),
+        _make_scalars_result([]),
+    ])
+
+    hallucinated = (
+        '{"subject": "Congrats on the raise", '
+        '"body": "Hi Alice, congrats on the $5M round led by Globex Industries."}'
+    )
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text=hallucinated)]
+    mock_client_instance = MagicMock()
+    mock_client_instance.messages.create.return_value = mock_response
+
+    with patch("anthropic.Anthropic", return_value=mock_client_instance):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/contacts/{contact.id}/compose")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # Response shape unchanged, but the invented facts never reach the prospect
+    assert set(data) == {"subject", "body"}
+    assert "Globex" not in data["body"]
+    assert "$5M" not in data["body"]
+    assert data["subject"] != "Congrats on the raise"
+    # The safe fallback still addresses the real contact
+    assert "Alice" in data["body"]
 
 
 # ---------------------------------------------------------------------------

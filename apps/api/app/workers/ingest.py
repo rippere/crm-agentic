@@ -3,13 +3,18 @@ Celery ingest worker.
 
 Task: process_gmail_sync(connector_id: str)
   1. Load connector from DB
-  2. Fetch Primary-inbox messages via GmailClient (category:primary + no-reply filter)
+  2. Fetch Primary-inbox + sent messages via GmailClient (see GMAIL_DEFAULT_QUERY)
   3. Deduplicate against messages table (UNIQUE workspace_id + external_id)
-  4. Pre-filter each message with Claude Haiku (deal relevance check)
-  5. Insert new relevant messages
-  6. Call Claude extraction on each new message body
-  7. Insert extracted tasks
-  8. Update connector.last_sync and message_count
+  4. Skip automated senders outright (noreply@ must never become a graph node)
+  5. Pre-filter each remaining message with Claude Haiku (deal relevance check)
+  6. Insert ALL human messages, capturing To/Cc/thread/direction headers:
+       - relevant     -> stored in full, enrichment enqueued
+       - not relevant -> stored METADATA-ONLY (no body, graph_only=True), which
+                         keeps the weak ties the relationship graph is made of
+                         instead of letting the relevance judge delete them
+  7. Call Claude extraction on each new relevant message body
+  8. Insert extracted tasks
+  9. Update connector.last_sync and message_count
 """
 from __future__ import annotations
 
@@ -65,6 +70,30 @@ def _decode_body(payload: dict[str, Any]) -> str:
 def _is_automated_sender(sender: str) -> bool:
     lower = sender.lower()
     return any(pattern in lower for pattern in _SKIP_SENDER_PATTERNS)
+
+
+def _parse_addresses(raw: str | None) -> list[str]:
+    """Bare, lowercased, de-duplicated addresses from an RFC 5322 address header.
+
+    Handles the forms Gmail actually returns — ``"Jane Doe" <jane@x.com>, sam@y.com``
+    — via email.utils.getaddresses. Order is preserved (the first To address is the
+    one outbound mail is attributed to). Malformed entries parse to an empty
+    address and are dropped rather than stored as junk graph nodes.
+    """
+    if not raw:
+        return []
+    from email.utils import getaddresses
+
+    out: list[str] = []
+    for _display_name, addr in getaddresses([raw]):
+        addr = addr.strip().lower()
+        # getaddresses hands back unparseable fragments verbatim (a bare word
+        # becomes its own "address"), so require an @ before trusting it.
+        if "@" not in addr:
+            continue
+        if addr not in out:
+            out.append(addr)
+    return out
 
 
 async def _link_contact(
@@ -242,6 +271,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
     new_count = 0
     skipped_automated = 0
     skipped_irrelevant = 0
+    graph_only_count = 0
     truncated = False
     enrich_ids: list[str] = []
 
@@ -330,6 +360,12 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 skipped_automated += 1
                 continue
 
+            # Direction comes from Gmail's own labels rather than by comparing the
+            # From address to the account — label data is authoritative for aliases
+            # and send-as addresses, which a string compare would misclassify.
+            label_ids = msg_data.get("labelIds", []) or []
+            direction = "outbound" if "SENT" in label_ids else "inbound"
+
             body_plain = _decode_body(msg_data.get("payload", {}))
             snippet = msg_data.get("snippet", "")
             candidates.append({
@@ -339,6 +375,17 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 "received_at": received_at,
                 "body_plain": body_plain,
                 "snippet": snippet,
+                "to_emails": _parse_addresses(headers.get("to")),
+                "cc_emails": _parse_addresses(headers.get("cc")),
+                "thread_id": msg_data.get("threadId"),
+                "rfc_message_id": headers.get("message-id"),
+                # References holds the full ancestry; its last entry is the direct
+                # parent and is the fallback when In-Reply-To is absent.
+                "in_reply_to": (
+                    headers.get("in-reply-to")
+                    or (headers.get("references", "").split() or [None])[-1]
+                ),
+                "direction": direction,
             })
 
         # Stage 2: concurrent Claude Haiku relevance pre-filter (fanned out).
@@ -351,35 +398,78 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 for c in candidates
             ])
 
-        # Stage 3: insert relevant messages only. Enrichment (tasks/clarity/
-        # sentiment) is decoupled — enqueued as a separate task per message so the
-        # ingest critical path is fetch/dedupe/insert only.
+        # Stage 3: insert every human message. Deal-relevant ones are stored in
+        # full and enriched as before; the rest are stored METADATA-ONLY —
+        # headers kept for the relationship graph, body never persisted,
+        # graph_only=True so no message-facing read path shows them.
+        #
+        # Dropping them (the previous behavior) let an LLM relevance judge decide
+        # what EXISTS in the database, which deleted exactly the weak ties a
+        # warm-intro graph is made of. Relevance still gates body storage and
+        # Claude enrichment, so the cost profile is unchanged.
         for cand, is_relevant in zip(candidates, relevance_flags):
-            if not is_relevant:
+            graph_only = not is_relevant
+            if graph_only:
                 skipped_irrelevant += 1
                 logger.debug(
-                    "ingest skipped_irrelevant gmail_id=%s subject=%s",
+                    "ingest metadata_only gmail_id=%s subject=%s",
                     cand["gmail_id"], cand["subject"][:60],
                 )
-                continue
 
-            contact_id = await _link_contact(db, workspace_id, cand["sender_email"], auto_create=True)
+            # Attribute the row to the human on the far end: for outbound mail
+            # that is the first recipient, not the sender (who is the account
+            # owner — linking on From would point every sent message at Ben).
+            if cand["direction"] == "outbound":
+                counterparty = cand["to_emails"][0] if cand["to_emails"] else None
+            else:
+                counterparty = cand["sender_email"]
+
+            # Auto-create stays scoped to relevant INBOUND mail — the existing
+            # "inbound becomes real pipeline" behavior. Two deliberate exclusions:
+            # metadata-only rows (the graph reads the address columns directly, so
+            # creating leads from hidden personal mail would only pollute the CRM),
+            # and outbound mail (now that in:sent syncs, auto-creating there would
+            # mint a contact for every business address a multi-year mailbox has
+            # ever written to, on the first sync). Both still LINK to contacts that
+            # already exist, so nothing is lost — only unsolicited creation.
+            contact_id = await _link_contact(
+                db,
+                workspace_id,
+                counterparty,
+                auto_create=is_relevant and cand["direction"] == "inbound",
+            )
 
             message = Message(
                 workspace_id=workspace_id,
                 connector_id=connector.id,
                 external_id=cand["gmail_id"],
                 subject=cand["subject"],
-                body_plain=cand["body_plain"],
+                body_plain="" if graph_only else cand["body_plain"],
                 sender_email=cand["sender_email"],
                 received_at=cand["received_at"],
                 contact_id=contact_id,
-                processed=False,  # enrichment task flips this once complete
-                relevant=True,  # passed _is_automated_sender + relevance gates
+                # No enrichment is coming for metadata-only rows, so mark them
+                # done rather than leaving them pending forever.
+                processed=graph_only,
+                relevant=is_relevant,
+                to_emails=cand["to_emails"],
+                cc_emails=cand["cc_emails"],
+                thread_id=cand["thread_id"],
+                rfc_message_id=cand["rfc_message_id"],
+                in_reply_to=cand["in_reply_to"],
+                direction=cand["direction"],
+                graph_only=graph_only,
             )
             db.add(message)
             await db.flush()
 
+            if graph_only:
+                graph_only_count += 1
+                continue
+
+            # new_count keeps its existing meaning — deal-relevant messages only —
+            # because connector.message_count is derived from it and surfaces in
+            # the UI. Metadata-only rows are reported separately.
             new_count += 1
             if cand["body_plain"].strip():
                 enrich_ids.append(str(message.id))
@@ -401,14 +491,18 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
 
     logger.info(
         "ingest complete connector=%s new=%d enqueued_enrich=%d skipped_automated=%d "
-        "skipped_irrelevant=%d truncated=%s",
-        connector_id, new_count, enqueued, skipped_automated, skipped_irrelevant, truncated,
+        "skipped_irrelevant=%d graph_only=%d truncated=%s",
+        connector_id, new_count, enqueued, skipped_automated, skipped_irrelevant,
+        graph_only_count, truncated,
     )
     return {
         "new_messages": new_count,
         "enqueued_enrich": enqueued,
         "skipped_automated": skipped_automated,
+        # Retains its name for compatibility, but no longer means "dropped":
+        # these rows are now stored metadata-only for the graph.
         "skipped_irrelevant": skipped_irrelevant,
+        "graph_only_rows": graph_only_count,
         "truncated": truncated,
         "connector_id": connector_id,
     }
@@ -543,7 +637,13 @@ async def _run_reprocess(workspace_id: str) -> dict[str, Any]:
 
     async with SessionFactory() as db:
         result = await db.execute(
-            select(Message).where(Message.workspace_id == ws_uuid)
+            select(Message).where(
+                Message.workspace_id == ws_uuid,
+                # Metadata-only rows have no body to enrich and no UI to appear
+                # in. Re-running the relevance LLM over them would spend a Haiku
+                # call per row to re-derive a verdict we already stored.
+                Message.graph_only.is_(False),
+            )
         )
         messages = list(result.scalars().all())
 

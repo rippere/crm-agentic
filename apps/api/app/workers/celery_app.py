@@ -14,7 +14,7 @@ celery_app = Celery(
     "crm_agentic",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["app.workers.ingest", "app.workers.score_contact", "app.workers.pipeline", "app.workers.slack_ingest", "app.workers.embed_contacts", "app.workers.deal_health_worker", "app.workers.transcribe", "app.workers.enrich_contact", "app.workers.followup_sequences", "app.workers.pm_agent"],
+    include=["app.workers.ingest", "app.workers.score_contact", "app.workers.pipeline", "app.workers.slack_ingest", "app.workers.embed_contacts", "app.workers.deal_health_worker", "app.workers.transcribe", "app.workers.enrich_contact", "app.workers.followup_sequences", "app.workers.pm_agent", "app.workers.import_leads", "app.workers.campaign_enroll", "app.workers.engagement_score", "app.workers.sequence_sender"],
 )
 
 celery_app.conf.update(
@@ -49,5 +49,25 @@ celery_app.conf.update(
             "schedule": crontab(minute="*/30"),
             "args": [],
         },
+        "tick-sequences": {
+            # Dispatcher fans out per-workspace; the bare tick_sequences task
+            # requires a workspace_id that beat cannot supply (it would crash).
+            "task": "app.workers.sequence_sender.tick_sequences_all",
+            "schedule": crontab(minute="*/5"),
+            "args": [],
+        },
+        "hourly-lead-scoring": {
+            # Dispatcher fans out per-workspace; the bare score_lead_engagement task
+            # requires a workspace_id that beat cannot supply (it would crash).
+            "task": "app.workers.engagement_score.score_leads_all",
+            "schedule": crontab(minute=0),
+            "args": [],
+        },
     },
 )
+
+# Eagerly import the `include` task modules so the task registry is populated
+# on import of this module (not only when a worker/beat process finalizes it).
+# This lets tooling and smoke checks that import `celery_app` directly see all
+# registered tasks without spinning up a worker.
+celery_app.loader.import_default_modules()

@@ -81,7 +81,13 @@ async def _run(workspace_id: str) -> dict[str, Any]:
             if deal.contact_id:
                 msg_result = await db.execute(
                     select(Message.received_at)
-                    .where(Message.contact_id == deal.contact_id)
+                    .where(
+                        Message.contact_id == deal.contact_id,
+                        # Metadata-only rows are not contact about the deal — a
+                        # stray irrelevant email must not make a stale deal look
+                        # freshly touched.
+                        Message.graph_only.is_(False),
+                    )
                     .order_by(Message.received_at.desc())
                     .limit(1)
                 )

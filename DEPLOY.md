@@ -1,5 +1,25 @@
 # NovaCRM — Production Deployment Checklist
 
+> ⚠️ **Partially stale — verified & corrected 2026-09-02 (empirically, from live prod headers).**
+>
+> **Deploy host = Railway (this doc's mechanism is CORRECT).** Verified live:
+> - `app.riphere.com` (Next.js frontend) → `server: railway-hikari`, `x-powered-by: Next.js`
+> - `api.riphere.com` (FastAPI API) → `server: railway-hikari`
+> - `www.riphere.com` (marketing/apex only) → `server: cloudflare` — **Cloudflare fronts ONLY the
+>   `www` edge; the app + API are Railway services.** (The `railway.toml` files are live, not stale.)
+>
+> **Deploy flow:** merge PR to `master` (`gh pr merge <#> --admin`) → Railway auto-deploys on the
+> master push. Force a redeploy with `railway redeploy -s api -y` (per-service).
+>
+> **What IS stale in the body below (fix before following):**
+> - **Migrations:** the checklist stops at `012`; the real set on disk runs through
+>   `023_outbound_engagement.sql`. Applying only 001–012 under-provisions the schema and 500s the
+>   lead-gen endpoints.
+> - **Beat schedule:** says 3 tasks; code (`apps/api/app/workers/celery_app.py`) + `README.md` list 4.
+> - **Example URLs** `novacrm(-api).up.railway.app` are wrong; real hosts are `app.riphere.com` /
+>   `api.riphere.com` (origin `api-production-c080.up.railway.app`).
+> - Supabase project: `ilfibxflnelssllgszex`.
+
 > **Audit date:** 2026-05-25  
 > **Auditor:** automated production-readiness pass
 
