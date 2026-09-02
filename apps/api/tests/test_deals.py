@@ -1934,21 +1934,25 @@ async def test_revenue_cohort_wrong_workspace_returns_403(app_client):
 @pytest.mark.asyncio
 async def test_velocity_trends_returns_monthly_cycle_times(app_client):
     """Closed deals are bucketed by close month with avg cycle-time computed."""
+    import datetime as _dt
+
     fastapi_app, mock_db, workspace_id = app_client
 
-    # Two closed_won deals closing in the same month, each with known cycle time
-    now = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+    # Use the real current time so the close month is always within the window.
+    now = _dt.datetime.now(_dt.timezone.utc)
+    # Place both deals closing at the start of the current month (always in window).
+    close_ts = now.replace(day=1, hour=12, minute=0, second=0, microsecond=0)
     d1 = _fake_deal(
         workspace_id,
         stage="closed_won",
-        created_at=now - timedelta(days=40),
-        stage_changed_at=now - timedelta(days=10),  # cycle = 30d
+        created_at=close_ts - timedelta(days=30),
+        stage_changed_at=close_ts,  # cycle = 30d
     )
     d2 = _fake_deal(
         workspace_id,
         stage="closed_lost",
-        created_at=now - timedelta(days=60),
-        stage_changed_at=now - timedelta(days=5),   # cycle = 55d
+        created_at=close_ts - timedelta(days=55),
+        stage_changed_at=close_ts,  # cycle = 55d
     )
 
     mock_db.execute = AsyncMock(return_value=_make_scalars_result([d1, d2]))
@@ -1963,8 +1967,8 @@ async def test_velocity_trends_returns_monthly_cycle_times(app_client):
     rows = resp.json()
     assert len(rows) == 3
 
-    # Both deals close in June 2026 (10d and 5d before 2026-07-04)
-    close_month = "2026-06"
+    # Both deals close in the current calendar month.
+    close_month = close_ts.strftime("%Y-%m")
     cur = next((r for r in rows if r["month"] == close_month), None)
     assert cur is not None
     assert cur["deal_count"] == 2

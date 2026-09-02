@@ -4443,6 +4443,170 @@ export const apiClient = {
     )
   },
 
+  getAccountPlan: (
+    workspaceId: string,
+    contactId: string,
+    token: string,
+  ): Promise<{
+    account_status: 'strategic' | 'growth' | 'maintain' | 'at_risk'
+    plan_horizon: 30 | 90 | 180
+    objectives: { objective: string; metric: string; timeline: string }[]
+    key_risks: string[]
+    recommended_actions: string[]
+    contact_id: string
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      type AccountPlanStub = {
+        account_status: 'strategic' | 'growth' | 'maintain' | 'at_risk'
+        plan_horizon: 30 | 90 | 180
+        objectives: { objective: string; metric: string; timeline: string }[]
+        key_risks: string[]
+        recommended_actions: string[]
+      }
+      const stubs: Record<string, AccountPlanStub> = {
+        'c-001': {
+          account_status: 'strategic',
+          plan_horizon: 180,
+          objectives: [
+            { objective: 'Close enterprise expansion deal', metric: '$120K ARR uplift', timeline: '60 days' },
+            { objective: 'Onboard executive sponsor', metric: 'Monthly EBR established', timeline: '30 days' },
+            { objective: 'Drive product adoption to 80%', metric: '8/10 modules active', timeline: '90 days' },
+          ],
+          key_risks: [
+            'Competitor Salesforce is actively pitching a renewal alternative',
+            'Budget freeze risk if Q3 targets are missed',
+            'Single point of contact — champion dependency',
+          ],
+          recommended_actions: [
+            'Present ROI case study to CFO before end of quarter',
+            'Schedule executive alignment call with their VP of Sales',
+            'Provide dedicated CSM support to accelerate adoption',
+          ],
+        },
+        'c-002': {
+          account_status: 'at_risk',
+          plan_horizon: 30,
+          objectives: [
+            { objective: 'Prevent churn', metric: 'Re-engagement call held', timeline: '7 days' },
+            { objective: 'Resolve open blockers', metric: '0 outstanding support tickets', timeline: '14 days' },
+            { objective: 'Rebuild executive relationship', metric: 'QBR scheduled', timeline: '30 days' },
+          ],
+          key_risks: [
+            'No contact in 45+ days — relationship going dark',
+            'Open support ticket unresolved for 3 weeks',
+            'HubSpot actively pitching competitive alternative',
+          ],
+          recommended_actions: [
+            'Initiate an urgent outreach call to surface blockers',
+            'Escalate open support issue to VP of Customer Success',
+            'Offer tailored success plan with 30-day milestones',
+          ],
+        },
+        'c-003': {
+          account_status: 'growth',
+          plan_horizon: 90,
+          objectives: [
+            { objective: 'Expand deal to additional team', metric: '2 new user groups active', timeline: '45 days' },
+            { objective: 'Increase average deal size', metric: '$40K+ on next renewal', timeline: '60 days' },
+            { objective: 'Secure referral or case study', metric: '1 testimonial published', timeline: '90 days' },
+          ],
+          key_risks: [
+            'Limited engagement from decision makers above contact',
+            'Competing priorities may delay renewal conversations',
+            'Low task completion rate suggests internal alignment gaps',
+          ],
+          recommended_actions: [
+            'Run a discovery session to identify expansion use cases',
+            'Send personalised ROI report ahead of renewal window',
+            'Invite contact to customer advisory board',
+          ],
+        },
+      }
+      const stub = stubs[contactId] ?? stubs['c-003']
+      return Promise.resolve({ ...stub, contact_id: contactId, generated_at: new Date().toISOString() })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/${contactId}/account-plan`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getPipelineNarrative: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    narrative: string
+    key_themes: string[]
+    momentum: 'accelerating' | 'steady' | 'stalling'
+    total_value: number
+    deal_count: number
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        narrative:
+          "The pipeline is showing steady momentum with $285K in open opportunities across four active stages. " +
+          "The proposal and negotiation stages hold the highest-value deals, suggesting the team is close to meaningful closes.\n\n" +
+          "Two deals are currently flagged at risk with health scores below 50, representing approximately 18% of total pipeline value. " +
+          "Focused intervention on these opportunities in the next two weeks could prevent significant revenue leakage.\n\n" +
+          "Recent closed-won activity has been modest, but the current pipeline composition — with several high-probability deals in advanced stages — " +
+          "points to a strong close-of-quarter if existing momentum is maintained.",
+        key_themes: [
+          'Strong proposal-stage deals are primed for close with focused attention.',
+          'At-risk opportunities need immediate re-engagement to protect pipeline value.',
+          'Sustain discovery pipeline now to avoid a post-quarter dry spell.',
+        ],
+        momentum: 'steady',
+        total_value: 285000,
+        deal_count: 12,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/pipeline-narrative`,
+      { method: 'POST' },
+      token,
+    )
+  },
+
+  getContactHealthSummary: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    summary: string
+    health_rating: 'strong' | 'healthy' | 'needs_attention' | 'critical'
+    going_dark_count: number
+    at_risk_count: number
+    total_contacts: number
+    top_actions: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        summary:
+          "The workspace has 47 contacts with strong overall engagement. " +
+          "8 contacts are at risk of going dark — proactive outreach this week can prevent churn.",
+        health_rating: 'healthy',
+        going_dark_count: 4,
+        at_risk_count: 8,
+        total_contacts: 47,
+        top_actions: [
+          'Re-engage the 4 contacts who have gone dark with a personalised check-in.',
+          'Schedule follow-up calls for the 8 at-risk contacts before end of week.',
+          'Add activity notes after your next three meetings to build engagement history.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/health-summary`,
+      { method: 'GET' },
+      token,
+    )
+  },
+
   // ─── Lead-Gen / Outbound Engagement ─────────────────────────────────────────
   // Funnel engine: leads → segments → campaigns → sequences → outreach approval.
   // Every method carries a demo branch. Import/score jobs return {status,job_id}

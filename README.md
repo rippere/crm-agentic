@@ -100,6 +100,8 @@ cd apps/web && npm run dev
 ### Agents
 - Nightly pipeline optimizer (Celery Beat, 02:00 UTC)
 - Nightly deal health scorer (Celery Beat, 02:15 UTC)
+- Daily HITL stale-deal follow-up check (Celery Beat, 09:00 UTC)
+- PM agent health check (Celery Beat, every 30 min)
 
 ## Environment Variables
 

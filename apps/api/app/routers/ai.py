@@ -6890,3 +6890,438 @@ async def contact_sentiment_trend(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# POST /workspaces/{workspace_id}/ai/contacts/{contact_id}/account-plan
+# ---------------------------------------------------------------------------
+
+_ACCOUNT_PLAN_SYSTEM = """\
+You are a strategic account planning expert. Given a CRM contact's profile, deal data, and recent communication context, \
+create a concise account plan. Reply ONLY with a valid JSON object: \
+{"account_status": "<strategic|growth|maintain|at_risk>", "plan_horizon": <30|90|180>, \
+"objectives": [{"objective": "...", "metric": "...", "timeline": "..."}, ...], \
+"key_risks": ["...", "...", "..."], "recommended_actions": ["...", "...", "..."]} \
+Provide exactly 3 objectives, 3 key_risks, and 3 recommended_actions. No markdown. Pure JSON only."""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/account-plan")
+@limiter.limit("5/minute")
+async def contact_account_plan(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_row = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_row.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    deals_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability)
+        .where(Deal.contact_id == contact_id, Deal.workspace_id == workspace_id)
+    )
+    deals = deals_result.all()
+    total_pipeline = sum((d.value or 0) for d in deals if d.stage not in ("closed_won", "closed_lost"))
+    closed_won_value = sum((d.value or 0) for d in deals if d.stage == "closed_won")
+
+    tasks_count_result = await db.execute(
+        select(func.count(Task.id)).where(
+            Task.contact_id == contact_id,
+            Task.workspace_id == workspace_id,
+            Task.status.in_(("open", "in_progress")),
+        )
+    )
+    open_task_count = tasks_count_result.scalar() or 0
+
+    msgs_result = await db.execute(
+        select(Message.subject, Message.body_plain, Message.received_at)
+        .where(Message.contact_id == contact_id, Message.workspace_id == workspace_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    messages = msgs_result.all()
+
+    deal_lines = []
+    for d in deals:
+        deal_lines.append(
+            f"  - {d.title or 'Untitled'} | stage={d.stage} | value=${d.value or 0:,.0f} | win_prob={d.ml_win_probability or 0}%"
+        )
+    msg_lines = []
+    for m in messages:
+        snippet = (m.body_plain or "")[:200].strip()
+        ts = m.received_at.isoformat() if m.received_at else "unknown"
+        msg_lines.append(f"  - [{ts}] {m.subject or '(no subject)'}: {snippet}")
+
+    context = "\n".join([
+        f"Contact: {contact.name} ({contact.email or 'N/A'}) | status={contact.status or 'unknown'}",
+        f"Company: {contact.company or 'N/A'}",
+        f"ML Lead Score: {contact.ml_score or 0}",
+        f"Open pipeline: ${total_pipeline:,.0f} | Closed won: ${closed_won_value:,.0f}",
+        f"Open tasks: {open_task_count}",
+        "Deals:" if deal_lines else "Deals: none",
+        *deal_lines,
+        "Recent messages:" if msg_lines else "Recent messages: none",
+        *msg_lines,
+    ])
+
+    _defaults = {
+        "account_status": "maintain",
+        "plan_horizon": 90,
+        "objectives": [
+            {"objective": "Deepen product adoption", "metric": "50% feature utilisation", "timeline": "30 days"},
+            {"objective": "Expand deal value", "metric": "$10K upsell", "timeline": "60 days"},
+            {"objective": "Strengthen executive relationship", "metric": "Monthly EBR", "timeline": "90 days"},
+        ],
+        "key_risks": [
+            "Low engagement may signal churn risk",
+            "Competing vendors actively targeting the account",
+            "No open tasks means follow-up gaps",
+        ],
+        "recommended_actions": [
+            "Schedule a quarterly business review",
+            "Share a product roadmap update aligned to their goals",
+            "Identify a new champion within the account",
+        ],
+    }
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_ACCOUNT_PLAN_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    valid_statuses = {"strategic", "growth", "maintain", "at_risk"}
+    account_status = data.get("account_status", _defaults["account_status"])
+    if account_status not in valid_statuses:
+        account_status = _defaults["account_status"]
+
+    valid_horizons = {30, 90, 180}
+    try:
+        plan_horizon = int(data.get("plan_horizon", _defaults["plan_horizon"]))
+    except (TypeError, ValueError):
+        plan_horizon = _defaults["plan_horizon"]
+    if plan_horizon not in valid_horizons:
+        plan_horizon = _defaults["plan_horizon"]
+
+    raw_objectives = data.get("objectives", [])
+    if not isinstance(raw_objectives, list):
+        raw_objectives = []
+    objectives = []
+    for obj in raw_objectives[:3]:
+        if isinstance(obj, dict):
+            objectives.append({
+                "objective": str(obj.get("objective", "")),
+                "metric": str(obj.get("metric", "")),
+                "timeline": str(obj.get("timeline", "")),
+            })
+    while len(objectives) < 3:
+        objectives.append(_defaults["objectives"][len(objectives)])
+
+    key_risks = [str(r) for r in (data.get("key_risks") or [])[:3]]
+    while len(key_risks) < 3:
+        key_risks.append(_defaults["key_risks"][len(key_risks)])
+
+    recommended_actions = [str(a) for a in (data.get("recommended_actions") or [])[:3]]
+    while len(recommended_actions) < 3:
+        recommended_actions.append(_defaults["recommended_actions"][len(recommended_actions)])
+
+    return {
+        "account_status": account_status,
+        "plan_horizon": plan_horizon,
+        "objectives": objectives,
+        "key_risks": key_risks,
+        "recommended_actions": recommended_actions,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/pipeline-narrative
+# ---------------------------------------------------------------------------
+
+_PIPELINE_NARRATIVE_SYSTEM = """\
+You are a strategic sales intelligence analyst. Given a snapshot of an open pipeline, write a concise strategic narrative \
+that tells the story of the pipeline's health, momentum, and key opportunities or risks. \
+Reply ONLY with a valid JSON object: \
+{"narrative": "<2-3 paragraph strategic story separated by \\n\\n>", \
+"key_themes": ["...", "...", "..."], "momentum": "<accelerating|steady|stalling>"} \
+Exactly 3 key_themes. No markdown. Pure JSON only."""
+
+
+@router.post("/workspaces/{workspace_id}/ai/pipeline-narrative")
+@limiter.limit("5/minute")
+async def pipeline_narrative(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    open_deals_result = await db.execute(
+        select(Deal.title, Deal.value, Deal.stage, Deal.health_score, Deal.ml_win_probability, Deal.company)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .order_by(Deal.value.desc().nullslast())
+    )
+    open_deals = open_deals_result.all()
+
+    total_value = sum(d.value or 0 for d in open_deals)
+    deal_count = len(open_deals)
+    at_risk_count = sum(1 for d in open_deals if (d.health_score or 0) < 50)
+    avg_win_prob = round(sum(d.ml_win_probability or 0 for d in open_deals) / max(deal_count, 1), 1)
+
+    stage_counts: dict[str, int] = {}
+    for d in open_deals:
+        stage_counts[d.stage] = stage_counts.get(d.stage, 0) + 1
+
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+    closed_won_result = await db.execute(
+        select(func.count(Deal.id), func.sum(Deal.value))
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= thirty_days_ago,
+        )
+    )
+    closed_row = closed_won_result.one()
+    closed_won_count = closed_row[0] or 0
+    closed_won_value = float(closed_row[1] or 0)
+
+    top_5 = open_deals[:5]
+    top_deals_lines = [
+        f"- {d.title or 'Untitled'} ({d.company or 'N/A'}): stage={d.stage}, value=${d.value or 0:,.0f}, "
+        f"health={d.health_score or 0}, win_prob={d.ml_win_probability or 0}%"
+        for d in top_5
+    ]
+    stage_lines = [f"  {stage}: {count} deals" for stage, count in sorted(stage_counts.items())]
+
+    context = "\n".join([
+        f"Open pipeline: {deal_count} deals, total value: ${total_value:,.0f}",
+        f"At-risk deals (health<50): {at_risk_count}",
+        f"Avg win probability: {avg_win_prob}%",
+        "Stage breakdown:\n" + ("\n".join(stage_lines) if stage_lines else "  (empty)"),
+        "Top 5 deals by value:\n" + ("\n".join(top_deals_lines) if top_deals_lines else "  (none)"),
+        f"Closed-won last 30 days: {closed_won_count} deals, value: ${closed_won_value:,.0f}",
+        "\nWrite a 2-3 paragraph strategic narrative, 3 key themes, and assess momentum.",
+    ])
+
+    _default_narrative = (
+        "The pipeline presents a balanced mix of early-stage opportunities and advanced deals nearing close. "
+        "With total open value providing a solid foundation, the team is well-positioned to close meaningful revenue this quarter.\n\n"
+        "Several deals show strong health scores and high win probabilities, signalling that focused effort now can accelerate closures. "
+        "However, a portion of the pipeline remains at risk and requires active intervention to prevent value leakage.\n\n"
+        "Overall momentum is steady. Prioritising high-value deals with clear next actions while reviving at-risk opportunities "
+        "will be key to hitting targets."
+    )
+    _default_themes = [
+        "Accelerate high-probability deals with clear next-action plans.",
+        "Shore up at-risk opportunities before they exit the funnel.",
+        "Sustain early-stage pipeline to secure future quarters.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            system=_PIPELINE_NARRATIVE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    narrative = data.get("narrative", _default_narrative)
+    if not isinstance(narrative, str) or not narrative.strip():
+        narrative = _default_narrative
+
+    raw_themes = data.get("key_themes", [])
+    key_themes = [str(t) for t in (raw_themes if isinstance(raw_themes, list) else [])[:3]]
+    while len(key_themes) < 3:
+        key_themes.append(_default_themes[len(key_themes) % 3])
+
+    valid_momentums = {"accelerating", "steady", "stalling"}
+    momentum = data.get("momentum", "steady")
+    if momentum not in valid_momentums:
+        momentum = "steady"
+
+    return {
+        "narrative": narrative,
+        "key_themes": key_themes,
+        "momentum": momentum,
+        "total_value": total_value,
+        "deal_count": deal_count,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+
+# ---------------------------------------------------------------------------
+# Phase 16b: AI workspace contact health summary
+# ---------------------------------------------------------------------------
+_CONTACT_HEALTH_SYSTEM = """\
+You are a CRM analyst specialising in contact engagement. Given workspace contact statistics, \
+write a concise 2-sentence health summary and suggest the 3 highest-priority actions. \
+Reply ONLY with a valid JSON object: \
+{"summary": "<2-sentence narrative>", \
+"health_rating": "<strong|healthy|needs_attention|critical>", \
+"top_actions": ["...", "...", "..."]} \
+Exactly 3 top_actions. No markdown. Pure JSON only."""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/health-summary")
+@limiter.limit("5/minute")
+async def contact_health_summary(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+    fourteen_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=14)
+
+    # All contacts in workspace
+    contacts_result = await db.execute(
+        select(Contact.id).where(Contact.workspace_id == workspace_id)
+    )
+    contact_ids = [row[0] for row in contacts_result.all()]
+    total_contacts = len(contact_ids)
+
+    if total_contacts == 0:
+        return {
+            "summary": "No contacts exist in this workspace yet. Start adding contacts to track engagement health.",
+            "health_rating": "needs_attention",
+            "going_dark_count": 0,
+            "at_risk_count": 0,
+            "total_contacts": 0,
+            "top_actions": [
+                "Import your existing contacts to get started.",
+                "Connect your email to begin tracking message activity.",
+                "Add notes after meetings to build engagement history.",
+            ],
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    # Last-touch per contact: max(messages.received_at, notes.created_at)
+    msg_touch_result = await db.execute(
+        select(Message.contact_id, func.max(Message.received_at).label("last_msg"))
+        .where(Message.contact_id.in_(contact_ids))
+        .group_by(Message.contact_id)
+    )
+    msg_touches = {row[0]: row[1] for row in msg_touch_result.all()}
+
+    note_touch_result = await db.execute(
+        select(ContactNote.contact_id, func.max(ContactNote.created_at).label("last_note"))
+        .where(ContactNote.contact_id.in_(contact_ids))
+        .group_by(ContactNote.contact_id)
+    )
+    note_touches = {row[0]: row[1] for row in note_touch_result.all()}
+
+    going_dark_count = 0
+    at_risk_count = 0
+    touched_count = 0
+    for cid in contact_ids:
+        mt = msg_touches.get(cid)
+        nt = note_touches.get(cid)
+        candidates = [t for t in (mt, nt) if t is not None]
+        if not candidates:
+            going_dark_count += 1
+            continue
+        last = max(candidates)
+        if hasattr(last, "tzinfo") and last.tzinfo is not None:
+            last = last.replace(tzinfo=None)
+        touched_count += 1
+        if last < thirty_days_ago:
+            going_dark_count += 1
+        elif last < fourteen_days_ago:
+            at_risk_count += 1
+
+    engaged_count = total_contacts - going_dark_count - at_risk_count
+    going_dark_pct = round(going_dark_count / total_contacts * 100) if total_contacts else 0
+
+    context = (
+        f"Workspace contact health snapshot:\n"
+        f"- Total contacts: {total_contacts}\n"
+        f"- Engaged (touched within 14 days): {engaged_count}\n"
+        f"- At-risk (no touch in 14-30 days): {at_risk_count}\n"
+        f"- Going dark (no touch in 30+ days or never touched): {going_dark_count} ({going_dark_pct}%)\n"
+    )
+
+    _default_summary = (
+        f"The workspace has {total_contacts} contacts with {going_dark_count} going dark "
+        f"and {at_risk_count} at risk. Prioritise re-engagement to protect relationship quality."
+    )
+    _default_actions = [
+        f"Re-engage the {going_dark_count} contacts who have gone dark.",
+        f"Schedule follow-ups for the {at_risk_count} at-risk contacts.",
+        "Review and update contact records to improve data quality.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_CONTACT_HEALTH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    summary = data.get("summary", _default_summary)
+    if not isinstance(summary, str) or not summary.strip():
+        summary = _default_summary
+
+    valid_ratings = {"strong", "healthy", "needs_attention", "critical"}
+    health_rating = data.get("health_rating", "needs_attention")
+    if health_rating not in valid_ratings:
+        health_rating = "needs_attention"
+
+    raw_actions = data.get("top_actions", [])
+    top_actions = [str(a) for a in (raw_actions if isinstance(raw_actions, list) else [])[:3]]
+    while len(top_actions) < 3:
+        top_actions.append(_default_actions[len(top_actions) % 3])
+
+    return {
+        "summary": summary,
+        "health_rating": health_rating,
+        "going_dark_count": going_dark_count,
+        "at_risk_count": at_risk_count,
+        "total_contacts": total_contacts,
+        "top_actions": top_actions,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

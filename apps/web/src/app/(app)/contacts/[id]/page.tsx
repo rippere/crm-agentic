@@ -482,9 +482,16 @@ export default function ContactDetailPage() {
 
   type AiSentimentPoint = { received_at: string; score: number };
   type AiSentimentData = { messages_analyzed: number; avg_sentiment: number; trend_direction: 'improving' | 'stable' | 'declining'; recent_sentiment: number; oldest_sentiment: number; sentiment_points: AiSentimentPoint[]; recommendations: string[]; contact_id: string; generated_at: string };
+  type AccountPlanObjective = { objective: string; metric: string; timeline: string };
+  type AccountPlanData = { account_status: 'strategic' | 'growth' | 'maintain' | 'at_risk'; plan_horizon: 30 | 90 | 180; objectives: AccountPlanObjective[]; key_risks: string[]; recommended_actions: string[]; contact_id: string; generated_at: string };
   const [aiSentiment, setAiSentiment] = useState<AiSentimentData | null>(null);
   const [aiSentimentLoading, setAiSentimentLoading] = useState(false);
   const [aiSentimentGenerating, setAiSentimentGenerating] = useState(false);
+
+  const [accountPlan, setAccountPlan] = useState<AccountPlanData | null>(null);
+  const [accountPlanLoading, setAccountPlanLoading] = useState(false);
+  const [accountPlanGenerating, setAccountPlanGenerating] = useState(false);
+  const [accountPlanExpanded, setAccountPlanExpanded] = useState<number | null>(null);
 
   const [outreachSeq, setOutreachSeq] = useState<OutreachStep[] | null>(null);
   const [outreachSeqLoading, setOutreachSeqLoading] = useState(false);
@@ -752,6 +759,13 @@ export default function ContactDetailPage() {
       .then((data) => setAiSentiment(data ?? null))
       .catch(() => setAiSentiment(null))
       .finally(() => setAiSentimentLoading(false));
+
+    setAccountPlanLoading(true);
+    apiClient
+      .getAccountPlan(workspaceId, contactId, token)
+      .then((data) => setAccountPlan(data ?? null))
+      .catch(() => setAccountPlan(null))
+      .finally(() => setAccountPlanLoading(false));
   }, [token, workspaceId, contactId]);
 
   useEffect(() => {
@@ -2456,6 +2470,134 @@ export default function ContactDetailPage() {
                 >
                   {aiSentimentGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <TrendingUp className="h-3 w-3" />}
                   {aiSentimentGenerating ? "Analyzing…" : "Analyze Sentiment"}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Account Plan (AI) */}
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Route className="h-4 w-4 text-indigo-400" />
+              <p className="text-xs font-semibold text-zinc-300">Account Plan</p>
+              {accountPlan && (() => {
+                const statusCfg: Record<string, { label: string; cls: string }> = {
+                  strategic: { label: 'Strategic', cls: 'bg-indigo-500/20 text-indigo-400' },
+                  growth: { label: 'Growth', cls: 'bg-emerald-500/20 text-emerald-400' },
+                  maintain: { label: 'Maintain', cls: 'bg-zinc-700/50 text-zinc-400' },
+                  at_risk: { label: 'At Risk', cls: 'bg-rose-500/20 text-rose-400' },
+                };
+                const cfg = statusCfg[accountPlan.account_status] ?? { label: accountPlan.account_status, cls: 'bg-zinc-700/50 text-zinc-400' };
+                return (
+                  <span className={cn("text-[10px] font-semibold px-2 py-0.5 rounded-full", cfg.cls)}>{cfg.label}</span>
+                );
+              })()}
+              <button
+                onClick={async () => {
+                  if (!token || !workspaceId || accountPlanGenerating) return;
+                  setAccountPlanGenerating(true);
+                  try {
+                    const data = await apiClient.getAccountPlan(workspaceId, contactId, token);
+                    setAccountPlan(data ?? null);
+                  } catch { /* ignore */ } finally { setAccountPlanGenerating(false); }
+                }}
+                disabled={accountPlanGenerating || !accountPlan}
+                className={cn("ml-auto text-zinc-500 hover:text-zinc-300 transition", accountPlan ? "" : "hidden")}
+                title="Regenerate"
+              >
+                <RefreshCw className={cn("h-3 w-3", accountPlanGenerating && "animate-spin")} />
+              </button>
+            </div>
+            {accountPlanLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => <div key={i} className="h-3 rounded bg-zinc-800 animate-pulse" />)}
+              </div>
+            ) : accountPlan ? (
+              <div className="space-y-3">
+                {/* Plan horizon chip */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-indigo-500/30 bg-indigo-500/10 text-indigo-400">
+                    {accountPlan.plan_horizon}-day plan
+                  </span>
+                  <span className="text-[10px] text-zinc-600 ml-auto">Generated {formatRelative(accountPlan.generated_at)}</span>
+                </div>
+                {/* Objectives accordion */}
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1.5">Objectives</p>
+                  <div className="space-y-1">
+                    {accountPlan.objectives.map((obj, i) => (
+                      <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+                        <button
+                          className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800/30 transition-colors"
+                          onClick={() => setAccountPlanExpanded(accountPlanExpanded === i ? null : i)}
+                        >
+                          <span className="flex-shrink-0 w-4 h-4 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-[9px] font-mono text-indigo-400">
+                            {i + 1}
+                          </span>
+                          <p className="flex-1 text-[11px] text-zinc-300 leading-snug">{obj.objective}</p>
+                          <ChevronRight className={cn("h-3 w-3 text-zinc-600 transition-transform flex-shrink-0", accountPlanExpanded === i && "rotate-90")} />
+                        </button>
+                        {accountPlanExpanded === i && (
+                          <div className="px-3 pb-2 space-y-1 border-t border-zinc-800">
+                            <div className="flex items-center gap-2 pt-1.5">
+                              <span className="text-[10px] text-zinc-600">Metric:</span>
+                              <span className="text-[10px] text-zinc-400 italic">{obj.metric}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-zinc-600">Timeline:</span>
+                              <span className="text-[10px] font-mono text-zinc-400">{obj.timeline}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {/* Key risks */}
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1.5">Key Risks</p>
+                  <div className="space-y-1">
+                    {accountPlan.key_risks.map((risk, i) => (
+                      <div key={i} className="flex gap-2">
+                        <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />
+                        <p className="text-[11px] text-zinc-400 leading-snug">{risk}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {/* Recommended actions */}
+                <div>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1.5">Actions</p>
+                  <div className="space-y-1">
+                    {accountPlan.recommended_actions.map((action, i) => (
+                      <div key={i} className="flex gap-2 items-start">
+                        <span className="flex-shrink-0 mt-0.5 w-4 h-4 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-[9px] font-mono text-indigo-400">
+                          {i + 1}
+                        </span>
+                        <p className="text-[11px] text-zinc-400 leading-snug">{action}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="py-2 flex flex-col gap-2">
+                <p className="text-xs text-zinc-600 italic">No account plan generated yet.</p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={async () => {
+                    if (!token || !workspaceId || accountPlanGenerating) return;
+                    setAccountPlanGenerating(true);
+                    try {
+                      const data = await apiClient.getAccountPlan(workspaceId, contactId, token);
+                      setAccountPlan(data ?? null);
+                    } catch { /* ignore */ } finally { setAccountPlanGenerating(false); }
+                  }}
+                  disabled={accountPlanGenerating}
+                >
+                  {accountPlanGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Route className="h-3 w-3" />}
+                  {accountPlanGenerating ? "Planning…" : "Generate Account Plan"}
                 </Button>
               </div>
             )}

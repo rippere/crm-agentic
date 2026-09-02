@@ -19,7 +19,7 @@ import {
   TrendingDown, Minus, ChevronRight, Filter, UserPlus, Mail,
   Copy, X, Loader2, Zap, ClipboardList, CheckSquare, Square, Tag,
   ExternalLink, Download, Upload, CheckCircle2, AlertCircle, Trash2,
-  GitMerge, Phone, MessageCircle, RefreshCw,
+  GitMerge, Phone, MessageCircle, RefreshCw, Users,
 } from "lucide-react";
 import type { Contact, ContactStatus, LeadScore } from "@/lib/types";
 
@@ -1059,6 +1059,11 @@ export default function ContactsPage() {
   const [reengagementDismissed, setReengagementDismissed] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  type ContactHealthData = { summary: string; health_rating: 'strong' | 'healthy' | 'needs_attention' | 'critical'; going_dark_count: number; at_risk_count: number; total_contacts: number; top_actions: string[]; generated_at: string };
+  const [contactHealth, setContactHealth] = useState<ContactHealthData | null>(null);
+  const [contactHealthLoading, setContactHealthLoading] = useState(false);
+  const [contactHealthOpen, setContactHealthOpen] = useState(true);
+
   const { contacts, createContact } = useContacts();
 
   useEffect(() => {
@@ -1100,6 +1105,38 @@ export default function ContactsPage() {
       .then((contacts) => setGoingDarkContacts(contacts))
       .catch(() => {});
   }, [token, workspaceId]);
+
+  useEffect(() => {
+    setContactHealthLoading(true);
+    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+    if (isDemoMode) {
+      apiClient.getContactHealthSummary("demo-workspace-1", "demo-token")
+        .then((data) => setContactHealth(data))
+        .catch(() => setContactHealth(null))
+        .finally(() => setContactHealthLoading(false));
+      return;
+    }
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) { setContactHealthLoading(false); return; }
+      const wsId = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+      if (!wsId) { setContactHealthLoading(false); return; }
+      apiClient.getContactHealthSummary(wsId, session.access_token)
+        .then((data) => setContactHealth(data))
+        .catch(() => setContactHealth(null))
+        .finally(() => setContactHealthLoading(false));
+    });
+  }, []);
+
+  async function handleRegenerateContactHealth() {
+    if (!workspaceId || !token || contactHealthLoading) return;
+    setContactHealthLoading(true);
+    try {
+      const data = await apiClient.getContactHealthSummary(workspaceId, token);
+      setContactHealth(data);
+    } catch { /* silently fail */ }
+    finally { setContactHealthLoading(false); }
+  }
 
   async function handleGenerateReengagementPlan() {
     if (!workspaceId || !token || reengagementLoading) return;
@@ -1305,6 +1342,100 @@ export default function ContactsPage() {
           );
         })}
       </div>
+
+      {/* Contact Health Summary */}
+      <Card className="p-4 space-y-0">
+        <button
+          className="flex w-full items-center justify-between cursor-pointer"
+          onClick={() => setContactHealthOpen((v) => !v)}
+        >
+          <div className="flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-500/10">
+              <Users className="h-4 w-4 text-teal-400" aria-hidden="true" />
+            </div>
+            <span className="text-sm font-semibold text-zinc-100">Contact Health Summary</span>
+            {contactHealth && !contactHealthLoading && (
+              <span className={cn(
+                "ml-1 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold font-mono uppercase tracking-wide",
+                contactHealth.health_rating === "strong" && "bg-emerald-500/15 text-emerald-300",
+                contactHealth.health_rating === "healthy" && "bg-sky-500/15 text-sky-300",
+                contactHealth.health_rating === "needs_attention" && "bg-amber-500/15 text-amber-300",
+                contactHealth.health_rating === "critical" && "bg-rose-500/15 text-rose-300",
+              )}>
+                {contactHealth.health_rating.replace("_", " ")}
+              </span>
+            )}
+          </div>
+          <ChevronRight className={cn("h-4 w-4 text-zinc-500 transition-transform duration-200", contactHealthOpen && "rotate-90")} />
+        </button>
+
+        {contactHealthOpen && (
+          <div className="mt-4 space-y-4">
+            {contactHealthLoading ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-4 rounded bg-zinc-800 w-full" />
+                <div className="h-4 rounded bg-zinc-800 w-5/6" />
+                <div className="h-3 rounded bg-zinc-800 w-3/4 mt-3" />
+                <div className="h-3 rounded bg-zinc-800 w-2/3" />
+              </div>
+            ) : contactHealth ? (
+              <>
+                <p className="text-sm text-zinc-300 leading-relaxed">{contactHealth.summary}</p>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-center">
+                    <p className="text-lg font-bold font-mono text-zinc-100">{contactHealth.total_contacts}</p>
+                    <p className="text-[10px] text-zinc-500">Total</p>
+                  </div>
+                  <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-center">
+                    <p className="text-lg font-bold font-mono text-amber-300">{contactHealth.at_risk_count}</p>
+                    <p className="text-[10px] text-amber-500/70">At Risk</p>
+                  </div>
+                  <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-center">
+                    <p className="text-lg font-bold font-mono text-rose-300">{contactHealth.going_dark_count}</p>
+                    <p className="text-[10px] text-rose-500/70">Going Dark</p>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-mono uppercase tracking-widest text-zinc-600">Top Actions</p>
+                  {contactHealth.top_actions.map((action, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                      <p className="text-xs text-zinc-400 leading-relaxed">{action}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-between pt-1 border-t border-zinc-800">
+                  <p className="text-[10px] text-zinc-600 font-mono">
+                    {new Date(contactHealth.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                  <button
+                    onClick={handleRegenerateContactHealth}
+                    disabled={contactHealthLoading}
+                    className="flex items-center gap-1.5 text-[11px] text-teal-400 hover:text-teal-300 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={cn("h-3 w-3", contactHealthLoading && "animate-spin")} />
+                    Regenerate
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="py-6 text-center space-y-2">
+                <Users className="mx-auto h-8 w-8 text-zinc-700" />
+                <p className="text-sm text-zinc-500">No health summary available</p>
+                <button
+                  onClick={handleRegenerateContactHealth}
+                  className="text-xs text-teal-400 hover:text-teal-300 transition-colors cursor-pointer"
+                >
+                  Generate Summary
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
 
       {/* Deduplication suggestions */}
       {suggestedMerges.length > 0 && !suggestionsDismissed && (
