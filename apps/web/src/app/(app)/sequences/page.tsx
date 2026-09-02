@@ -6,6 +6,7 @@ import Header from "@/components/layout/Header";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import { cn, sequenceStatusConfig } from "@/lib/utils";
+import { isDemoMode } from "@/lib/demo-mode";
 import { useSequences } from "@/hooks/useSequences";
 import {
   Workflow, Plus, X, ChevronRight, Mail, MessageSquare, Shuffle,
@@ -158,7 +159,9 @@ export default function SequencesPage() {
       description: f.description || undefined,
       channel: f.channel,
     });
-    await refetch();
+    // In demo mode refetch re-seeds the static fixture list, discarding the
+    // optimistic insert (the source of truth there); reconcile only in live mode.
+    if (!isDemoMode) await refetch();
     if (created && typeof created === "object" && "id" in created) return String((created as { id: string }).id);
     return null;
   }, [createSequence, refetch]);

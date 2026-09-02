@@ -122,6 +122,14 @@ async def _run_import(
     mapping = mapping or {}
 
     raw_rows = _load_rows(rows_ref)
+    # Best-effort cleanup: the router stages up to 10k rows of lead PII (name/
+    # email/phone/company) to a temp JSON file; delete it now that it's loaded
+    # so PII doesn't accumulate on local disk across imports.
+    if isinstance(rows_ref, str) and "lead-import" in rows_ref and os.path.isfile(rows_ref):
+        try:
+            os.remove(rows_ref)
+        except OSError as exc:  # noqa: BLE001
+            logger.warning("import_leads staging_cleanup_failed path=%s exc=%s", rows_ref, exc)
     truncated = len(raw_rows) > MAX_ROWS
     raw_rows = raw_rows[:MAX_ROWS]
 

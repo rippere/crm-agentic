@@ -164,8 +164,13 @@ export default function LeadDetailPage() {
       if (session) {
         setToken(session.access_token);
         setWorkspaceId((session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id) ?? null);
+      } else {
+        // No session (expired / unauthenticated): stop the initial spinner so the
+        // page surfaces its empty state instead of hanging forever. loadLead only
+        // runs once token+workspaceId are set, so it would otherwise never fire.
+        setLoading(false);
       }
-    });
+    }).catch(() => setLoading(false));
   }, []);
 
   const loadLead = useCallback(() => {
