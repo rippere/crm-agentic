@@ -4094,3 +4094,77 @@ async def test_pipeline_narrative_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.post(f"/workspaces/{wrong_id}/ai/pipeline-narrative")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16b tests: contact health summary
+# ---------------------------------------------------------------------------
+
+def _contact_row(cid=None):
+    row = MagicMock()
+    row.__getitem__ = lambda self, i: cid or uuid.uuid4()
+    return row
+
+
+@pytest.mark.asyncio
+async def test_contact_health_summary_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    contact_id = uuid.uuid4()
+
+    # contacts query — returns a list of (id,) tuples
+    contacts_result = MagicMock()
+    contacts_result.all.return_value = [(contact_id,)]
+
+    # msg_touch query — one contact, touched 5 days ago
+    import datetime as _dt
+    five_days_ago = _dt.datetime.utcnow() - _dt.timedelta(days=5)
+    msg_touch_result = MagicMock()
+    msg_touch_result.all.return_value = [(contact_id, five_days_ago)]
+
+    # note_touch query — no notes
+    note_touch_result = MagicMock()
+    note_touch_result.all.return_value = []
+
+    mock_db.execute = AsyncMock(side_effect=[
+        contacts_result,
+        msg_touch_result,
+        note_touch_result,
+    ])
+
+    import json as _json
+    response_json = _json.dumps({
+        "summary": "Contacts are well-engaged. Keep up the momentum.",
+        "health_rating": "strong",
+        "top_actions": ["Send a check-in to top accounts.", "Add new contacts from recent meetings.", "Log notes after calls."],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/health-summary")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["summary"], str) and len(body["summary"]) > 0
+    assert body["health_rating"] in ("strong", "healthy", "needs_attention", "critical")
+    assert isinstance(body["going_dark_count"], int)
+    assert isinstance(body["at_risk_count"], int)
+    assert isinstance(body["total_contacts"], int)
+    assert isinstance(body["top_actions"], list) and len(body["top_actions"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_health_summary_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/health-summary")
+    assert resp.status_code == 403
