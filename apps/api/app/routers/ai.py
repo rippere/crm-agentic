@@ -6890,3 +6890,164 @@ async def contact_sentiment_trend(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# POST /workspaces/{workspace_id}/ai/contacts/{contact_id}/account-plan
+# ---------------------------------------------------------------------------
+
+_ACCOUNT_PLAN_SYSTEM = """\
+You are a strategic account planning expert. Given a CRM contact's profile, deal data, and recent communication context, \
+create a concise account plan. Reply ONLY with a valid JSON object: \
+{"account_status": "<strategic|growth|maintain|at_risk>", "plan_horizon": <30|90|180>, \
+"objectives": [{"objective": "...", "metric": "...", "timeline": "..."}, ...], \
+"key_risks": ["...", "...", "..."], "recommended_actions": ["...", "...", "..."]} \
+Provide exactly 3 objectives, 3 key_risks, and 3 recommended_actions. No markdown. Pure JSON only."""
+
+
+@router.post("/workspaces/{workspace_id}/ai/contacts/{contact_id}/account-plan")
+@limiter.limit("5/minute")
+async def contact_account_plan(
+    request: Request,
+    workspace_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contact_row = await db.execute(
+        select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
+    )
+    contact = contact_row.scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    deals_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability)
+        .where(Deal.contact_id == contact_id, Deal.workspace_id == workspace_id)
+    )
+    deals = deals_result.all()
+    total_pipeline = sum((d.value or 0) for d in deals if d.stage not in ("closed_won", "closed_lost"))
+    closed_won_value = sum((d.value or 0) for d in deals if d.stage == "closed_won")
+
+    tasks_count_result = await db.execute(
+        select(func.count(Task.id)).where(
+            Task.contact_id == contact_id,
+            Task.workspace_id == workspace_id,
+            Task.status.in_(("open", "in_progress")),
+        )
+    )
+    open_task_count = tasks_count_result.scalar() or 0
+
+    msgs_result = await db.execute(
+        select(Message.subject, Message.body_plain, Message.received_at)
+        .where(Message.contact_id == contact_id, Message.workspace_id == workspace_id)
+        .order_by(Message.received_at.desc())
+        .limit(3)
+    )
+    messages = msgs_result.all()
+
+    deal_lines = []
+    for d in deals:
+        deal_lines.append(
+            f"  - {d.title or 'Untitled'} | stage={d.stage} | value=${d.value or 0:,.0f} | win_prob={d.ml_win_probability or 0}%"
+        )
+    msg_lines = []
+    for m in messages:
+        snippet = (m.body_plain or "")[:200].strip()
+        ts = m.received_at.isoformat() if m.received_at else "unknown"
+        msg_lines.append(f"  - [{ts}] {m.subject or '(no subject)'}: {snippet}")
+
+    context = "\n".join([
+        f"Contact: {contact.name} ({contact.email or 'N/A'}) | status={contact.status or 'unknown'}",
+        f"Company: {contact.company or 'N/A'}",
+        f"ML Lead Score: {contact.ml_score or 0}",
+        f"Open pipeline: ${total_pipeline:,.0f} | Closed won: ${closed_won_value:,.0f}",
+        f"Open tasks: {open_task_count}",
+        "Deals:" if deal_lines else "Deals: none",
+        *deal_lines,
+        "Recent messages:" if msg_lines else "Recent messages: none",
+        *msg_lines,
+    ])
+
+    _defaults = {
+        "account_status": "maintain",
+        "plan_horizon": 90,
+        "objectives": [
+            {"objective": "Deepen product adoption", "metric": "50% feature utilisation", "timeline": "30 days"},
+            {"objective": "Expand deal value", "metric": "$10K upsell", "timeline": "60 days"},
+            {"objective": "Strengthen executive relationship", "metric": "Monthly EBR", "timeline": "90 days"},
+        ],
+        "key_risks": [
+            "Low engagement may signal churn risk",
+            "Competing vendors actively targeting the account",
+            "No open tasks means follow-up gaps",
+        ],
+        "recommended_actions": [
+            "Schedule a quarterly business review",
+            "Share a product roadmap update aligned to their goals",
+            "Identify a new champion within the account",
+        ],
+    }
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_ACCOUNT_PLAN_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    valid_statuses = {"strategic", "growth", "maintain", "at_risk"}
+    account_status = data.get("account_status", _defaults["account_status"])
+    if account_status not in valid_statuses:
+        account_status = _defaults["account_status"]
+
+    valid_horizons = {30, 90, 180}
+    try:
+        plan_horizon = int(data.get("plan_horizon", _defaults["plan_horizon"]))
+    except (TypeError, ValueError):
+        plan_horizon = _defaults["plan_horizon"]
+    if plan_horizon not in valid_horizons:
+        plan_horizon = _defaults["plan_horizon"]
+
+    raw_objectives = data.get("objectives", [])
+    if not isinstance(raw_objectives, list):
+        raw_objectives = []
+    objectives = []
+    for obj in raw_objectives[:3]:
+        if isinstance(obj, dict):
+            objectives.append({
+                "objective": str(obj.get("objective", "")),
+                "metric": str(obj.get("metric", "")),
+                "timeline": str(obj.get("timeline", "")),
+            })
+    while len(objectives) < 3:
+        objectives.append(_defaults["objectives"][len(objectives)])
+
+    key_risks = [str(r) for r in (data.get("key_risks") or [])[:3]]
+    while len(key_risks) < 3:
+        key_risks.append(_defaults["key_risks"][len(key_risks)])
+
+    recommended_actions = [str(a) for a in (data.get("recommended_actions") or [])[:3]]
+    while len(recommended_actions) < 3:
+        recommended_actions.append(_defaults["recommended_actions"][len(recommended_actions)])
+
+    return {
+        "account_status": account_status,
+        "plan_horizon": plan_horizon,
+        "objectives": objectives,
+        "key_risks": key_risks,
+        "recommended_actions": recommended_actions,
+        "contact_id": str(contact_id),
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
