@@ -7179,3 +7179,149 @@ async def pipeline_narrative(
         "deal_count": deal_count,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+
+# ---------------------------------------------------------------------------
+# Phase 16b: AI workspace contact health summary
+# ---------------------------------------------------------------------------
+_CONTACT_HEALTH_SYSTEM = """\
+You are a CRM analyst specialising in contact engagement. Given workspace contact statistics, \
+write a concise 2-sentence health summary and suggest the 3 highest-priority actions. \
+Reply ONLY with a valid JSON object: \
+{"summary": "<2-sentence narrative>", \
+"health_rating": "<strong|healthy|needs_attention|critical>", \
+"top_actions": ["...", "...", "..."]} \
+Exactly 3 top_actions. No markdown. Pure JSON only."""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/health-summary")
+@limiter.limit("5/minute")
+async def contact_health_summary(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+    fourteen_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=14)
+
+    # All contacts in workspace
+    contacts_result = await db.execute(
+        select(Contact.id).where(Contact.workspace_id == workspace_id)
+    )
+    contact_ids = [row[0] for row in contacts_result.all()]
+    total_contacts = len(contact_ids)
+
+    if total_contacts == 0:
+        return {
+            "summary": "No contacts exist in this workspace yet. Start adding contacts to track engagement health.",
+            "health_rating": "needs_attention",
+            "going_dark_count": 0,
+            "at_risk_count": 0,
+            "total_contacts": 0,
+            "top_actions": [
+                "Import your existing contacts to get started.",
+                "Connect your email to begin tracking message activity.",
+                "Add notes after meetings to build engagement history.",
+            ],
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    # Last-touch per contact: max(messages.received_at, notes.created_at)
+    msg_touch_result = await db.execute(
+        select(Message.contact_id, func.max(Message.received_at).label("last_msg"))
+        .where(Message.contact_id.in_(contact_ids))
+        .group_by(Message.contact_id)
+    )
+    msg_touches = {row[0]: row[1] for row in msg_touch_result.all()}
+
+    note_touch_result = await db.execute(
+        select(ContactNote.contact_id, func.max(ContactNote.created_at).label("last_note"))
+        .where(ContactNote.contact_id.in_(contact_ids))
+        .group_by(ContactNote.contact_id)
+    )
+    note_touches = {row[0]: row[1] for row in note_touch_result.all()}
+
+    going_dark_count = 0
+    at_risk_count = 0
+    touched_count = 0
+    for cid in contact_ids:
+        mt = msg_touches.get(cid)
+        nt = note_touches.get(cid)
+        candidates = [t for t in (mt, nt) if t is not None]
+        if not candidates:
+            going_dark_count += 1
+            continue
+        last = max(candidates)
+        if hasattr(last, "tzinfo") and last.tzinfo is not None:
+            last = last.replace(tzinfo=None)
+        touched_count += 1
+        if last < thirty_days_ago:
+            going_dark_count += 1
+        elif last < fourteen_days_ago:
+            at_risk_count += 1
+
+    engaged_count = total_contacts - going_dark_count - at_risk_count
+    going_dark_pct = round(going_dark_count / total_contacts * 100) if total_contacts else 0
+
+    context = (
+        f"Workspace contact health snapshot:\n"
+        f"- Total contacts: {total_contacts}\n"
+        f"- Engaged (touched within 14 days): {engaged_count}\n"
+        f"- At-risk (no touch in 14-30 days): {at_risk_count}\n"
+        f"- Going dark (no touch in 30+ days or never touched): {going_dark_count} ({going_dark_pct}%)\n"
+    )
+
+    _default_summary = (
+        f"The workspace has {total_contacts} contacts with {going_dark_count} going dark "
+        f"and {at_risk_count} at risk. Prioritise re-engagement to protect relationship quality."
+    )
+    _default_actions = [
+        f"Re-engage the {going_dark_count} contacts who have gone dark.",
+        f"Schedule follow-ups for the {at_risk_count} at-risk contacts.",
+        "Review and update contact records to improve data quality.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_CONTACT_HEALTH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    summary = data.get("summary", _default_summary)
+    if not isinstance(summary, str) or not summary.strip():
+        summary = _default_summary
+
+    valid_ratings = {"strong", "healthy", "needs_attention", "critical"}
+    health_rating = data.get("health_rating", "needs_attention")
+    if health_rating not in valid_ratings:
+        health_rating = "needs_attention"
+
+    raw_actions = data.get("top_actions", [])
+    top_actions = [str(a) for a in (raw_actions if isinstance(raw_actions, list) else [])[:3]]
+    while len(top_actions) < 3:
+        top_actions.append(_default_actions[len(top_actions) % 3])
+
+    return {
+        "summary": summary,
+        "health_rating": health_rating,
+        "going_dark_count": going_dark_count,
+        "at_risk_count": at_risk_count,
+        "total_contacts": total_contacts,
+        "top_actions": top_actions,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

@@ -4560,4 +4560,40 @@ export const apiClient = {
       token,
     )
   },
+
+  getContactHealthSummary: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    summary: string
+    health_rating: 'strong' | 'healthy' | 'needs_attention' | 'critical'
+    going_dark_count: number
+    at_risk_count: number
+    total_contacts: number
+    top_actions: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        summary:
+          "The workspace has 47 contacts with strong overall engagement. " +
+          "8 contacts are at risk of going dark — proactive outreach this week can prevent churn.",
+        health_rating: 'healthy',
+        going_dark_count: 4,
+        at_risk_count: 8,
+        total_contacts: 47,
+        top_actions: [
+          'Re-engage the 4 contacts who have gone dark with a personalised check-in.',
+          'Schedule follow-up calls for the 8 at-risk contacts before end of week.',
+          'Add activity notes after your next three meetings to build engagement history.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/contacts/health-summary`,
+      { method: 'GET' },
+      token,
+    )
+  },
 }
