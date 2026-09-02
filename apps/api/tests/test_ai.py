@@ -4018,3 +4018,79 @@ async def test_contact_account_plan_wrong_workspace_returns_403(app_client):
             f"/workspaces/{wrong_id}/ai/contacts/{contact_id}/account-plan"
         )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{wid}/ai/pipeline-narrative
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_narrative_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _all_rows(rows):
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    def _one_row(row):
+        r = MagicMock()
+        r.one.return_value = row
+        return r
+
+    fake_deal = _fake_deal_row(stage="proposal", value=50000.0)
+    fake_deal.company = "Acme"
+    fake_deal.health_score = 72
+    fake_deal.ml_win_probability = 68
+
+    response_json = _json.dumps({
+        "narrative": (
+            "The pipeline shows steady momentum with a strong proposal-stage deal.\n\n"
+            "At-risk deals need urgent attention to protect pipeline value.\n\n"
+            "Overall the team is on track to hit quarterly targets."
+        ),
+        "key_themes": [
+            "Focus resources on proposal-stage deals.",
+            "Revive at-risk opportunities immediately.",
+            "Build early-stage pipeline for Q4.",
+        ],
+        "momentum": "steady",
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _all_rows([fake_deal]),
+        _one_row((1, 25000.0)),
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.post(f"/workspaces/{workspace_id}/ai/pipeline-narrative")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["narrative"], str) and len(body["narrative"]) > 0
+    assert isinstance(body["key_themes"], list) and len(body["key_themes"]) == 3
+    assert all(isinstance(t, str) for t in body["key_themes"])
+    assert body["momentum"] in ("accelerating", "steady", "stalling")
+    assert isinstance(body["total_value"], (int, float))
+    assert isinstance(body["deal_count"], int)
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_pipeline_narrative_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.post(f"/workspaces/{wrong_id}/ai/pipeline-narrative")
+    assert resp.status_code == 403

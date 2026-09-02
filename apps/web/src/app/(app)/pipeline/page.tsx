@@ -9,7 +9,7 @@ import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import { cn, formatCurrency, stageConfig, dealStageOrder, SIGNAL } from "@/lib/utils";
 import Link from "next/link";
-import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight, Search, Sparkles, GitCompare, Trophy } from "lucide-react";
+import { Brain, TrendingUp, Plus, BarChart3, DollarSign, Heart, AlertTriangle, X, ChevronRight, Zap, ExternalLink, Download, Loader2, CheckSquare, Square, Trash2, ArrowRight, Search, Sparkles, GitCompare, Trophy, FileText, RefreshCw } from "lucide-react";
 import type { Deal, DealStage } from "@/lib/types";
 
 interface PipelineSuggestion {
@@ -417,6 +417,12 @@ export default function PipelinePage() {
   const [pulseGenerating, setPulseGenerating] = useState(false);
   const [pulseOpen, setPulseOpen] = useState(true);
 
+  type NarrativeData = { narrative: string; key_themes: string[]; momentum: 'accelerating' | 'steady' | 'stalling'; total_value: number; deal_count: number; generated_at: string };
+  const [narrativeData, setNarrativeData] = useState<NarrativeData | null>(null);
+  const [narrativeLoading, setNarrativeLoading] = useState(false);
+  const [narrativeGenerating, setNarrativeGenerating] = useState(false);
+  const [narrativeOpen, setNarrativeOpen] = useState(true);
+
   type ComparePoint = { dimension: string; verdict: string };
   type CompareResult = { winner_id: string; rationale: string; comparison_points: ComparePoint[]; deal_ids: string[]; generated_at: string };
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
@@ -488,6 +494,47 @@ export default function PipelinePage() {
         .finally(() => setPulseLoading(false));
     });
   }, []);
+
+  useEffect(() => {
+    setNarrativeLoading(true);
+    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+    if (isDemoMode) {
+      apiClient.getPipelineNarrative("demo-workspace-1", "demo-token")
+        .then((data) => setNarrativeData(data))
+        .catch(() => setNarrativeData(null))
+        .finally(() => setNarrativeLoading(false));
+      return;
+    }
+    const supabase = createBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) { setNarrativeLoading(false); return; }
+      const workspaceId: string | undefined = (session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id);
+      if (!workspaceId) { setNarrativeLoading(false); return; }
+      apiClient.getPipelineNarrative(workspaceId, session.access_token)
+        .then((data) => setNarrativeData(data))
+        .catch(() => setNarrativeData(null))
+        .finally(() => setNarrativeLoading(false));
+    });
+  }, []);
+
+  const handleRegenerateNarrative = async () => {
+    if (narrativeGenerating) return;
+    setNarrativeGenerating(true);
+    try {
+      const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      let workspaceId = "demo-workspace-1";
+      let token = "demo-token";
+      if (!isDemoMode) {
+        const supabase = createBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        workspaceId = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id ?? "";
+        token = session.access_token;
+      }
+      const data = await apiClient.getPipelineNarrative(workspaceId, token);
+      setNarrativeData(data);
+    } catch { /* ignore */ } finally { setNarrativeGenerating(false); }
+  };
 
   const handleRegeneratePulse = async () => {
     if (pulseGenerating) return;
@@ -907,6 +954,88 @@ export default function PipelinePage() {
               </div>
             )}
           </div>
+        )}
+      </Card>
+
+      {/* Pipeline Narrative */}
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-violet-400" />
+          <p className="text-sm font-semibold text-zinc-200">Pipeline Narrative</p>
+          {narrativeData && (
+            <span className={cn(
+              "text-[10px] font-semibold px-2 py-0.5 rounded-full border ml-1",
+              narrativeData.momentum === 'accelerating' && "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
+              narrativeData.momentum === 'steady' && "bg-indigo-500/15 text-indigo-400 border-indigo-500/25",
+              narrativeData.momentum === 'stalling' && "bg-rose-500/15 text-rose-400 border-rose-500/25",
+            )}>
+              {narrativeData.momentum}
+            </span>
+          )}
+          <div className="flex items-center gap-1 ml-auto">
+            {narrativeData && (
+              <button
+                onClick={handleRegenerateNarrative}
+                disabled={narrativeGenerating}
+                className="text-zinc-500 hover:text-zinc-300 transition"
+                title="Regenerate"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", narrativeGenerating && "animate-spin")} />
+              </button>
+            )}
+            <button
+              onClick={() => setNarrativeOpen((o) => !o)}
+              className="text-zinc-500 hover:text-zinc-300 transition"
+              title={narrativeOpen ? "Collapse" : "Expand"}
+            >
+              <ChevronRight className={cn("h-4 w-4 transition-transform", narrativeOpen && "rotate-90")} />
+            </button>
+          </div>
+        </div>
+        {narrativeOpen && (
+          narrativeLoading ? (
+            <div className="space-y-2 animate-pulse">
+              <div className="h-3 bg-zinc-800 rounded w-full" />
+              <div className="h-3 bg-zinc-800 rounded w-5/6" />
+              <div className="h-3 bg-zinc-800 rounded w-4/6" />
+              <div className="h-3 bg-zinc-800 rounded w-full mt-3" />
+              <div className="h-3 bg-zinc-800 rounded w-3/4" />
+            </div>
+          ) : narrativeData ? (
+            <div className="space-y-3">
+              {/* Narrative paragraphs */}
+              <div className="space-y-2">
+                {narrativeData.narrative.split('\n\n').map((para, i) => (
+                  <p key={i} className="text-sm text-zinc-300 leading-relaxed">{para}</p>
+                ))}
+              </div>
+              {/* Key themes */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-mono text-zinc-600 uppercase tracking-widest">Key Themes</p>
+                {narrativeData.key_themes.map((theme, i) => (
+                  <div key={i} className="flex gap-2 items-start">
+                    <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                    <p className="text-xs text-zinc-400 leading-snug">{theme}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-zinc-600">
+                {narrativeData.deal_count} deals · {formatCurrency(narrativeData.total_value)} pipeline · Generated {new Date(narrativeData.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </p>
+            </div>
+          ) : (
+            <div className="py-2 flex flex-col gap-2">
+              <p className="text-xs text-zinc-600 italic">No narrative generated yet.</p>
+              <button
+                onClick={handleRegenerateNarrative}
+                disabled={narrativeGenerating}
+                className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 transition disabled:opacity-50"
+              >
+                {narrativeGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileText className="h-3 w-3" />}
+                {narrativeGenerating ? "Generating…" : "Generate Narrative"}
+              </button>
+            </div>
+          )
         )}
       </Card>
 
