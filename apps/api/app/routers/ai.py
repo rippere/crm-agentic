@@ -7051,3 +7051,131 @@ async def contact_account_plan(
         "contact_id": str(contact_id),
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /workspaces/{workspace_id}/ai/pipeline-narrative
+# ---------------------------------------------------------------------------
+
+_PIPELINE_NARRATIVE_SYSTEM = """\
+You are a strategic sales intelligence analyst. Given a snapshot of an open pipeline, write a concise strategic narrative \
+that tells the story of the pipeline's health, momentum, and key opportunities or risks. \
+Reply ONLY with a valid JSON object: \
+{"narrative": "<2-3 paragraph strategic story separated by \\n\\n>", \
+"key_themes": ["...", "...", "..."], "momentum": "<accelerating|steady|stalling>"} \
+Exactly 3 key_themes. No markdown. Pure JSON only."""
+
+
+@router.post("/workspaces/{workspace_id}/ai/pipeline-narrative")
+@limiter.limit("5/minute")
+async def pipeline_narrative(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    open_deals_result = await db.execute(
+        select(Deal.title, Deal.value, Deal.stage, Deal.health_score, Deal.ml_win_probability, Deal.company)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .order_by(Deal.value.desc().nullslast())
+    )
+    open_deals = open_deals_result.all()
+
+    total_value = sum(d.value or 0 for d in open_deals)
+    deal_count = len(open_deals)
+    at_risk_count = sum(1 for d in open_deals if (d.health_score or 0) < 50)
+    avg_win_prob = round(sum(d.ml_win_probability or 0 for d in open_deals) / max(deal_count, 1), 1)
+
+    stage_counts: dict[str, int] = {}
+    for d in open_deals:
+        stage_counts[d.stage] = stage_counts.get(d.stage, 0) + 1
+
+    thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+    closed_won_result = await db.execute(
+        select(func.count(Deal.id), func.sum(Deal.value))
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= thirty_days_ago,
+        )
+    )
+    closed_row = closed_won_result.one()
+    closed_won_count = closed_row[0] or 0
+    closed_won_value = float(closed_row[1] or 0)
+
+    top_5 = open_deals[:5]
+    top_deals_lines = [
+        f"- {d.title or 'Untitled'} ({d.company or 'N/A'}): stage={d.stage}, value=${d.value or 0:,.0f}, "
+        f"health={d.health_score or 0}, win_prob={d.ml_win_probability or 0}%"
+        for d in top_5
+    ]
+    stage_lines = [f"  {stage}: {count} deals" for stage, count in sorted(stage_counts.items())]
+
+    context = "\n".join([
+        f"Open pipeline: {deal_count} deals, total value: ${total_value:,.0f}",
+        f"At-risk deals (health<50): {at_risk_count}",
+        f"Avg win probability: {avg_win_prob}%",
+        "Stage breakdown:\n" + ("\n".join(stage_lines) if stage_lines else "  (empty)"),
+        "Top 5 deals by value:\n" + ("\n".join(top_deals_lines) if top_deals_lines else "  (none)"),
+        f"Closed-won last 30 days: {closed_won_count} deals, value: ${closed_won_value:,.0f}",
+        "\nWrite a 2-3 paragraph strategic narrative, 3 key themes, and assess momentum.",
+    ])
+
+    _default_narrative = (
+        "The pipeline presents a balanced mix of early-stage opportunities and advanced deals nearing close. "
+        "With total open value providing a solid foundation, the team is well-positioned to close meaningful revenue this quarter.\n\n"
+        "Several deals show strong health scores and high win probabilities, signalling that focused effort now can accelerate closures. "
+        "However, a portion of the pipeline remains at risk and requires active intervention to prevent value leakage.\n\n"
+        "Overall momentum is steady. Prioritising high-value deals with clear next actions while reviving at-risk opportunities "
+        "will be key to hitting targets."
+    )
+    _default_themes = [
+        "Accelerate high-probability deals with clear next-action plans.",
+        "Shore up at-risk opportunities before they exit the funnel.",
+        "Sustain early-stage pipeline to secure future quarters.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            system=_PIPELINE_NARRATIVE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    narrative = data.get("narrative", _default_narrative)
+    if not isinstance(narrative, str) or not narrative.strip():
+        narrative = _default_narrative
+
+    raw_themes = data.get("key_themes", [])
+    key_themes = [str(t) for t in (raw_themes if isinstance(raw_themes, list) else [])[:3]]
+    while len(key_themes) < 3:
+        key_themes.append(_default_themes[len(key_themes) % 3])
+
+    valid_momentums = {"accelerating", "steady", "stalling"}
+    momentum = data.get("momentum", "steady")
+    if momentum not in valid_momentums:
+        momentum = "steady"
+
+    return {
+        "narrative": narrative,
+        "key_themes": key_themes,
+        "momentum": momentum,
+        "total_value": total_value,
+        "deal_count": deal_count,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

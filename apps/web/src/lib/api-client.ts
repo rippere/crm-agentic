@@ -4522,4 +4522,42 @@ export const apiClient = {
       token,
     )
   },
+
+  getPipelineNarrative: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    narrative: string
+    key_themes: string[]
+    momentum: 'accelerating' | 'steady' | 'stalling'
+    total_value: number
+    deal_count: number
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        narrative:
+          "The pipeline is showing steady momentum with $285K in open opportunities across four active stages. " +
+          "The proposal and negotiation stages hold the highest-value deals, suggesting the team is close to meaningful closes.\n\n" +
+          "Two deals are currently flagged at risk with health scores below 50, representing approximately 18% of total pipeline value. " +
+          "Focused intervention on these opportunities in the next two weeks could prevent significant revenue leakage.\n\n" +
+          "Recent closed-won activity has been modest, but the current pipeline composition — with several high-probability deals in advanced stages — " +
+          "points to a strong close-of-quarter if existing momentum is maintained.",
+        key_themes: [
+          'Strong proposal-stage deals are primed for close with focused attention.',
+          'At-risk opportunities need immediate re-engagement to protect pipeline value.',
+          'Sustain discovery pipeline now to avoid a post-quarter dry spell.',
+        ],
+        momentum: 'steady',
+        total_value: 285000,
+        deal_count: 12,
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/ai/pipeline-narrative`,
+      { method: 'POST' },
+      token,
+    )
+  },
 }
