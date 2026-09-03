@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -20,6 +20,7 @@ from app.models.user import User
 from app.models.activity_event import ActivityEvent
 from app.models.contact import Contact
 from app.models.lead import Lead
+from app.models.task import Task
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,11 @@ async def create_activity(
             detail=f"disposition must be one of {list(DISPOSITIONS)}",
         )
 
+    # Assign the id up front so a generated follow-up Task can carry a marker that
+    # points back at this activity (external_id="disp:<activity_id>").
+    event_id = uuid.uuid4()
     event = ActivityEvent(
+        id=event_id,
         workspace_id=workspace_id,
         type=body.type,
         agent_name=body.agent_name,
@@ -125,35 +130,58 @@ async def create_activity(
     )
     db.add(event)
 
-    # 'dead' disposition side effects, atomic with the event insert (single commit):
-    # churn the contact and mark ONLY its single most-recent lead lost. Older leads and
-    # zero-lead contacts are left alone (contact churn only). Per locked decision
-    # 2026-09-02. (last_contacted_at is intentionally NOT stamped here — that column is
-    # B4's to add.)
-    if body.disposition == "dead" and body.contact_id is not None:
-        contact = (
-            await db.execute(
-                select(Contact).where(
-                    Contact.workspace_id == workspace_id,
-                    Contact.id == body.contact_id,
+    # Disposition side effects, atomic with the event insert (single commit).
+    # Per Zach (2026-09-02) + locked decision:
+    #   follow_up_1mo -> a follow-up Task due +30d
+    #   follow_up_6mo -> a follow-up Task due +180d
+    #   dead          -> churn the contact + lose ONLY its single most-recent lead
+    #                    (ORDER BY created_at DESC LIMIT 1); older leads and zero-lead
+    #                    contacts are left alone.
+    # Generated follow-up Tasks are marked external_id="disp:<activity_id>" so B4's
+    # cadence sweep / standup can tell them from a manual task and dedup.
+    # (last_contacted_at is intentionally NOT stamped here — B4 owns that column.)
+    if body.disposition in DISPOSITIONS:
+        contact = None
+        if body.contact_id is not None:
+            contact = (
+                await db.execute(
+                    select(Contact).where(
+                        Contact.workspace_id == workspace_id,
+                        Contact.id == body.contact_id,
+                    )
+                )
+            ).scalar_one_or_none()
+
+        if body.disposition == "dead":
+            if contact is not None:
+                contact.status = "churned"
+            if body.contact_id is not None:
+                lead = (
+                    await db.execute(
+                        select(Lead)
+                        .where(
+                            Lead.workspace_id == workspace_id,
+                            Lead.contact_id == body.contact_id,
+                        )
+                        .order_by(desc(Lead.created_at))
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if lead is not None:
+                    lead.stage = "lost"
+        else:  # follow_up_1mo | follow_up_6mo
+            days = 30 if body.disposition == "follow_up_1mo" else 180
+            contact_label = contact.name if contact is not None and contact.name else "contact"
+            db.add(
+                Task(
+                    workspace_id=workspace_id,
+                    contact_id=body.contact_id,
+                    title=f"Follow up: {contact_label}",
+                    due_date=date.today() + timedelta(days=days),
+                    status="open",
+                    external_id=f"disp:{event_id}",
                 )
             )
-        ).scalar_one_or_none()
-        if contact is not None:
-            contact.status = "churned"
-        lead = (
-            await db.execute(
-                select(Lead)
-                .where(
-                    Lead.workspace_id == workspace_id,
-                    Lead.contact_id == body.contact_id,
-                )
-                .order_by(desc(Lead.created_at))
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if lead is not None:
-            lead.stage = "lost"
 
     await db.commit()
     await db.refresh(event)

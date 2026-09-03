@@ -9,12 +9,13 @@ its single most-recent lead).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import AsyncClient, ASGITransport
 
+from app.models.task import Task
 from tests.conftest import _make_scalar_result
 
 
@@ -106,6 +107,64 @@ async def test_note_without_disposition_still_201(app_client):
     assert resp.status_code == 201
     assert resp.json()["disposition"] is None
     mock_db.execute.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# follow-up side effects — a marked Task with the right due date
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_follow_up_1mo_creates_task_due_30d(app_client):
+    """follow_up_1mo -> a follow-up Task due +30d, marked disp:<activity_id>,
+    linked to the contact and titled with the contact name."""
+    app, mock_db, workspace_id = app_client
+    contact = MagicMock(); contact.name = "Riverside Events"
+    mock_db.execute = AsyncMock(side_effect=[_make_scalar_result(contact)])  # name lookup
+    mock_db.refresh.side_effect = fake_refresh
+    contact_id = str(uuid.uuid4())
+
+    resp = await _post(
+        app, workspace_id,
+        {"type": "call", "agent_name": "User", "description": "Great chat",
+         "disposition": "follow_up_1mo", "contact_id": contact_id},
+    )
+
+    assert resp.status_code == 201
+    activity_id = resp.json()["id"]
+    tasks = [c.args[0] for c in mock_db.add.call_args_list if isinstance(c.args[0], Task)]
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.due_date == date.today() + timedelta(days=30)
+    assert task.external_id == f"disp:{activity_id}"  # marker points back at the activity
+    assert str(task.contact_id) == contact_id
+    assert task.title == "Follow up: Riverside Events"
+    assert task.status == "open"
+    mock_db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_follow_up_6mo_creates_task_due_180d(app_client):
+    """follow_up_6mo -> a follow-up Task due +180d, same marker convention."""
+    app, mock_db, workspace_id = app_client
+    contact = MagicMock(); contact.name = "Lakeside Hall"
+    mock_db.execute = AsyncMock(side_effect=[_make_scalar_result(contact)])
+    mock_db.refresh.side_effect = fake_refresh
+    contact_id = str(uuid.uuid4())
+
+    resp = await _post(
+        app, workspace_id,
+        {"type": "call", "agent_name": "User", "description": "Revisit next season",
+         "disposition": "follow_up_6mo", "contact_id": contact_id},
+    )
+
+    assert resp.status_code == 201
+    activity_id = resp.json()["id"]
+    tasks = [c.args[0] for c in mock_db.add.call_args_list if isinstance(c.args[0], Task)]
+    assert len(tasks) == 1
+    assert tasks[0].due_date == date.today() + timedelta(days=180)
+    assert tasks[0].external_id == f"disp:{activity_id}"
+    assert str(tasks[0].contact_id) == contact_id
 
 
 # ---------------------------------------------------------------------------
