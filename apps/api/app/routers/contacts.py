@@ -1188,7 +1188,7 @@ async def contact_timeline(
             "title": e.type or "Activity",
             "body": e.description or "",
             "ts": e.created_at.isoformat() if e.created_at else None,
-            "meta": {"agent_name": e.agent_name, "severity": e.severity},
+            "meta": {"agent_name": e.agent_name, "severity": e.severity, "disposition": e.disposition},
         })
 
     # Sort newest first

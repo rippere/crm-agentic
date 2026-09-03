@@ -18,10 +18,17 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.activity_event import ActivityEvent
+from app.models.contact import Contact
+from app.models.lead import Lead
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Valid next-step dispositions for a call-type activity. Plain tuple + a 422 guard,
+# mirroring LEAD_STAGES in leads.py — the DB CHECK on activity_events.disposition is
+# the backstop.
+DISPOSITIONS = ("follow_up_1mo", "follow_up_6mo", "dead")
 
 # Tear the SSE stream down after this many *consecutive* poll failures so a wedged
 # DB session (e.g. asyncpg connection killed by PgBouncer) can't loop forever
@@ -37,6 +44,7 @@ class ActivityEventResponse(BaseModel):
     description: str | None
     meta: str | None
     severity: str
+    disposition: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -48,6 +56,12 @@ class ActivityEventCreate(BaseModel):
     description: str
     meta: str = ""
     severity: str = "info"
+    # Required when type == "call"; validated against DISPOSITIONS in create_activity.
+    disposition: str | None = None
+    # Contact this activity is logged against — used to drive the 'dead' side effects
+    # (churn the contact, lose its most-recent lead). Not persisted on the event row
+    # itself (contact linkage stays in `meta` as "contact:<id>").
+    contact_id: uuid.UUID | None = None
 
 
 @router.get("/workspaces/{workspace_id}/activity", response_model=list[ActivityEventResponse])
@@ -87,6 +101,19 @@ async def create_activity(
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
+    # A call MUST close with a next-step disposition; any activity that carries one
+    # must carry a valid one (mirrors the LEAD_STAGES 422 pattern in leads.py).
+    if body.type == "call" and body.disposition is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"disposition is required for call activities and must be one of {list(DISPOSITIONS)}",
+        )
+    if body.disposition is not None and body.disposition not in DISPOSITIONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"disposition must be one of {list(DISPOSITIONS)}",
+        )
+
     event = ActivityEvent(
         workspace_id=workspace_id,
         type=body.type,
@@ -94,8 +121,40 @@ async def create_activity(
         description=body.description,
         meta=body.meta,
         severity=body.severity,
+        disposition=body.disposition,
     )
     db.add(event)
+
+    # 'dead' disposition side effects, atomic with the event insert (single commit):
+    # churn the contact and mark ONLY its single most-recent lead lost. Older leads and
+    # zero-lead contacts are left alone (contact churn only). Per locked decision
+    # 2026-09-02. (last_contacted_at is intentionally NOT stamped here — that column is
+    # B4's to add.)
+    if body.disposition == "dead" and body.contact_id is not None:
+        contact = (
+            await db.execute(
+                select(Contact).where(
+                    Contact.workspace_id == workspace_id,
+                    Contact.id == body.contact_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if contact is not None:
+            contact.status = "churned"
+        lead = (
+            await db.execute(
+                select(Lead)
+                .where(
+                    Lead.workspace_id == workspace_id,
+                    Lead.contact_id == body.contact_id,
+                )
+                .order_by(desc(Lead.created_at))
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if lead is not None:
+            lead.stage = "lost"
+
     await db.commit()
     await db.refresh(event)
     return ActivityEventResponse.model_validate(event)
