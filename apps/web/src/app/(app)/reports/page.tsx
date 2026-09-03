@@ -561,7 +561,7 @@ export default function ReportsPage() {
                         contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
                         labelStyle={{ color: "#a1a1aa" }}
                         itemStyle={{ color: "#f4f4f5" }}
-                        formatter={(value: number) => `${value}%`}
+                        formatter={(value) => `${value}%`}
                       />
                       <Bar dataKey="predicted_avg" name="Predicted" fill="#38bdf8" radius={[2, 2, 0, 0]} />
                       <Bar dataKey="actual_win_rate" name="Actual" fill="#818cf8" radius={[2, 2, 0, 0]} />
