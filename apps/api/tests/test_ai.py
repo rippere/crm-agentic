@@ -4168,3 +4168,56 @@ async def test_contact_health_summary_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/health-summary")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_win_probability_calibration_returns_structured_response(app_client):
+    import json as _json
+    fastapi_app, mock_db, workspace_id = app_client
+
+    deals_rows = [
+        (80, "closed_won"),
+        (75, "closed_won"),
+        (20, "closed_lost"),
+        (30, "closed_lost"),
+        (60, "qualified"),
+        (50, "proposal"),
+    ]
+    result_mock = MagicMock()
+    result_mock.all.return_value = deals_rows
+    mock_db.execute = AsyncMock(return_value=result_mock)
+
+    response_json = _json.dumps({
+        "narrative": "The model shows a slight optimistic bias. Review high-probability deals for accuracy.",
+        "recommendations": ["Audit 80–89% bucket.", "Retrain on Q3 data.", "Calibrate stage weights."],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/win-probability-calibration")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["calibration_buckets"], list) and len(body["calibration_buckets"]) == 10
+    assert isinstance(body["calibration_score"], int) and 0 <= body["calibration_score"] <= 100
+    assert body["overall_bias"] in ("optimistic", "pessimistic", "well_calibrated")
+    assert isinstance(body["narrative"], str) and len(body["narrative"]) > 0
+    assert isinstance(body["recommendations"], list) and len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_win_probability_calibration_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-probability-calibration")
+
+    assert resp.status_code == 403

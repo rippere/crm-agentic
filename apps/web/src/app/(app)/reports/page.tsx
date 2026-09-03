@@ -123,6 +123,16 @@ export default function ReportsPage() {
   } | null>(null);
   const [competitiveLandscapeLoading, setCompetitiveLandscapeLoading] = useState(false);
   const [competitiveLandscapeOpen, setCompetitiveLandscapeOpen] = useState(true);
+  const [winProbCalibration, setWinProbCalibration] = useState<{
+    calibration_buckets: Array<{ bucket_label: string; predicted_avg: number; actual_win_rate: number | null; deal_count: number }>
+    calibration_score: number
+    overall_bias: 'optimistic' | 'pessimistic' | 'well_calibrated'
+    narrative: string
+    recommendations: string[]
+    generated_at: string
+  } | null>(null);
+  const [winProbCalibrationLoading, setWinProbCalibrationLoading] = useState(false);
+  const [winProbCalibrationOpen, setWinProbCalibrationOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -154,6 +164,8 @@ export default function ReportsPage() {
       apiClient.getTeamPerformance("demo-workspace-1", "demo-token").then(setTeamPerf).catch(() => {}).finally(() => setTeamPerfLoading(false));
       setCompetitiveLandscapeLoading(true);
       apiClient.getCompetitiveLandscape("demo-workspace-1", "demo-token").then(setCompetitiveLandscape).catch(() => {}).finally(() => setCompetitiveLandscapeLoading(false));
+      setWinProbCalibrationLoading(true);
+      apiClient.getWinProbabilityCalibration("demo-workspace-1", "demo-token").then(setWinProbCalibration).catch(() => {}).finally(() => setWinProbCalibrationLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -189,6 +201,8 @@ export default function ReportsPage() {
       apiClient.getTeamPerformance(workspaceId, session.access_token).then(setTeamPerf).catch(() => {}).finally(() => setTeamPerfLoading(false));
       setCompetitiveLandscapeLoading(true);
       apiClient.getCompetitiveLandscape(workspaceId, session.access_token).then(setCompetitiveLandscape).catch(() => {}).finally(() => setCompetitiveLandscapeLoading(false));
+      setWinProbCalibrationLoading(true);
+      apiClient.getWinProbabilityCalibration(workspaceId, session.access_token).then(setWinProbCalibration).catch(() => {}).finally(() => setWinProbCalibrationLoading(false));
     });
   }, []);
 
@@ -345,6 +359,27 @@ export default function ReportsPage() {
         if (!session) { setCompetitiveLandscapeLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCompetitiveLandscapeLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateWinProbCalibration = () => {
+    setWinProbCalibrationLoading(true);
+    const doFetch = (workspaceId: string, token: string) => {
+      apiClient.getWinProbabilityCalibration(workspaceId, token)
+        .then(setWinProbCalibration)
+        .catch(() => {})
+        .finally(() => setWinProbCalibrationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setWinProbCalibrationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setWinProbCalibrationLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -605,6 +640,104 @@ export default function ReportsPage() {
             )}
             {!competitiveLandscape && !competitiveLandscapeLoading && (
               <p className="text-sm text-zinc-500">Click Regenerate to generate a competitive landscape analysis.</p>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Win Probability Calibration AI Card */}
+      <Card className="gap-0 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-sky-400" />
+            <span className="text-sm font-semibold text-zinc-100">Win Probability Calibration</span>
+            {winProbCalibration && (
+              <span className="inline-flex items-center rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-0.5 text-xs font-semibold text-sky-300">
+                Score {winProbCalibration.calibration_score}/100
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateWinProbCalibration}
+              disabled={winProbCalibrationLoading}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`h-3 w-3 ${winProbCalibrationLoading ? "animate-spin" : ""}`} />
+              {winProbCalibrationLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setWinProbCalibrationOpen((o) => !o)} className="text-zinc-500 hover:text-zinc-300 transition-colors">
+              {winProbCalibrationOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {winProbCalibrationOpen && (
+          <div className="p-4 space-y-4">
+            {winProbCalibrationLoading && !winProbCalibration && (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => <div key={i} className="h-10 rounded-lg bg-zinc-800 animate-pulse" />)}
+              </div>
+            )}
+            {winProbCalibration && (
+              <div className={`space-y-4 transition-opacity ${winProbCalibrationLoading ? "opacity-40" : "opacity-100"}`}>
+                <div className="flex items-center gap-3">
+                  <span className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${
+                    winProbCalibration.overall_bias === 'optimistic' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
+                    winProbCalibration.overall_bias === 'pessimistic' ? 'text-rose-400 bg-rose-500/10 border-rose-500/20' :
+                    'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                  }`}>
+                    {winProbCalibration.overall_bias === 'well_calibrated' ? 'Well Calibrated' : winProbCalibration.overall_bias.charAt(0).toUpperCase() + winProbCalibration.overall_bias.slice(1)} Bias
+                  </span>
+                </div>
+                <p className="text-sm text-zinc-300 leading-relaxed">{winProbCalibration.narrative}</p>
+                {/* Bucket table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-zinc-800">
+                        <th className="py-1.5 pr-3 text-left font-semibold text-zinc-500 uppercase tracking-widest">Bucket</th>
+                        <th className="py-1.5 pr-3 text-right font-semibold text-zinc-500 uppercase tracking-widest">Predicted</th>
+                        <th className="py-1.5 pr-3 text-right font-semibold text-zinc-500 uppercase tracking-widest">Actual</th>
+                        <th className="py-1.5 text-right font-semibold text-zinc-500 uppercase tracking-widest">Deals</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {winProbCalibration.calibration_buckets.filter((b) => b.deal_count > 0).map((b) => {
+                        const diff = b.actual_win_rate != null ? b.predicted_avg - b.actual_win_rate : null;
+                        return (
+                          <tr key={b.bucket_label} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
+                            <td className="py-1.5 pr-3 font-mono text-zinc-300">{b.bucket_label}</td>
+                            <td className="py-1.5 pr-3 text-right font-mono text-sky-300">{b.predicted_avg.toFixed(1)}%</td>
+                            <td className="py-1.5 pr-3 text-right font-mono">
+                              {b.actual_win_rate != null ? (
+                                <span className={diff != null && Math.abs(diff) > 10 ? 'text-rose-300' : diff != null && Math.abs(diff) > 5 ? 'text-amber-300' : 'text-emerald-300'}>
+                                  {b.actual_win_rate.toFixed(1)}%
+                                </span>
+                              ) : <span className="text-zinc-600">—</span>}
+                            </td>
+                            <td className="py-1.5 text-right font-mono text-zinc-500">{b.deal_count}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">Recommendations</p>
+                  <ol className="space-y-1.5">
+                    {winProbCalibration.recommendations.map((r, i) => (
+                      <li key={i} className="flex gap-2 text-sm text-zinc-300">
+                        <span className="flex-shrink-0 font-mono text-xs text-sky-400 mt-0.5">{i + 1}.</span>
+                        <span>{r}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+                <p className="text-xs text-zinc-600">Generated {new Date(winProbCalibration.generated_at).toLocaleString()}</p>
+              </div>
+            )}
+            {!winProbCalibration && !winProbCalibrationLoading && (
+              <p className="text-sm text-zinc-500">Click Regenerate to analyse win probability calibration across your deal pipeline.</p>
             )}
           </div>
         )}
