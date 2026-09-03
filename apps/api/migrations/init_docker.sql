@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS activity_events (
   description  TEXT,
   meta         TEXT,
   severity     TEXT NOT NULL DEFAULT 'info' CHECK (severity IN ('info', 'success', 'warning')),
+  disposition  TEXT CHECK (disposition IS NULL OR disposition IN ('follow_up_1mo', 'follow_up_6mo', 'dead')),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

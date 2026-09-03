@@ -18,4 +18,8 @@ class ActivityEvent(Base):
     description: Mapped[str | None] = mapped_column(String, nullable=True)
     meta: Mapped[str | None] = mapped_column(String, nullable=True)
     severity: Mapped[str] = mapped_column(String, nullable=False, default="info")
+    # Mandatory next-step disposition for call-type activities, enforced in the router
+    # (create_activity). Plain String + DB CHECK + a router-validated tuple, per house
+    # convention — not a Python Enum. Nullable: non-call activities carry no disposition.
+    disposition: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
