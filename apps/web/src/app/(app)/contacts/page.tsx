@@ -737,7 +737,7 @@ function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector
           <LogActivityModal
             contactName={contact.name}
             onClose={() => setLogActivityOpen(false)}
-            onSubmit={({ type, note }) => {
+            onSubmit={({ type, note, disposition }) => {
               if (!workspaceId || !token) return;
               apiClient.createActivity(workspaceId, {
                 type,
@@ -745,6 +745,8 @@ function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector
                 description: note,
                 meta: `contact:${contact.id}`,
                 severity: "info",
+                contact_id: contact.id,
+                ...(disposition ? { disposition } : {}),
               }, token).catch(() => {});
             }}
           />
@@ -854,6 +856,14 @@ function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector
                     evt.type === "call" ? "Call" :
                     evt.type === "deal_stage" ? "Deal" :
                     "Activity";
+                  const disposition = evt.meta?.disposition as string | undefined;
+                  const dispCfg = disposition
+                    ? ({
+                        follow_up_1mo: { label: "Follow-up 1mo", cls: "border-indigo-500/30 bg-indigo-500/10 text-indigo-400" },
+                        follow_up_6mo: { label: "Follow-up 6mo", cls: "border-sky-500/30 bg-sky-500/10 text-sky-400" },
+                        dead:          { label: "Dead",          cls: "border-rose-500/30 bg-rose-500/10 text-rose-400" },
+                      } as const)[disposition as "follow_up_1mo" | "follow_up_6mo" | "dead"]
+                    : undefined;
                   return (
                     <div key={evt.id} className="flex gap-3">
                       <div className="flex flex-col items-center">
@@ -870,6 +880,11 @@ function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector
                         <p className="text-xs font-medium text-zinc-200 truncate">{evt.title}</p>
                         {evt.body && (
                           <p className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">{evt.body}</p>
+                        )}
+                        {dispCfg && (
+                          <span className={cn("mt-1 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide", dispCfg.cls)}>
+                            {dispCfg.label}
+                          </span>
                         )}
                       </div>
                     </div>

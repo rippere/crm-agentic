@@ -101,6 +101,7 @@ export type ActivityEventRow = {
   description: string;
   meta: string;
   severity: "info" | "success" | "warning";
+  disposition?: "follow_up_1mo" | "follow_up_6mo" | "dead";
   created_at: string;
 };
 

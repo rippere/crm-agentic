@@ -21,6 +21,7 @@ def _fake_event(workspace_id: uuid.UUID, **kwargs) -> MagicMock:
     ev.description = kwargs.get("description", "Email sent to contact")
     ev.meta = kwargs.get("meta", "")
     ev.severity = kwargs.get("severity", "info")
+    ev.disposition = kwargs.get("disposition")  # None unless a call disposition is set
     ev.created_at = kwargs.get("created_at", datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc))
     return ev
 
@@ -152,6 +153,7 @@ async def test_list_activity_type_filter_passes_query_param(app_client):
     ev.description = "New contact"
     ev.meta = ""
     ev.severity = "info"
+    ev.disposition = None
     ev.created_at = datetime.now(timezone.utc)
     mock_db.execute = AsyncMock(return_value=_make_scalars_result([ev]))
 

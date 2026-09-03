@@ -6,13 +6,20 @@ import { X, ClipboardList, Phone, Mail, Users, Calendar } from "lucide-react";
 import Button from "@/components/ui/Button";
 
 type ActivityType = "note" | "call" | "email" | "meeting";
+type Disposition = "follow_up_1mo" | "follow_up_6mo" | "dead";
 
 interface LogActivityModalProps {
   contactName?: string;
   dealTitle?: string;
   onClose: () => void;
-  onSubmit: (activity: { type: ActivityType; note: string }) => void;
+  onSubmit: (activity: { type: ActivityType; note: string; disposition?: Disposition }) => void;
 }
+
+const DISPOSITION_OPTIONS: { value: Disposition; label: string }[] = [
+  { value: "follow_up_1mo", label: "Follow up in 1 month" },
+  { value: "follow_up_6mo", label: "Follow up in 6 months" },
+  { value: "dead",          label: "Dead lead" },
+];
 
 const ACTIVITY_TYPES: { type: ActivityType; icon: React.ReactNode; label: string }[] = [
   { type: "note",    icon: <ClipboardList className="h-3.5 w-3.5" />, label: "Note"    },
@@ -36,10 +43,18 @@ export default function LogActivityModal({
 }: LogActivityModalProps) {
   const [type, setType] = useState<ActivityType>("note");
   const [note, setNote] = useState("");
+  const [disposition, setDisposition] = useState<Disposition | "">("");
+
+  // A call must close with a next-step disposition (mirrors the server-side 422).
+  const dispositionMissing = type === "call" && !disposition;
 
   const handleSubmit = () => {
-    if (!note.trim()) return;
-    onSubmit({ type, note: note.trim() });
+    if (!note.trim() || dispositionMissing) return;
+    onSubmit(
+      type === "call"
+        ? { type, note: note.trim(), disposition: disposition as Disposition }
+        : { type, note: note.trim() }
+    );
     onClose();
   };
 
@@ -96,6 +111,32 @@ export default function LogActivityModal({
             ))}
           </div>
 
+          {/* Disposition — mandatory next step, calls only */}
+          {type === "call" && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-medium text-zinc-400">
+                Next step <span className="text-rose-400">*</span>
+              </label>
+              <select
+                value={disposition}
+                onChange={(e) => setDisposition(e.target.value as Disposition | "")}
+                className={cn(
+                  "w-full rounded-xl border bg-zinc-900 px-4 py-2.5 text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50",
+                  disposition ? "border-zinc-800" : "border-rose-500/40"
+                )}
+              >
+                <option value="" disabled>
+                  Choose a next step…
+                </option>
+                {DISPOSITION_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Note textarea */}
           <textarea
             autoFocus
@@ -124,7 +165,7 @@ export default function LogActivityModal({
               variant="primary"
               className="flex-1 justify-center"
               onClick={handleSubmit}
-              disabled={!note.trim()}
+              disabled={!note.trim() || dispositionMissing}
             >
               Log Activity
             </Button>

@@ -905,7 +905,7 @@ export const apiClient = {
     if (opts?.eventType) params.set('event_type', opts.eventType)
     return apiFetch(`/workspaces/${workspaceId}/activity?${params}`, {}, token)
   },
-  createActivity: (workspaceId: string, data: { type: string; agent_name: string; description: string; meta?: string; severity?: string }, token: string) => {
+  createActivity: (workspaceId: string, data: { type: string; agent_name: string; description: string; meta?: string; severity?: string; disposition?: string; contact_id?: string }, token: string) => {
     if (isDemoMode) return Promise.resolve({ id: `demo-activity-${Date.now()}`, ...data })
     return apiFetch(`/workspaces/${workspaceId}/activity`, { method: 'POST', body: JSON.stringify(data) }, token)
   },
