@@ -7325,3 +7325,117 @@ async def contact_health_summary(
         "top_actions": top_actions,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+_WIN_PROB_CALIBRATION_SYSTEM = """\
+You are a sales analytics AI. Given win probability calibration data (predicted vs actual win rates per bucket), write a 2-sentence narrative insight and exactly 3 specific recommendations to improve prediction accuracy.
+Respond with JSON only: {"narrative": "...", "recommendations": ["...", "...", "..."]}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-probability-calibration")
+@limiter.limit("5/minute")
+async def win_probability_calibration(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Deal.ml_win_probability, Deal.stage).where(Deal.workspace_id == workspace_id)
+    )
+    deals = result.all()
+
+    BUCKETS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
+    bucket_data: dict = {b: {"won": 0, "lost": 0, "total": 0, "probs": []} for b in BUCKETS}
+
+    for prob, stage in deals:
+        bucket = min((prob // 10) * 10, 90)
+        bucket_data[bucket]["total"] += 1
+        bucket_data[bucket]["probs"].append(prob)
+        if stage == "closed_won":
+            bucket_data[bucket]["won"] += 1
+        elif stage == "closed_lost":
+            bucket_data[bucket]["lost"] += 1
+
+    calibration_buckets = []
+    errors = []
+    biases = []
+
+    for b in BUCKETS:
+        bd = bucket_data[b]
+        probs = bd["probs"]
+        predicted_avg = round(sum(probs) / len(probs), 1) if probs else float(b + 5)
+        closed = bd["won"] + bd["lost"]
+        actual_win_rate = round(bd["won"] / closed * 100, 1) if closed > 0 else None
+        bucket_label = f"{b}–{b + 9}%" if b < 90 else "90–100%"
+        calibration_buckets.append({
+            "bucket_label": bucket_label,
+            "predicted_avg": predicted_avg,
+            "actual_win_rate": actual_win_rate,
+            "deal_count": bd["total"],
+        })
+        if actual_win_rate is not None:
+            errors.append(abs(predicted_avg - actual_win_rate))
+            biases.append(predicted_avg - actual_win_rate)
+
+    calibration_score = max(0, round(100 - (sum(errors) / len(errors)))) if errors else 50
+
+    if biases:
+        avg_bias = sum(biases) / len(biases)
+        overall_bias = "optimistic" if avg_bias > 5 else "pessimistic" if avg_bias < -5 else "well_calibrated"
+    else:
+        overall_bias = "well_calibrated"
+
+    total_deals = len(deals)
+    context = (
+        f"Workspace has {total_deals} deals. Calibration score: {calibration_score}/100. "
+        f"Overall bias: {overall_bias}. "
+        f"Buckets with data: {[{'bucket': cb['bucket_label'], 'predicted': cb['predicted_avg'], 'actual': cb['actual_win_rate']} for cb in calibration_buckets if cb['actual_win_rate'] is not None]}"
+    )
+
+    _default_narrative = (
+        f"The win probability model scores {calibration_score}/100 with a {overall_bias.replace('_', ' ')} bias across {total_deals} deals. "
+        "Refining predictions using historical closed-deal outcomes will improve forecast accuracy."
+    )
+    _default_recs = [
+        "Review deals in buckets with the largest prediction errors and update probability scores.",
+        "Retrain the scoring model using recent closed-won and closed-lost outcomes.",
+        "Audit stage-level assumptions to reduce systematic over- or under-estimation.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_WIN_PROB_CALIBRATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    narrative = data.get("narrative", _default_narrative)
+    if not isinstance(narrative, str) or not narrative.strip():
+        narrative = _default_narrative
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(_default_recs[len(recommendations) % 3])
+
+    return {
+        "calibration_buckets": calibration_buckets,
+        "calibration_score": calibration_score,
+        "overall_bias": overall_bias,
+        "narrative": narrative,
+        "recommendations": recommendations,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

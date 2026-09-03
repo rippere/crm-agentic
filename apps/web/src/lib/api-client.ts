@@ -4903,6 +4903,42 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/outreach/${enrollmentId}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }, token)
   },
 
+  getWinProbabilityCalibration: (workspaceId: string, token: string): Promise<{
+    calibration_buckets: Array<{ bucket_label: string; predicted_avg: number; actual_win_rate: number | null; deal_count: number }>
+    calibration_score: number
+    overall_bias: 'optimistic' | 'pessimistic' | 'well_calibrated'
+    narrative: string
+    recommendations: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        calibration_buckets: [
+          { bucket_label: '0–9%',   predicted_avg: 5,  actual_win_rate: null, deal_count: 0 },
+          { bucket_label: '10–19%', predicted_avg: 14, actual_win_rate: 10,   deal_count: 3 },
+          { bucket_label: '20–29%', predicted_avg: 24, actual_win_rate: 18,   deal_count: 4 },
+          { bucket_label: '30–39%', predicted_avg: 33, actual_win_rate: 30,   deal_count: 5 },
+          { bucket_label: '40–49%', predicted_avg: 45, actual_win_rate: 38,   deal_count: 6 },
+          { bucket_label: '50–59%', predicted_avg: 54, actual_win_rate: 52,   deal_count: 8 },
+          { bucket_label: '60–69%', predicted_avg: 63, actual_win_rate: 58,   deal_count: 7 },
+          { bucket_label: '70–79%', predicted_avg: 74, actual_win_rate: 72,   deal_count: 5 },
+          { bucket_label: '80–89%', predicted_avg: 83, actual_win_rate: 85,   deal_count: 4 },
+          { bucket_label: '90–100%',predicted_avg: 94, actual_win_rate: 91,   deal_count: 2 },
+        ],
+        calibration_score: 93,
+        overall_bias: 'optimistic',
+        narrative: 'The model shows a slight optimistic bias at lower probability bands, with predictions 4–6% higher than actual win rates in the 10–49% range. Calibrating lower-confidence scores against recent closed-deal outcomes will significantly improve forecast reliability.',
+        recommendations: [
+          'Review all deals scored 10–49% and compare against historical closed-deal outcomes to identify systematic overestimates.',
+          'Retrain the ML scoring model on the last 6 months of closed-won and closed-lost deals for fresher signal.',
+          'Introduce a stage-based probability floor to prevent newly created deals from receiving unrealistically high scores.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-probability-calibration`, { method: 'GET' }, token)
+  },
+
   // Shared Celery job poll (import/score/enroll jobs). Mirrors useJobPoller's
   // GET /jobs/{id}; workspaceId is accepted for call-site symmetry but the
   // endpoint is not workspace-scoped.
