@@ -4232,3 +4232,72 @@ async def test_win_probability_calibration_wrong_workspace_returns_403(app_clien
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-probability-calibration")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16d tests: agent performance report
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_agent_performance_report_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    events_result = MagicMock()
+    events_result.all.return_value = [
+        ("Lead Scorer", "info"),
+        ("Lead Scorer", "info"),
+        ("Lead Scorer", "error"),
+        ("Email Composer", "info"),
+        ("Email Composer", "info"),
+        ("Email Composer", "info"),
+        ("Semantic Sorter", "error"),
+        ("Semantic Sorter", "info"),
+    ]
+    mock_db.execute = AsyncMock(return_value=events_result)
+
+    import json as _json
+    response_json = _json.dumps({
+        "narrative": "Agents completed 8 runs in the last 30 days with an 75% success rate. Lead Scorer and Email Composer are performing reliably while Semantic Sorter needs attention.",
+        "recommendations": [
+            "Investigate Semantic Sorter errors in the last 7 days.",
+            "Schedule Lead Scorer to run daily for fresh scoring.",
+            "Monitor Email Composer for rate-limit failures.",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/performance-report")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["agent_stats"], list)
+    assert len(body["agent_stats"]) == 3
+    stat = body["agent_stats"][0]
+    assert "agent_name" in stat
+    assert "run_count" in stat
+    assert "success_count" in stat
+    assert "failure_count" in stat
+    assert "success_rate" in stat
+    assert isinstance(body["overall_success_rate"], float)
+    assert body["most_active_agent"] is not None
+    assert body["least_reliable_agent"] is not None
+    assert isinstance(body["narrative"], str) and len(body["narrative"]) > 0
+    assert isinstance(body["recommendations"], list) and len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_agent_performance_report_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/performance-report")
+    assert resp.status_code == 403

@@ -124,6 +124,20 @@ export default function ReportsPage() {
   const [competitiveLandscapeLoading, setCompetitiveLandscapeLoading] = useState(false);
   const [competitiveLandscapeOpen, setCompetitiveLandscapeOpen] = useState(true);
 
+  type AgentStat = { agent_name: string; run_count: number; success_count: number; failure_count: number; success_rate: number };
+  type AgentPerfReport = {
+    agent_stats: AgentStat[]
+    overall_success_rate: number
+    most_active_agent: string | null
+    least_reliable_agent: string | null
+    narrative: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [agentPerfReport, setAgentPerfReport] = useState<AgentPerfReport | null>(null);
+  const [agentPerfReportLoading, setAgentPerfReportLoading] = useState(false);
+  const [agentPerfReportOpen, setAgentPerfReportOpen] = useState(true);
+
   type CalibrationBucket = { bucket_label: string; predicted_avg: number; actual_win_rate: number | null; deal_count: number };
   type CalibrationData = {
     calibration_buckets: CalibrationBucket[]
@@ -169,6 +183,8 @@ export default function ReportsPage() {
       apiClient.getCompetitiveLandscape("demo-workspace-1", "demo-token").then(setCompetitiveLandscape).catch(() => {}).finally(() => setCompetitiveLandscapeLoading(false));
       setCalibrationLoading(true);
       apiClient.getWinProbabilityCalibration("demo-workspace-1", "demo-token").then(setCalibrationData).catch(() => {}).finally(() => setCalibrationLoading(false));
+      setAgentPerfReportLoading(true);
+      apiClient.getAgentPerformanceReport("demo-workspace-1", "demo-token").then(setAgentPerfReport).catch(() => {}).finally(() => setAgentPerfReportLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -206,6 +222,8 @@ export default function ReportsPage() {
       apiClient.getCompetitiveLandscape(workspaceId, session.access_token).then(setCompetitiveLandscape).catch(() => {}).finally(() => setCompetitiveLandscapeLoading(false));
       setCalibrationLoading(true);
       apiClient.getWinProbabilityCalibration(workspaceId, session.access_token).then(setCalibrationData).catch(() => {}).finally(() => setCalibrationLoading(false));
+      setAgentPerfReportLoading(true);
+      apiClient.getAgentPerformanceReport(workspaceId, session.access_token).then(setAgentPerfReport).catch(() => {}).finally(() => setAgentPerfReportLoading(false));
     });
   }, []);
 
@@ -383,6 +401,27 @@ export default function ReportsPage() {
         if (!session) { setCalibrationLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCalibrationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentPerfReport = () => {
+    setAgentPerfReportLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentPerformanceReport(wid, tok)
+        .then(setAgentPerfReport)
+        .catch(() => {})
+        .finally(() => setAgentPerfReportLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentPerfReportLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentPerfReportLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -584,6 +623,101 @@ export default function ReportsPage() {
             )}
             {!calibrationData && !calibrationLoading && (
               <p className="text-sm text-zinc-500">Click Regenerate to generate a win probability calibration report.</p>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Agent Performance Report AI Card */}
+      <Card className="border-violet-500/20">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Bot className="h-4 w-4 text-violet-400" />
+            <span className="text-sm font-semibold text-zinc-100">Agent Performance Report</span>
+            {agentPerfReport && (
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${
+                agentPerfReport.overall_success_rate >= 80
+                  ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                  : agentPerfReport.overall_success_rate >= 60
+                  ? "bg-amber-500/10 border-amber-500/20 text-amber-400"
+                  : "bg-rose-500/10 border-rose-500/20 text-rose-400"
+              }`}>
+                {agentPerfReport.overall_success_rate}% success
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateAgentPerfReport}
+              disabled={agentPerfReportLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`h-3 w-3 ${agentPerfReportLoading ? "animate-spin" : ""}`} />
+              {agentPerfReportLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button
+              onClick={() => setAgentPerfReportOpen((o) => !o)}
+              className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              {agentPerfReportOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+
+        {agentPerfReportOpen && (
+          <div className="mt-4">
+            {agentPerfReportLoading && !agentPerfReport && (
+              <div className="space-y-2">
+                <div className="h-4 w-full rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-4/5 rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-3/5 rounded bg-zinc-800 animate-pulse" />
+              </div>
+            )}
+            {agentPerfReport && (
+              <div className={`transition-opacity ${agentPerfReportLoading ? "opacity-40" : "opacity-100"}`}>
+                <p className="text-sm text-zinc-300 leading-relaxed mb-4">{agentPerfReport.narrative}</p>
+                {agentPerfReport.agent_stats.length > 0 && (
+                  <div className="mb-4 space-y-2">
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Per-Agent Stats (Last 30 Days)</p>
+                    {agentPerfReport.agent_stats.map((a) => (
+                      <div key={a.agent_name} className="flex items-center gap-3">
+                        <span className="w-36 truncate text-xs text-zinc-300">{a.agent_name}</span>
+                        <div className="flex-1 flex items-center gap-2">
+                          <div className="relative flex-1 h-2 rounded-full bg-zinc-800 overflow-hidden">
+                            <div
+                              className="absolute inset-y-0 left-0 rounded-full bg-emerald-500"
+                              style={{ width: `${a.success_rate}%` }}
+                            />
+                            {a.failure_count > 0 && (
+                              <div
+                                className="absolute inset-y-0 rounded-full bg-rose-500"
+                                style={{ left: `${a.success_rate}%`, width: `${100 - a.success_rate}%` }}
+                              />
+                            )}
+                          </div>
+                          <span className="w-12 text-right text-[10px] font-mono text-zinc-400">{a.success_rate}%</span>
+                        </div>
+                        <span className="w-14 text-right text-[10px] text-zinc-500">{a.run_count} runs</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Recommendations</p>
+                  {agentPerfReport.recommendations.map((rec, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                      <p className="text-sm text-zinc-300">{rec}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs text-zinc-600">
+                  Generated {new Date(agentPerfReport.generated_at).toLocaleString()} · Claude Haiku
+                </p>
+              </div>
+            )}
+            {!agentPerfReport && !agentPerfReportLoading && (
+              <p className="text-sm text-zinc-500">Click Regenerate to generate an agent performance report.</p>
             )}
           </div>
         )}
