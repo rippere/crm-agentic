@@ -4911,6 +4911,44 @@ export const apiClient = {
     return apiFetch(`/jobs/${jobId}`, {}, token)
   },
 
+  getAgentPerformanceReport: (workspaceId: string, token: string): Promise<{
+    agent_stats: Array<{
+      agent_name: string
+      run_count: number
+      success_count: number
+      failure_count: number
+      success_rate: number
+    }>
+    overall_success_rate: number
+    most_active_agent: string | null
+    least_reliable_agent: string | null
+    narrative: string
+    recommendations: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        agent_stats: [
+          { agent_name: 'Lead Scorer',       run_count: 42, success_count: 40, failure_count: 2, success_rate: 95.2 },
+          { agent_name: 'Email Composer',    run_count: 38, success_count: 34, failure_count: 4, success_rate: 89.5 },
+          { agent_name: 'Deal Health Check', run_count: 30, success_count: 28, failure_count: 2, success_rate: 93.3 },
+          { agent_name: 'Semantic Sorter',   run_count: 18, success_count: 14, failure_count: 4, success_rate: 77.8 },
+        ],
+        overall_success_rate: 88.0,
+        most_active_agent: 'Lead Scorer',
+        least_reliable_agent: 'Semantic Sorter',
+        narrative: 'Agents ran 128 times over the last 30 days with an overall success rate of 88%. The Lead Scorer is the most active and reliable agent, while the Semantic Sorter shows the highest failure rate at 22% and warrants investigation.',
+        recommendations: [
+          'Investigate Semantic Sorter failures — check embedding service timeouts and retry logic.',
+          'Schedule the Email Composer to run during off-peak hours to reduce API rate-limit errors.',
+          'Enable Slack alerts for any agent with a 30-day success rate below 85%.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/performance-report`, {}, token)
+  },
+
   getWinProbabilityCalibration: (workspaceId: string, token: string): Promise<{
     calibration_buckets: Array<{
       bucket_label: string

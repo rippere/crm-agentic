@@ -7466,3 +7466,142 @@ async def win_probability_calibration(
         "recommendations": recommendations,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ── Agent Performance Report ──────────────────────────────────────────────────
+
+_AGENT_PERF_SYSTEM = """\
+You are a CRM operations analyst reviewing AI agent performance data for a sales team.
+Given agent run statistics from the last 30 days, write a concise performance summary.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "narrative": "2-sentence summary of overall agent performance and any standout patterns",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+
+Rules:
+- narrative: 2 sentences, reference specific agents by name where useful, plain prose
+- recommendations: exactly 3 specific, actionable steps to improve agent reliability or utilization\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/performance-report")
+@limiter.limit("5/minute")
+async def agent_performance_report(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+
+    result = await db.execute(
+        select(ActivityEvent.agent_name, ActivityEvent.severity)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.agent_name.isnot(None),
+            ActivityEvent.created_at >= cutoff,
+        )
+    )
+    rows = result.all()
+
+    stats_map: dict[str, dict] = {}
+    for agent_name, severity in rows:
+        name = str(agent_name)
+        if name not in stats_map:
+            stats_map[name] = {"run_count": 0, "success_count": 0, "failure_count": 0}
+        stats_map[name]["run_count"] += 1
+        if severity == "error":
+            stats_map[name]["failure_count"] += 1
+        else:
+            stats_map[name]["success_count"] += 1
+
+    agent_stats = []
+    for name, s in sorted(stats_map.items(), key=lambda x: -x[1]["run_count"]):
+        rate = round(s["success_count"] / s["run_count"] * 100, 1) if s["run_count"] > 0 else 0.0
+        agent_stats.append({
+            "agent_name": name,
+            "run_count": s["run_count"],
+            "success_count": s["success_count"],
+            "failure_count": s["failure_count"],
+            "success_rate": rate,
+        })
+
+    total_runs = sum(s["run_count"] for s in stats_map.values())
+    total_success = sum(s["success_count"] for s in stats_map.values())
+    overall_success_rate = round(total_success / total_runs * 100, 1) if total_runs > 0 else 0.0
+
+    most_active_agent = max(stats_map, key=lambda n: stats_map[n]["run_count"]) if stats_map else None
+    least_reliable_agent = min(
+        stats_map,
+        key=lambda n: stats_map[n]["success_count"] / stats_map[n]["run_count"] if stats_map[n]["run_count"] > 0 else 1,
+    ) if stats_map else None
+
+    _default_narrative = (
+        "No agent activity was recorded in the last 30 days. "
+        "Run agents from the Agents page to start tracking performance."
+    )
+    _default_recommendations = [
+        "Schedule regular automated agent runs using Celery beat tasks.",
+        "Review agent failure logs to identify recurring error patterns.",
+        "Enable email alerts for agent failure rates above 20%.",
+    ]
+
+    if not agent_stats:
+        return {
+            "agent_stats": [],
+            "overall_success_rate": 0.0,
+            "most_active_agent": None,
+            "least_reliable_agent": None,
+            "narrative": _default_narrative,
+            "recommendations": _default_recommendations,
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    context = (
+        f"Overall success rate: {overall_success_rate}% ({total_success}/{total_runs} runs succeeded)\n"
+        f"Most active agent: {most_active_agent}\n"
+        f"Least reliable agent: {least_reliable_agent}\n\n"
+        "Per-agent stats (last 30 days):\n"
+    )
+    for a in agent_stats:
+        context += f"  {a['agent_name']}: {a['run_count']} runs, {a['success_rate']}% success ({a['failure_count']} failures)\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_AGENT_PERF_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    narrative = data.get("narrative", _default_narrative)
+    if not isinstance(narrative, str) or not narrative.strip():
+        narrative = _default_narrative
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else []) if str(r).strip()][:3]
+    while len(recommendations) < 3:
+        recommendations.append(_default_recommendations[len(recommendations)])
+
+    return {
+        "agent_stats": agent_stats,
+        "overall_success_rate": overall_success_rate,
+        "most_active_agent": most_active_agent,
+        "least_reliable_agent": least_reliable_agent,
+        "narrative": narrative,
+        "recommendations": recommendations,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
