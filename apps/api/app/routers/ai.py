@@ -7325,3 +7325,144 @@ async def contact_health_summary(
         "top_actions": top_actions,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ── Win Probability Calibration ───────────────────────────────────────────────
+
+_CALIBRATION_SYSTEM = """\
+You are a sales analytics expert reviewing ML model calibration data for a CRM.
+Given win-probability calibration buckets (predicted vs actual win rates), write a
+concise analysis and actionable recommendations.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "narrative": "2-3 sentence analysis of the calibration results",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+
+Rules:
+- narrative: describe overall calibration quality, where the model is most/least accurate
+- recommendations: exactly 3 specific, actionable steps to improve forecast accuracy
+- Be data-driven and reference the calibration_score and bias provided\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-probability-calibration")
+@limiter.limit("5/minute")
+async def win_probability_calibration(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Deal.ml_win_probability, Deal.stage).where(
+            Deal.workspace_id == workspace_id,
+            Deal.ml_win_probability.isnot(None),
+        )
+    )
+    rows = result.all()
+
+    # Build 10% buckets
+    buckets: dict[int, dict] = {b: {"predicted_sum": 0, "won": 0, "lost": 0, "total": 0} for b in range(0, 100, 10)}
+    for prob, stage in rows:
+        b = min(int(prob) // 10 * 10, 90)
+        buckets[b]["predicted_sum"] += prob
+        buckets[b]["total"] += 1
+        if stage == "closed_won":
+            buckets[b]["won"] += 1
+        elif stage == "closed_lost":
+            buckets[b]["lost"] += 1
+
+    calibration_buckets = []
+    errors = []
+    bias_deltas = []
+    for b in range(0, 100, 10):
+        d = buckets[b]
+        total = d["total"]
+        predicted_avg = round(d["predicted_sum"] / total, 1) if total > 0 else b + 5.0
+        closed = d["won"] + d["lost"]
+        actual_win_rate = round(d["won"] / closed * 100, 1) if closed > 0 else None
+        calibration_buckets.append({
+            "bucket_label": f"{b}–{b+9}%",
+            "predicted_avg": predicted_avg,
+            "actual_win_rate": actual_win_rate,
+            "deal_count": total,
+        })
+        if actual_win_rate is not None:
+            errors.append(abs(predicted_avg - actual_win_rate))
+            bias_deltas.append(predicted_avg - actual_win_rate)
+
+    calibration_score = round(max(0, 100 - (sum(errors) / len(errors))), 1) if errors else None
+    if bias_deltas:
+        avg_bias = sum(bias_deltas) / len(bias_deltas)
+        overall_bias = "optimistic" if avg_bias > 5 else ("pessimistic" if avg_bias < -5 else "well_calibrated")
+    else:
+        overall_bias = "well_calibrated"
+
+    _default_narrative = (
+        "Insufficient closed deal data to fully evaluate model calibration. "
+        "As deals close, the calibration report will reveal how accurately the ML model predicts outcomes."
+    )
+    _default_recommendations = [
+        "Close more deals to build a statistically significant calibration dataset.",
+        "Review deals stuck in early stages for accurate ML probability inputs.",
+        "Manually audit deals with probabilities above 70% to validate model signals.",
+    ]
+
+    if not rows:
+        return {
+            "calibration_buckets": calibration_buckets,
+            "calibration_score": None,
+            "overall_bias": "well_calibrated",
+            "narrative": _default_narrative,
+            "recommendations": _default_recommendations,
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    context = (
+        f"Calibration Score: {calibration_score if calibration_score is not None else 'N/A'}/100\n"
+        f"Overall Bias: {overall_bias}\n"
+        f"Buckets with closed deal data: {len(errors)}\n\n"
+        "Calibration buckets (predicted% → actual win rate%):\n"
+    )
+    for bk in calibration_buckets:
+        actual = f"{bk['actual_win_rate']}%" if bk["actual_win_rate"] is not None else "no closed data"
+        context += f"  {bk['bucket_label']}: predicted {bk['predicted_avg']}% → actual {actual} ({bk['deal_count']} deals)\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_CALIBRATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    narrative = data.get("narrative", _default_narrative)
+    if not isinstance(narrative, str) or not narrative.strip():
+        narrative = _default_narrative
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else []) if str(r).strip()][:3]
+    while len(recommendations) < 3:
+        recommendations.append(_default_recommendations[len(recommendations)])
+
+    return {
+        "calibration_buckets": calibration_buckets,
+        "calibration_score": calibration_score,
+        "overall_bias": overall_bias,
+        "narrative": narrative,
+        "recommendations": recommendations,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

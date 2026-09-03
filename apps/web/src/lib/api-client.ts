@@ -4910,5 +4910,46 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ job_id: jobId, state: 'success', result: {} })
     return apiFetch(`/jobs/${jobId}`, {}, token)
   },
+
+  getWinProbabilityCalibration: (workspaceId: string, token: string): Promise<{
+    calibration_buckets: Array<{
+      bucket_label: string
+      predicted_avg: number
+      actual_win_rate: number | null
+      deal_count: number
+    }>
+    calibration_score: number | null
+    overall_bias: 'optimistic' | 'pessimistic' | 'well_calibrated'
+    narrative: string
+    recommendations: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        calibration_buckets: [
+          { bucket_label: '0–9%',   predicted_avg: 5,  actual_win_rate: 8,    deal_count: 2  },
+          { bucket_label: '10–19%', predicted_avg: 15, actual_win_rate: 12,   deal_count: 4  },
+          { bucket_label: '20–29%', predicted_avg: 24, actual_win_rate: 18,   deal_count: 6  },
+          { bucket_label: '30–39%', predicted_avg: 35, actual_win_rate: 30,   deal_count: 5  },
+          { bucket_label: '40–49%', predicted_avg: 44, actual_win_rate: 40,   deal_count: 8  },
+          { bucket_label: '50–59%', predicted_avg: 54, actual_win_rate: 52,   deal_count: 7  },
+          { bucket_label: '60–69%', predicted_avg: 65, actual_win_rate: 61,   deal_count: 9  },
+          { bucket_label: '70–79%', predicted_avg: 74, actual_win_rate: 70,   deal_count: 6  },
+          { bucket_label: '80–89%', predicted_avg: 84, actual_win_rate: 79,   deal_count: 4  },
+          { bucket_label: '90–99%', predicted_avg: 93, actual_win_rate: 88,   deal_count: 3  },
+        ],
+        calibration_score: 94.8,
+        overall_bias: 'optimistic',
+        narrative: 'The ML model is consistently optimistic across all probability tiers, overestimating win likelihood by an average of 5 points. Calibration is strongest in the 50–70% range where predicted and actual rates align within 3 points. High-confidence deals (80%+) show the largest gap, suggesting the model overcounts champion engagement signals.',
+        recommendations: [
+          'Apply a 5-point downward calibration correction to all deal probabilities above 70% until the model is retrained.',
+          'Audit the 80–99% deals for champion engagement quality — the model may be over-weighting outreach frequency.',
+          'Add stage-change recency as a feature input to reduce overconfidence on stalled high-probability deals.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-probability-calibration`, {}, token)
+  },
 }
 

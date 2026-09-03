@@ -124,6 +124,19 @@ export default function ReportsPage() {
   const [competitiveLandscapeLoading, setCompetitiveLandscapeLoading] = useState(false);
   const [competitiveLandscapeOpen, setCompetitiveLandscapeOpen] = useState(true);
 
+  type CalibrationBucket = { bucket_label: string; predicted_avg: number; actual_win_rate: number | null; deal_count: number };
+  type CalibrationData = {
+    calibration_buckets: CalibrationBucket[]
+    calibration_score: number | null
+    overall_bias: 'optimistic' | 'pessimistic' | 'well_calibrated'
+    narrative: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [calibrationData, setCalibrationData] = useState<CalibrationData | null>(null);
+  const [calibrationLoading, setCalibrationLoading] = useState(false);
+  const [calibrationOpen, setCalibrationOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -154,6 +167,8 @@ export default function ReportsPage() {
       apiClient.getTeamPerformance("demo-workspace-1", "demo-token").then(setTeamPerf).catch(() => {}).finally(() => setTeamPerfLoading(false));
       setCompetitiveLandscapeLoading(true);
       apiClient.getCompetitiveLandscape("demo-workspace-1", "demo-token").then(setCompetitiveLandscape).catch(() => {}).finally(() => setCompetitiveLandscapeLoading(false));
+      setCalibrationLoading(true);
+      apiClient.getWinProbabilityCalibration("demo-workspace-1", "demo-token").then(setCalibrationData).catch(() => {}).finally(() => setCalibrationLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -189,6 +204,8 @@ export default function ReportsPage() {
       apiClient.getTeamPerformance(workspaceId, session.access_token).then(setTeamPerf).catch(() => {}).finally(() => setTeamPerfLoading(false));
       setCompetitiveLandscapeLoading(true);
       apiClient.getCompetitiveLandscape(workspaceId, session.access_token).then(setCompetitiveLandscape).catch(() => {}).finally(() => setCompetitiveLandscapeLoading(false));
+      setCalibrationLoading(true);
+      apiClient.getWinProbabilityCalibration(workspaceId, session.access_token).then(setCalibrationData).catch(() => {}).finally(() => setCalibrationLoading(false));
     });
   }, []);
 
@@ -350,6 +367,27 @@ export default function ReportsPage() {
     }
   };
 
+  const regenerateCalibration = () => {
+    setCalibrationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getWinProbabilityCalibration(wid, tok)
+        .then(setCalibrationData)
+        .catch(() => {})
+        .finally(() => setCalibrationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCalibrationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCalibrationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
   const RATING_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
     strong:   { label: "Strong",   color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
     healthy:  { label: "Healthy",  color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
@@ -362,6 +400,12 @@ export default function ReportsPage() {
     good:               { label: "Good",               color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
     needs_improvement:  { label: "Needs Improvement",  color: "text-amber-400",   bg: "bg-amber-500/10 border-amber-500/20"   },
     critical:           { label: "Critical",           color: "text-rose-400",    bg: "bg-rose-500/10 border-rose-500/20"     },
+  };
+
+  const BIAS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+    optimistic:      { label: "Optimistic",      color: "text-amber-400",   bg: "bg-amber-500/10 border-amber-500/20"   },
+    pessimistic:     { label: "Pessimistic",     color: "text-sky-400",     bg: "bg-sky-500/10 border-sky-500/20"       },
+    well_calibrated: { label: "Well Calibrated", color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
   };
 
   if (loading) {
@@ -438,6 +482,108 @@ export default function ReportsPage() {
             )}
             {!pipelineHealth && !pipelineHealthLoading && (
               <p className="text-sm text-zinc-500">Click Regenerate to generate a pipeline health briefing.</p>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Win Probability Calibration AI Card */}
+      <Card className="border-sky-500/20">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-sky-400" />
+            <span className="text-sm font-semibold text-zinc-100">Win Probability Calibration</span>
+            {calibrationData && calibrationData.calibration_score !== null && (
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${BIAS_CONFIG[calibrationData.overall_bias]?.bg} ${BIAS_CONFIG[calibrationData.overall_bias]?.color}`}>
+                {BIAS_CONFIG[calibrationData.overall_bias]?.label}
+                <span className="font-mono">{calibrationData.calibration_score}</span>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateCalibration}
+              disabled={calibrationLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`h-3 w-3 ${calibrationLoading ? "animate-spin" : ""}`} />
+              {calibrationLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button
+              onClick={() => setCalibrationOpen((o) => !o)}
+              className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              {calibrationOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+
+        {calibrationOpen && (
+          <div className="mt-4">
+            {calibrationLoading && !calibrationData && (
+              <div className="space-y-2">
+                <div className="h-4 w-full rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-4/5 rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-3/5 rounded bg-zinc-800 animate-pulse" />
+              </div>
+            )}
+            {calibrationData && (
+              <div className={`transition-opacity ${calibrationLoading ? "opacity-40" : "opacity-100"}`}>
+                <div className="flex items-start gap-6 mb-4">
+                  {calibrationData.calibration_score !== null && (
+                    <div className="flex-shrink-0 flex flex-col items-center gap-1">
+                      <svg viewBox="0 0 64 64" className="h-16 w-16">
+                        <circle cx="32" cy="32" r="26" fill="none" stroke="#27272a" strokeWidth="6" />
+                        <circle
+                          cx="32" cy="32" r="26" fill="none"
+                          stroke={calibrationData.calibration_score >= 80 ? "#34d399" : calibrationData.calibration_score >= 60 ? "#f59e0b" : "#f87171"}
+                          strokeWidth="6"
+                          strokeDasharray={`${(calibrationData.calibration_score / 100) * 163.4} 163.4`}
+                          strokeLinecap="round"
+                          transform="rotate(-90 32 32)"
+                        />
+                        <text x="32" y="36" textAnchor="middle" fontSize="14" fontWeight="bold" fill="#f4f4f5">
+                          {calibrationData.calibration_score}
+                        </text>
+                      </svg>
+                      <span className="text-xs text-zinc-500">Cal. Score</span>
+                    </div>
+                  )}
+                  <p className="text-sm text-zinc-300 leading-relaxed">{calibrationData.narrative}</p>
+                </div>
+                <div className="mb-4 h-48">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={calibrationData.calibration_buckets} barGap={2}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                      <XAxis dataKey="bucket_label" tick={{ fontSize: 10, fill: "#71717a" }} />
+                      <YAxis tick={{ fontSize: 10, fill: "#71717a" }} domain={[0, 100]} unit="%" />
+                      <Tooltip
+                        contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
+                        labelStyle={{ color: "#a1a1aa" }}
+                        itemStyle={{ color: "#f4f4f5" }}
+                        formatter={(value) => `${value}%`}
+                      />
+                      <Bar dataKey="predicted_avg" name="Predicted" fill="#38bdf8" radius={[2, 2, 0, 0]} />
+                      <Bar dataKey="actual_win_rate" name="Actual" fill="#818cf8" radius={[2, 2, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Recommendations</p>
+                  {calibrationData.recommendations.map((rec, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                      <p className="text-sm text-zinc-300">{rec}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs text-zinc-600">
+                  Generated {new Date(calibrationData.generated_at).toLocaleString()} · Claude Haiku
+                </p>
+              </div>
+            )}
+            {!calibrationData && !calibrationLoading && (
+              <p className="text-sm text-zinc-500">Click Regenerate to generate a win probability calibration report.</p>
             )}
           </div>
         )}
