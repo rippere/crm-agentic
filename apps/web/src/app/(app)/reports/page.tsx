@@ -151,6 +151,17 @@ export default function ReportsPage() {
   const [calibrationLoading, setCalibrationLoading] = useState(false);
   const [calibrationOpen, setCalibrationOpen] = useState(true);
 
+  type FunnelStage = { stage: string; count: number; conversion_rate: number | null };
+  type AcquisitionFunnel = {
+    funnel_stages: FunnelStage[]
+    top_insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [acquisitionFunnel, setAcquisitionFunnel] = useState<AcquisitionFunnel | null>(null);
+  const [acquisitionFunnelLoading, setAcquisitionFunnelLoading] = useState(false);
+  const [acquisitionFunnelOpen, setAcquisitionFunnelOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -185,6 +196,8 @@ export default function ReportsPage() {
       apiClient.getWinProbabilityCalibration("demo-workspace-1", "demo-token").then(setCalibrationData).catch(() => {}).finally(() => setCalibrationLoading(false));
       setAgentPerfReportLoading(true);
       apiClient.getAgentPerformanceReport("demo-workspace-1", "demo-token").then(setAgentPerfReport).catch(() => {}).finally(() => setAgentPerfReportLoading(false));
+      setAcquisitionFunnelLoading(true);
+      apiClient.getContactAcquisitionFunnel("demo-workspace-1", "demo-token").then(setAcquisitionFunnel).catch(() => {}).finally(() => setAcquisitionFunnelLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -224,6 +237,8 @@ export default function ReportsPage() {
       apiClient.getWinProbabilityCalibration(workspaceId, session.access_token).then(setCalibrationData).catch(() => {}).finally(() => setCalibrationLoading(false));
       setAgentPerfReportLoading(true);
       apiClient.getAgentPerformanceReport(workspaceId, session.access_token).then(setAgentPerfReport).catch(() => {}).finally(() => setAgentPerfReportLoading(false));
+      setAcquisitionFunnelLoading(true);
+      apiClient.getContactAcquisitionFunnel(workspaceId, session.access_token).then(setAcquisitionFunnel).catch(() => {}).finally(() => setAcquisitionFunnelLoading(false));
     });
   }, []);
 
@@ -1936,6 +1951,100 @@ export default function ReportsPage() {
           </Card>
         );
       })()}
+
+      {/* Contact Acquisition Funnel — Phase 16e */}
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-indigo-400" />
+          <p className="text-sm font-semibold text-zinc-200">Contact Acquisition Funnel</p>
+          <button
+            onClick={() => setAcquisitionFunnelOpen((o) => !o)}
+            className="ml-auto text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            {acquisitionFunnelOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+          <button
+            onClick={() => {
+              if (acquisitionFunnelLoading) return;
+              setAcquisitionFunnelLoading(true);
+              const load = (wsId: string, tok: string) =>
+                apiClient.getContactAcquisitionFunnel(wsId, tok).then(setAcquisitionFunnel).catch(() => {}).finally(() => setAcquisitionFunnelLoading(false));
+              if (DEMO_MODE) { load("demo-workspace-1", "demo-token"); return; }
+              const supabase = createBrowserClient();
+              supabase.auth.getSession().then(({ data: { session } }) => {
+                if (!session) { setAcquisitionFunnelLoading(false); return; }
+                const wsId = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+                if (wsId) load(wsId, session.access_token); else setAcquisitionFunnelLoading(false);
+              });
+            }}
+            className="text-zinc-500 hover:text-zinc-300 transition-colors"
+            title="Regenerate"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", acquisitionFunnelLoading && "animate-spin")} />
+          </button>
+        </div>
+        {acquisitionFunnelOpen && (
+          acquisitionFunnelLoading ? (
+            <div className="space-y-2 animate-pulse">
+              <div className="h-5 w-full rounded bg-zinc-800" />
+              <div className="h-5 w-4/5 rounded bg-zinc-800" />
+              <div className="h-5 w-3/5 rounded bg-zinc-800" />
+            </div>
+          ) : acquisitionFunnel ? (
+            <div className="space-y-4">
+              {/* Funnel bars */}
+              <div className="space-y-2">
+                {acquisitionFunnel.funnel_stages.map((stage, idx) => {
+                  const maxCount = Math.max(...acquisitionFunnel.funnel_stages.map((s) => s.count), 1);
+                  const pct = Math.round((stage.count / maxCount) * 100);
+                  const stageLabel = stage.stage.charAt(0).toUpperCase() + stage.stage.slice(1);
+                  return (
+                    <div key={stage.stage}>
+                      {idx > 0 && stage.conversion_rate !== null && (
+                        <div className="flex items-center gap-1 my-1 pl-2">
+                          <div className="w-0.5 h-3 bg-zinc-700 mx-2" />
+                          <span className="text-[10px] font-mono text-zinc-500">
+                            {stage.conversion_rate}% conversion
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-3">
+                        <span className="w-20 text-xs text-zinc-400 shrink-0">{stageLabel}</span>
+                        <div className="flex-1 bg-zinc-800 rounded-full h-5 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-indigo-500/70 flex items-center px-2 transition-all duration-500"
+                            style={{ width: `${Math.max(pct, 4)}%` }}
+                          >
+                            <span className="text-[10px] font-mono text-white whitespace-nowrap">{stage.count}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Top insight */}
+              <p className="text-xs text-zinc-300 italic border-l-2 border-indigo-500 pl-3">
+                {acquisitionFunnel.top_insight}
+              </p>
+              {/* Recommendations */}
+              <ul className="space-y-1.5">
+                {acquisitionFunnel.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10px] font-mono text-zinc-600">
+                Generated {new Date(acquisitionFunnel.generated_at).toLocaleString()}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500">No data available.</p>
+          )
+        )}
+      </Card>
 
       {/* Stale alert */}
       {stats.stale > 0 && (
