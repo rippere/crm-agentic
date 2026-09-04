@@ -7605,3 +7605,102 @@ async def agent_performance_report(
         "recommendations": recommendations,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+_CONTACT_FUNNEL_SYSTEM = (
+    "You are a CRM analytics expert. Given a contact acquisition funnel with stage counts and "
+    "conversion rates, return a JSON object with exactly two keys:\n"
+    "  \"top_insight\": a single sentence summarising the biggest opportunity or risk in the funnel,\n"
+    "  \"recommendations\": a JSON array of exactly 3 concise, actionable strings to improve conversion.\n"
+    "Return ONLY valid JSON. No markdown, no explanation."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/acquisition-funnel")
+@limiter.limit("5/minute")
+async def contact_acquisition_funnel(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    funnel_stages = ["lead", "prospect", "customer"]
+
+    result = await db.execute(
+        select(Contact.status, func.count(Contact.id).label("cnt"))
+        .where(Contact.workspace_id == workspace_id)
+        .where(Contact.status.in_(funnel_stages))
+        .group_by(Contact.status)
+    )
+    counts: dict[str, int] = {row.status: row.cnt for row in result.all()}
+
+    stage_counts = [counts.get(s, 0) for s in funnel_stages]
+
+    funnel: list[dict] = []
+    for i, stage in enumerate(funnel_stages):
+        count = stage_counts[i]
+        if i == 0:
+            conversion_rate = None
+        else:
+            prev = stage_counts[i - 1]
+            conversion_rate = round(count / prev * 100, 1) if prev > 0 else 0.0
+        funnel.append({"stage": stage, "count": count, "conversion_rate": conversion_rate})
+
+    _default_insight = (
+        "No contacts in the funnel yet — start by importing leads and tracking their progress."
+    )
+    _default_recommendations = [
+        "Import leads via CSV or connect Gmail/Slack to auto-create contacts from inbound messages.",
+        "Set up a weekly review cadence to move stalled leads to prospect or mark them as churned.",
+        "Use the Lead Scorer agent to prioritise which prospects to advance to customer.",
+    ]
+
+    total = sum(stage_counts)
+    if total == 0:
+        return {
+            "funnel_stages": funnel,
+            "top_insight": _default_insight,
+            "recommendations": _default_recommendations,
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    context_lines = ["Contact acquisition funnel (stage: count — conversion from previous stage):"]
+    for f in funnel:
+        conv_str = f"(conversion: {f['conversion_rate']}%)" if f["conversion_rate"] is not None else "(top of funnel)"
+        context_lines.append(f"  {f['stage']}: {f['count']} contacts {conv_str}")
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_CONTACT_FUNNEL_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    top_insight = data.get("top_insight", _default_insight)
+    if not isinstance(top_insight, str) or not top_insight.strip():
+        top_insight = _default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else []) if str(r).strip()][:3]
+    while len(recommendations) < 3:
+        recommendations.append(_default_recommendations[len(recommendations)])
+
+    return {
+        "funnel_stages": funnel,
+        "top_insight": top_insight,
+        "recommendations": recommendations,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

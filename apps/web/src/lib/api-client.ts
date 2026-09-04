@@ -4949,6 +4949,35 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/performance-report`, {}, token)
   },
 
+  getContactAcquisitionFunnel: (workspaceId: string, token: string): Promise<{
+    funnel_stages: Array<{
+      stage: string
+      count: number
+      conversion_rate: number | null
+    }>
+    top_insight: string
+    recommendations: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        funnel_stages: [
+          { stage: 'lead',     count: 120, conversion_rate: null },
+          { stage: 'prospect', count:  48, conversion_rate: 40.0 },
+          { stage: 'customer', count:  18, conversion_rate: 37.5 },
+        ],
+        top_insight: 'Only 40% of leads convert to prospects — improving your initial qualification call could unlock significant pipeline growth.',
+        recommendations: [
+          'Add a qualification score threshold so only leads with a score ≥ 60 move to prospect automatically.',
+          'Run the Lead Scorer agent weekly to surface high-potential leads before they go cold.',
+          'Schedule a 15-minute discovery call within 48 hours of a new lead being created to boost lead→prospect conversion.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/acquisition-funnel`, {}, token)
+  },
+
   getWinProbabilityCalibration: (workspaceId: string, token: string): Promise<{
     calibration_buckets: Array<{
       bucket_label: string

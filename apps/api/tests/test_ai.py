@@ -4301,3 +4301,61 @@ async def test_agent_performance_report_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/performance-report")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_contact_acquisition_funnel_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    counts_result = MagicMock()
+    counts_result.all.return_value = [
+        MagicMock(status="lead",     cnt=80),
+        MagicMock(status="prospect", cnt=30),
+        MagicMock(status="customer", cnt=12),
+    ]
+    mock_db.execute = AsyncMock(return_value=counts_result)
+
+    import json as _json
+    response_json = _json.dumps({
+        "top_insight": "Only 38% of leads become prospects — earlier qualification would improve pipeline quality.",
+        "recommendations": [
+            "Use the Lead Scorer agent to rank leads weekly and focus outreach on the top 20%.",
+            "Send a personalised follow-up within 48 hours of lead creation to boost prospect conversion.",
+            "Review churned contacts monthly to identify patterns and adjust your ICP.",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/acquisition-funnel")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["funnel_stages"], list)
+    assert len(body["funnel_stages"]) == 3
+    stages = {s["stage"]: s for s in body["funnel_stages"]}
+    assert stages["lead"]["count"] == 80
+    assert stages["prospect"]["count"] == 30
+    assert stages["customer"]["count"] == 12
+    assert stages["lead"]["conversion_rate"] is None
+    assert stages["prospect"]["conversion_rate"] == pytest.approx(37.5, abs=0.1)
+    assert stages["customer"]["conversion_rate"] == pytest.approx(40.0, abs=0.1)
+    assert isinstance(body["top_insight"], str) and len(body["top_insight"]) > 0
+    assert isinstance(body["recommendations"], list) and len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_acquisition_funnel_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/acquisition-funnel")
+    assert resp.status_code == 403
