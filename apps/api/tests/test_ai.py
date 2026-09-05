@@ -4359,3 +4359,86 @@ async def test_contact_acquisition_funnel_wrong_workspace_returns_403(app_client
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/acquisition-funnel")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_contact_source_attribution_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    contact_id_1 = uuid.uuid4()
+    contact_id_2 = uuid.uuid4()
+    contact_id_3 = uuid.uuid4()
+
+    contacts_result = MagicMock()
+    contacts_result.all.return_value = [
+        MagicMock(id=contact_id_1, email="alice@acme.com",   company="Acme Corp"),
+        MagicMock(id=contact_id_2, email="bob@globex.com",   company="Globex"),
+        MagicMock(id=contact_id_3, email="carol@initech.io", company=None),
+    ]
+    # Individual deal rows: contact_id, value, stage
+    deals_result = MagicMock()
+    deals_result.all.return_value = [
+        MagicMock(contact_id=contact_id_1, value=21000, stage="closed_won"),
+        MagicMock(contact_id=contact_id_1, value=21000, stage="closed_won"),
+        MagicMock(contact_id=contact_id_1, value=53000, stage="proposal"),
+        MagicMock(contact_id=contact_id_2, value=20000, stage="closed_won"),
+        MagicMock(contact_id=contact_id_2, value=48000, stage="qualified"),
+    ]
+
+    call_count = 0
+    async def _multi_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return contacts_result
+        return deals_result
+
+    mock_db.execute = _multi_execute
+
+    import json as _json
+    response_json = _json.dumps({
+        "insight": "Acme Corp accounts for the majority of pipeline value and should be a priority focus.",
+        "recommendations": [
+            "Double down on Acme Corp by identifying additional stakeholders.",
+            "Investigate Globex win rate to understand conversion blockers.",
+            "Add company fields to all contacts to reduce Unknown source bucket.",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/source-attribution")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["sources"], list)
+    assert len(body["sources"]) >= 1
+    source_labels = [s["source_label"] for s in body["sources"]]
+    assert "Acme Corp" in source_labels
+    assert "Globex" in source_labels
+    # carol has no company — should use domain: "Initech (domain)"
+    assert any("Initech" in lbl for lbl in source_labels)
+    acme = next(s for s in body["sources"] if s["source_label"] == "Acme Corp")
+    assert acme["pipeline_value"] == 95000
+    assert acme["won_revenue"] == 42000
+    assert acme["win_rate"] == pytest.approx(66.7, abs=0.1)
+    assert isinstance(body["top_source"], str)
+    assert isinstance(body["insight"], str) and len(body["insight"]) > 0
+    assert isinstance(body["recommendations"], list) and len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_source_attribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/source-attribution")
+    assert resp.status_code == 403

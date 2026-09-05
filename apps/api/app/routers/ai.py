@@ -7704,3 +7704,145 @@ async def contact_acquisition_funnel(
         "recommendations": recommendations,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+_SOURCE_ATTRIBUTION_SYSTEM = (
+    "You are a CRM revenue analyst. Given a contact source attribution breakdown showing pipeline value "
+    "and won revenue per company/domain cluster, return a JSON object with exactly two keys:\n"
+    "  \"insight\": a single sentence summarising the most important finding,\n"
+    "  \"recommendations\": a JSON array of exactly 3 concise, actionable strings.\n"
+    "Return ONLY valid JSON. No markdown, no explanation."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/source-attribution")
+@limiter.limit("5/minute")
+async def contact_source_attribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    contacts_result = await db.execute(
+        select(Contact.id, Contact.email, Contact.company)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    contacts = contacts_result.all()
+
+    _default_insight = "No contacts found — import contacts to see source attribution."
+    _default_recommendations = [
+        "Import contacts via CSV to start tracking pipeline by source.",
+        "Connect Gmail or Slack to auto-create contacts from inbound messages.",
+        "Use company fields consistently to improve source attribution accuracy.",
+    ]
+
+    if not contacts:
+        return {
+            "sources": [],
+            "top_source": None,
+            "insight": _default_insight,
+            "recommendations": _default_recommendations,
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    # Build contact_id → source_label map using company or email domain
+    contact_source_map: dict[str, str] = {}
+    for c in contacts:
+        if c.company and c.company.strip():
+            source = c.company.strip()
+        elif c.email and "@" in c.email:
+            domain_part = c.email.split("@")[1].split(".")[0]
+            source = f"{domain_part.capitalize()} (domain)"
+        else:
+            source = "Unknown"
+        contact_source_map[str(c.id)] = source
+
+    # Fetch all deals for the workspace contacts
+    contact_uuids = [uuid.UUID(cid) for cid in contact_source_map]
+    deals_result = await db.execute(
+        select(Deal.contact_id, Deal.value, Deal.stage)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.contact_id.in_(contact_uuids))
+    )
+    deal_rows = deals_result.all()
+
+    # Aggregate by source label
+    source_stats: dict[str, dict] = {}
+    for cid in contact_source_map:
+        source = contact_source_map[cid]
+        if source not in source_stats:
+            source_stats[source] = {"contact_ids": set(), "pipeline_value": 0, "won_revenue": 0, "deal_count": 0, "won_count": 0}
+        source_stats[source]["contact_ids"].add(cid)
+
+    for row in deal_rows:
+        cid = str(row.contact_id)
+        source = contact_source_map.get(cid, "Unknown")
+        if source not in source_stats:
+            source_stats[source] = {"contact_ids": set(), "pipeline_value": 0, "won_revenue": 0, "deal_count": 0, "won_count": 0}
+        val = int(row.value or 0)
+        source_stats[source]["pipeline_value"] += val
+        source_stats[source]["deal_count"] += 1
+        if row.stage == "closed_won":
+            source_stats[source]["won_revenue"] += val
+            source_stats[source]["won_count"] += 1
+
+    sources = []
+    for source_label, stats in source_stats.items():
+        dc = stats["deal_count"]
+        wc = stats["won_count"]
+        sources.append({
+            "source_label": source_label,
+            "contact_count": len(stats["contact_ids"]),
+            "pipeline_value": stats["pipeline_value"],
+            "won_revenue": stats["won_revenue"],
+            "win_rate": round(wc / dc * 100, 1) if dc > 0 else 0.0,
+        })
+    sources.sort(key=lambda x: x["pipeline_value"], reverse=True)
+    sources = sources[:10]
+
+    top_source = sources[0]["source_label"] if sources else None
+
+    context_lines = ["Contact source attribution (sorted by pipeline value):"]
+    for s in sources:
+        context_lines.append(
+            f"  {s['source_label']}: {s['contact_count']} contacts, "
+            f"${s['pipeline_value']:,} pipeline, ${s['won_revenue']:,} won, "
+            f"{s['win_rate']}% win rate"
+        )
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_SOURCE_ATTRIBUTION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", _default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = _default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else []) if str(r).strip()][:3]
+    while len(recommendations) < 3:
+        recommendations.append(_default_recommendations[len(recommendations)])
+
+    return {
+        "sources": sources,
+        "top_source": top_source,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
