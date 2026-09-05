@@ -5018,5 +5018,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-probability-calibration`, {}, token)
   },
+
+  getContactSourceAttribution: (workspaceId: string, token: string): Promise<{
+    sources: Array<{
+      source_label: string
+      contact_count: number
+      pipeline_value: number
+      won_revenue: number
+      win_rate: number
+    }>
+    top_source: string | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        sources: [
+          { source_label: 'Acme Corp',          contact_count: 5, pipeline_value: 95000, won_revenue: 42000, win_rate: 60.0 },
+          { source_label: 'Globex',              contact_count: 3, pipeline_value: 68000, won_revenue: 20000, win_rate: 40.0 },
+          { source_label: 'Initech',             contact_count: 4, pipeline_value: 54000, won_revenue: 18000, win_rate: 33.3 },
+          { source_label: 'Umbrella (domain)',   contact_count: 2, pipeline_value: 32000, won_revenue: 12000, win_rate: 50.0 },
+          { source_label: 'Vandelay Industries', contact_count: 1, pipeline_value: 15000, won_revenue:  5000, win_rate: 50.0 },
+        ],
+        top_source: 'Acme Corp',
+        insight: 'Acme Corp accounts for 36% of total pipeline — doubling down on that account cluster would have an outsized revenue impact.',
+        recommendations: [
+          'Prioritise expanding within Acme Corp by mapping additional stakeholders and identifying upsell opportunities.',
+          'Investigate why Initech has a 33% win rate despite high pipeline value — review deal notes for common objections.',
+          'Tag all contacts with a company field to improve source attribution and reduce the "Unknown" bucket.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/source-attribution`, {}, token)
+  },
 }
 

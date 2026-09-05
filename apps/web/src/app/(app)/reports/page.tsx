@@ -162,6 +162,17 @@ export default function ReportsPage() {
   const [acquisitionFunnelLoading, setAcquisitionFunnelLoading] = useState(false);
   const [acquisitionFunnelOpen, setAcquisitionFunnelOpen] = useState(true);
 
+  type SourceAttribution = {
+    sources: Array<{ source_label: string; contact_count: number; pipeline_value: number; won_revenue: number; win_rate: number }>
+    top_source: string | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [sourceAttribution, setSourceAttribution] = useState<SourceAttribution | null>(null);
+  const [sourceAttributionLoading, setSourceAttributionLoading] = useState(false);
+  const [sourceAttributionOpen, setSourceAttributionOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -198,6 +209,8 @@ export default function ReportsPage() {
       apiClient.getAgentPerformanceReport("demo-workspace-1", "demo-token").then(setAgentPerfReport).catch(() => {}).finally(() => setAgentPerfReportLoading(false));
       setAcquisitionFunnelLoading(true);
       apiClient.getContactAcquisitionFunnel("demo-workspace-1", "demo-token").then(setAcquisitionFunnel).catch(() => {}).finally(() => setAcquisitionFunnelLoading(false));
+      setSourceAttributionLoading(true);
+      apiClient.getContactSourceAttribution("demo-workspace-1", "demo-token").then(setSourceAttribution).catch(() => {}).finally(() => setSourceAttributionLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -239,6 +252,8 @@ export default function ReportsPage() {
       apiClient.getAgentPerformanceReport(workspaceId, session.access_token).then(setAgentPerfReport).catch(() => {}).finally(() => setAgentPerfReportLoading(false));
       setAcquisitionFunnelLoading(true);
       apiClient.getContactAcquisitionFunnel(workspaceId, session.access_token).then(setAcquisitionFunnel).catch(() => {}).finally(() => setAcquisitionFunnelLoading(false));
+      setSourceAttributionLoading(true);
+      apiClient.getContactSourceAttribution(workspaceId, session.access_token).then(setSourceAttribution).catch(() => {}).finally(() => setSourceAttributionLoading(false));
     });
   }, []);
 
@@ -2042,6 +2057,93 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500">No data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Contact Source Attribution — Phase 16f */}
+      <Card>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-teal-400" />
+            <p className="text-sm font-semibold text-zinc-200">Contact Source Attribution</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                const supabase = createBrowserClient();
+                supabase.auth.getSession().then(({ data: { session } }) => {
+                  const wsId = DEMO_MODE ? "demo-workspace-1" : (session?.user.app_metadata?.workspace_id ?? session?.user.user_metadata?.workspace_id);
+                  const tok = DEMO_MODE ? "demo-token" : (session?.access_token ?? "");
+                  if (!wsId || sourceAttributionLoading) return;
+                  setSourceAttributionLoading(true);
+                  apiClient.getContactSourceAttribution(wsId, tok).then(setSourceAttribution).catch(() => {}).finally(() => setSourceAttributionLoading(false));
+                });
+              }}
+              className="rounded p-1 hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", sourceAttributionLoading && "animate-spin")} />
+            </button>
+            <button onClick={() => setSourceAttributionOpen((o) => !o)} className="rounded p-1 hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 transition-colors">
+              {sourceAttributionOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {sourceAttributionOpen && (
+          sourceAttributionLoading ? (
+            <div className="mt-4 space-y-2 animate-pulse">
+              {[1,2,3].map((i) => <div key={i} className="h-6 rounded bg-zinc-800" />)}
+            </div>
+          ) : sourceAttribution ? (
+            <div className="mt-4 space-y-4">
+              {/* Per-source rows */}
+              <div className="space-y-2">
+                {sourceAttribution.sources.map((s) => {
+                  const maxPipeline = Math.max(...sourceAttribution.sources.map((x) => x.pipeline_value), 1);
+                  return (
+                    <div key={s.source_label} className="space-y-0.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-200 font-medium">{s.source_label}</span>
+                        <div className="flex items-center gap-3 text-zinc-400">
+                          <span>{s.contact_count} contact{s.contact_count !== 1 ? "s" : ""}</span>
+                          <span className="text-indigo-300 font-mono">{formatCurrency(s.pipeline_value)}</span>
+                          <span className="text-emerald-400 font-mono">{formatCurrency(s.won_revenue)} won</span>
+                          <span className="text-zinc-500">{s.win_rate}% WR</span>
+                        </div>
+                      </div>
+                      <div className="relative h-1.5 rounded-full bg-zinc-800">
+                        <div
+                          className="absolute inset-y-0 left-0 rounded-full bg-teal-500"
+                          style={{ width: `${Math.round((s.pipeline_value / maxPipeline) * 100)}%` }}
+                        />
+                        <div
+                          className="absolute inset-y-0 left-0 rounded-full bg-emerald-500 opacity-70"
+                          style={{ width: `${Math.round((s.won_revenue / maxPipeline) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* AI insight */}
+              <p className="text-xs text-zinc-300 italic border-l-2 border-teal-500 pl-3">
+                {sourceAttribution.insight}
+              </p>
+              {/* Recommendations */}
+              <ul className="space-y-1.5">
+                {sourceAttribution.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10px] font-mono text-zinc-600">
+                Generated {new Date(sourceAttribution.generated_at).toLocaleString()}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 mt-3">No data available.</p>
           )
         )}
       </Card>
