@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -173,6 +173,19 @@ export default function ReportsPage() {
   const [sourceAttributionLoading, setSourceAttributionLoading] = useState(false);
   const [sourceAttributionOpen, setSourceAttributionOpen] = useState(true);
 
+  type TaskWeek = { week_start: string; created: number; completed: number; overdue: number; completion_rate: number };
+  type TaskCompletionTrends = {
+    weeks: TaskWeek[]
+    avg_completion_rate: number
+    trend: 'improving' | 'stable' | 'declining'
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [taskCompletionTrends, setTaskCompletionTrends] = useState<TaskCompletionTrends | null>(null);
+  const [taskCompletionTrendsLoading, setTaskCompletionTrendsLoading] = useState(false);
+  const [taskCompletionTrendsOpen, setTaskCompletionTrendsOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -211,6 +224,8 @@ export default function ReportsPage() {
       apiClient.getContactAcquisitionFunnel("demo-workspace-1", "demo-token").then(setAcquisitionFunnel).catch(() => {}).finally(() => setAcquisitionFunnelLoading(false));
       setSourceAttributionLoading(true);
       apiClient.getContactSourceAttribution("demo-workspace-1", "demo-token").then(setSourceAttribution).catch(() => {}).finally(() => setSourceAttributionLoading(false));
+      setTaskCompletionTrendsLoading(true);
+      apiClient.getTaskCompletionTrends("demo-workspace-1", "demo-token").then(setTaskCompletionTrends).catch(() => {}).finally(() => setTaskCompletionTrendsLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -254,6 +269,8 @@ export default function ReportsPage() {
       apiClient.getContactAcquisitionFunnel(workspaceId, session.access_token).then(setAcquisitionFunnel).catch(() => {}).finally(() => setAcquisitionFunnelLoading(false));
       setSourceAttributionLoading(true);
       apiClient.getContactSourceAttribution(workspaceId, session.access_token).then(setSourceAttribution).catch(() => {}).finally(() => setSourceAttributionLoading(false));
+      setTaskCompletionTrendsLoading(true);
+      apiClient.getTaskCompletionTrends(workspaceId, session.access_token).then(setTaskCompletionTrends).catch(() => {}).finally(() => setTaskCompletionTrendsLoading(false));
     });
   }, []);
 
@@ -2144,6 +2161,109 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 mt-3">No data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Task Completion Trends — Phase 16g */}
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <CheckSquare className="h-4 w-4 text-emerald-400" />
+          <p className="text-sm font-semibold text-zinc-200">Task Completion Trends</p>
+          {taskCompletionTrends && (
+            <span className={cn(
+              "ml-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+              taskCompletionTrends.trend === "improving" ? "bg-emerald-500/20 text-emerald-300" :
+              taskCompletionTrends.trend === "declining" ? "bg-rose-500/20 text-rose-300" :
+              "bg-zinc-500/20 text-zinc-300"
+            )}>
+              {taskCompletionTrends.trend === "improving" ? "↑ Improving" :
+               taskCompletionTrends.trend === "declining" ? "↓ Declining" : "→ Stable"}
+            </span>
+          )}
+          <div className="flex-1" />
+          <button
+            onClick={() => {
+              if (taskCompletionTrendsLoading) return;
+              setTaskCompletionTrendsLoading(true);
+              const load = (wsId: string, tok: string) =>
+                apiClient.getTaskCompletionTrends(wsId, tok).then(setTaskCompletionTrends).catch(() => {}).finally(() => setTaskCompletionTrendsLoading(false));
+              if (DEMO_MODE) { load("demo-workspace-1", "demo-token"); return; }
+              const supabase = createBrowserClient();
+              supabase.auth.getSession().then(({ data: { session } }) => {
+                if (!session) { setTaskCompletionTrendsLoading(false); return; }
+                const wsId = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+                if (wsId) load(wsId, session.access_token); else setTaskCompletionTrendsLoading(false);
+              });
+            }}
+            className="text-zinc-500 hover:text-zinc-300 transition-colors"
+            title="Regenerate"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", taskCompletionTrendsLoading && "animate-spin")} />
+          </button>
+          <button onClick={() => setTaskCompletionTrendsOpen((o) => !o)} className="text-zinc-500 hover:text-zinc-300 transition-colors">
+            {taskCompletionTrendsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+        </div>
+
+        {taskCompletionTrendsOpen && (
+          taskCompletionTrendsLoading ? (
+            <div className="space-y-2 animate-pulse">
+              <div className="h-40 rounded-lg bg-zinc-800/60" />
+              <div className="h-3 w-3/4 rounded bg-zinc-800/60" />
+            </div>
+          ) : taskCompletionTrends ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-4 text-xs text-zinc-400">
+                <span>Avg completion rate: <span className="font-semibold text-zinc-200">{taskCompletionTrends.avg_completion_rate}%</span></span>
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <ComposedChart data={taskCompletionTrends.weeks} margin={{ top: 4, right: 40, bottom: 0, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                  <XAxis
+                    dataKey="week_start"
+                    tick={{ fontSize: 9, fill: "#71717a" }}
+                    tickFormatter={(v: string) => {
+                      const d = new Date(v);
+                      return `${d.toLocaleString("default", { month: "short" })} ${d.getDate()}`;
+                    }}
+                    interval={2}
+                  />
+                  <YAxis yAxisId="left" tick={{ fontSize: 9, fill: "#71717a" }} width={28} />
+                  <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: 9, fill: "#71717a" }} width={32} unit="%" />
+                  <Tooltip
+                    contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8, fontSize: 11 }}
+                    formatter={(value: unknown, name: unknown) => {
+                      if (name === "completion_rate") return [`${value}%`, "Completion Rate"];
+                      const n = String(name);
+                      return [value as number, n.charAt(0).toUpperCase() + n.slice(1)];
+                    }}
+                    labelFormatter={(label: unknown) => new Date(String(label)).toLocaleDateString()}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 10, color: "#a1a1aa" }} />
+                  <Bar yAxisId="left" dataKey="created" name="Created" fill="#52525b" radius={[2, 2, 0, 0]} />
+                  <Bar yAxisId="left" dataKey="completed" name="Completed" fill="#10b981" radius={[2, 2, 0, 0]} />
+                  <Bar yAxisId="left" dataKey="overdue" name="Overdue" fill="#f43f5e" radius={[2, 2, 0, 0]} />
+                  <Line yAxisId="right" dataKey="completion_rate" name="completion_rate" stroke="#818cf8" strokeWidth={2} strokeDasharray="4 2" dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-300 italic border-l-2 border-emerald-500 pl-3">
+                {taskCompletionTrends.insight}
+              </p>
+              <ul className="space-y-1.5">
+                {taskCompletionTrends.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10px] font-mono text-zinc-600">
+                Generated {new Date(taskCompletionTrends.generated_at).toLocaleString()}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 mt-3">No task data available.</p>
           )
         )}
       </Card>

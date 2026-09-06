@@ -4442,3 +4442,103 @@ async def test_contact_source_attribution_wrong_workspace_returns_403(app_client
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/source-attribution")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16g: task completion trends
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_task_completion_trends_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    import datetime as dt
+
+    today = dt.date.today()
+    this_monday = today - dt.timedelta(days=today.weekday())
+    # Place tasks in the most recent week
+    recent_monday = dt.datetime.combine(this_monday, dt.datetime.min.time()).replace(
+        tzinfo=dt.timezone.utc
+    )
+    recent_tuesday = recent_monday + dt.timedelta(days=1)
+    recent_wednesday = recent_monday + dt.timedelta(days=2)
+    # A due_date two weeks ago (in the overdue window)
+    overdue_due_date = (this_monday - dt.timedelta(weeks=2))
+
+    def _make_task(created_at, updated_at, status, due_date=None):
+        t = MagicMock()
+        t.created_at = created_at
+        t.updated_at = updated_at
+        t.status = status
+        t.due_date = due_date
+        return t
+
+    created_task = _make_task(recent_tuesday, recent_tuesday, "open")
+    completed_task = _make_task(recent_monday, recent_wednesday, "done")
+    overdue_task = _make_task(
+        recent_monday - dt.timedelta(weeks=2),
+        recent_monday - dt.timedelta(weeks=2),
+        "open",
+        due_date=overdue_due_date,
+    )
+
+    call_count = 0
+
+    async def _multi_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        result = MagicMock()
+        if call_count == 1:
+            result.scalars.return_value.all.return_value = [created_task]
+        elif call_count == 2:
+            result.scalars.return_value.all.return_value = [completed_task]
+        else:
+            result.scalars.return_value.all.return_value = [overdue_task]
+        return result
+
+    mock_db.execute = _multi_execute
+
+    import json as _json
+    response_json = _json.dumps({
+        "insight": "Task completion rate is improving steadily over the last 12 weeks.",
+        "recommendations": [
+            "Set due dates on all open tasks to improve accountability.",
+            "Hold weekly task review sessions to close overdue items.",
+            "Break large tasks into smaller subtasks to boost velocity.",
+        ],
+    })
+    mock_resp = MagicMock()
+    mock_resp.content = [MagicMock(text=response_json)]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_resp
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/tasks/completion-trends?weeks=12")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["weeks"], list)
+    assert len(body["weeks"]) == 12
+    week = body["weeks"][-1]  # most recent week should have our tasks
+    assert "week_start" in week
+    assert isinstance(week["created"], int)
+    assert isinstance(week["completed"], int)
+    assert isinstance(week["overdue"], int)
+    assert isinstance(week["completion_rate"], (int, float))
+    assert isinstance(body["avg_completion_rate"], (int, float))
+    assert body["trend"] in ("improving", "stable", "declining")
+    assert isinstance(body["insight"], str) and len(body["insight"]) > 0
+    assert isinstance(body["recommendations"], list) and len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_task_completion_trends_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/completion-trends")
+    assert resp.status_code == 403
