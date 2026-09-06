@@ -5053,5 +5053,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/source-attribution`, {}, token)
   },
+
+  getTaskCompletionTrends: (workspaceId: string, token: string, weeks = 12): Promise<{
+    weeks: Array<{ week_start: string; created: number; completed: number; overdue: number; completion_rate: number }>
+    avg_completion_rate: number
+    trend: 'improving' | 'stable' | 'declining'
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      const now = new Date()
+      const demoWeeks = Array.from({ length: 12 }, (_, i) => {
+        const d = new Date(now)
+        d.setDate(d.getDate() - d.getDay() + 1 - (11 - i) * 7)
+        const created = 6 + (i % 4)
+        const completed = i < 6 ? Math.floor(created * (0.45 + i * 0.04)) : Math.floor(created * (0.65 + (i - 6) * 0.03))
+        const overdue = Math.max(0, created - completed - 1)
+        const completion_rate = created > 0 ? Math.round((completed / created) * 1000) / 10 : 0
+        return { week_start: d.toISOString().slice(0, 10), created, completed, overdue, completion_rate }
+      })
+      return Promise.resolve({
+        weeks: demoWeeks,
+        avg_completion_rate: 67.4,
+        trend: 'improving',
+        insight: 'Task completion rate has improved by 22 percentage points over the past 12 weeks, driven by consistent overdue-task reviews.',
+        recommendations: [
+          'Continue weekly task review sessions — they are clearly driving the upward completion trend.',
+          'Address the 2–3 overdue tasks each week before creating new ones to prevent backlog growth.',
+          'Tag tasks by project or deal to surface completion patterns across different workstreams.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trends?weeks=${weeks}`, {}, token)
+  },
 }
 

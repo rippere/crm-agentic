@@ -7846,3 +7846,170 @@ async def contact_source_attribution(
         "recommendations": recommendations,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16g: AI workspace task completion trends
+# ---------------------------------------------------------------------------
+
+_TASK_COMPLETION_TRENDS_SYSTEM = (
+    "You are a CRM task analytics expert. Given weekly task completion data, return a JSON object with exactly two keys:\n"
+    '  "insight": a single sentence summarising the team\'s task completion patterns and trajectory,\n'
+    '  "recommendations": a JSON array of exactly 3 concise, actionable strings to improve task completion rate.\n'
+    "Return ONLY valid JSON. No markdown, no explanation."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/tasks/completion-trends")
+@limiter.limit("5/minute")
+async def get_task_completion_trends(
+    request: Request,
+    workspace_id: uuid.UUID,
+    weeks: int = 12,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    weeks = max(1, min(weeks, 52))
+
+    today = datetime.datetime.now(timezone.utc).date()
+    this_monday = today - datetime.timedelta(days=today.weekday())
+    week_starts = [this_monday - datetime.timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+    cutoff_date = week_starts[0]
+    cutoff = datetime.datetime.combine(cutoff_date, datetime.datetime.min.time()).replace(tzinfo=timezone.utc)
+
+    r1 = await db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.created_at >= cutoff,
+        )
+    )
+    created_tasks = r1.scalars().all()
+
+    r2 = await db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.status == "done",
+            Task.updated_at >= cutoff,
+        )
+    )
+    completed_tasks = r2.scalars().all()
+
+    r3 = await db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.due_date.isnot(None),
+            Task.due_date >= cutoff_date,
+            Task.due_date < today,
+            Task.status.notin_(["done", "cancelled"]),
+        )
+    )
+    overdue_tasks = r3.scalars().all()
+
+    def _to_utc(ts: datetime.datetime) -> datetime.datetime:
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+    weeks_data = []
+    for ws in week_starts:
+        we = ws + datetime.timedelta(weeks=1)
+        ws_dt = datetime.datetime.combine(ws, datetime.datetime.min.time()).replace(tzinfo=timezone.utc)
+        we_dt = datetime.datetime.combine(we, datetime.datetime.min.time()).replace(tzinfo=timezone.utc)
+
+        created = sum(
+            1 for t in created_tasks
+            if t.created_at and ws_dt <= _to_utc(t.created_at) < we_dt
+        )
+        completed = sum(
+            1 for t in completed_tasks
+            if t.updated_at and ws_dt <= _to_utc(t.updated_at) < we_dt
+        )
+        overdue = sum(
+            1 for t in overdue_tasks
+            if t.due_date and ws <= t.due_date < we
+        )
+        completion_rate = round(completed / created * 100, 1) if created > 0 else 0.0
+        weeks_data.append({
+            "week_start": ws.isoformat(),
+            "created": created,
+            "completed": completed,
+            "overdue": overdue,
+            "completion_rate": completion_rate,
+        })
+
+    rates = [w["completion_rate"] for w in weeks_data if w["created"] > 0]
+    avg_completion_rate = round(sum(rates) / len(rates), 1) if rates else 0.0
+
+    if len(rates) >= 4:
+        mid = len(rates) // 2
+        first_half = sum(rates[:mid]) / mid
+        second_half = sum(rates[mid:]) / (len(rates) - mid)
+        if second_half > first_half + 5:
+            trend = "improving"
+        elif second_half < first_half - 5:
+            trend = "declining"
+        else:
+            trend = "stable"
+    else:
+        trend = "stable"
+
+    _default_insight = "Task completion data is being collected — check back once more tasks are tracked."
+    _default_recommendations = [
+        "Set clear due dates on all tasks to improve accountability.",
+        "Review and close overdue tasks weekly to keep the backlog healthy.",
+        "Break large tasks into smaller subtasks to increase completion velocity.",
+    ]
+
+    if not any(w["created"] > 0 for w in weeks_data):
+        return {
+            "weeks": weeks_data,
+            "avg_completion_rate": 0.0,
+            "trend": trend,
+            "insight": _default_insight,
+            "recommendations": _default_recommendations,
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    context = (
+        f"Task completion trends over {weeks} weeks:\n"
+        f"Average completion rate: {avg_completion_rate}%\n"
+        f"Trend: {trend}\n"
+        "Weekly breakdown (week_start, created, completed, overdue, completion_rate%):\n"
+    )
+    for w in weeks_data:
+        context += f"  {w['week_start']}: created={w['created']}, completed={w['completed']}, overdue={w['overdue']}, rate={w['completion_rate']}%\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_TASK_COMPLETION_TRENDS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", _default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = _default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else []) if str(r).strip()][:3]
+    while len(recommendations) < 3:
+        recommendations.append(_default_recommendations[len(recommendations)])
+
+    return {
+        "weeks": weeks_data,
+        "avg_completion_rate": avg_completion_rate,
+        "trend": trend,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
