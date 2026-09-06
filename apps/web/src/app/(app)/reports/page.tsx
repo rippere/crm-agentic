@@ -2233,11 +2233,12 @@ export default function ReportsPage() {
                   <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: 9, fill: "#71717a" }} width={32} unit="%" />
                   <Tooltip
                     contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8, fontSize: 11 }}
-                    formatter={(value: number, name: string) => {
+                    formatter={(value: unknown, name: unknown) => {
                       if (name === "completion_rate") return [`${value}%`, "Completion Rate"];
-                      return [value, name.charAt(0).toUpperCase() + name.slice(1)];
+                      const n = String(name);
+                      return [value as number, n.charAt(0).toUpperCase() + n.slice(1)];
                     }}
-                    labelFormatter={(label: string) => new Date(label).toLocaleDateString()}
+                    labelFormatter={(label: unknown) => new Date(String(label)).toLocaleDateString()}
                   />
                   <Legend wrapperStyle={{ fontSize: 10, color: "#a1a1aa" }} />
                   <Bar yAxisId="left" dataKey="created" name="Created" fill="#52525b" radius={[2, 2, 0, 0]} />
