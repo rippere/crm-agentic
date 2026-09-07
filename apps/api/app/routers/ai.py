@@ -4,6 +4,8 @@ import uuid
 from collections import Counter, defaultdict
 from datetime import timezone
 
+import statistics
+
 import anthropic as _anthropic
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -21,6 +23,7 @@ from app.models.clarity_score import ClarityScore
 from app.models.deal import Deal
 from app.models.deal_note import DealNote
 from app.models.message import Message
+from app.models.connector import Connector
 from app.models.task import Task
 from app.models.activity_event import ActivityEvent
 from app.models.deal_health_history import DealHealthHistory
@@ -8009,6 +8012,149 @@ async def get_task_completion_trends(
         "weeks": weeks_data,
         "avg_completion_rate": avg_completion_rate,
         "trend": trend,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/messages/response-time-benchmark")
+@limiter.limit("5/minute")
+async def get_message_response_time_benchmark(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Fetch all messages with connector service, ordered for pairing
+    stmt = (
+        select(
+            Message.sender_email,
+            Message.received_at,
+            Message.subject,
+            Message.connector_id,
+            Connector.service,
+        )
+        .join(Connector, Message.connector_id == Connector.id)
+        .where(Message.workspace_id == workspace_id)
+        .order_by(Connector.service, Message.connector_id, Message.received_at)
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    # Group by (service, connector_id, normalized_subject) to identify threads
+    threads: dict = defaultdict(list)
+    for row in rows:
+        normalized_subject = (row.subject or "").lower().replace("re: ", "").replace("fwd: ", "").strip()
+        key = (row.service, str(row.connector_id), normalized_subject)
+        threads[key].append(row)
+
+    # Compute response lags per service by pairing alternating senders
+    service_lags: dict[str, list[float]] = defaultdict(list)
+    for (service, _connector_id, _subj), msgs in threads.items():
+        if len(msgs) < 2:
+            continue
+        for i in range(1, len(msgs)):
+            prev = msgs[i - 1]
+            curr = msgs[i]
+            if prev.sender_email and curr.sender_email and prev.sender_email != curr.sender_email:
+                if prev.received_at and curr.received_at:
+                    delta_h = (curr.received_at - prev.received_at).total_seconds() / 3600
+                    if 0 < delta_h < 168:  # exclude outliers > 1 week
+                        service_lags[service].append(delta_h)
+
+    def _compute_stats(lags: list[float]) -> dict:
+        sorted_lags = sorted(lags)
+        n = len(sorted_lags)
+        avg = sum(lags) / n
+        p50 = sorted_lags[n // 2]
+        p90 = sorted_lags[int(n * 0.9)]
+        return {
+            "avg_hours": round(avg, 1),
+            "p50_hours": round(p50, 1),
+            "p90_hours": round(p90, 1),
+            "message_count": n,
+        }
+
+    benchmark = []
+    all_lags: list[float] = []
+    for service in ["gmail", "slack", "teams"]:
+        lags = service_lags.get(service, [])
+        if lags:
+            stats = _compute_stats(lags)
+            stats["service"] = service
+            benchmark.append(stats)
+            all_lags.extend(lags)
+
+    overall_avg = round(sum(all_lags) / len(all_lags), 1) if all_lags else None
+
+    if overall_avg is None:
+        rating = "slow"
+    elif overall_avg < 2:
+        rating = "excellent"
+    elif overall_avg < 8:
+        rating = "good"
+    elif overall_avg < 24:
+        rating = "fair"
+    else:
+        rating = "slow"
+
+    if not all_lags:
+        return {
+            "benchmark": [],
+            "overall_avg_hours": None,
+            "rating": "slow",
+            "insight": "No message reply data found. Connect Gmail or Slack to start tracking response times.",
+            "recommendations": [
+                "Connect a Gmail or Slack connector to begin tracking response times.",
+                "Aim to reply to all inbound messages within 4 hours.",
+                "Use AI triage to prioritize urgent messages first.",
+            ],
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    context_lines = [f"Overall avg response time: {overall_avg}h (rating: {rating})"]
+    for b in benchmark:
+        context_lines.append(
+            f"- {b['service'].title()}: avg={b['avg_hours']}h, p50={b['p50_hours']}h, p90={b['p90_hours']}h ({b['message_count']} pairs)"
+        )
+    context = "\n".join(context_lines)
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Analyze this workspace message response time data and provide a 1-sentence insight and "
+                "3 actionable recommendations to improve response times.\n\n"
+                f"{context}\n\n"
+                'Return JSON: {"insight": "...", "recommendations": ["...", "...", "..."]}'
+            ),
+        }],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = text[:200]
+        recommendations = [
+            "Prioritize urgent messages to improve overall response rate.",
+            "Set up automated acknowledgment replies to buy processing time.",
+            "Review high p90 channels for bottlenecks in the response workflow.",
+        ]
+
+    return {
+        "benchmark": benchmark,
+        "overall_avg_hours": overall_avg,
+        "rating": rating,
         "insight": insight,
         "recommendations": recommendations,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",

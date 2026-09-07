@@ -186,6 +186,19 @@ export default function ReportsPage() {
   const [taskCompletionTrendsLoading, setTaskCompletionTrendsLoading] = useState(false);
   const [taskCompletionTrendsOpen, setTaskCompletionTrendsOpen] = useState(true);
 
+  type MsgBenchmarkRow = { service: string; avg_hours: number; p50_hours: number; p90_hours: number; message_count: number };
+  type MsgResponseBenchmark = {
+    benchmark: MsgBenchmarkRow[]
+    overall_avg_hours: number | null
+    rating: 'excellent' | 'good' | 'fair' | 'slow'
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [msgBenchmark, setMsgBenchmark] = useState<MsgResponseBenchmark | null>(null);
+  const [msgBenchmarkLoading, setMsgBenchmarkLoading] = useState(false);
+  const [msgBenchmarkOpen, setMsgBenchmarkOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -226,6 +239,8 @@ export default function ReportsPage() {
       apiClient.getContactSourceAttribution("demo-workspace-1", "demo-token").then(setSourceAttribution).catch(() => {}).finally(() => setSourceAttributionLoading(false));
       setTaskCompletionTrendsLoading(true);
       apiClient.getTaskCompletionTrends("demo-workspace-1", "demo-token").then(setTaskCompletionTrends).catch(() => {}).finally(() => setTaskCompletionTrendsLoading(false));
+      setMsgBenchmarkLoading(true);
+      apiClient.getMessageResponseTimeBenchmark("demo-workspace-1", "demo-token").then(setMsgBenchmark).catch(() => {}).finally(() => setMsgBenchmarkLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -271,6 +286,8 @@ export default function ReportsPage() {
       apiClient.getContactSourceAttribution(workspaceId, session.access_token).then(setSourceAttribution).catch(() => {}).finally(() => setSourceAttributionLoading(false));
       setTaskCompletionTrendsLoading(true);
       apiClient.getTaskCompletionTrends(workspaceId, session.access_token).then(setTaskCompletionTrends).catch(() => {}).finally(() => setTaskCompletionTrendsLoading(false));
+      setMsgBenchmarkLoading(true);
+      apiClient.getMessageResponseTimeBenchmark(workspaceId, session.access_token).then(setMsgBenchmark).catch(() => {}).finally(() => setMsgBenchmarkLoading(false));
     });
   }, []);
 
@@ -2264,6 +2281,123 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 mt-3">No task data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Response Time Benchmark */}
+      <Card>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-sky-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Response Time Benchmark</h3>
+            {msgBenchmark && (
+              <span className={cn(
+                "text-[10px] font-semibold px-2 py-0.5 rounded-full",
+                msgBenchmark.rating === "excellent" ? "bg-emerald-500/15 text-emerald-400" :
+                msgBenchmark.rating === "good"      ? "bg-indigo-500/15 text-indigo-400" :
+                msgBenchmark.rating === "fair"      ? "bg-amber-500/15 text-amber-400" :
+                                                      "bg-rose-500/15 text-rose-400"
+              )}>
+                {msgBenchmark.rating}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                if (!msgBenchmarkLoading) {
+                  setMsgBenchmarkLoading(true);
+                  (DEMO_MODE
+                    ? apiClient.getMessageResponseTimeBenchmark("demo-workspace-1", "demo-token")
+                    : createBrowserClient().auth.getSession().then(({ data: { session } }) =>
+                        session ? apiClient.getMessageResponseTimeBenchmark(
+                          session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id,
+                          session.access_token
+                        ) : Promise.reject()
+                      )
+                  ).then(setMsgBenchmark).catch(() => {}).finally(() => setMsgBenchmarkLoading(false));
+                }
+              }}
+              className="text-zinc-500 hover:text-zinc-300 transition-colors"
+              title="Regenerate"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", msgBenchmarkLoading && "animate-spin")} />
+            </button>
+            <button onClick={() => setMsgBenchmarkOpen((o) => !o)} className="text-zinc-500 hover:text-zinc-300">
+              {msgBenchmarkOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+
+        {msgBenchmarkOpen && (
+          msgBenchmarkLoading ? (
+            <div className="mt-4 space-y-2">
+              {[1, 2, 3].map((i) => <div key={i} className="h-6 bg-zinc-800 rounded animate-pulse" />)}
+            </div>
+          ) : msgBenchmark ? (
+            <div className="mt-4 space-y-4">
+              {/* Overall rating ring + per-service rows */}
+              <div className="flex items-start gap-6">
+                {/* SVG ring for overall avg */}
+                {msgBenchmark.overall_avg_hours != null && (
+                  <div className="flex flex-col items-center gap-1 flex-shrink-0">
+                    <svg width="64" height="64" viewBox="0 0 64 64">
+                      <circle cx="32" cy="32" r="26" fill="none" stroke="#27272A" strokeWidth="8" />
+                      <circle
+                        cx="32" cy="32" r="26" fill="none"
+                        stroke={
+                          msgBenchmark.rating === "excellent" ? "#10B981" :
+                          msgBenchmark.rating === "good"      ? "#6366F1" :
+                          msgBenchmark.rating === "fair"      ? "#F59E0B" : "#F43F5E"
+                        }
+                        strokeWidth="8"
+                        strokeDasharray={`${Math.max(10, 163 - (msgBenchmark.overall_avg_hours / 48) * 163)} 163`}
+                        strokeLinecap="round"
+                        transform="rotate(-90 32 32)"
+                      />
+                    </svg>
+                    <p className="text-[10px] text-zinc-400 font-mono">{msgBenchmark.overall_avg_hours}h avg</p>
+                  </div>
+                )}
+                {/* Per-service rows */}
+                <div className="flex-1 space-y-2">
+                  {msgBenchmark.benchmark.map((b) => (
+                    <div key={b.service} className="flex items-center gap-3 text-xs">
+                      <span className="w-12 capitalize text-zinc-400 font-medium">{b.service}</span>
+                      <span className={cn(
+                        "font-mono",
+                        b.avg_hours < 2 ? "text-emerald-400" :
+                        b.avg_hours < 8 ? "text-indigo-400" :
+                        b.avg_hours < 24 ? "text-amber-400" : "text-rose-400"
+                      )}>avg {b.avg_hours}h</span>
+                      <span className="text-zinc-500">p50 {b.p50_hours}h</span>
+                      <span className="text-zinc-500">p90 {b.p90_hours}h</span>
+                      <span className="ml-auto text-zinc-600">{b.message_count} pairs</span>
+                    </div>
+                  ))}
+                  {msgBenchmark.benchmark.length === 0 && (
+                    <p className="text-xs text-zinc-500">No reply pairs found. Connect a Gmail or Slack connector to track response times.</p>
+                  )}
+                </div>
+              </div>
+              {/* Insight */}
+              <p className="text-xs text-zinc-400 italic border-l-2 border-sky-500/40 pl-3">{msgBenchmark.insight}</p>
+              {/* Recommendations */}
+              <ul className="space-y-1">
+                {msgBenchmark.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10px] font-mono text-zinc-600">
+                Generated {new Date(msgBenchmark.generated_at).toLocaleString()}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 mt-3">No message data available.</p>
           )
         )}
       </Card>

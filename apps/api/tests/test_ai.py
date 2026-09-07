@@ -4542,3 +4542,67 @@ async def test_task_completion_trends_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/completion-trends")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16h — Message Response Time Benchmark
+# ---------------------------------------------------------------------------
+
+def _fake_msg_row(sender_email: str, received_at_offset_h: float, service: str = "gmail", subject: str = "Hello") -> MagicMock:
+    import datetime
+    row = MagicMock()
+    row.sender_email = sender_email
+    row.received_at = datetime.datetime(2026, 6, 1, 0, 0, 0) + datetime.timedelta(hours=received_at_offset_h)
+    row.subject = subject
+    row.connector_id = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    row.service = service
+    return row
+
+
+@pytest.mark.asyncio
+async def test_message_response_time_benchmark_pairing_logic(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Two alternating senders → one 3h lag pair
+    rows = [
+        _fake_msg_row("contact@example.com", 0.0, "gmail", "Hello"),
+        _fake_msg_row("member@company.com", 3.0, "gmail", "Hello"),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = rows
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_claude = MagicMock()
+    mock_claude.messages.create.return_value = MagicMock(
+        content=[MagicMock(text='{"insight": "Good response times.", "recommendations": ["a", "b", "c"]}')]
+    )
+
+    with patch("app.routers.ai._anthropic.Anthropic", return_value=mock_claude):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/messages/response-time-benchmark")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "benchmark" in data
+    assert "overall_avg_hours" in data
+    assert data["rating"] in ("excellent", "good", "fair", "slow")
+    # 3h lag → avg should be 3.0, rating "good"
+    assert data["overall_avg_hours"] == 3.0
+    assert data["rating"] == "good"
+    assert len(data["benchmark"]) == 1
+    assert data["benchmark"][0]["service"] == "gmail"
+    assert data["benchmark"][0]["avg_hours"] == 3.0
+    assert "insight" in data
+    assert isinstance(data["recommendations"], list) and len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_message_response_time_benchmark_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/messages/response-time-benchmark")
+    assert resp.status_code == 403
