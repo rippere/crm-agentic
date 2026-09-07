@@ -5088,5 +5088,34 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trends?weeks=${weeks}`, {}, token)
   },
+
+  async getMessageResponseTimeBenchmark(workspaceId: string, token: string): Promise<{
+    benchmark: Array<{ service: string; avg_hours: number; p50_hours: number; p90_hours: number; message_count: number }>
+    overall_avg_hours: number | null
+    rating: 'excellent' | 'good' | 'fair' | 'slow'
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 600))
+      return Promise.resolve({
+        benchmark: [
+          { service: 'gmail', avg_hours: 3.2, p50_hours: 2.1, p90_hours: 8.4, message_count: 47 },
+          { service: 'slack', avg_hours: 0.8, p50_hours: 0.4, p90_hours: 2.2, message_count: 31 },
+        ],
+        overall_avg_hours: 2.2,
+        rating: 'good',
+        insight: 'Slack responses are notably faster than email — the team averages under 1h on Slack while Gmail responses lag at 3.2h average.',
+        recommendations: [
+          'Route urgent deal communications through Slack to leverage the team\'s 48-minute average response time.',
+          'Set a target of 4h max response time for Gmail — currently the p90 is 8.4h, suggesting some messages fall through the cracks.',
+          'Use AI triage to surface high-priority inbound emails early in the workday for faster replies.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/messages/response-time-benchmark`, {}, token)
+  },
 }
 
