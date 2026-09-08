@@ -102,6 +102,8 @@ cd apps/web && npm run dev
 - Nightly deal health scorer (Celery Beat, 02:15 UTC)
 - Daily HITL stale-deal follow-up check (Celery Beat, 09:00 UTC)
 - PM agent health check (Celery Beat, every 30 min)
+- Sequence sender tick — outreach campaign step dispatch (Celery Beat, every 5 min)
+- Lead engagement rescoring (Celery Beat, hourly)
 
 ## Environment Variables
 
