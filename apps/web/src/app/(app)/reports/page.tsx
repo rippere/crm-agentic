@@ -199,6 +199,20 @@ export default function ReportsPage() {
   const [msgBenchmarkLoading, setMsgBenchmarkLoading] = useState(false);
   const [msgBenchmarkOpen, setMsgBenchmarkOpen] = useState(true);
 
+  type EngagementBenchmarkContact = { id: string; name: string | null; email: string | null; score: number };
+  type EngagementBenchmark = {
+    buckets: Array<{ label: string; count: number; avg_score: number }>
+    top_contacts: EngagementBenchmarkContact[]
+    bottom_contacts: EngagementBenchmarkContact[]
+    avg_score: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [engagementBenchmark, setEngagementBenchmark] = useState<EngagementBenchmark | null>(null);
+  const [engagementBenchmarkLoading, setEngagementBenchmarkLoading] = useState(false);
+  const [engagementBenchmarkOpen, setEngagementBenchmarkOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -241,6 +255,8 @@ export default function ReportsPage() {
       apiClient.getTaskCompletionTrends("demo-workspace-1", "demo-token").then(setTaskCompletionTrends).catch(() => {}).finally(() => setTaskCompletionTrendsLoading(false));
       setMsgBenchmarkLoading(true);
       apiClient.getMessageResponseTimeBenchmark("demo-workspace-1", "demo-token").then(setMsgBenchmark).catch(() => {}).finally(() => setMsgBenchmarkLoading(false));
+      setEngagementBenchmarkLoading(true);
+      apiClient.getContactEngagementBenchmark("demo-workspace-1", "demo-token").then(setEngagementBenchmark).catch(() => {}).finally(() => setEngagementBenchmarkLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -288,6 +304,8 @@ export default function ReportsPage() {
       apiClient.getTaskCompletionTrends(workspaceId, session.access_token).then(setTaskCompletionTrends).catch(() => {}).finally(() => setTaskCompletionTrendsLoading(false));
       setMsgBenchmarkLoading(true);
       apiClient.getMessageResponseTimeBenchmark(workspaceId, session.access_token).then(setMsgBenchmark).catch(() => {}).finally(() => setMsgBenchmarkLoading(false));
+      setEngagementBenchmarkLoading(true);
+      apiClient.getContactEngagementBenchmark(workspaceId, session.access_token).then(setEngagementBenchmark).catch(() => {}).finally(() => setEngagementBenchmarkLoading(false));
     });
   }, []);
 
@@ -2398,6 +2416,122 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 mt-3">No message data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Contact Engagement Benchmark */}
+      <Card>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-violet-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Contact Engagement Benchmark</h3>
+            {engagementBenchmark && (
+              <span className="text-xs font-mono text-zinc-500">avg {engagementBenchmark.avg_score}/100</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setEngagementBenchmarkLoading(true);
+                const load = DEMO_MODE
+                  ? apiClient.getContactEngagementBenchmark("demo-workspace-1", "demo-token")
+                  : createBrowserClient().auth.getSession().then(({ data: { session } }) =>
+                      apiClient.getContactEngagementBenchmark(
+                        session?.user.app_metadata?.workspace_id ?? session?.user.user_metadata?.workspace_id ?? "",
+                        session?.access_token ?? ""
+                      )
+                    );
+                load.then(setEngagementBenchmark).catch(() => {}).finally(() => setEngagementBenchmarkLoading(false));
+              }}
+              className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", engagementBenchmarkLoading && "animate-spin")} />
+            </button>
+            <button
+              onClick={() => setEngagementBenchmarkOpen((o) => !o)}
+              className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              {engagementBenchmarkOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+        </div>
+        {engagementBenchmarkOpen && (
+          engagementBenchmarkLoading ? (
+            <div className="space-y-2 mt-3">
+              {[...Array(3)].map((_, i) => <div key={i} className="h-4 rounded bg-zinc-800 animate-pulse" />)}
+            </div>
+          ) : engagementBenchmark ? (
+            <div className="space-y-4 mt-1">
+              {/* Bucket bar chart */}
+              <div className="space-y-2">
+                {engagementBenchmark.buckets.map((b) => {
+                  const total = engagementBenchmark.buckets.reduce((s, x) => s + x.count, 0) || 1;
+                  const pct = Math.round((b.count / total) * 100);
+                  const color = b.label.startsWith("High") ? "bg-violet-500" : b.label.startsWith("Medium") ? "bg-indigo-500" : "bg-zinc-600";
+                  return (
+                    <div key={b.label} className="space-y-0.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-400">{b.label}</span>
+                        <span className="font-mono text-zinc-300">{b.count} contacts · avg {b.avg_score}</span>
+                      </div>
+                      <div className="h-2 w-full rounded-full bg-zinc-800">
+                        <div className={cn("h-2 rounded-full transition-all", color)} style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Top / Bottom tables */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1.5">Top Engaged</p>
+                  <div className="space-y-1.5">
+                    {engagementBenchmark.top_contacts.map((c) => (
+                      <div key={c.id} className="flex items-center gap-2">
+                        <div className="h-1.5 rounded-full bg-violet-500" style={{ width: `${Math.round((c.score / 100) * 80)}px` }} />
+                        <span className="text-xs text-zinc-300 truncate flex-1">{c.name ?? c.email}</span>
+                        <span className="text-[11px] font-mono text-violet-400">{c.score}</span>
+                      </div>
+                    ))}
+                    {engagementBenchmark.top_contacts.length === 0 && (
+                      <p className="text-xs text-zinc-500">No contacts yet.</p>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1.5">Least Engaged</p>
+                  <div className="space-y-1.5">
+                    {engagementBenchmark.bottom_contacts.map((c) => (
+                      <div key={c.id} className="flex items-center gap-2">
+                        <div className="h-1.5 rounded-full bg-zinc-600" style={{ width: `${Math.round((c.score / 100) * 80)}px` }} />
+                        <span className="text-xs text-zinc-400 truncate flex-1">{c.name ?? c.email}</span>
+                        <span className="text-[11px] font-mono text-zinc-500">{c.score}</span>
+                      </div>
+                    ))}
+                    {engagementBenchmark.bottom_contacts.length === 0 && (
+                      <p className="text-xs text-zinc-500">No contacts yet.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {/* Insight */}
+              <p className="text-xs text-zinc-400 italic border-l-2 border-violet-500/40 pl-3">{engagementBenchmark.insight}</p>
+              {/* Recommendations */}
+              <ul className="space-y-1">
+                {engagementBenchmark.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10px] font-mono text-zinc-600">
+                Generated {new Date(engagementBenchmark.generated_at).toLocaleString()}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 mt-3">No engagement data available.</p>
           )
         )}
       </Card>

@@ -8159,3 +8159,164 @@ async def get_message_response_time_benchmark(
         "recommendations": recommendations,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16i — AI workspace contact engagement benchmark
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/engagement-benchmark")
+@limiter.limit("5/minute")
+async def get_contact_engagement_benchmark(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=90)
+
+    contacts_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.email).where(Contact.workspace_id == workspace_id)
+    )
+    contacts = contacts_result.all()
+
+    if not contacts:
+        return {
+            "buckets": [
+                {"label": "Low (0–33)", "count": 0, "avg_score": 0},
+                {"label": "Medium (34–66)", "count": 0, "avg_score": 0},
+                {"label": "High (67–100)", "count": 0, "avg_score": 0},
+            ],
+            "top_contacts": [],
+            "bottom_contacts": [],
+            "avg_score": 0,
+            "insight": "No contacts found. Add contacts to begin tracking engagement.",
+            "recommendations": [
+                "Import contacts via CSV or connect a Gmail/Slack connector.",
+                "Begin logging notes and tasks for each contact to build engagement history.",
+                "Use AI outreach drafts to start meaningful conversations.",
+            ],
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+
+    contact_ids = [c.id for c in contacts]
+
+    msg_result = await db.execute(
+        select(Message.contact_id, func.count(Message.id).label("msg_count"))
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.received_at >= cutoff,
+            Message.contact_id.in_(contact_ids),
+        )
+        .group_by(Message.contact_id)
+    )
+    msg_counts = {row.contact_id: row.msg_count for row in msg_result.all()}
+
+    note_result = await db.execute(
+        select(ContactNote.contact_id, func.count(ContactNote.id).label("note_count"))
+        .where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.created_at >= cutoff,
+            ContactNote.contact_id.in_(contact_ids),
+        )
+        .group_by(ContactNote.contact_id)
+    )
+    note_counts = {row.contact_id: row.note_count for row in note_result.all()}
+
+    task_result = await db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.created_at >= cutoff,
+            Task.contact_id.in_(contact_ids),
+        )
+    )
+    all_tasks = task_result.scalars().all()
+    task_stats: dict = {}
+    for t in all_tasks:
+        cid = t.contact_id
+        if cid not in task_stats:
+            task_stats[cid] = [0, 0]
+        task_stats[cid][0] += 1
+        if t.status == "done":
+            task_stats[cid][1] += 1
+
+    scored = []
+    for c in contacts:
+        msg_count = msg_counts.get(c.id, 0)
+        note_count = note_counts.get(c.id, 0)
+        total_tasks, done_tasks = task_stats.get(c.id, [0, 0])
+        messages_score = min(40, msg_count * 8)
+        notes_score = min(30, note_count * 10)
+        tasks_score = round(30 * done_tasks / total_tasks) if total_tasks > 0 else 0
+        score = messages_score + notes_score + tasks_score
+        scored.append({"id": str(c.id), "name": c.name, "email": c.email, "score": score})
+
+    low = [s for s in scored if s["score"] <= 33]
+    medium = [s for s in scored if 34 <= s["score"] <= 66]
+    high = [s for s in scored if s["score"] >= 67]
+
+    def _bucket_avg(group: list) -> int:
+        return round(sum(s["score"] for s in group) / len(group)) if group else 0
+
+    buckets = [
+        {"label": "Low (0–33)", "count": len(low), "avg_score": _bucket_avg(low)},
+        {"label": "Medium (34–66)", "count": len(medium), "avg_score": _bucket_avg(medium)},
+        {"label": "High (67–100)", "count": len(high), "avg_score": _bucket_avg(high)},
+    ]
+    avg_score = round(sum(s["score"] for s in scored) / len(scored)) if scored else 0
+
+    sorted_by_score = sorted(scored, key=lambda x: x["score"], reverse=True)
+    top_contacts = [{"id": s["id"], "name": s["name"], "email": s["email"], "score": s["score"]} for s in sorted_by_score[:3]]
+    bottom_contacts = [{"id": s["id"], "name": s["name"], "email": s["email"], "score": s["score"]} for s in sorted_by_score[-3:]]
+    bottom_contacts = sorted(bottom_contacts, key=lambda x: x["score"])
+
+    context = (
+        f"Workspace has {len(scored)} contacts. Overall avg engagement score: {avg_score}/100.\n"
+        f"Low engagement (0–33): {len(low)} contacts. "
+        f"Medium (34–66): {len(medium)}. High (67–100): {len(high)}.\n"
+    )
+    if top_contacts:
+        context += f"Most engaged: {top_contacts[0]['name']} (score {top_contacts[0]['score']}).\n"
+    if bottom_contacts:
+        context += f"Least engaged: {bottom_contacts[0]['name']} (score {bottom_contacts[0]['score']}).\n"
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Analyze this workspace contact engagement benchmark data and provide a 1-sentence insight "
+                "and 3 actionable recommendations to improve overall engagement.\n\n"
+                f"{context}\n\n"
+                'Return JSON: {"insight": "...", "recommendations": ["...", "...", "..."]}'
+            ),
+        }],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = text[:200]
+        recommendations = [
+            "Focus outreach on low-engagement contacts to bring them into active conversation.",
+            "Schedule regular check-ins with your top contacts to maintain strong engagement.",
+            "Use AI task suggestions to create follow-up actions for each contact.",
+        ]
+
+    return {
+        "buckets": buckets,
+        "top_contacts": top_contacts,
+        "bottom_contacts": bottom_contacts,
+        "avg_score": avg_score,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }

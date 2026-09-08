@@ -5117,5 +5117,45 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/messages/response-time-benchmark`, {}, token)
   },
+
+  async getContactEngagementBenchmark(workspaceId: string, token: string): Promise<{
+    buckets: Array<{ label: string; count: number; avg_score: number }>
+    top_contacts: Array<{ id: string; name: string | null; email: string | null; score: number }>
+    bottom_contacts: Array<{ id: string; name: string | null; email: string | null; score: number }>
+    avg_score: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        buckets: [
+          { label: 'Low (0–33)', count: 8, avg_score: 14 },
+          { label: 'Medium (34–66)', count: 22, avg_score: 51 },
+          { label: 'High (67–100)', count: 17, avg_score: 84 },
+        ],
+        top_contacts: [
+          { id: 'c-001', name: 'Alice Martin', email: 'alice@acme.com', score: 98 },
+          { id: 'c-002', name: 'Bob Chen', email: 'bob@initech.com', score: 87 },
+          { id: 'c-003', name: 'Carol White', email: 'carol@globex.com', score: 79 },
+        ],
+        bottom_contacts: [
+          { id: 'c-010', name: 'Dave Kim', email: 'dave@staples.com', score: 4 },
+          { id: 'c-011', name: 'Eve Lopez', email: 'eve@umbrella.com', score: 9 },
+          { id: 'c-012', name: 'Frank Wu', email: 'frank@soylent.com', score: 17 },
+        ],
+        avg_score: 52,
+        insight: '36% of contacts have low engagement scores — a targeted re-engagement campaign could lift pipeline activity by bringing cold contacts back into active conversation.',
+        recommendations: [
+          'Use the Going Dark detector to identify contacts with no recent touch and trigger an outreach sequence.',
+          'Schedule monthly check-ins with your top 17 high-engagement contacts to sustain momentum.',
+          'Run AI Task Suggestions for low-scoring contacts to auto-generate follow-up actions.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/engagement-benchmark`, {}, token)
+  },
 }
 
