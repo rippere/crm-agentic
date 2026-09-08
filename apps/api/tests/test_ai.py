@@ -4606,3 +4606,96 @@ async def test_message_response_time_benchmark_wrong_workspace_returns_403(app_c
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/messages/response-time-benchmark")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16i — Contact Engagement Benchmark
+# ---------------------------------------------------------------------------
+
+def _fake_engagement_contact(cid: uuid.UUID, name: str = "Test Contact", email: str = "test@example.com") -> MagicMock:
+    row = MagicMock()
+    row.id = cid
+    row.name = name
+    row.email = email
+    return row
+
+
+def _fake_engagement_task(contact_id: uuid.UUID, status: str = "open") -> MagicMock:
+    t = MagicMock()
+    t.contact_id = contact_id
+    t.status = status
+    return t
+
+
+@pytest.mark.asyncio
+async def test_contact_engagement_benchmark_bucket_math(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    cid_high = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    cid_low = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
+    # First call: contacts list
+    contacts_result = MagicMock()
+    contacts_result.all.return_value = [
+        _fake_engagement_contact(cid_high, "Alice", "alice@example.com"),
+        _fake_engagement_contact(cid_low, "Bob", "bob@example.com"),
+    ]
+
+    # Second call: message counts → Alice has 6 messages (score 40+), Bob has 0
+    msg_result = MagicMock()
+    msg_row = MagicMock()
+    msg_row.contact_id = cid_high
+    msg_row.msg_count = 6
+    msg_result.all.return_value = [msg_row]
+
+    # Third call: note counts → Alice has 3 notes (score 30), Bob has 0
+    note_result = MagicMock()
+    note_row = MagicMock()
+    note_row.contact_id = cid_high
+    note_row.note_count = 3
+    note_result.all.return_value = [note_row]
+
+    # Fourth call: tasks (scalars) → Alice has 2 done tasks
+    task_result = MagicMock()
+    task_result.scalars.return_value.all.return_value = [
+        _fake_engagement_task(cid_high, "done"),
+        _fake_engagement_task(cid_high, "done"),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[contacts_result, msg_result, note_result, task_result])
+
+    mock_claude = MagicMock()
+    mock_claude.messages.create.return_value = MagicMock(
+        content=[MagicMock(text='{"insight": "Engagement is split.", "recommendations": ["a", "b", "c"]}')]
+    )
+
+    with patch("app.routers.ai._anthropic.Anthropic", return_value=mock_claude):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/engagement-benchmark")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "buckets" in data and len(data["buckets"]) == 3
+    assert "top_contacts" in data and len(data["top_contacts"]) <= 3
+    assert "bottom_contacts" in data
+    assert "avg_score" in data
+    assert "insight" in data
+    assert isinstance(data["recommendations"], list) and len(data["recommendations"]) == 3
+    assert "generated_at" in data
+    # Alice score: min(40,6*8)=40 + min(30,3*10)=30 + round(30*2/2)=30 = 100 → high
+    # Bob score: 0 → low
+    high_bucket = next(b for b in data["buckets"] if "67" in b["label"])
+    low_bucket = next(b for b in data["buckets"] if "0" in b["label"])
+    assert high_bucket["count"] == 1
+    assert low_bucket["count"] == 1
+    assert data["top_contacts"][0]["name"] == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_contact_engagement_benchmark_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/engagement-benchmark")
+    assert resp.status_code == 403
