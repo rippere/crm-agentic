@@ -8320,3 +8320,142 @@ async def get_contact_engagement_benchmark(
         "recommendations": recommendations,
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+
+
+# Phase 16j — AI workspace deal negotiation readiness report
+# ---------------------------------------------------------------------------
+
+_NEGOT_PROMPT = """You are Nova, a CRM AI sales coach. Given a list of open deals in the proposal or negotiation stage, evaluate each deal's negotiation readiness and produce a 1-sentence workspace-level summary.
+
+Deal context:
+{deal_context}
+
+For each deal, determine:
+- readiness: "ready" (strong health, no critical blockers), "needs_work" (some issues but fixable), or "not_ready" (critical blockers)
+- blockers: list of 1-3 short phrases for what's blocking (empty if ready)
+- next_steps: list of 1-2 short specific actions
+
+Return JSON:
+{{
+  "summary": "one sentence workspace-level summary of negotiation readiness",
+  "deals": [
+    {{
+      "id": "<deal_id>",
+      "readiness": "ready|needs_work|not_ready",
+      "blockers": ["..."],
+      "next_steps": ["..."]
+    }}
+  ]
+}}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/negotiation-readiness")
+@limiter.limit("5/minute")
+async def get_deals_negotiation_readiness(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.utcnow()
+
+    deals_result = await db.execute(
+        select(Deal).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["proposal", "negotiation"]),
+        ).order_by(Deal.value.desc())
+    )
+    deals = deals_result.scalars().all()
+
+    if not deals:
+        return {
+            "total_deals": 0,
+            "ready_count": 0,
+            "not_ready_count": 0,
+            "deals": [],
+            "summary": "No deals are currently in proposal or negotiation stages.",
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    deal_rows = []
+    for d in deals:
+        competitors = d.competitors if isinstance(d.competitors, list) else []
+        stage_changed = d.stage_changed_at or d.created_at or now
+        days_in_stage = max(0, (now - stage_changed).days) if stage_changed else 0
+        next_action_date = d.next_action_date
+        overdue_days = 0
+        if next_action_date:
+            import datetime as _dt
+            try:
+                nad = _dt.date.fromisoformat(str(next_action_date))
+                delta = (now.date() - nad).days
+                overdue_days = max(0, delta)
+            except Exception:
+                pass
+        deal_rows.append({
+            "id": str(d.id),
+            "title": d.title or "Untitled",
+            "company": d.company or "",
+            "stage": d.stage,
+            "health": d.health_score or 0,
+            "competitors": len(competitors),
+            "days_in_stage": days_in_stage,
+            "overdue_days": overdue_days,
+        })
+
+    deal_context = "\n".join(
+        f"- Deal '{r['title']}' ({r['company']}): stage={r['stage']}, health={r['health']}/100, "
+        f"competitors={r['competitors']}, days_in_stage={r['days_in_stage']}, "
+        f"action_overdue_by={r['overdue_days']}d [id={r['id']}]"
+        for r in deal_rows
+    )
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        messages=[{
+            "role": "user",
+            "content": _NEGOT_PROMPT.format(deal_context=deal_context),
+        }],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        summary = parsed.get("summary", "")
+        ai_deals = {d["id"]: d for d in parsed.get("deals", []) if "id" in d}
+    except Exception:
+        summary = "Negotiation readiness analysis complete."
+        ai_deals = {}
+
+    result_deals = []
+    for r in deal_rows:
+        ai = ai_deals.get(r["id"], {})
+        readiness = ai.get("readiness", "needs_work")
+        if readiness not in {"ready", "needs_work", "not_ready"}:
+            readiness = "needs_work"
+        result_deals.append({
+            "id": r["id"],
+            "title": r["title"],
+            "company": r["company"],
+            "stage": r["stage"],
+            "readiness": readiness,
+            "blockers": ai.get("blockers", [])[:3],
+            "next_steps": ai.get("next_steps", [])[:2],
+        })
+
+    ready_count = sum(1 for d in result_deals if d["readiness"] == "ready")
+    not_ready_count = sum(1 for d in result_deals if d["readiness"] == "not_ready")
+
+    return {
+        "total_deals": len(result_deals),
+        "ready_count": ready_count,
+        "not_ready_count": not_ready_count,
+        "deals": result_deals,
+        "summary": summary,
+        "generated_at": now.isoformat() + "Z",
+    }

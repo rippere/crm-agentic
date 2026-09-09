@@ -5157,5 +5157,63 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/engagement-benchmark`, {}, token)
   },
+
+  async getDealsNegotiationReadiness(workspaceId: string, token: string): Promise<{
+    total_deals: number
+    ready_count: number
+    not_ready_count: number
+    deals: Array<{
+      id: string
+      title: string
+      company: string
+      stage: string
+      readiness: 'ready' | 'needs_work' | 'not_ready'
+      blockers: string[]
+      next_steps: string[]
+    }>
+    summary: string
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 750))
+      return Promise.resolve({
+        total_deals: 3,
+        ready_count: 1,
+        not_ready_count: 1,
+        deals: [
+          {
+            id: 'd-001',
+            title: 'TechCorp Platform Expansion',
+            company: 'TechCorp',
+            stage: 'negotiation',
+            readiness: 'ready',
+            blockers: [],
+            next_steps: ['Send revised contract terms by Friday', 'Schedule executive sign-off call'],
+          },
+          {
+            id: 'd-002',
+            title: 'Initech Analytics Suite',
+            company: 'Initech',
+            stage: 'proposal',
+            readiness: 'needs_work',
+            blockers: ['Next action overdue by 5 days', 'No engagement in 12 days'],
+            next_steps: ['Re-engage champion with updated ROI model', 'Confirm decision timeline'],
+          },
+          {
+            id: 'd-003',
+            title: 'Globex Security Package',
+            company: 'Globex',
+            stage: 'proposal',
+            readiness: 'not_ready',
+            blockers: ['Health score critically low (28)', '3 competitors in play', 'No identified champion'],
+            next_steps: ['Request executive sponsor introduction', 'Address pricing objection with case study'],
+          },
+        ],
+        summary: '1 of 3 proposal/negotiation deals is fully negotiation-ready; 2 require immediate attention to avoid slippage.',
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/negotiation-readiness`, {}, token)
+  },
 }
 

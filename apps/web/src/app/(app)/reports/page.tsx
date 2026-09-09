@@ -213,6 +213,18 @@ export default function ReportsPage() {
   const [engagementBenchmarkLoading, setEngagementBenchmarkLoading] = useState(false);
   const [engagementBenchmarkOpen, setEngagementBenchmarkOpen] = useState(true);
 
+  type NegotiationDeal = {
+    id: string; title: string; company: string; stage: string;
+    readiness: 'ready' | 'needs_work' | 'not_ready'; blockers: string[]; next_steps: string[];
+  };
+  type NegotiationReadiness = {
+    total_deals: number; ready_count: number; not_ready_count: number;
+    deals: NegotiationDeal[]; summary: string; generated_at: string;
+  };
+  const [negotiationReadiness, setNegotiationReadiness] = useState<NegotiationReadiness | null>(null);
+  const [negotiationReadinessLoading, setNegotiationReadinessLoading] = useState(false);
+  const [negotiationReadinessOpen, setNegotiationReadinessOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -257,6 +269,8 @@ export default function ReportsPage() {
       apiClient.getMessageResponseTimeBenchmark("demo-workspace-1", "demo-token").then(setMsgBenchmark).catch(() => {}).finally(() => setMsgBenchmarkLoading(false));
       setEngagementBenchmarkLoading(true);
       apiClient.getContactEngagementBenchmark("demo-workspace-1", "demo-token").then(setEngagementBenchmark).catch(() => {}).finally(() => setEngagementBenchmarkLoading(false));
+      setNegotiationReadinessLoading(true);
+      apiClient.getDealsNegotiationReadiness("demo-workspace-1", "demo-token").then(setNegotiationReadiness).catch(() => {}).finally(() => setNegotiationReadinessLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -306,6 +320,8 @@ export default function ReportsPage() {
       apiClient.getMessageResponseTimeBenchmark(workspaceId, session.access_token).then(setMsgBenchmark).catch(() => {}).finally(() => setMsgBenchmarkLoading(false));
       setEngagementBenchmarkLoading(true);
       apiClient.getContactEngagementBenchmark(workspaceId, session.access_token).then(setEngagementBenchmark).catch(() => {}).finally(() => setEngagementBenchmarkLoading(false));
+      setNegotiationReadinessLoading(true);
+      apiClient.getDealsNegotiationReadiness(workspaceId, session.access_token).then(setNegotiationReadiness).catch(() => {}).finally(() => setNegotiationReadinessLoading(false));
     });
   }, []);
 
@@ -504,6 +520,27 @@ export default function ReportsPage() {
         if (!session) { setAgentPerfReportLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentPerfReportLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateNegotiationReadiness = () => {
+    setNegotiationReadinessLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealsNegotiationReadiness(wid, tok)
+        .then(setNegotiationReadiness)
+        .catch(() => {})
+        .finally(() => setNegotiationReadinessLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setNegotiationReadinessLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setNegotiationReadinessLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -2532,6 +2569,109 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 mt-3">No engagement data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Negotiation Readiness — Phase 16j */}
+      <Card className="border-amber-500/20">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Target className="h-4 w-4 text-amber-400" />
+            <span className="text-sm font-semibold text-zinc-100">Negotiation Readiness</span>
+            {negotiationReadiness && (
+              <span className={cn(
+                "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium",
+                negotiationReadiness.not_ready_count === 0 && negotiationReadiness.total_deals > 0
+                  ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
+                  : negotiationReadiness.not_ready_count > 0
+                  ? "border-rose-500/20 bg-rose-500/10 text-rose-400"
+                  : "border-amber-500/20 bg-amber-500/10 text-amber-400"
+              )}>
+                {negotiationReadiness.not_ready_count === 0 && negotiationReadiness.total_deals > 0
+                  ? `${negotiationReadiness.ready_count} ready`
+                  : negotiationReadiness.not_ready_count > 0
+                  ? `${negotiationReadiness.not_ready_count} blocked`
+                  : `${negotiationReadiness.total_deals} deals`}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateNegotiationReadiness}
+              disabled={negotiationReadinessLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={cn("h-3 w-3", negotiationReadinessLoading && "animate-spin")} />
+              {negotiationReadinessLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button
+              onClick={() => setNegotiationReadinessOpen((o) => !o)}
+              className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              {negotiationReadinessOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {negotiationReadinessOpen && (
+          negotiationReadinessLoading && !negotiationReadiness ? (
+            <div className="space-y-2 mt-3">
+              {[...Array(3)].map((_, i) => <div key={i} className="h-10 rounded bg-zinc-800 animate-pulse" />)}
+            </div>
+          ) : negotiationReadiness ? (
+            <div className={cn("space-y-3 mt-3", negotiationReadinessLoading && "opacity-40")}>
+              <p className="text-xs text-zinc-400 italic">{negotiationReadiness.summary}</p>
+              {negotiationReadiness.deals.length === 0 ? (
+                <p className="text-xs text-zinc-500">No deals in proposal or negotiation stage.</p>
+              ) : (
+                <div className="space-y-2">
+                  {negotiationReadiness.deals.map((d) => {
+                    const readinessColor =
+                      d.readiness === 'ready' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+                      : d.readiness === 'not_ready' ? 'text-rose-400 border-rose-500/30 bg-rose-500/10'
+                      : 'text-amber-400 border-amber-500/30 bg-amber-500/10';
+                    const readinessLabel =
+                      d.readiness === 'ready' ? 'Ready' : d.readiness === 'not_ready' ? 'Blocked' : 'Needs Work';
+                    const stageLabel = stageConfig[d.stage as keyof typeof stageConfig]?.label ?? d.stage;
+                    return (
+                      <div key={d.id} className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-medium text-zinc-200">{d.title}</p>
+                            <p className="text-[11px] text-zinc-500">{d.company} · <span className="text-zinc-400">{stageLabel}</span></p>
+                          </div>
+                          <span className={cn("flex-shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium", readinessColor)}>
+                            {readinessLabel}
+                          </span>
+                        </div>
+                        {d.blockers.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {d.blockers.map((b, i) => (
+                              <span key={i} className="rounded-full border border-rose-500/20 bg-rose-500/10 px-2 py-0.5 text-[10px] text-rose-300">{b}</span>
+                            ))}
+                          </div>
+                        )}
+                        {d.next_steps.length > 0 && (
+                          <ul className="space-y-0.5">
+                            {d.next_steps.map((s, i) => (
+                              <li key={i} className="flex items-start gap-1.5 text-[11px] text-zinc-400">
+                                <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                                {s}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-[10px] font-mono text-zinc-600">
+                Generated {new Date(negotiationReadiness.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 mt-3">No negotiation data available.</p>
           )
         )}
       </Card>

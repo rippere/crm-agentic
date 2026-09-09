@@ -4699,3 +4699,66 @@ async def test_contact_engagement_benchmark_wrong_workspace_returns_403(app_clie
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/engagement-benchmark")
     assert resp.status_code == 403
+
+
+# Phase 16j — Deal Negotiation Readiness
+# ---------------------------------------------------------------------------
+
+def _fake_negot_deal(did: uuid.UUID, stage: str = "proposal", health: int = 75) -> MagicMock:
+    d = MagicMock()
+    d.id = did
+    d.title = "Test Deal"
+    d.company = "Acme Corp"
+    d.stage = stage
+    d.health_score = health
+    d.competitors = []
+    d.stage_changed_at = None
+    d.created_at = None
+    d.next_action_date = None
+    return d
+
+
+@pytest.mark.asyncio
+async def test_deals_negotiation_readiness_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    did = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    deals_result = MagicMock()
+    deals_result.scalars.return_value.all.return_value = [_fake_negot_deal(did, "proposal", 80)]
+    mock_db.execute = AsyncMock(return_value=deals_result)
+
+    mock_claude = MagicMock()
+    mock_claude.messages.create.return_value = MagicMock(
+        content=[MagicMock(text=(
+            '{"summary": "1 deal ready for negotiation.", '
+            f'"deals": [{{"id": "{did}", "readiness": "ready", "blockers": [], "next_steps": ["Send contract"]}}]}}'
+        ))]
+    )
+
+    with patch("app.routers.ai._anthropic.Anthropic", return_value=mock_claude):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/negotiation-readiness")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_deals"] == 1
+    assert data["ready_count"] == 1
+    assert data["not_ready_count"] == 0
+    assert len(data["deals"]) == 1
+    deal = data["deals"][0]
+    assert deal["readiness"] == "ready"
+    assert isinstance(deal["blockers"], list)
+    assert isinstance(deal["next_steps"], list)
+    assert "summary" in data
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_deals_negotiation_readiness_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/negotiation-readiness")
+    assert resp.status_code == 403
