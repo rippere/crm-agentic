@@ -5215,5 +5215,53 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/negotiation-readiness`, {}, token)
   },
+
+  async getMessageSourceReliability(workspaceId: string, token: string): Promise<{
+    sources: Array<{
+      service: string
+      total_messages: number
+      processed_rate: number
+      weekly_trend: number[]
+    }>
+    most_reliable_source: string | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 750))
+      return Promise.resolve({
+        sources: [
+          {
+            service: 'gmail',
+            total_messages: 250,
+            processed_rate: 94.0,
+            weekly_trend: [18, 22, 15, 28, 19, 24, 31, 20, 17, 25, 22, 27],
+          },
+          {
+            service: 'slack',
+            total_messages: 180,
+            processed_rate: 98.3,
+            weekly_trend: [12, 15, 14, 18, 16, 20, 22, 15, 13, 19, 17, 21],
+          },
+          {
+            service: 'teams',
+            total_messages: 45,
+            processed_rate: 86.7,
+            weekly_trend: [3, 4, 3, 5, 4, 3, 6, 4, 3, 5, 4, 5],
+          },
+        ],
+        most_reliable_source: 'slack',
+        insight: 'Slack has the highest processing rate at 98.3%, while Teams shows a lower rate of 86.7% suggesting occasional ingestion delays.',
+        recommendations: [
+          'Investigate the Teams connector processing failures to improve its 86.7% rate.',
+          'Gmail volume is growing — consider setting up push notifications for faster ingestion.',
+          'All sources are healthy; maintain current webhook configurations to preserve reliability.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/messages/source-reliability`, {}, token)
+  },
 }
 
