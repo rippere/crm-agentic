@@ -156,6 +156,12 @@ async def _research_venue(
     monkeypatch this function directly.
     """
     if client is None:
+        # Short-circuit the real request on a missing key (llm.py delegates this
+        # guard to callers): no injected client + no key -> degrade to {} without
+        # constructing a doomed keyless request. A test-injected client — or a
+        # monkeypatched _research_venue — bypasses this guard entirely.
+        if not (getattr(settings, "ANTHROPIC_API_KEY", "") or ""):
+            return {}
         client = get_async_anthropic_client()
 
     criteria_keys = [c.get("key") for c in rubric.get("criteria", []) if c.get("key")]
@@ -259,10 +265,11 @@ async def score_venue(
     ``overall=0``, ``tier='B'``, ``research_confidence='Low'``) carrying only the
     hard facts. Never raises.
     """
-    api_key = getattr(settings, "ANTHROPIC_API_KEY", "") or ""
-    research: dict = {}
-    if api_key:
-        research = await _research_venue(place, rubric, market_context, client=client)
+    # _research_venue is the single guarded seam: it short-circuits on a missing
+    # key (no keyless request) and degrades to {} on any failure. Call it
+    # unconditionally — gating here on the key would also bypass the monkeypatched
+    # seam the worker tests rely on, silently forcing every venue to overall 0.
+    research = await _research_venue(place, rubric, market_context, client=client)
     if not isinstance(research, dict):
         research = {}
 
