@@ -5263,5 +5263,36 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/messages/source-reliability`, {}, token)
   },
+
+  async getStageTransitionAnalysis(workspaceId: string, token: string): Promise<{
+    transitions: Array<{ from_stage: string; to_stage: string; count: number; avg_days: number }>
+    bottleneck_stage: string | null
+    fastest_transition: string | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 750))
+      return Promise.resolve({
+        transitions: [
+          { from_stage: 'discovery', to_stage: 'qualified', count: 12, avg_days: 4.2 },
+          { from_stage: 'qualified', to_stage: 'proposal', count: 9, avg_days: 8.7 },
+          { from_stage: 'proposal', to_stage: 'negotiation', count: 6, avg_days: 21.3 },
+          { from_stage: 'negotiation', to_stage: 'closed_won', count: 4, avg_days: 12.5 },
+        ],
+        bottleneck_stage: 'proposal',
+        fastest_transition: 'discovery → qualified',
+        insight: 'The proposal stage is the main bottleneck, taking an average of 21 days — consider adding nurture sequences to accelerate decision-making.',
+        recommendations: [
+          'Add automated follow-up sequences for deals in proposal stage exceeding 14 days.',
+          'Review deals stalled in the proposal stage and schedule calls to address objections.',
+          'Track win/loss reasons at negotiation to improve close rate.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/stage-transition-analysis`, {}, token)
+  },
 }
 

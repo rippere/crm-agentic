@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -237,6 +237,19 @@ export default function ReportsPage() {
   const [msgSourceReliabilityLoading, setMsgSourceReliabilityLoading] = useState(false);
   const [msgSourceReliabilityOpen, setMsgSourceReliabilityOpen] = useState(true);
 
+  type StageTransition = { from_stage: string; to_stage: string; count: number; avg_days: number };
+  type StageTransitionAnalysis = {
+    transitions: StageTransition[]
+    bottleneck_stage: string | null
+    fastest_transition: string | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [stageTransitionAnalysis, setStageTransitionAnalysis] = useState<StageTransitionAnalysis | null>(null);
+  const [stageTransitionLoading, setStageTransitionLoading] = useState(false);
+  const [stageTransitionOpen, setStageTransitionOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -285,6 +298,8 @@ export default function ReportsPage() {
       apiClient.getDealsNegotiationReadiness("demo-workspace-1", "demo-token").then(setNegotiationReadiness).catch(() => {}).finally(() => setNegotiationReadinessLoading(false));
       setMsgSourceReliabilityLoading(true);
       apiClient.getMessageSourceReliability("demo-workspace-1", "demo-token").then(setMsgSourceReliability).catch(() => {}).finally(() => setMsgSourceReliabilityLoading(false));
+      setStageTransitionLoading(true);
+      apiClient.getStageTransitionAnalysis("demo-workspace-1", "demo-token").then(setStageTransitionAnalysis).catch(() => {}).finally(() => setStageTransitionLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -338,6 +353,8 @@ export default function ReportsPage() {
       apiClient.getDealsNegotiationReadiness(workspaceId, session.access_token).then(setNegotiationReadiness).catch(() => {}).finally(() => setNegotiationReadinessLoading(false));
       setMsgSourceReliabilityLoading(true);
       apiClient.getMessageSourceReliability(workspaceId, session.access_token).then(setMsgSourceReliability).catch(() => {}).finally(() => setMsgSourceReliabilityLoading(false));
+      setStageTransitionLoading(true);
+      apiClient.getStageTransitionAnalysis(workspaceId, session.access_token).then(setStageTransitionAnalysis).catch(() => {}).finally(() => setStageTransitionLoading(false));
     });
   }, []);
 
@@ -578,6 +595,27 @@ export default function ReportsPage() {
         if (!session) { setMsgSourceReliabilityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setMsgSourceReliabilityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateStageTransitionAnalysis = () => {
+    setStageTransitionLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getStageTransitionAnalysis(wid, tok)
+        .then(setStageTransitionAnalysis)
+        .catch(() => {})
+        .finally(() => setStageTransitionLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setStageTransitionLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setStageTransitionLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -2820,6 +2858,77 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No source reliability data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Stage Transition Analysis */}
+      <Card className="border-zinc-700/50">
+        <div className="flex items-center gap-2 p-4 border-b border-zinc-700/50">
+          <ArrowRight className="h-4 w-4 text-violet-400" />
+          <span className="text-sm font-semibold text-zinc-200">Stage Transition Analysis</span>
+          {stageTransitionAnalysis?.bottleneck_stage && (
+            <span className="ml-1 rounded-full bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-xs text-amber-400">
+              Bottleneck: {stageTransitionAnalysis.bottleneck_stage}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={regenerateStageTransitionAnalysis}
+              disabled={stageTransitionLoading}
+              className="flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", stageTransitionLoading && "animate-spin")} />
+              {stageTransitionLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setStageTransitionOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {stageTransitionOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {stageTransitionOpen && (
+          stageTransitionLoading && !stageTransitionAnalysis ? (
+            <p className="p-4 text-xs text-zinc-500 animate-pulse">Analysing stage transitions…</p>
+          ) : stageTransitionAnalysis ? (
+            <div className={cn("space-y-4 p-4", stageTransitionLoading && "opacity-40")}>
+              {stageTransitionAnalysis.transitions.length === 0 ? (
+                <p className="text-xs text-zinc-500">No stage transitions recorded in the last 90 days.</p>
+              ) : (
+                <div className="space-y-2">
+                  {stageTransitionAnalysis.transitions.map((t, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs">
+                      <span className="w-28 truncate text-zinc-300 capitalize">{t.from_stage.replace(/_/g, ' ')}</span>
+                      <ArrowRight className="h-3 w-3 flex-shrink-0 text-violet-400" />
+                      <span className="w-28 truncate text-zinc-300 capitalize">{t.to_stage.replace(/_/g, ' ')}</span>
+                      <span className="ml-auto text-zinc-400">{t.count}×</span>
+                      <span className={cn(
+                        "w-20 text-right font-mono",
+                        t.avg_days > 14 ? "text-rose-400" : t.avg_days > 7 ? "text-amber-400" : "text-emerald-400"
+                      )}>{t.avg_days}d avg</span>
+                    </div>
+                  ))}
+                  {stageTransitionAnalysis.fastest_transition && (
+                    <p className="text-xs text-zinc-500 pt-1">
+                      Fastest: <span className="text-emerald-400">{stageTransitionAnalysis.fastest_transition}</span>
+                    </p>
+                  )}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{stageTransitionAnalysis.insight}</p>
+              <ul className="space-y-1">
+                {stageTransitionAnalysis.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(stageTransitionAnalysis.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No stage transition data available.</p>
           )
         )}
       </Card>
