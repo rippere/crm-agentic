@@ -8479,7 +8479,7 @@ Return JSON only:
 """
 
 
-@router.get("/{workspace_id}/ai/messages/source-reliability")
+@router.get("/workspaces/{workspace_id}/ai/messages/source-reliability")
 @limiter.limit("5/minute")
 async def get_message_source_reliability(
     request: Request,
