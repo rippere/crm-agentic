@@ -8459,3 +8459,147 @@ async def get_deals_negotiation_readiness(
         "summary": summary,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16k — AI workspace message source reliability report
+# ---------------------------------------------------------------------------
+
+_MSG_SRC_RELIABILITY_PROMPT = """\
+You are an AI assistant analyzing message source reliability for a CRM workspace.
+
+Message source statistics:
+{source_context}
+
+Return JSON only:
+{{
+    "insight": "one concise sentence about reliability patterns across sources",
+    "recommendations": ["specific action 1", "specific action 2", "specific action 3"]
+}}
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/messages/source-reliability")
+@limiter.limit("5/minute")
+async def get_message_source_reliability(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.utcnow()
+
+    # 12-week Mon-Sun calendar buckets
+    days_since_monday = now.weekday()
+    current_monday = (now - datetime.timedelta(days=days_since_monday)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    week_starts = [current_monday - datetime.timedelta(weeks=i) for i in range(11, -1, -1)]
+    twelve_weeks_ago = week_starts[0]
+
+    # Query 1: total message count per service
+    total_result = await db.execute(
+        select(Connector.service, func.count(Message.id).label("total"))
+        .join(Connector, Message.connector_id == Connector.id)
+        .where(Message.workspace_id == workspace_id)
+        .group_by(Connector.service)
+    )
+    total_by_service: dict = {row.service: row.total for row in total_result.all()}
+
+    if not total_by_service:
+        return {
+            "sources": [],
+            "most_reliable_source": None,
+            "insight": "No messages ingested yet. Connect a Gmail or Slack account to begin.",
+            "recommendations": [
+                "Connect a Gmail connector to start ingesting emails.",
+                "Connect a Slack connector to monitor team communications.",
+                "Configure webhook push notifications for real-time message delivery.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Query 2: processed message count per service
+    processed_result = await db.execute(
+        select(Connector.service, func.count(Message.id).label("processed"))
+        .join(Connector, Message.connector_id == Connector.id)
+        .where(Message.workspace_id == workspace_id, Message.processed == True)
+        .group_by(Connector.service)
+    )
+    processed_by_service: dict = {row.service: row.processed for row in processed_result.all()}
+
+    # Query 3: weekly message timestamps for last 12 weeks
+    weekly_result = await db.execute(
+        select(Connector.service, Message.received_at)
+        .join(Connector, Message.connector_id == Connector.id)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.received_at >= twelve_weeks_ago,
+        )
+    )
+    weekly_rows = weekly_result.all()
+
+    # Build per-service weekly trend (12 buckets, oldest-first)
+    service_weekly: dict = {svc: [0] * 12 for svc in total_by_service}
+    for service, received_at in weekly_rows:
+        if received_at is None or service not in service_weekly:
+            continue
+        ts = received_at.replace(tzinfo=None) if received_at.tzinfo else received_at
+        for i, ws in enumerate(week_starts):
+            if ws <= ts < ws + datetime.timedelta(weeks=1):
+                service_weekly[service][i] += 1
+                break
+
+    # Build sources list sorted by total desc
+    sources = []
+    for svc, total in sorted(total_by_service.items(), key=lambda x: x[1], reverse=True):
+        processed = processed_by_service.get(svc, 0)
+        rate = round(processed / total * 100, 1) if total > 0 else 0.0
+        sources.append({
+            "service": svc,
+            "total_messages": total,
+            "processed_rate": rate,
+            "weekly_trend": service_weekly.get(svc, [0] * 12),
+        })
+
+    most_reliable_source = (
+        max(sources, key=lambda s: s["processed_rate"])["service"] if sources else None
+    )
+
+    source_context = "\n".join(
+        f"- {s['service'].capitalize()}: {s['total_messages']} total, {s['processed_rate']}% processing rate"
+        for s in sources
+    )
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": _MSG_SRC_RELIABILITY_PROMPT.format(source_context=source_context),
+        }],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "Message sources are performing normally.")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = "Message sources are performing normally."
+        recommendations = []
+
+    while len(recommendations) < 3:
+        recommendations.append("Monitor processing rates regularly to ensure timely message delivery.")
+
+    return {
+        "sources": sources,
+        "most_reliable_source": most_reliable_source,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

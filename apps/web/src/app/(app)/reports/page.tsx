@@ -13,7 +13,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -225,6 +225,18 @@ export default function ReportsPage() {
   const [negotiationReadinessLoading, setNegotiationReadinessLoading] = useState(false);
   const [negotiationReadinessOpen, setNegotiationReadinessOpen] = useState(true);
 
+  type MsgSourceRow = { service: string; total_messages: number; processed_rate: number; weekly_trend: number[] };
+  type MsgSourceReliability = {
+    sources: MsgSourceRow[]
+    most_reliable_source: string | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [msgSourceReliability, setMsgSourceReliability] = useState<MsgSourceReliability | null>(null);
+  const [msgSourceReliabilityLoading, setMsgSourceReliabilityLoading] = useState(false);
+  const [msgSourceReliabilityOpen, setMsgSourceReliabilityOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -271,6 +283,8 @@ export default function ReportsPage() {
       apiClient.getContactEngagementBenchmark("demo-workspace-1", "demo-token").then(setEngagementBenchmark).catch(() => {}).finally(() => setEngagementBenchmarkLoading(false));
       setNegotiationReadinessLoading(true);
       apiClient.getDealsNegotiationReadiness("demo-workspace-1", "demo-token").then(setNegotiationReadiness).catch(() => {}).finally(() => setNegotiationReadinessLoading(false));
+      setMsgSourceReliabilityLoading(true);
+      apiClient.getMessageSourceReliability("demo-workspace-1", "demo-token").then(setMsgSourceReliability).catch(() => {}).finally(() => setMsgSourceReliabilityLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -322,6 +336,8 @@ export default function ReportsPage() {
       apiClient.getContactEngagementBenchmark(workspaceId, session.access_token).then(setEngagementBenchmark).catch(() => {}).finally(() => setEngagementBenchmarkLoading(false));
       setNegotiationReadinessLoading(true);
       apiClient.getDealsNegotiationReadiness(workspaceId, session.access_token).then(setNegotiationReadiness).catch(() => {}).finally(() => setNegotiationReadinessLoading(false));
+      setMsgSourceReliabilityLoading(true);
+      apiClient.getMessageSourceReliability(workspaceId, session.access_token).then(setMsgSourceReliability).catch(() => {}).finally(() => setMsgSourceReliabilityLoading(false));
     });
   }, []);
 
@@ -541,6 +557,27 @@ export default function ReportsPage() {
         if (!session) { setNegotiationReadinessLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setNegotiationReadinessLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateMsgSourceReliability = () => {
+    setMsgSourceReliabilityLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getMessageSourceReliability(wid, tok)
+        .then(setMsgSourceReliability)
+        .catch(() => {})
+        .finally(() => setMsgSourceReliabilityLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setMsgSourceReliabilityLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setMsgSourceReliabilityLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -2672,6 +2709,117 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 mt-3">No negotiation data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Message Source Reliability */}
+      <Card className="space-y-0 p-0 overflow-hidden">
+        <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <CloudDownload className="h-4 w-4 text-sky-400" />
+            <span className="text-sm font-semibold text-zinc-100">Message Source Reliability</span>
+            {msgSourceReliability?.most_reliable_source && (
+              <span className="inline-flex items-center rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-0.5 text-xs font-medium text-sky-400">
+                Most reliable: {msgSourceReliability.most_reliable_source}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateMsgSourceReliability}
+              disabled={msgSourceReliabilityLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={cn("h-3 w-3", msgSourceReliabilityLoading && "animate-spin")} />
+              {msgSourceReliabilityLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button
+              onClick={() => setMsgSourceReliabilityOpen((o) => !o)}
+              className="rounded-lg p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              {msgSourceReliabilityOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {msgSourceReliabilityOpen && (
+          msgSourceReliabilityLoading && !msgSourceReliability ? (
+            <div className="space-y-3 p-4">
+              {[...Array(3)].map((_, i) => <div key={i} className="h-12 rounded bg-zinc-800 animate-pulse" />)}
+            </div>
+          ) : msgSourceReliability ? (
+            <div className={cn("space-y-4 p-4", msgSourceReliabilityLoading && "opacity-40")}>
+              {msgSourceReliability.sources.length === 0 ? (
+                <p className="text-xs text-zinc-500">No messages ingested yet. Connect a Gmail or Slack account.</p>
+              ) : (
+                <div className="space-y-3">
+                  {msgSourceReliability.sources.map((src) => {
+                    const maxTrend = Math.max(...src.weekly_trend, 1);
+                    const sparkPoints = src.weekly_trend.map((v, i) =>
+                      `${(i / 11) * 100},${100 - (v / maxTrend) * 100}`
+                    ).join(' ');
+                    const serviceLabel = src.service.charAt(0).toUpperCase() + src.service.slice(1);
+                    const rateColor = src.processed_rate >= 95
+                      ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                      : src.processed_rate >= 80
+                      ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                      : 'text-rose-400 bg-rose-500/10 border-rose-500/20';
+                    const barColor = src.processed_rate >= 95 ? '#00C896' : src.processed_rate >= 80 ? '#FBBF24' : '#F43F5E';
+                    return (
+                      <div key={src.service} className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-zinc-200">{serviceLabel}</span>
+                            <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", rateColor)}>
+                              {src.processed_rate}% processed
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-zinc-500 font-mono">{src.total_messages} msgs</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1">
+                            <div className="h-1.5 w-full rounded-full bg-zinc-800">
+                              <div
+                                className="h-1.5 rounded-full transition-all"
+                                style={{ width: `${src.processed_rate}%`, backgroundColor: barColor }}
+                              />
+                            </div>
+                          </div>
+                          <svg
+                            viewBox="0 0 100 100"
+                            className="h-6 w-20 flex-shrink-0"
+                            preserveAspectRatio="none"
+                          >
+                            <polyline
+                              points={sparkPoints}
+                              fill="none"
+                              stroke="#38BDF8"
+                              strokeWidth="3"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{msgSourceReliability.insight}</p>
+              <ul className="space-y-1">
+                {msgSourceReliability.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10px] font-mono text-zinc-600">
+                Generated {new Date(msgSourceReliability.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No source reliability data available.</p>
           )
         )}
       </Card>

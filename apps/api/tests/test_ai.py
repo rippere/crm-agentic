@@ -4762,3 +4762,68 @@ async def test_deals_negotiation_readiness_wrong_workspace_returns_403(app_clien
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/negotiation-readiness")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16k — AI workspace message source reliability
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_message_source_reliability_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+
+    total_row = MagicMock()
+    total_row.service = "gmail"
+    total_row.total = 50
+
+    processed_row = MagicMock()
+    processed_row.service = "gmail"
+    processed_row.processed = 45
+
+    weekly_row = ("gmail", _dt.datetime.utcnow() - _dt.timedelta(days=3))
+
+    result1 = _make_execute_result([total_row])
+    result2 = _make_execute_result([processed_row])
+    result3 = _make_execute_result([weekly_row])
+    mock_db.execute = AsyncMock(side_effect=[result1, result2, result3])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "Gmail is highly reliable.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/messages/source-reliability")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "sources" in data
+    assert isinstance(data["sources"], list)
+    assert len(data["sources"]) == 1
+    src = data["sources"][0]
+    assert src["service"] == "gmail"
+    assert src["total_messages"] == 50
+    assert src["processed_rate"] == 90.0
+    assert len(src["weekly_trend"]) == 12
+    assert data["most_reliable_source"] == "gmail"
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_message_source_reliability_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/messages/source-reliability")
+    assert resp.status_code == 403
