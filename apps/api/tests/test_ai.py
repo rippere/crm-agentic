@@ -4827,3 +4827,62 @@ async def test_message_source_reliability_wrong_workspace_returns_403(app_client
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/messages/source-reliability")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16l — AI workspace deal stage transition analysis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage_transition_analysis_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+
+    now = _dt.datetime.utcnow()
+    row1 = ("Deal 'Alpha Corp' → proposal (reason: manual)", now - _dt.timedelta(days=20))
+    row2 = ("Deal 'Alpha Corp' → negotiation (reason: manual)", now - _dt.timedelta(days=5))
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result([row1, row2]),
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "Proposal stage is the bottleneck.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/stage-transition-analysis")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "transitions" in data
+    assert isinstance(data["transitions"], list)
+    assert len(data["transitions"]) == 1
+    t = data["transitions"][0]
+    assert t["from_stage"] == "proposal"
+    assert t["to_stage"] == "negotiation"
+    assert t["count"] == 1
+    assert t["avg_days"] > 0
+    assert data["bottleneck_stage"] == "proposal"
+    assert data["fastest_transition"] == "proposal → negotiation"
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_stage_transition_analysis_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/stage-transition-analysis")
+    assert resp.status_code == 403

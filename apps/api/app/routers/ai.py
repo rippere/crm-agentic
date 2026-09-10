@@ -8603,3 +8603,136 @@ async def get_message_source_reliability(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16l — AI workspace deal stage transition analysis
+# ---------------------------------------------------------------------------
+
+_STAGE_TRANSITION_ANALYSIS_PROMPT = (
+    "You are a CRM pipeline analyst. Given deal stage transition data for the last 90 days, "
+    "provide a concise insight and 3 actionable recommendations to improve pipeline velocity.\n\n"
+    "Stage Transitions:\n{transition_context}\n\n"
+    "Respond with JSON only — no markdown, no preamble:\n"
+    '{{"insight": "one sentence", "recommendations": ["rec1", "rec2", "rec3"]}}'
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/stage-transition-analysis")
+@limiter.limit("5/minute")
+async def get_stage_transition_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    import re as _re
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=90)
+
+    _valid_stages = {"discovery", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"}
+    _stage_re = _re.compile(r"→\s*([a-z_]+)")
+    _title_re = _re.compile(r"Deal '([^']+)'")
+
+    result = await db.execute(
+        select(ActivityEvent.description, ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "deal_moved",
+            ActivityEvent.created_at >= cutoff,
+        )
+        .order_by(ActivityEvent.created_at.asc())
+    )
+    rows = result.all()
+
+    # Group events by deal title and parse destination stage from description
+    deal_events: dict[str, list[tuple[str, datetime.datetime]]] = defaultdict(list)
+    for desc, created_at in rows:
+        if not desc:
+            continue
+        title_m = _title_re.search(desc)
+        stage_m = _stage_re.search(desc)
+        if title_m and stage_m and stage_m.group(1) in _valid_stages:
+            title = title_m.group(1)
+            stage = stage_m.group(1)
+            ts = created_at.replace(tzinfo=datetime.timezone.utc) if not created_at.tzinfo else created_at
+            deal_events[title].append((stage, ts))
+
+    # Compute (from_stage → to_stage) transition counts and avg days
+    from_to_days: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for events_list in deal_events.values():
+        for i in range(1, len(events_list)):
+            prev_stage, prev_ts = events_list[i - 1]
+            curr_stage, curr_ts = events_list[i]
+            if prev_stage != curr_stage:
+                days = (curr_ts - prev_ts).total_seconds() / 86400.0
+                from_to_days[(prev_stage, curr_stage)].append(days)
+
+    if not from_to_days:
+        return {
+            "transitions": [],
+            "bottleneck_stage": None,
+            "fastest_transition": None,
+            "insight": "No stage transition data available for the last 90 days.",
+            "recommendations": [
+                "Start recording deal stage movements to see transition analysis.",
+                "Ensure deals are updated regularly to track pipeline velocity.",
+                "Use the pipeline view to move deals through stages and build history.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    transitions = []
+    for (from_s, to_s), days_list in sorted(from_to_days.items(), key=lambda x: -len(x[1])):
+        avg_days = round(sum(days_list) / len(days_list), 1)
+        transitions.append({
+            "from_stage": from_s,
+            "to_stage": to_s,
+            "count": len(days_list),
+            "avg_days": avg_days,
+        })
+
+    bottleneck = max(transitions, key=lambda t: t["avg_days"])
+    bottleneck_stage = bottleneck["from_stage"]
+    fastest = min(transitions, key=lambda t: t["avg_days"])
+    fastest_transition = f"{fastest['from_stage']} → {fastest['to_stage']}"
+
+    transition_context = "\n".join(
+        f"- {t['from_stage']} → {t['to_stage']}: {t['count']} transition(s), avg {t['avg_days']} days"
+        for t in transitions[:10]
+    )
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": _STAGE_TRANSITION_ANALYSIS_PROMPT.format(transition_context=transition_context),
+        }],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "Stage transitions are within normal ranges.")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = "Stage transitions are within normal ranges."
+        recommendations = []
+
+    while len(recommendations) < 3:
+        recommendations.append("Review stage transition timing to optimize pipeline velocity.")
+
+    return {
+        "transitions": transitions,
+        "bottleneck_stage": bottleneck_stage,
+        "fastest_transition": fastest_transition,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
