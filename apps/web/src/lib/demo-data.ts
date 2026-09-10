@@ -1077,7 +1077,7 @@ const _BOOTH_IN_FIELD: Record<string, { booth_model: string; install_date: strin
   'l-033': { booth_model: 'Mirror Booth X', install_date: '2026-08-19', venue: 'Celebration Station Rentals' },
 }
 
-export const demoLeads: Lead[] = _LEAD_SEED.map(([name, company, title, stage, source, score], i) => {
+const _eventLeads: Lead[] = _LEAD_SEED.map(([name, company, title, stage, source, score], i) => {
   const idNum = String(i + 1).padStart(3, '0')
   const daysAgo = 2 + i
   const email = name.toLowerCase().replace(/[^a-z]+/g, '.').replace(/^\.|\.$/g, '') +
@@ -1108,6 +1108,194 @@ export const demoLeads: Lead[] = _LEAD_SEED.map(([name, company, title, stage, s
     updatedAt: new Date(Date.now() - daysAgo * 86400000).toISOString(),
   }
 })
+
+// ─── Autonomous Lead Engine — Discovery (Increment 1) demo fixtures ───────────
+// The chatbot-driven discovery spine: an operator says "find photo-booth leads in
+// Burlington", a places-API pass builds a deduped venue universe, an LLM deep-
+// research pass rubric-scores each venue, and the strongest fits land in the
+// existing leads table with source='discovery'. These fixtures let /assistant and
+// /leads render the full flow under NEXT_PUBLIC_DEMO_MODE with no backend (R15).
+
+// One completed discovery run. `stats` uses the ONE shared summary schema the
+// worker + web poller agree on (R2/C4): {found, scored, inserted, skipped, errors}.
+export const demoDiscoveryRun = {
+  id: 'run-burlington-001',
+  workspaceId: LEADGEN_WS,
+  locality: 'Burlington, VT',
+  provider: 'google_places',
+  status: 'succeeded' as const,
+  params: { categories: ['bar', 'brewery', 'museum', 'event_venue', 'music_venue', 'restaurant'], radius_m: 8000, max_venues: 60 },
+  stats: { found: 41, scored: 41, inserted: 16, skipped: 25, errors: 0 },
+  jobId: 'demo-discovery-run-001',
+  createdAt: new Date(Date.now() - 2 * 3600000).toISOString(),
+  completedAt: new Date(Date.now() - 2 * 3600000 + 95000).toISOString(),
+}
+
+// Durable fit record written to lead.custom_fields.discovery (R6/R7). fit_score is
+// the rubric-computed 0-100 overall (NEVER lead.score — that stays the engagement
+// score owned by engagement_score, R5). tier follows A+≥95, A≥90, A-≥85, B+≥80, B≥0.
+// [venue, category, contact, role, email, phone, fitScore, tier, fitSummary, whyItWorks, bestOutreachAngle, keyRisks]
+const _DISCOVERY_SEED: Array<[string, string, string, string, string, string, number, string, string, string, string, string]> = [
+  ['Rí Rá Irish Pub', 'Bar / Pub', 'Enda McMahon', 'General Manager', 'enda@rira.com', '+1 (802) 860-9401',
+    97.5, 'A+', 'Flagship-tier fit: a high-traffic downtown pub with a young, photo-active crowd and dedicated event nights.',
+    'Church Street foot traffic plus live-music and holiday events drive exactly the group dwell-time and social sharing a booth monetizes.',
+    'Lead with the St. Patrick\'s season and weekend live-music nights — pitch a revenue-share booth by the back snug where groups gather.',
+    'Tight floor plan on peak nights; confirm a placement that does not block the bar service line.'],
+  ['ECHO, Leahy Center for Lake Champlain', 'Museum', 'Marissa Feld', 'Events & Rentals Manager', 'events@echovermont.org', '+1 (802) 864-1848',
+    95.0, 'A+', 'Premier venue fit: a waterfront science museum with a heavy private-event and family calendar.',
+    'Constant rotating family + corporate rentals mean year-round, all-ages photo demand with strong brand-safe backdrops.',
+    'Pitch the private-event rental package — a branded booth as a value-add upsell the venue can resell to its own clients.',
+    'Procurement runs through a nonprofit board; longer approval cycle and possible revenue-share constraints.'],
+  ['Zero Gravity Brewery', 'Brewery / Taproom', 'Colby Rhoades', 'Taproom Manager', 'taproom@zerogravitybeer.com', '+1 (802) 497-0054',
+    92.5, 'A', 'Strong fit: a popular taproom with events, trivia, and a photo-forward millennial crowd.',
+    'Taproom events and a large patio create repeat group gatherings — ideal recurring booth traffic in warm months.',
+    'Anchor on Friday release nights and trivia; propose a seasonal patio placement with a QR share flow.',
+    'Seasonal patio-dependent traffic; indoor footprint is tighter in winter.'],
+  ['Hotel Vermont', 'Hotel / Event Space', 'Priya Anand', 'Director of Events', 'panand@hotelvt.com', '+1 (802) 651-0080',
+    91.0, 'A', 'Excellent fit: a boutique downtown hotel with a dense wedding and corporate-event calendar.',
+    'Weddings and corporate galas are the highest-value booth events — captive, photo-eager, well-funded guests.',
+    'Sell the wedding-package add-on and let the hotel bundle the booth into its event menu.',
+    'Weddings are seasonal and pre-booked far out; onboarding must precede the booking window.'],
+  ['Higher Ground', 'Music Venue', 'Danny Kalb', 'Booking & Ops', 'ops@highergroundmusic.com', '+1 (802) 652-0777',
+    89.5, 'A-', 'Very good fit: a well-known live-music venue with steady show traffic.',
+    'Concert crowds are peak social-share moments; pre-show and intermission lulls are strong booth windows.',
+    'Pitch a show-night booth in the lobby with artist-themed templates and a share-to-social hook.',
+    'Show-night-only traffic; needs a lockable placement given late-night crowds.'],
+  ['Vermont Comedy Club', 'Comedy / Event Space', 'Nathan Hartswick', 'Co-Owner', 'nathan@vtcomedy.com', '+1 (802) 859-0100',
+    88.0, 'A-', 'Good fit: an intimate comedy + events club with nightly shows and private bookings.',
+    'Nightly shows plus private-party rentals give consistent, upbeat group traffic that shares readily.',
+    'Lead with private-event rentals and pre-show mingling; small footprint booth by the bar.',
+    'Small venue — placement must not eat seating capacity.'],
+  ['Waterworks Food + Drink', 'Restaurant / Waterfront', 'Gina Trombley', 'GM', 'gina@waterworksvt.com', '+1 (802) 497-3525',
+    86.5, 'A-', 'Good fit: a scenic riverside restaurant with a private-event room.',
+    'Waterfront views and a dedicated event room make for high-quality, share-worthy photos at group functions.',
+    'Pitch the private dining room events — showers, rehearsal dinners, corporate lunches.',
+    'Restaurant-first floor; event cadence is moderate, not nightly.'],
+  ['The Skinny Pancake', 'Restaurant / Live Events', 'Benji Adler', 'Events Lead', 'events@skinnypancake.com', '+1 (802) 540-0188',
+    84.0, 'B+', 'Solid fit: a lakefront creperie hosting community and live-music events.',
+    'Community events and a young, values-driven crowd share readily and return often.',
+    'Anchor on their live-music and community-fundraiser nights with a branded booth.',
+    'Casual margins may push back on revenue share; lead with a low-friction trial.'],
+  ['Champlain Valley Exposition', 'Fairgrounds / Event Venue', 'Rick Bessette', 'Event Coordinator', 'rick@cvexpo.org', '+1 (802) 878-5545',
+    82.5, 'B+', 'Solid fit: a large fair + expo venue with a packed seasonal calendar.',
+    'Fairs, expos, and trade shows produce huge, photo-hungry crowds in concentrated bursts.',
+    'Pitch a multi-event season pass — fair week plus the shoulder-season expos and shows.',
+    'Highly seasonal; peak is fair week and needs staffing to match volume.'],
+  ['Foam Brewers', 'Brewery / Waterfront', 'Sam Keane', 'Taproom Lead', 'hello@foambrewers.com', '+1 (802) 399-2511',
+    81.0, 'B+', 'Solid fit: a waterfront craft brewery with live music and a strong Instagram presence.',
+    'Lakeside setting and an already photo-active crowd make organic booth adoption easy.',
+    'Lean on their live-music nights and existing social following; propose a lakeside patio booth.',
+    'Limited indoor space; strongest in the warm season.'],
+  ['Hula Lakeside', 'Coworking / Event Space', 'Melinda Cross', 'Events Manager', 'events@hulahq.com', '+1 (802) 861-2000',
+    80.5, 'B+', 'Solid fit: a lakefront campus hosting corporate events, launches, and community gatherings.',
+    'Corporate launches and community events draw exactly the mid-size, well-funded groups that book booths.',
+    'Sell the corporate-event add-on and let their events team resell it to member companies.',
+    'Event cadence varies month to month; needs a flexible placement arrangement.'],
+  ['Nectar\'s', 'Bar / Music Venue', 'Devon Ashe', 'Manager', 'booking@liveatnectars.com', '+1 (802) 658-4771',
+    78.0, 'B', 'Fair fit: the iconic live-music bar with nightly shows.',
+    'Nightly music and a legacy crowd give steady late-night booth traffic.',
+    'Pitch show-night booths with band-themed overlays; tie into their brand nostalgia.',
+    'Late-night, high-wear environment; requires a rugged placement and clear liability terms.'],
+  ['Leunig\'s Bistro & Café', 'Restaurant / Bistro', 'Claire Dubois', 'Owner', 'claire@leunigsbistro.com', '+1 (802) 863-3759',
+    74.5, 'B', 'Fair fit: a Church Street bistro with a lively brunch and event crowd.',
+    'Prime Church Street visibility and a social brunch crowd offer decent share potential.',
+    'Anchor on weekend brunch and holiday seatings; keep the footprint minimal.',
+    'Fine-dining service flow leaves little room for a booth; placement is the main hurdle.'],
+  ['The Farmhouse Tap & Grill', 'Gastropub', 'Owen Marsh', 'GM', 'owen@farmhousetg.com', '+1 (802) 859-0888',
+    72.0, 'B', 'Fair fit: a busy gastropub with a beer garden.',
+    'Beer-garden group seating and a young crowd give moderate warm-season booth demand.',
+    'Pitch a seasonal beer-garden booth tied to their events calendar.',
+    'Indoor space is packed at peak; realistically a warm-season play.'],
+  ['Splash at the Boathouse', 'Bar / Waterfront', 'Tara Vance', 'Manager', 'tara@splashboathouse.com', '+1 (802) 343-5894',
+    69.5, 'B', 'Fair fit: a seasonal floating waterfront bar.',
+    'Sunset-on-the-lake backdrops are highly shareable during the summer season.',
+    'Pitch a pure summer-season booth capitalizing on the sunset backdrop.',
+    'Open only in the warm months; short revenue window.'],
+  ['Burlington Country Club', 'Private Club / Events', 'Gregory Hale', 'Membership & Events', 'events@burlingtoncc.org', '+1 (802) 864-9532',
+    66.0, 'B', 'Fair fit: a private club with a wedding and banquet calendar.',
+    'Weddings and member galas are high-value, but access and gatekeeping are tighter.',
+    'Approach through the wedding/banquet coordinator as an event upsell.',
+    'Private-member gatekeeping and a slower, relationship-driven sales cycle.'],
+]
+
+// Discovery-sourced leads land in the existing leads table with source='discovery',
+// stage='new', and score=0 (engagement score, untouched by discovery — R5). The
+// fit record lives entirely under custom_fields.discovery.
+export const demoDiscoveryLeads: Lead[] = _DISCOVERY_SEED.map(
+  ([venue, category, contact, role, email, phone, fitScore, tier, fitSummary, whyItWorks, bestOutreachAngle, keyRisks], i) => {
+    const idNum = String(i + 1).padStart(3, '0')
+    const placeId = `place-blvt-${idNum}`
+    return {
+      id: `l-disc-${idNum}`,
+      workspaceId: LEADGEN_WS,
+      contactId: null,
+      name: contact,
+      email,
+      phone,
+      company: venue,
+      title: role,
+      source: 'discovery',
+      stage: 'new',
+      score: 0, // engagement score — discovery never writes it (R5)
+      scoreDetail: { value: 0, label: 'cold', signals: ['Discovered via market scan', 'No outreach sent yet'] },
+      ownerId: null,
+      customFields: {
+        discovery: {
+          run_id: demoDiscoveryRun.id,
+          provider: 'google_places',
+          place_id: placeId,
+          category,
+          area: 'Burlington, VT',
+          address: 'Burlington, VT 05401',
+          lat: 44.4759 + (i % 5) * 0.004,
+          lng: -73.2121 - (i % 5) * 0.004,
+          website: `https://${venue.toLowerCase().replace(/[^a-z0-9]+/g, '')}.com`,
+          fit_score: fitScore,
+          tier,
+          rubric_scores: {
+            traffic: Math.min(5, Math.round((fitScore / 20) * 10) / 10),
+            social_photo: Math.min(5, Math.round((fitScore / 20) * 10) / 10),
+            group_dwell: Math.min(5, Math.round(((fitScore - 2) / 20) * 10) / 10),
+            brand_fit: Math.min(5, Math.round((fitScore / 20) * 10) / 10),
+            placement_feasibility: Math.min(5, Math.round(((fitScore - 4) / 20) * 10) / 10),
+            year_round: Math.min(5, Math.round(((fitScore - 6) / 20) * 10) / 10),
+            contactability: Math.min(5, Math.round((fitScore / 20) * 10) / 10),
+          },
+          weights: { traffic: 0.25, social_photo: 0.20, group_dwell: 0.15, brand_fit: 0.15, placement_feasibility: 0.10, year_round: 0.05, contactability: 0.10 },
+          fit_summary: fitSummary,
+          why_it_works: whyItWorks,
+          best_outreach_angle: bestOutreachAngle,
+          key_risks: keyRisks,
+          best_contact: contact,
+          contact_role: role,
+          contact_email: email,
+          contact_phone: phone,
+          research_confidence: fitScore >= 85 ? 'High' : fitScore >= 75 ? 'Medium' : 'Low',
+          best_scouting_window: 'Fri–Sat evenings',
+          primary_source_url: `https://${venue.toLowerCase().replace(/[^a-z0-9]+/g, '')}.com`,
+          contact_source_url: `https://${venue.toLowerCase().replace(/[^a-z0-9]+/g, '')}.com/contact`,
+        },
+      },
+      externalId: `google_places:${placeId}`,
+      lastEngagedAt: null,
+      createdAt: demoDiscoveryRun.completedAt,
+      updatedAt: demoDiscoveryRun.completedAt,
+    }
+  },
+)
+
+// The exported lead universe = the shipped event-industry leads + the discovered
+// Burlington venues, so /leads renders both funnels under demo mode.
+export const demoLeads: Lead[] = [..._eventLeads, ...demoDiscoveryLeads]
+
+// Seed transcript for the /assistant chat panel — shows the discovery flow (R15).
+export const demoChatMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
+  {
+    role: 'assistant',
+    content:
+      "Hi — I'm Nova, your lead engine. Tell me a market and I'll go find photo-booth venues: \"find photo-booth leads in Burlington\". I'll scan the map, rubric-score every venue for fit, and load the strongest into your Leads. You approve anything that spends before it runs.",
+  },
+]
 
 // Funnel rollup derived from demoLeads (count + summed score per stage).
 export function demoLeadFunnel(): LeadFunnelStage[] {

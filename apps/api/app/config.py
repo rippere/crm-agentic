@@ -32,5 +32,20 @@ class Settings(BaseSettings):
     GMAIL_WEBHOOK_SECRET: str = ""  # shared secret appended to webhook URL
     GMAIL_PUBSUB_TOPIC: str = ""    # e.g. projects/myproject/topics/gmail-push
 
+    # ─── Autonomous Lead Engine, Increment 1 (Discovery) ───────────────────
+    # Shared Anthropic model ids (BUILD-SPEC §3.1/§3.4, R7). ONE non-empty
+    # env-overridable default each; consumed via app.services.llm — never a
+    # literal in logic. Verified current ids (no date suffix).
+    ANTHROPIC_MODEL_FAST: str = "claude-haiku-4-5"    # reply-sentiment, quick answers
+    ANTHROPIC_MODEL_SMART: str = "claude-sonnet-5"    # agentic loop, deep-research scoring, distillation
+    # Places provider key-gates (services/places.py waterfall). Empty => provider
+    # unavailable (available() is False); no key configured => run completes 'partial'.
+    GOOGLE_PLACES_API_KEY: str = ""
+    YELP_API_KEY: str = ""
+    FOURSQUARE_API_KEY: str = ""
+    # Discovery worker tuning.
+    DISCOVERY_LLM_CONCURRENCY: int = 5   # asyncio.Semaphore fan-out for score_venue
+    DISCOVERY_MAX_VENUES: int = 60       # cap on the deduped venue universe per run
+
 
 settings = Settings()

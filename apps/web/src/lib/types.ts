@@ -290,13 +290,17 @@ export type LeadStage =
   | "lost";
 
 // How a lead entered the funnel (mirror the SQL CHECK on leads.source).
+// "discovery" is added by the Autonomous Lead Engine (Increment 1) — venues
+// found by the discovery spine land as leads with source='discovery' and a
+// custom_fields.discovery fit record. Mirrors the widened 024 leads_source_check.
 export type LeadSource =
   | "import"
   | "manual"
   | "web"
   | "api"
   | "referral"
-  | "event";
+  | "event"
+  | "discovery";
 
 // Engagement-score band, derived by the scoring worker. Mirrors LeadScore
 // (cold/warm/hot) so the same score-config idiom applies.
