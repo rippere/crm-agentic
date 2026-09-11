@@ -60,13 +60,17 @@ def _sequence(settings=None):
     return s
 
 
-def _lead(name="Zach", company="Photo Booth Co", email="zach@example.com", phone="+15550001111"):
+def _lead(name="Zach", company="Photo Booth Co", email="zach@example.com", phone="+15550001111",
+          stage="new", score=0):
     l = MagicMock()
     l.name = name
     l.company = company
     l.email = email
     l.phone = phone
     l.title = "Owner"
+    # Inc 2: the escalation graph reads lead.stage + lead.score.
+    l.stage = stage
+    l.score = score
     return l
 
 
@@ -77,13 +81,28 @@ def _patched_session(db):
     return MagicMock(return_value=session_cm)
 
 
+def _decision_rows(db):
+    """Every EscalationDecision ORM row db.add received."""
+    from app.models.escalation_decision import EscalationDecision
+
+    rows = []
+    for call in db.add.call_args_list:
+        obj = call.args[0] if call.args else None
+        if isinstance(obj, EscalationDecision):
+            rows.append(obj)
+    return rows
+
+
 def _run_tick(*, enrollments, sequence, steps, lead, replied=False, approved=False,
-              deliver_result=None, db=None):
+              mode="auto", sentiment=None, deliver_result=None, db=None):
     """Drive _run_tick with all DB loaders + the send boundary patched.
 
     `steps` is a dict {step_order: step_or_None} consulted by the patched
     _load_step (current + next lookups). `replied`/`approved` drive the
-    _has_event_after_last_send gate. Returns (result, db, deliver_mock).
+    _has_event_after_last_send gate. `mode` is the per-stage authority clamp the
+    patched _load_stage_mode returns ('auto'|'ask'|'off'); `sentiment` is what the
+    patched _latest_sentiment returns (R8 vocab or None). Returns
+    (result, db, deliver_mock).
     """
     import app.workers.sequence_sender as mod
 
@@ -104,12 +123,20 @@ def _run_tick(*, enrollments, sequence, steps, lead, replied=False, approved=Fal
 
     deliver_mock = AsyncMock(return_value=deliver_result or {"delivered": True, "channel": "email"})
 
+    # Patch the best-effort re-score enqueue so the send path never blocks on a
+    # real Redis broker (the .delay() is guarded in-worker, but connecting still
+    # retries for ~20s with no broker up).
+    import app.workers.engagement_score as score_mod
+
     with patch.object(mod, "_get_async_session", return_value=_patched_session(db)), \
          patch.object(mod, "_due_enrollments", new=AsyncMock(return_value=enrollments)), \
          patch.object(mod, "_load_sequence", new=AsyncMock(return_value=sequence)), \
          patch.object(mod, "_load_step", new=_fake_load_step), \
          patch.object(mod, "_load_lead", new=AsyncMock(return_value=lead)), \
+         patch.object(mod, "_load_stage_mode", new=AsyncMock(return_value=mode)), \
+         patch.object(mod, "_latest_sentiment", new=AsyncMock(return_value=sentiment)), \
          patch.object(mod, "_has_event_after_last_send", new=_fake_has_event), \
+         patch.object(score_mod.score_lead_engagement, "delay", new=MagicMock()), \
          patch.object(mod, "_deliver", new=deliver_mock):
         result = asyncio.run(mod._run_tick(str(_WS_ID)))
     return result, db, deliver_mock
@@ -213,34 +240,40 @@ def test_draft_body_ai_without_key_falls_back_to_template():
 # ---------------------------------------------------------------------------
 
 
-def test_requires_approval_parks_pending_no_send():
-    """A due, approval-gated step on a fresh enrollment -> queued draft, waiting, NO send."""
+def test_ask_mode_parks_pending_no_send():
+    """A due step under an 'ask' cap -> queued draft, waiting, NO send (R12 fail-closed)."""
     enr = _enrollment(current_step=0, status="active")
-    step0 = _step(step_order=0, requires_approval=True)
+    step0 = _step(step_order=0)
     result, db, deliver = _run_tick(
         enrollments=[enr],
         sequence=_sequence(),
         steps={0: step0},
         lead=_lead(),
-        approved=False,
+        mode="ask",
     )
     assert result["queued"] == 1
     assert result["sent"] == 0
     assert enr.status == "waiting"
     deliver.assert_not_awaited()
     db.commit.assert_awaited_once()
+    # A decision row was written: proposed 'send', clamped to 'park'.
+    rows = _decision_rows(db)
+    assert len(rows) == 1
+    assert rows[0].proposed_action == "send"
+    assert rows[0].final_action == "park"
+    assert rows[0].mode == "ask"
 
 
 def test_already_waiting_does_not_requeue():
-    """An enrollment already parked ('waiting') with no approval yet is left alone."""
+    """An enrollment already parked ('waiting') under 'ask' is left alone (no 2nd draft)."""
     enr = _enrollment(current_step=0, status="waiting")
-    step0 = _step(step_order=0, requires_approval=True)
+    step0 = _step(step_order=0)
     result, db, deliver = _run_tick(
         enrollments=[enr],
         sequence=_sequence(),
         steps={0: step0},
         lead=_lead(),
-        approved=False,
+        mode="ask",
     )
     assert result["queued"] == 0
     assert result["sent"] == 0
@@ -249,15 +282,16 @@ def test_already_waiting_does_not_requeue():
 
 
 def test_approved_sends_and_advances():
-    """Approval present -> send, advance current_step, set next_run_at from next.delay_hours."""
+    """A prior approval short-circuits the 'ask' clamp -> send + advance."""
     enr = _enrollment(current_step=0, status="active")
-    step0 = _step(step_order=0, requires_approval=True)
-    step1 = _step(step_order=1, requires_approval=False, delay_hours=48)
+    step0 = _step(step_order=0)
+    step1 = _step(step_order=1, delay_hours=48)
     result, db, deliver = _run_tick(
         enrollments=[enr],
         sequence=_sequence(),
         steps={0: step0, 1: step1},
         lead=_lead(),
+        mode="ask",
         approved=True,
     )
     assert result["sent"] == 1
@@ -271,32 +305,113 @@ def test_approved_sends_and_advances():
     assert enr.next_run_at > enr.last_sent_at
 
 
-def test_no_approval_step_sends_immediately():
-    """A step that needs no approval sends on the tick with no gating."""
+def test_auto_mode_sends_immediately():
+    """Under an 'auto' cap a due step sends on the tick with no gating."""
     enr = _enrollment(current_step=0, status="active")
-    step0 = _step(step_order=0, requires_approval=False, delay_hours=0)
-    step1 = _step(step_order=1, requires_approval=False, delay_hours=24)
+    step0 = _step(step_order=0, delay_hours=0)
+    step1 = _step(step_order=1, delay_hours=24)
     result, db, deliver = _run_tick(
         enrollments=[enr],
         sequence=_sequence(),
         steps={0: step0, 1: step1},
         lead=_lead(),
-        approved=False,  # irrelevant: step needs no approval
+        mode="auto",
     )
     assert result["sent"] == 1
     deliver.assert_awaited_once()
     assert enr.current_step == 1
 
 
+def test_off_mode_holds_no_send_no_draft():
+    """The 'off' kill switch -> hold: no send, no queued draft, row untouched."""
+    enr = _enrollment(current_step=0, status="active")
+    step0 = _step(step_order=0)
+    result, db, deliver = _run_tick(
+        enrollments=[enr],
+        sequence=_sequence(),
+        steps={0: step0},
+        lead=_lead(),
+        mode="off",
+    )
+    assert result["sent"] == 0
+    assert result["queued"] == 0
+    assert result["skipped"] == 1
+    assert enr.status == "active"  # left for a later tick
+    deliver.assert_not_awaited()
+    rows = _decision_rows(db)
+    assert rows[0].final_action == "hold"
+
+
+def test_off_suppresses_stale_approved():
+    """'off' wins even over a stale approval (kill switch, critique low-1)."""
+    enr = _enrollment(current_step=0, status="active")
+    step0 = _step(step_order=0)
+    result, db, deliver = _run_tick(
+        enrollments=[enr],
+        sequence=_sequence(),
+        steps={0: step0},
+        lead=_lead(),
+        mode="off",
+        approved=True,  # would normally short-circuit to send
+    )
+    assert result["sent"] == 0
+    deliver.assert_not_awaited()
+    assert _decision_rows(db)[0].final_action == "hold"
+
+
+def test_negative_sentiment_escalates():
+    """A negative reply proposes 'escalate' -> waiting, escalated counter, no send."""
+    enr = _enrollment(current_step=0, status="active")
+    step0 = _step(step_order=0)
+    result, db, deliver = _run_tick(
+        enrollments=[enr],
+        sequence=_sequence({"stop_on_reply": False}),  # don't halt on the reply itself
+        steps={0: step0},
+        lead=_lead(),
+        mode="auto",
+        replied=True,
+        sentiment="negative",
+    )
+    assert result["escalated"] == 1
+    assert result["sent"] == 0
+    assert enr.status == "waiting"
+    deliver.assert_not_awaited()
+    row = _decision_rows(db)[0]
+    assert row.proposed_action == "escalate"
+    assert row.final_action == "escalate"
+    assert row.sentiment == "negative"
+
+
+def test_unsubscribe_sentiment_stops():
+    """An unsubscribe reply proposes 'stop' -> enrollment stopped, no send (any mode)."""
+    enr = _enrollment(current_step=0, status="active")
+    step0 = _step(step_order=0)
+    result, db, deliver = _run_tick(
+        enrollments=[enr],
+        sequence=_sequence({"stop_on_reply": False}),
+        steps={0: step0},
+        lead=_lead(),
+        mode="auto",
+        replied=True,
+        sentiment="unsubscribe",
+    )
+    assert result["stopped"] == 1
+    assert result["sent"] == 0
+    assert enr.status == "stopped"
+    deliver.assert_not_awaited()
+    assert _decision_rows(db)[0].final_action == "stop"
+
+
 def test_last_step_completes():
     """Sending the final step (no next step) marks the enrollment completed."""
     enr = _enrollment(current_step=2, status="active")
-    last = _step(step_order=2, requires_approval=False)
+    last = _step(step_order=2)
     result, db, deliver = _run_tick(
         enrollments=[enr],
         sequence=_sequence(),
         steps={2: last, 3: None},  # no step 3
         lead=_lead(),
+        mode="auto",
     )
     assert result["sent"] == 1
     assert result["completed"] == 1
@@ -337,7 +452,7 @@ def test_stop_on_reply_halts_before_send():
 
 
 def test_stop_on_reply_disabled_still_sends_after_reply():
-    """With stop_on_reply=False a reply does not halt the drip."""
+    """With stop_on_reply=False an unclassified reply does not halt the drip (auto)."""
     enr = _enrollment(current_step=0, status="active")
     step0 = _step(step_order=0, requires_approval=False)
     result, db, deliver = _run_tick(
@@ -345,7 +460,9 @@ def test_stop_on_reply_disabled_still_sends_after_reply():
         sequence=_sequence({"stop_on_reply": False}),
         steps={0: step0, 1: None},
         lead=_lead(),
+        mode="auto",
         replied=True,
+        sentiment=None,  # not yet classified -> propose send
     )
     assert result["sent"] == 1
     deliver.assert_awaited_once()
@@ -357,7 +474,7 @@ def test_quiet_hours_skips_without_touching_row():
     step0 = _step(step_order=0, requires_approval=False)
     result, db, deliver = _run_tick(
         enrollments=[enr],
-        sequence=_sequence({"quiet_hours": [0, 23]}),  # _NOW (15:00) is inside
+        sequence=_sequence({"quiet_hours": [0, 24]}),  # full-day window: always inside (time-independent)
         steps={0: step0},
         lead=_lead(),
     )
@@ -376,6 +493,7 @@ def test_sms_channel_uses_stub_delivery():
         sequence=_sequence(),
         steps={0: step0, 1: None},
         lead=_lead(),
+        mode="auto",
         deliver_result={"delivered": True, "channel": "sms", "stub": True},
     )
     assert result["sent"] == 1
