@@ -372,14 +372,14 @@ export default function CallsPage() {
             </div>
           )}
         </div>
-        <Button variant="cta" size="sm" onClick={() => setUploading(true)} disabled={!workspaceId}>
+        <Button data-tour="calls-upload" variant="cta" size="sm" onClick={() => setUploading(true)} disabled={!workspaceId}>
           <Upload className="h-3.5 w-3.5" />
           Log a Call
         </Button>
       </div>
 
       {/* Call list */}
-      <Card className="overflow-hidden p-0">
+      <Card data-tour="calls-list" className="overflow-hidden p-0">
         {loading ? (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="h-6 w-6 text-indigo-400 animate-spin" />

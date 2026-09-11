@@ -6,32 +6,42 @@ import { Compass } from "lucide-react";
 import { createBrowserClient } from "@/lib/supabase";
 import type { WorkspaceMode } from "@/lib/types";
 import { TourProvider, useTour, peekTourProgress } from "@/lib/onboarding/TourProvider";
-import { appShellModules } from "@/lib/onboarding/modules";
+import { appShellModules, moduleHomeRoutes } from "@/lib/onboarding/modules";
 import TourSpotlight from "./TourSpotlight";
 
 /**
  * Shell-level tour host. Mounted once inside the authenticated (app) shell so
- * every post-login module (Module 1 "Your home base", and later shell modules)
- * runs with the workspace `mode` wired in for branch-by-mode filtering.
+ * every post-login shell module (Module 1 "Your home base", Module 2 "Contacts",
+ * Module 3 "Inbox & Calls", …) runs with the workspace `mode` wired in for
+ * branch-by-mode filtering.
  *
- * Module 1 is auto-offered once, on the user's first visit to the dashboard,
- * and is otherwise reachable from the launcher — resuming from saved progress.
- * The engine, provider, and spotlight are unchanged; this is pure wiring.
+ * Each shell module is auto-offered once, on the user's first visit to its home
+ * route (dashboard / contacts / inbox), and is otherwise reachable from the
+ * launcher — which resumes the first not-yet-completed module in order. The
+ * engine, provider, and spotlight are unchanged; this is pure wiring.
  */
 
-const HOME_BASE = appShellModules[0]; // Module 1 for now
+/** The first shell module the user hasn't completed (for the launcher). */
+function firstUnfinishedModule(scopeKey: string) {
+  for (const m of appShellModules) {
+    const p = peekTourProgress(m.id, scopeKey);
+    if (!p || p.status !== "completed") return m;
+  }
+  return appShellModules[appShellModules.length - 1];
+}
 
-/** Floating launcher + first-visit auto-offer. Must be a child of TourProvider. */
+/** Floating launcher + first-visit-per-route auto-offer. Child of TourProvider. */
 function AppTourLauncher({ scopeKey }: { scopeKey: string }) {
   const { start, isActive } = useTour();
   const pathname = usePathname();
 
-  // Auto-offer the home-base tour once, and only on the dashboard.
+  // Auto-offer the module whose home route matches this page, once, if unseen.
   useEffect(() => {
-    if (pathname !== "/dashboard") return;
-    const seen = peekTourProgress(HOME_BASE.id, scopeKey);
+    const module = appShellModules.find((m) => moduleHomeRoutes[m.id] === pathname);
+    if (!module) return;
+    const seen = peekTourProgress(module.id, scopeKey);
     if (!seen) {
-      const t = window.setTimeout(() => start(HOME_BASE), 800);
+      const t = window.setTimeout(() => start(module), 800);
       return () => window.clearTimeout(t);
     }
   }, [pathname, scopeKey, start]);
@@ -41,7 +51,7 @@ function AppTourLauncher({ scopeKey }: { scopeKey: string }) {
   return (
     <button
       type="button"
-      onClick={() => start(HOME_BASE)}
+      onClick={() => start(firstUnfinishedModule(scopeKey))}
       data-tour-launcher="app"
       className="fixed bottom-5 right-5 z-[60] flex items-center gap-2 rounded-full border border-indigo-500/40 bg-indigo-600/90 px-4 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-900/30 backdrop-blur hover:bg-indigo-500 transition-colors cursor-pointer"
     >

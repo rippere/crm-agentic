@@ -1637,7 +1637,7 @@ export default function ContactsPage() {
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-52 max-w-sm">
+        <div data-tour="contacts-search" className="relative flex-1 min-w-52 max-w-sm">
           {semanticLoading ? (
             <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-400 animate-spin" />
           ) : semanticMode ? (
@@ -1662,6 +1662,7 @@ export default function ContactsPage() {
 
         {/* Semantic mode toggle */}
         <button
+          data-tour="contacts-ai-search"
           onClick={() => { setSemanticMode((v) => !v); setSearch(""); setSemanticResults([]); }}
           className={cn(
             "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-200 cursor-pointer",
@@ -1742,6 +1743,7 @@ export default function ContactsPage() {
         </button>
 
         <button
+          data-tour="contacts-import"
           onClick={() => importInputRef.current?.click()}
           disabled={importLoading}
           className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-400 transition-all hover:border-zinc-700 hover:text-zinc-300 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
@@ -1763,7 +1765,7 @@ export default function ContactsPage() {
           aria-label="Import contacts CSV file"
         />
 
-        <Button variant="cta" size="sm" onClick={() => setNewContactOpen(true)}>
+        <Button data-tour="contacts-add" variant="cta" size="sm" onClick={() => setNewContactOpen(true)}>
           <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
           Add Contact
         </Button>
@@ -1801,7 +1803,7 @@ export default function ContactsPage() {
       )}
 
       {/* Table */}
-      <Card className="overflow-hidden p-0">
+      <Card data-tour="contacts-list" className="overflow-hidden p-0">
         <div className="overflow-x-auto">
           <table className="w-full" role="table" aria-label="Contacts table">
             <thead>
