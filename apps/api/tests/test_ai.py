@@ -4886,3 +4886,66 @@ async def test_stage_transition_analysis_wrong_workspace_returns_403(app_client)
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/stage-transition-analysis")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16m: GET /workspaces/{wid}/ai/revenue/trend-analysis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_revenue_trend_analysis_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    # Simulate 3 closed_won deals in different months
+    d1_close = now.replace(day=1) - _dt.timedelta(days=60)
+    d2_close = now.replace(day=1) - _dt.timedelta(days=30)
+    d3_close = now.replace(day=1)
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result([
+            (50000.0, d1_close, d1_close),
+            (75000.0, d2_close, d2_close),
+            (90000.0, d3_close, d3_close),
+        ]),
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "Revenue is accelerating with strong Q4 performance.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/revenue/trend-analysis")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "monthly_trend" in data
+    assert isinstance(data["monthly_trend"], list)
+    assert len(data["monthly_trend"]) == 12
+    assert "trend_direction" in data
+    assert data["trend_direction"] in ("accelerating", "growing", "stable", "declining")
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+    # Deals should be bucketed into their respective months
+    total_revenue = sum(r["revenue"] for r in data["monthly_trend"])
+    assert total_revenue == 215000
+
+
+@pytest.mark.asyncio
+async def test_revenue_trend_analysis_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/revenue/trend-analysis")
+    assert resp.status_code == 403

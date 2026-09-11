@@ -8736,3 +8736,157 @@ async def get_stage_transition_analysis(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16m: AI workspace revenue trend analysis
+# ---------------------------------------------------------------------------
+
+_REVENUE_TREND_PROMPT = (
+    "You are a CRM revenue analyst. Given 12 months of closed-won revenue data, return a JSON object "
+    "with exactly two keys:\n"
+    "- \"insight\": one concise sentence summarising the most important pattern in the revenue trend.\n"
+    "- \"recommendations\": an array of exactly 3 short, specific, actionable recommendations.\n"
+    "Return only raw JSON, no markdown.\n\n"
+    "Revenue data (YYYY-MM → revenue $, deal_count):\n{monthly_context}"
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/revenue/trend-analysis")
+@limiter.limit("5/minute")
+async def get_revenue_trend_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    # Query closed_won deals for the last 12 months
+    cutoff = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    for _ in range(11):
+        if cutoff.month == 1:
+            cutoff = cutoff.replace(year=cutoff.year - 1, month=12)
+        else:
+            cutoff = cutoff.replace(month=cutoff.month - 1)
+
+    result = await db.execute(
+        select(Deal.value, Deal.stage_changed_at, Deal.created_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    rows = result.all()
+
+    # Build 12-month buckets (YYYY-MM)
+    month_buckets: dict[str, dict] = {}
+    ref = now
+    for i in range(11, -1, -1):
+        if ref.month - i <= 0:
+            y = ref.year - 1
+            m = ref.month - i + 12
+        else:
+            y = ref.year
+            m = ref.month - i
+        key = f"{y}-{m:02d}"
+        month_buckets[key] = {"month": key, "revenue": 0, "deal_count": 0, "avg_deal_size": 0}
+
+    for value, stage_changed_at, created_at in rows:
+        close_dt = stage_changed_at or created_at
+        if close_dt is None:
+            continue
+        if not close_dt.tzinfo:
+            close_dt = close_dt.replace(tzinfo=timezone.utc)
+        key = f"{close_dt.year}-{close_dt.month:02d}"
+        if key in month_buckets:
+            month_buckets[key]["revenue"] += float(value or 0)
+            month_buckets[key]["deal_count"] += 1
+
+    monthly_trend = list(month_buckets.values())
+    for row in monthly_trend:
+        if row["deal_count"] > 0:
+            row["avg_deal_size"] = round(row["revenue"] / row["deal_count"])
+        row["revenue"] = round(row["revenue"])
+
+    total_revenue = sum(r["revenue"] for r in monthly_trend)
+    if total_revenue == 0:
+        return {
+            "monthly_trend": monthly_trend,
+            "growth_rate": None,
+            "best_month": None,
+            "trend_direction": "stable",
+            "insight": "No closed-won revenue data available for the last 12 months.",
+            "recommendations": [
+                "Close your first deals to start tracking revenue trends.",
+                "Set expected close dates on open deals to forecast upcoming revenue.",
+                "Review pipeline health to identify deals ready to close.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    # Compute growth rate and trend direction
+    first_half = sum(r["revenue"] for r in monthly_trend[:6])
+    second_half = sum(r["revenue"] for r in monthly_trend[6:])
+    if first_half > 0:
+        half_growth = (second_half - first_half) / first_half
+    else:
+        half_growth = 1.0 if second_half > 0 else 0.0
+
+    if half_growth > 0.3:
+        trend_direction = "accelerating"
+    elif half_growth > 0.05:
+        trend_direction = "growing"
+    elif half_growth > -0.1:
+        trend_direction = "stable"
+    else:
+        trend_direction = "declining"
+
+    nonzero = [r for r in monthly_trend if r["revenue"] > 0]
+    if len(nonzero) >= 2:
+        growth_rate = round(half_growth * 100, 1)
+    else:
+        growth_rate = None
+
+    best = max(monthly_trend, key=lambda r: r["revenue"])
+    best_month = best["month"] if best["revenue"] > 0 else None
+
+    monthly_context = "\n".join(
+        f"- {r['month']}: ${r['revenue']:,} ({r['deal_count']} deal{'s' if r['deal_count'] != 1 else ''})"
+        for r in monthly_trend
+    )
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": _REVENUE_TREND_PROMPT.format(monthly_context=monthly_context),
+        }],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "Revenue trends are within normal ranges.")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = "Revenue trends are within normal ranges."
+        recommendations = []
+
+    while len(recommendations) < 3:
+        recommendations.append("Review closed-won deals to identify patterns driving revenue.")
+
+    return {
+        "monthly_trend": monthly_trend,
+        "growth_rate": growth_rate,
+        "best_month": best_month,
+        "trend_direction": trend_direction,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }

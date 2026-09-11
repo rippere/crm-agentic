@@ -11,6 +11,7 @@ import { createBrowserClient } from "@/lib/supabase";
 import {
   BarChart, Bar, LineChart, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
+  AreaChart, Area,
 } from "recharts";
 import {
   TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight,
@@ -250,6 +251,20 @@ export default function ReportsPage() {
   const [stageTransitionLoading, setStageTransitionLoading] = useState(false);
   const [stageTransitionOpen, setStageTransitionOpen] = useState(true);
 
+  type RevenueTrendMonth = { month: string; revenue: number; deal_count: number; avg_deal_size: number };
+  type RevenueTrendAnalysis = {
+    monthly_trend: RevenueTrendMonth[]
+    growth_rate: number | null
+    best_month: string | null
+    trend_direction: 'accelerating' | 'growing' | 'stable' | 'declining'
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [revenueTrend, setRevenueTrend] = useState<RevenueTrendAnalysis | null>(null);
+  const [revenueTrendLoading, setRevenueTrendLoading] = useState(false);
+  const [revenueTrendOpen, setRevenueTrendOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -300,6 +315,8 @@ export default function ReportsPage() {
       apiClient.getMessageSourceReliability("demo-workspace-1", "demo-token").then(setMsgSourceReliability).catch(() => {}).finally(() => setMsgSourceReliabilityLoading(false));
       setStageTransitionLoading(true);
       apiClient.getStageTransitionAnalysis("demo-workspace-1", "demo-token").then(setStageTransitionAnalysis).catch(() => {}).finally(() => setStageTransitionLoading(false));
+      setRevenueTrendLoading(true);
+      apiClient.getRevenueTrendAnalysis("demo-workspace-1", "demo-token").then(setRevenueTrend).catch(() => {}).finally(() => setRevenueTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -355,6 +372,8 @@ export default function ReportsPage() {
       apiClient.getMessageSourceReliability(workspaceId, session.access_token).then(setMsgSourceReliability).catch(() => {}).finally(() => setMsgSourceReliabilityLoading(false));
       setStageTransitionLoading(true);
       apiClient.getStageTransitionAnalysis(workspaceId, session.access_token).then(setStageTransitionAnalysis).catch(() => {}).finally(() => setStageTransitionLoading(false));
+      setRevenueTrendLoading(true);
+      apiClient.getRevenueTrendAnalysis(workspaceId, session.access_token).then(setRevenueTrend).catch(() => {}).finally(() => setRevenueTrendLoading(false));
     });
   }, []);
 
@@ -621,11 +640,39 @@ export default function ReportsPage() {
     }
   };
 
+  const regenerateRevenueTrend = () => {
+    setRevenueTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getRevenueTrendAnalysis(wid, tok)
+        .then(setRevenueTrend)
+        .catch(() => {})
+        .finally(() => setRevenueTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setRevenueTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setRevenueTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
   const RATING_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
     strong:   { label: "Strong",   color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
     healthy:  { label: "Healthy",  color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
     at_risk:  { label: "At Risk",  color: "text-amber-400",   bg: "bg-amber-500/10 border-amber-500/20"   },
     critical: { label: "Critical", color: "text-rose-400",    bg: "bg-rose-500/10 border-rose-500/20"     },
+  };
+
+  const TREND_DIR_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+    accelerating: { label: "Accelerating", color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
+    growing:      { label: "Growing",      color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
+    stable:       { label: "Stable",       color: "text-zinc-400",    bg: "bg-zinc-500/10 border-zinc-500/20"      },
+    declining:    { label: "Declining",    color: "text-rose-400",    bg: "bg-rose-500/10 border-rose-500/20"      },
   };
 
   const TEAM_PERF_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -2929,6 +2976,101 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No stage transition data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Phase 16m: Revenue Trend Analysis */}
+      <Card className="border-zinc-800 p-0 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+          <TrendingUp className="h-4 w-4 text-emerald-400" />
+          <span className="text-sm font-semibold text-zinc-200">Revenue Trend Analysis</span>
+          {revenueTrend?.trend_direction && (() => {
+            const cfg = TREND_DIR_CONFIG[revenueTrend.trend_direction];
+            return (
+              <span className={cn("ml-1 rounded-full border px-2 py-0.5 text-xs", cfg?.color, cfg?.bg)}>
+                {cfg?.label ?? revenueTrend.trend_direction}
+              </span>
+            );
+          })()}
+          {revenueTrend?.growth_rate != null && (
+            <span className={cn(
+              "rounded-full border px-2 py-0.5 text-xs font-mono",
+              revenueTrend.growth_rate >= 0 ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" : "text-rose-400 bg-rose-500/10 border-rose-500/20"
+            )}>
+              {revenueTrend.growth_rate >= 0 ? "+" : ""}{revenueTrend.growth_rate}% vs prior 6 mo
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={regenerateRevenueTrend}
+              disabled={revenueTrendLoading}
+              className="flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", revenueTrendLoading && "animate-spin")} />
+              {revenueTrendLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setRevenueTrendOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {revenueTrendOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {revenueTrendOpen && (
+          revenueTrendLoading && !revenueTrend ? (
+            <p className="p-4 text-xs text-zinc-500 animate-pulse">Analysing revenue trends…</p>
+          ) : revenueTrend ? (
+            <div className={cn("space-y-4 p-4", revenueTrendLoading && "opacity-40")}>
+              {revenueTrend.monthly_trend.some((r) => r.revenue > 0) ? (
+                <div className="h-40">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={revenueTrend.monthly_trend} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                      <defs>
+                        <linearGradient id="revGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#10B981" stopOpacity={0.3} />
+                          <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#27272A" />
+                      <XAxis dataKey="month" tick={{ fill: "#71717A", fontSize: 10 }} tickLine={false} />
+                      <YAxis tick={{ fill: "#71717A", fontSize: 10 }} tickLine={false} tickFormatter={(v: number) => `$${v >= 1000 ? `${Math.round(v / 1000)}k` : v}`} />
+                      <Tooltip
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null;
+                          const d = payload[0].payload as RevenueTrendMonth;
+                          return (
+                            <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl text-xs">
+                              <p className="font-mono text-zinc-400 mb-1">{label}</p>
+                              <p className="text-emerald-300">${d.revenue.toLocaleString()}</p>
+                              <p className="text-zinc-500">{d.deal_count} deal{d.deal_count !== 1 ? "s" : ""} · avg ${d.avg_deal_size.toLocaleString()}</p>
+                            </div>
+                          );
+                        }}
+                      />
+                      {revenueTrend.best_month && (
+                        <ReferenceLine x={revenueTrend.best_month} stroke="#10B981" strokeDasharray="3 3" label={{ value: "Best", fill: "#10B981", fontSize: 9 }} />
+                      )}
+                      <Area type="monotone" dataKey="revenue" stroke="#10B981" strokeWidth={2} fill="url(#revGradient)" dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500">No closed-won revenue in the last 12 months.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{revenueTrend.insight}</p>
+              <ul className="space-y-1">
+                {revenueTrend.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(revenueTrend.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No revenue trend data available.</p>
           )
         )}
       </Card>

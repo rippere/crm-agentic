@@ -5294,5 +5294,44 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/stage-transition-analysis`, {}, token)
   },
+
+  async getRevenueTrendAnalysis(workspaceId: string, token: string): Promise<{
+    monthly_trend: Array<{ month: string; revenue: number; deal_count: number; avg_deal_size: number }>
+    growth_rate: number | null
+    best_month: string | null
+    trend_direction: 'accelerating' | 'growing' | 'stable' | 'declining'
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 750))
+      const now = new Date()
+      const months: Array<{ month: string; revenue: number; deal_count: number; avg_deal_size: number }> = []
+      // Build 12 month demo data with growing trajectory
+      const baseRevenues = [42000, 38000, 51000, 47000, 55000, 49000, 61000, 58000, 72000, 68000, 81000, 89000]
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        const revenue = baseRevenues[11 - i]
+        const deal_count = Math.round(revenue / 18000) + 1
+        months.push({ month: key, revenue, deal_count, avg_deal_size: Math.round(revenue / deal_count) })
+      }
+      return Promise.resolve({
+        monthly_trend: months,
+        growth_rate: 52.3,
+        best_month: months[months.length - 1].month,
+        trend_direction: 'accelerating',
+        insight: 'Revenue has grown 52% over the last 12 months, with the strongest acceleration in Q3 and Q4 driven by higher-value deals.',
+        recommendations: [
+          'Double down on the proposal-to-close playbook that produced the Q4 spike.',
+          'Set monthly revenue targets to maintain the accelerating trajectory.',
+          'Expand the pipeline in the discovery stage to sustain growth 3–6 months out.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/revenue/trend-analysis`, {}, token)
+  },
 }
 
