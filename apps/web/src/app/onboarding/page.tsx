@@ -7,6 +7,7 @@ import { apiClient } from "@/lib/api-client";
 import { Zap, TrendingUp, CheckSquare, Layers, Mail, MessageSquare, Users, ArrowRight, Check, Loader2 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import OnboardingTour from "@/components/onboarding/OnboardingTour";
 
 const STEPS = ["Workspace", "Mode", "Integrations", "Team"] as const;
 type Step = 1 | 2 | 3 | 4;
@@ -153,7 +154,7 @@ export default function OnboardingPage() {
           </div>
         </div>
 
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-8">
+        <div data-tour="onboarding-card" className="rounded-xl border border-zinc-800 bg-zinc-900 p-8">
           <StepIndicator current={step} />
 
           {error && (
@@ -170,6 +171,7 @@ export default function OnboardingPage() {
                 <p className="text-sm text-zinc-500 mb-6">This is how your team will identify the workspace.</p>
                 <label className="block text-xs font-medium text-zinc-400 mb-1.5">Workspace name</label>
                 <input
+                  data-tour="workspace-name"
                   type="text"
                   value={workspaceName}
                   onChange={(e) => setWorkspaceName(e.target.value)}
@@ -198,7 +200,7 @@ export default function OnboardingPage() {
               <div>
                 <h1 className="text-xl font-semibold text-zinc-100 mb-1">Choose your mode</h1>
                 <p className="text-sm text-zinc-500 mb-6">Select how you&apos;ll primarily use NovaCRM.</p>
-                <div className="grid grid-cols-1 gap-3">
+                <div data-tour="mode-select" className="grid grid-cols-1 gap-3">
                   {modeOptions.map(({ value, label, description, icon: Icon }) => (
                     <button
                       key={value}
@@ -245,7 +247,7 @@ export default function OnboardingPage() {
               <div>
                 <h1 className="text-xl font-semibold text-zinc-100 mb-1">Connect your tools</h1>
                 <p className="text-sm text-zinc-500 mb-6">Connect Gmail and Slack to unlock AI-powered email drafting and messaging intelligence.</p>
-                <div className="space-y-3">
+                <div data-tour="integrations" className="space-y-3">
                   <div className={cn(
                     "flex items-center gap-4 rounded-lg border p-4 transition-all",
                     gmailConnected ? "border-emerald-500/30 bg-emerald-500/5" : "border-zinc-700 bg-zinc-800"
@@ -309,7 +311,7 @@ export default function OnboardingPage() {
           {/* Step 4: Invite team */}
           {step === 4 && (
             <div className="space-y-6">
-              <div>
+              <div data-tour="invite-team">
                 <h1 className="text-xl font-semibold text-zinc-100 mb-1">Invite your team</h1>
                 <p className="text-sm text-zinc-500 mb-6">Add teammates to your workspace. You can always invite more from Settings.</p>
 
@@ -341,6 +343,7 @@ export default function OnboardingPage() {
               </div>
 
               <button
+                data-tour="launch"
                 onClick={() => router.push("/dashboard")}
                 className="w-full flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 transition"
               >
@@ -353,6 +356,9 @@ export default function OnboardingPage() {
           )}
         </div>
       </div>
+
+      {/* Reusable guided-onboarding tour engine + Module 0 ("Get set up"). */}
+      <OnboardingTour />
     </div>
   );
 }
