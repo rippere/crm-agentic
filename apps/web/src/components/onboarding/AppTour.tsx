@@ -6,20 +6,21 @@ import { Compass } from "lucide-react";
 import { createBrowserClient } from "@/lib/supabase";
 import type { WorkspaceMode } from "@/lib/types";
 import { TourProvider, useTour, peekTourProgress, filterStepsForMode } from "@/lib/onboarding/TourProvider";
-import { appShellModules, moduleHomeRoutes } from "@/lib/onboarding/modules";
+import { appShellModules, capstoneModules, moduleHomeRoutes } from "@/lib/onboarding/modules";
 import type { TourModule } from "@/lib/onboarding/types";
 import TourSpotlight from "./TourSpotlight";
 
 /**
  * Shell-level tour host. Mounted once inside the authenticated (app) shell so
  * every post-login shell module (Module 1 "Your home base", Module 2 "Contacts",
- * Module 3 "Inbox & Calls", …) runs with the workspace `mode` wired in for
- * branch-by-mode filtering.
+ * Module 3 "Inbox & Calls", the Sales/PM tracks) runs with the workspace `mode`
+ * wired in for branch-by-mode filtering.
  *
- * Each shell module is auto-offered once, on the user's first visit to its home
- * route (dashboard / contacts / inbox), and is otherwise reachable from the
- * launcher — which resumes the first not-yet-completed module in order. The
- * engine, provider, and spotlight are unchanged; this is pure wiring.
+ * First-run modules are auto-offered once, on first visit to their home route,
+ * and reachable from the launcher, which resumes the first not-yet-completed
+ * one. The Level-2 capstone (C1-C3) is NOT auto-offered and has no home route —
+ * it's "unlocked later": the launcher only offers it once every applicable
+ * first-run module is complete. The engine/provider/spotlight are unchanged.
  */
 
 /** Does this module have any steps for the current workspace mode? */
@@ -27,18 +28,28 @@ function appliesToMode(module: TourModule, mode: WorkspaceMode): boolean {
   return filterStepsForMode(module.steps, mode).length > 0;
 }
 
+function isCompleted(scopeKey: string, m: TourModule): boolean {
+  return peekTourProgress(m.id, scopeKey)?.status === "completed";
+}
+
 /**
- * The first shell module the user hasn't completed AND that applies to their
- * mode (for the launcher). Mode-gated track modules with zero steps for the
- * current mode are skipped entirely.
+ * What the launcher starts: the first not-yet-completed first-run module for the
+ * mode; and ONLY once every first-run module is complete does it unlock the
+ * capstone (first uncompleted capstone module). This is the sole path to the
+ * capstone — it is never auto-offered and never surfaces on first run.
  */
-function firstUnfinishedModule(scopeKey: string, mode: WorkspaceMode) {
-  const applicable = appShellModules.filter((m) => appliesToMode(m, mode));
-  for (const m of applicable) {
-    const p = peekTourProgress(m.id, scopeKey);
-    if (!p || p.status !== "completed") return m;
-  }
-  return applicable[applicable.length - 1] ?? appShellModules[0];
+function launcherTarget(scopeKey: string, mode: WorkspaceMode): TourModule {
+  const firstRun = appShellModules.filter((m) => appliesToMode(m, mode));
+  const unfinishedFirstRun = firstRun.find((m) => !isCompleted(scopeKey, m));
+  if (unfinishedFirstRun) return unfinishedFirstRun;
+  // First-run complete → unlock capstone.
+  const unfinishedCapstone = capstoneModules.find((m) => !isCompleted(scopeKey, m));
+  return unfinishedCapstone ?? capstoneModules[capstoneModules.length - 1] ?? firstRun[firstRun.length - 1];
+}
+
+/** True once every applicable first-run module is complete (capstone unlocked). */
+function capstoneUnlocked(scopeKey: string, mode: WorkspaceMode): boolean {
+  return appShellModules.filter((m) => appliesToMode(m, mode)).every((m) => isCompleted(scopeKey, m));
 }
 
 /** Floating launcher + first-visit-per-route auto-offer. Child of TourProvider. */
@@ -61,15 +72,19 @@ function AppTourLauncher({ scopeKey, mode }: { scopeKey: string; mode: Workspace
 
   if (isActive) return null;
 
+  // Once first-run is done, the launcher unlocks the Level-2 capstone.
+  const unlocked = capstoneUnlocked(scopeKey, mode);
+
   return (
     <button
       type="button"
-      onClick={() => start(firstUnfinishedModule(scopeKey, mode))}
+      onClick={() => start(launcherTarget(scopeKey, mode))}
       data-tour-launcher="app"
+      data-capstone-unlocked={unlocked ? "true" : "false"}
       className="fixed bottom-5 right-5 z-[60] flex items-center gap-2 rounded-full border border-indigo-500/40 bg-indigo-600/90 px-4 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-900/30 backdrop-blur hover:bg-indigo-500 transition-colors cursor-pointer"
     >
       <Compass className="h-4 w-4" />
-      Product tour
+      {unlocked ? "Advanced tour" : "Product tour"}
     </button>
   );
 }

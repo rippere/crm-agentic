@@ -9,6 +9,9 @@ import { moduleS3Outreach } from "./module-s3-outreach";
 import { moduleS4Reports } from "./module-s4-reports";
 import { moduleP1Tasks } from "./module-p1-tasks";
 import { moduleP2Projects } from "./module-p2-projects";
+import { moduleC1Goals } from "./module-c1-goals";
+import { moduleC2NovaDeep } from "./module-c2-nova-deep";
+import { moduleC3Nexus } from "./module-c3-nexus";
 
 export { module0Setup } from "./module-0-setup";
 export { module1HomeBase } from "./module-1-home-base";
@@ -20,6 +23,9 @@ export { moduleS3Outreach } from "./module-s3-outreach";
 export { moduleS4Reports } from "./module-s4-reports";
 export { moduleP1Tasks } from "./module-p1-tasks";
 export { moduleP2Projects } from "./module-p2-projects";
+export { moduleC1Goals } from "./module-c1-goals";
+export { moduleC2NovaDeep } from "./module-c2-nova-deep";
+export { moduleC3Nexus } from "./module-c3-nexus";
 
 /**
  * The full ordered onboarding curriculum: shared core (0-3), then the
@@ -43,6 +49,23 @@ export const onboardingModules: TourModule[] = [
   // PM track (mode = pm | both)
   moduleP1Tasks,
   moduleP2Projects,
+  // Level-2 capstone (all modes; unlocked later, NOT part of first-run)
+  moduleC1Goals,
+  moduleC2NovaDeep,
+  moduleC3Nexus,
+];
+
+/**
+ * Level-2 capstone — the "unlocked later" set (spec §2 level-2 split). These are
+ * DELIBERATELY excluded from `appShellModules` and `moduleHomeRoutes`, so AppTour
+ * never auto-offers them on first run and the first-run launcher chain never
+ * reaches them. They are surfaced only once the user has data and habits, via a
+ * separate advanced-tour entry point that starts these by id. All modes.
+ */
+export const capstoneModules: TourModule[] = [
+  moduleC1Goals,
+  moduleC2NovaDeep,
+  moduleC3Nexus,
 ];
 
 /**

@@ -311,7 +311,7 @@ export default function Sidebar({
       </nav>
 
       {/* Nexus — live agent status */}
-      <div className="px-3 py-3 border-t border-zinc-800/50 shrink-0">
+      <div data-tour="nexus-panel" className="px-3 py-3 border-t border-zinc-800/50 shrink-0">
         <motion.div variants={labelVariants}>
           <div className="flex items-center justify-between mb-2">
             <p className="text-[10px] font-mono font-semibold uppercase tracking-[0.14em] text-zinc-500">
