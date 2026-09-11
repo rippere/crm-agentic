@@ -380,7 +380,7 @@ export default function ReportsPage() {
       <Header title="Reports" subtitle={`${deals.length} total deals · win rate ${stats.winRate}%`} />
 
       {/* Pipeline Health AI Briefing */}
-      <Card className="border-indigo-500/20">
+      <Card data-tour="reports-briefing" className="border-indigo-500/20">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-indigo-400" />
@@ -611,7 +611,7 @@ export default function ReportsPage() {
       </Card>
 
       {/* KPI row */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div data-tour="reports-kpis" className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <Card compact accent="signal" className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#00C896]/10 border border-[#00C896]/20 flex-shrink-0">
             <Trophy className="h-4 w-4 text-[#00C896]" />

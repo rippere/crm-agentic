@@ -319,7 +319,7 @@ export default function OutreachPage() {
           </div>
         </Card>
       ) : (
-        <div className="space-y-4" role="region" aria-label="Outreach approval queue">
+        <div data-tour="outreach-queue" className="space-y-4" role="region" aria-label="Outreach approval queue">
           {pending.map((p) => {
             const { label, channel } = stepInfo(p);
             return (

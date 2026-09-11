@@ -5,8 +5,9 @@ import { usePathname } from "next/navigation";
 import { Compass } from "lucide-react";
 import { createBrowserClient } from "@/lib/supabase";
 import type { WorkspaceMode } from "@/lib/types";
-import { TourProvider, useTour, peekTourProgress } from "@/lib/onboarding/TourProvider";
+import { TourProvider, useTour, peekTourProgress, filterStepsForMode } from "@/lib/onboarding/TourProvider";
 import { appShellModules, moduleHomeRoutes } from "@/lib/onboarding/modules";
+import type { TourModule } from "@/lib/onboarding/types";
 import TourSpotlight from "./TourSpotlight";
 
 /**
@@ -21,37 +22,49 @@ import TourSpotlight from "./TourSpotlight";
  * engine, provider, and spotlight are unchanged; this is pure wiring.
  */
 
-/** The first shell module the user hasn't completed (for the launcher). */
-function firstUnfinishedModule(scopeKey: string) {
-  for (const m of appShellModules) {
+/** Does this module have any steps for the current workspace mode? */
+function appliesToMode(module: TourModule, mode: WorkspaceMode): boolean {
+  return filterStepsForMode(module.steps, mode).length > 0;
+}
+
+/**
+ * The first shell module the user hasn't completed AND that applies to their
+ * mode (for the launcher). Mode-gated track modules with zero steps for the
+ * current mode are skipped entirely.
+ */
+function firstUnfinishedModule(scopeKey: string, mode: WorkspaceMode) {
+  const applicable = appShellModules.filter((m) => appliesToMode(m, mode));
+  for (const m of applicable) {
     const p = peekTourProgress(m.id, scopeKey);
     if (!p || p.status !== "completed") return m;
   }
-  return appShellModules[appShellModules.length - 1];
+  return applicable[applicable.length - 1] ?? appShellModules[0];
 }
 
 /** Floating launcher + first-visit-per-route auto-offer. Child of TourProvider. */
-function AppTourLauncher({ scopeKey }: { scopeKey: string }) {
+function AppTourLauncher({ scopeKey, mode }: { scopeKey: string; mode: WorkspaceMode }) {
   const { start, isActive } = useTour();
   const pathname = usePathname();
 
-  // Auto-offer the module whose home route matches this page, once, if unseen.
+  // Auto-offer the module whose home route matches this page — but only if it
+  // applies to the current mode (a PM-only module is never offered in a Sales
+  // workspace) and hasn't been seen yet.
   useEffect(() => {
     const module = appShellModules.find((m) => moduleHomeRoutes[m.id] === pathname);
-    if (!module) return;
+    if (!module || !appliesToMode(module, mode)) return;
     const seen = peekTourProgress(module.id, scopeKey);
     if (!seen) {
       const t = window.setTimeout(() => start(module), 800);
       return () => window.clearTimeout(t);
     }
-  }, [pathname, scopeKey, start]);
+  }, [pathname, scopeKey, mode, start]);
 
   if (isActive) return null;
 
   return (
     <button
       type="button"
-      onClick={() => start(firstUnfinishedModule(scopeKey))}
+      onClick={() => start(firstUnfinishedModule(scopeKey, mode))}
       data-tour-launcher="app"
       className="fixed bottom-5 right-5 z-[60] flex items-center gap-2 rounded-full border border-indigo-500/40 bg-indigo-600/90 px-4 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-900/30 backdrop-blur hover:bg-indigo-500 transition-colors cursor-pointer"
     >
@@ -85,7 +98,7 @@ export default function AppTour({ mode }: { mode: WorkspaceMode }) {
 
   return (
     <TourProvider scopeKey={scopeKey} mode={mode}>
-      <AppTourLauncher scopeKey={scopeKey} />
+      <AppTourLauncher scopeKey={scopeKey} mode={mode} />
       <TourSpotlight />
     </TourProvider>
   );
