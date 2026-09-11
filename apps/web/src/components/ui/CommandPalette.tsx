@@ -175,6 +175,7 @@ export default function CommandPalette({ onClose }: CommandPaletteProps) {
       onClick={onClose}
     >
       <div
+        data-tour="cmdk-palette"
         className="w-full max-w-2xl rounded-2xl border border-zinc-700/60 bg-zinc-900 shadow-[0_0_60px_rgba(99,102,241,0.15)] overflow-hidden"
         onClick={e => e.stopPropagation()}
         role="dialog"
@@ -192,6 +193,7 @@ export default function CommandPalette({ onClose }: CommandPaletteProps) {
             <Search className="h-3.5 w-3.5" /> Search
           </button>
           <button
+            data-tour="cmdk-nova"
             onClick={() => setMode("ai")}
             className={cn(
               "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer",

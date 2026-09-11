@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Compass } from "lucide-react";
 import { createBrowserClient } from "@/lib/supabase";
 import { TourProvider, useTour, peekTourProgress } from "@/lib/onboarding/TourProvider";
-import { module0Setup } from "@/lib/onboarding/modules/module-0-setup";
+import { module0Setup } from "@/lib/onboarding/modules";
 import TourSpotlight from "./TourSpotlight";
 
 /**

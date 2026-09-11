@@ -286,8 +286,12 @@ export default function TourSpotlight() {
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.96, y: -8 }}
           transition={{ duration: 0.2, ease: "easeOut" }}
-          className="absolute rounded-2xl border border-zinc-700/80 bg-zinc-900 shadow-2xl shadow-black/60 focus:outline-none pointer-events-auto"
-          style={{ top: popoverPos.top, left: popoverPos.left, width: POPOVER_W, maxWidth: "calc(100vw - 16px)" }}
+          className="absolute rounded-2xl border border-zinc-700/80 bg-zinc-900 shadow-2xl shadow-black/60 focus:outline-none pointer-events-auto overflow-y-auto overscroll-contain"
+          // Cap to the viewport and scroll internally so a content-heavy step
+          // (six slots + AI tip) never pushes its checkpoint buttons off-screen
+          // on a short viewport. popoverH is measured from this capped height,
+          // so placement uses the real on-screen size.
+          style={{ top: popoverPos.top, left: popoverPos.left, width: POPOVER_W, maxWidth: "calc(100vw - 16px)", maxHeight: "calc(100vh - 16px)" }}
         >
           <div className="p-5">
             {/* Header: progress + close */}
