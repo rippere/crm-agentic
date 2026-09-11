@@ -150,7 +150,8 @@ export const module0Setup: TourModule = {
         "Click Go to Dashboard to enter your workspace. From there, press ⌘K anytime to ask Nova a question about your pipeline.",
       whatJustHappened:
         "That's the whole setup. The agents begin scoring, tagging, and summarizing in the background — you just supervise the parts that matter.",
-      forwardReference: "The Help page (in the sidebar) has a full walkthrough whenever you want it.",
+      forwardReference:
+        "Next up is your home base — the dashboard and the ⌘K command bar, where you'll meet Nova and can ask your CRM anything.",
       checkpoint: { confirmLabel: "Finish" },
     },
   ],
