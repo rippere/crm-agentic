@@ -1288,6 +1288,90 @@ export const demoDiscoveryLeads: Lead[] = _DISCOVERY_SEED.map(
 // Burlington venues, so /leads renders both funnels under demo mode.
 export const demoLeads: Lead[] = [..._eventLeads, ...demoDiscoveryLeads]
 
+// ─── Escalation control-plane demo seeds (Increment 2, R15) ───────────────────
+// The operator-supervised control graph: per-stage auto/ask/off caps, the
+// workspace autonomy master switch (fail-closed off, R12), and the escalation
+// queue (waiting enrollments joined to their newest decision). Photobooth-flavored
+// so /escalation renders under NEXT_PUBLIC_DEMO_MODE with no backend.
+
+export interface DemoStageControl {
+  stage: string
+  mode: 'auto' | 'ask' | 'off'
+  config: Record<string, unknown>
+}
+
+// All six lead stages, mode defaulting to 'ask' (R12). A couple are nudged so the
+// UI shows the full auto/ask/off spread; with the master switch off they are all
+// effectively clamped to ask/off anyway.
+export const demoEscalationControls: DemoStageControl[] = [
+  { stage: 'new',       mode: 'ask',  config: { thresholds: { book_score: 70, send_floor: 0 } } },
+  { stage: 'contacted', mode: 'ask',  config: { thresholds: { book_score: 70, send_floor: 0 } } },
+  { stage: 'engaged',   mode: 'auto', config: { thresholds: { book_score: 70, send_floor: 0 } } },
+  { stage: 'qualified', mode: 'ask',  config: { thresholds: { book_score: 70, send_floor: 0 } } },
+  { stage: 'converted', mode: 'off',  config: {} },
+  { stage: 'lost',      mode: 'off',  config: {} },
+]
+
+// The master switch — OFF by default (R12): until an operator flips it on, every
+// per-stage 'auto' is clamped to 'ask'.
+export const demoAutonomy: { autonomy_enabled: boolean; settings: Record<string, unknown> } = {
+  autonomy_enabled: false,
+  settings: {},
+}
+
+export interface DemoQueueItem {
+  enrollment_id: string
+  lead_id: string
+  lead_name: string | null
+  lead_company: string | null
+  stage: string | null
+  status: string
+  proposed_action: string | null
+  final_action: string | null
+  mode: string | null
+  sentiment: string | null
+  score: number | null
+  reason: string | null
+  needs_judgment: boolean
+  occurred_at: string | null
+}
+
+// Waiting enrollments joined to their newest escalation decision. A mix of
+// needs_judgment=true (a negative/objection reply the graph escalated to a human)
+// and plain 'park' (an 'ask' clamp awaiting a routine approval).
+export const demoEscalationQueue: DemoQueueItem[] = [
+  {
+    enrollment_id: 'enr-esc-001', lead_id: 'l-disc-001',
+    lead_name: 'Enda McMahon', lead_company: 'Rí Rá Irish Pub',
+    stage: 'engaged', status: 'waiting',
+    proposed_action: 'escalate', final_action: 'escalate', mode: 'auto',
+    sentiment: 'objection', score: 62,
+    reason: 'propose=escalate clamp(auto)=escalate sentiment=objection',
+    needs_judgment: true,
+    occurred_at: new Date(Date.now() - 40 * 60000).toISOString(),
+  },
+  {
+    enrollment_id: 'enr-esc-002', lead_id: 'l-disc-002',
+    lead_name: 'Marissa Feld', lead_company: 'ECHO, Leahy Center for Lake Champlain',
+    stage: 'engaged', status: 'waiting',
+    proposed_action: 'escalate', final_action: 'escalate', mode: 'auto',
+    sentiment: 'booking', score: 78,
+    reason: 'propose=escalate clamp(auto)=escalate sentiment=booking',
+    needs_judgment: true,
+    occurred_at: new Date(Date.now() - 95 * 60000).toISOString(),
+  },
+  {
+    enrollment_id: 'enr-esc-003', lead_id: 'l-disc-004',
+    lead_name: 'Priya Anand', lead_company: 'Hotel Vermont',
+    stage: 'contacted', status: 'waiting',
+    proposed_action: 'send', final_action: 'park', mode: 'ask',
+    sentiment: null, score: 0,
+    reason: 'propose=send clamp(ask)=park',
+    needs_judgment: false,
+    occurred_at: new Date(Date.now() - 3 * 3600000).toISOString(),
+  },
+]
+
 // Seed transcript for the /assistant chat panel — shows the discovery flow (R15).
 export const demoChatMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
   {
