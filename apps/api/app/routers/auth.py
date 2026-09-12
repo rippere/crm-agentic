@@ -216,4 +216,16 @@ async def invite_teammate(
         detail = resp.json().get("message", "Invite failed")
         raise _HTTPException(status_code=_status.HTTP_502_BAD_GATEWAY, detail=detail)
 
+    # Bind the invited user to THIS workspace via server-only app_metadata, so their
+    # first login joins this workspace (with your data) instead of auto-provisioning a
+    # fresh empty one. The invite's `data` above only populates user_metadata, which the
+    # auth layer deliberately ignores as forgeable (the cross-tenant IDOR fix) — so
+    # without this the invitee lands in an empty workspace and an onboarding redirect.
+    invited = resp.json()
+    invited_uid = None
+    if isinstance(invited, dict):
+        invited_uid = invited.get("id") or (invited.get("user") or {}).get("id")
+    if invited_uid:
+        await _sync_workspace_metadata(str(invited_uid), str(workspace_id))
+
     return {"status": "invited", "email": body.email}

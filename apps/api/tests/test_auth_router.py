@@ -267,6 +267,34 @@ async def test_invite_supabase_error_returns_502(app_client):
     assert "invited" in resp.json()["detail"].lower()
 
 
+@pytest.mark.asyncio
+async def test_invite_binds_workspace_app_metadata(app_client):
+    """A successful invite must bind the invited user to THIS workspace via
+    server-only app_metadata, so their first login joins it (not a fresh empty one)."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    invited_uid = str(uuid.uuid4())
+    mock_response = MagicMock(is_success=True)
+    mock_response.json.return_value = {"id": invited_uid, "email": "tester@example.com"}
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=mock_response)
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+    sync_mock = AsyncMock()
+    with patch("app.routers.auth.httpx.AsyncClient", return_value=mock_cm):
+        with patch("app.routers.auth._sync_workspace_metadata", new=sync_mock):
+            async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+                resp = await ac.post(
+                    f"/workspaces/{workspace_id}/invite",
+                    json={"email": "tester@example.com"},
+                )
+
+    assert resp.status_code == 200
+    sync_mock.assert_awaited_once_with(invited_uid, str(workspace_id))
+
+
 # ---------------------------------------------------------------------------
 # _sync_workspace_metadata — direct unit tests
 # ---------------------------------------------------------------------------
