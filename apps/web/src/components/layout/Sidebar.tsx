@@ -178,6 +178,7 @@ export default function Sidebar({
 
   return (
     <motion.aside
+      data-tour="sidebar"
       className={cn(
         "fixed left-0 top-0 h-full flex flex-col border-r border-zinc-800/50 overflow-hidden",
         isMobile ? "z-50 shadow-2xl shadow-black/50" : "z-30"
@@ -226,6 +227,7 @@ export default function Sidebar({
       {/* Search / ⌘K */}
       <div className="px-2 pt-3 pb-1">
         <button
+          data-tour="cmdk-trigger"
           onClick={() => { onSearchClick?.(); onMobileClose?.(); }}
           className="group w-full flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-2 text-sm text-zinc-600 hover:text-zinc-400 hover:border-zinc-700 transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500"
           aria-label="Open command palette (⌘K)"
@@ -309,7 +311,7 @@ export default function Sidebar({
       </nav>
 
       {/* Nexus — live agent status */}
-      <div className="px-3 py-3 border-t border-zinc-800/50 shrink-0">
+      <div data-tour="nexus-panel" className="px-3 py-3 border-t border-zinc-800/50 shrink-0">
         <motion.div variants={labelVariants}>
           <div className="flex items-center justify-between mb-2">
             <p className="text-[10px] font-mono font-semibold uppercase tracking-[0.14em] text-zinc-500">

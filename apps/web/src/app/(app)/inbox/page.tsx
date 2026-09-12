@@ -470,6 +470,7 @@ export default function InboxPage() {
 
           {/* AI Triage */}
           <Button
+            data-tour="inbox-triage"
             variant="ghost"
             size="sm"
             onClick={handleTriage}
@@ -523,7 +524,7 @@ export default function InboxPage() {
 
       {/* Message list */}
       {!error && (
-      <Card className="overflow-hidden p-0">
+      <Card data-tour="inbox-list" className="overflow-hidden p-0">
         {loading ? (
           <>
             {[1, 2, 3, 4, 5].map((i) => <MessageSkeleton key={i} />)}

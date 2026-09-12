@@ -196,7 +196,7 @@ export default function SequencesPage() {
         <p className="text-xs text-zinc-500">
           {filtered.length} sequence{filtered.length !== 1 ? "s" : ""}{filterStatus !== "all" ? ` · ${sequenceStatusConfig[filterStatus]?.label}` : ""}
         </p>
-        <Button variant="cta" size="sm" onClick={() => setNewOpen(true)}>
+        <Button data-tour="sequences-new" variant="cta" size="sm" onClick={() => setNewOpen(true)}>
           <Plus className="h-3.5 w-3.5" /> New Sequence
         </Button>
       </div>

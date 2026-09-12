@@ -335,13 +335,13 @@ export default function CampaignsPage() {
         <p className="text-xs text-zinc-500">
           {filtered.length} campaign{filtered.length !== 1 ? "s" : ""}{filterStatus !== "all" ? ` · ${campaignStatusConfig[filterStatus]?.label}` : ""}
         </p>
-        <Button variant="cta" size="sm" onClick={() => setNewOpen(true)}>
+        <Button data-tour="campaigns-new" variant="cta" size="sm" onClick={() => setNewOpen(true)}>
           <Plus className="h-3.5 w-3.5" /> New Campaign
         </Button>
       </div>
 
       {/* Table */}
-      <Card className="p-0 overflow-hidden">
+      <Card data-tour="campaigns-list" className="p-0 overflow-hidden">
         {loading ? (
           <div className="p-4 space-y-2">
             {[1, 2, 3].map((i) => <div key={i} className="h-14 rounded-xl bg-zinc-800/40 animate-pulse" />)}

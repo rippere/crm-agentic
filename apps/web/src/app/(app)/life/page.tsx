@@ -382,7 +382,7 @@ export default function LifePage() {
       </section>
 
       {/* ── KPI TREND CARDS ── */}
-      <section aria-labelledby="kpi-heading">
+      <section data-tour="life-kpis" aria-labelledby="kpi-heading">
         <div className="flex items-center gap-2 mb-3">
           <h2 id="kpi-heading" className="text-xs font-semibold text-zinc-400 uppercase tracking-widest font-mono">
             KPI Trends
@@ -442,7 +442,7 @@ export default function LifePage() {
       </section>
 
       {/* ── COMMITMENTS ── */}
-      <section aria-labelledby="commitments-heading">
+      <section data-tour="life-commitments" aria-labelledby="commitments-heading">
         <h2 id="commitments-heading" className="sr-only">Commitments</h2>
         <CommitmentsTable
           commitments={commitments}

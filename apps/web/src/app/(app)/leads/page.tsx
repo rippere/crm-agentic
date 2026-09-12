@@ -713,7 +713,7 @@ export default function LeadsPage() {
       <Header title="Leads" subtitle={`${leads.length} in funnel · engagement-scored`} />
 
       {/* Stat-tile filter row */}
-      <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+      <div data-tour="leads-stats" className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         <button
           onClick={() => setFilterStage("all")}
           className={cn(
@@ -783,7 +783,7 @@ export default function LeadsPage() {
         >
           <Upload className="h-3 w-3" /> Import CSV
         </button>
-        <Button variant="cta" size="sm" onClick={() => setNewLeadOpen(true)}>
+        <Button data-tour="leads-new" variant="cta" size="sm" onClick={() => setNewLeadOpen(true)}>
           <Plus className="h-3.5 w-3.5" /> New Lead
         </Button>
       </div>
@@ -794,7 +794,7 @@ export default function LeadsPage() {
           {[1, 2, 3, 4, 5].map((i) => <div key={i} className="h-14 rounded-xl bg-zinc-800/30 animate-pulse" />)}
         </div>
       ) : view === "table" ? (
-        <Card className="p-0 overflow-hidden">
+        <Card data-tour="leads-list" className="p-0 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>

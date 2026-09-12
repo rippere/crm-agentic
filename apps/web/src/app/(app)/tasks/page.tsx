@@ -441,6 +441,7 @@ function TasksPageInner() {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <Button
+            data-tour="tasks-prioritize"
             variant="ghost"
             size="sm"
             onClick={handlePrioritize}
@@ -450,7 +451,7 @@ function TasksPageInner() {
             {prioritizing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
             {prioritizing ? "Analyzing…" : "AI Prioritize"}
           </Button>
-          <Button variant="cta" size="sm" onClick={() => setShowNewForm(true)}>
+          <Button data-tour="tasks-new" variant="cta" size="sm" onClick={() => setShowNewForm(true)}>
             <Plus className="h-3.5 w-3.5" />
             New Task
           </Button>
@@ -517,7 +518,7 @@ function TasksPageInner() {
           onDragEnd={handleDragEnd}
           onDragOver={handleDragOver}
         >
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div data-tour="tasks-board" className="grid grid-cols-1 gap-4 md:grid-cols-3">
             {COLUMNS.map((col) => {
               const colTasks = tasksByColumn[col.id];
               return (

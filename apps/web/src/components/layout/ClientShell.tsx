@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Menu, Zap } from "lucide-react";
 import Sidebar from "@/components/layout/Sidebar";
 import CommandPalette from "@/components/ui/CommandPalette";
+import AppTour from "@/components/onboarding/AppTour";
 import type { WorkspaceMode } from "@/lib/types";
 
 const transitionProps = {
@@ -135,6 +136,10 @@ export default function ClientShell({ children, mode, userEmail = "", userName =
           />
         )}
       </AnimatePresence>
+
+      {/* Post-login guided tour host (Module 1 "Your home base" and later shell
+          modules). Mode-aware so it never spotlights nav this workspace hides. */}
+      <AppTour mode={mode} />
     </>
   );
 }
