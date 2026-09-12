@@ -8890,3 +8890,182 @@ async def get_revenue_trend_analysis(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+# ── Contact Inactivity Risk ───────────────────────────────────────────────────
+
+_INACTIVITY_RISK_SYSTEM = """\
+You are a CRM analyst specialising in contact re-engagement. Given contact inactivity statistics, \
+write a concise 2-sentence insight and 3 prioritised recommendations. \
+Reply ONLY with a valid JSON object: \
+{"insight": "<2-sentence analysis>", "recommendations": ["...", "...", "..."]} \
+Exactly 3 recommendations. No markdown. Pure JSON only."""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/inactivity-risk")
+@limiter.limit("5/minute")
+async def get_contact_inactivity_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+
+    # All customer/prospect contacts in workspace
+    contacts_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.email, Contact.company)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+        )
+    )
+    contacts = contacts_result.all()
+    total_contacts = len(contacts)
+
+    if total_contacts == 0:
+        return {
+            "critical_count": 0,
+            "high_risk_count": 0,
+            "watch_count": 0,
+            "total_contacts": 0,
+            "contacts_by_bucket": [],
+            "insight": "No customer or prospect contacts exist in this workspace yet. Add contacts to track inactivity.",
+            "recommendations": [
+                "Import your existing contacts and set their status to prospect or customer.",
+                "Connect your email to automatically track message activity.",
+                "Add notes after meetings to build engagement history.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    contact_ids = [c[0] for c in contacts]
+    contact_map = {
+        c[0]: {"id": str(c[0]), "name": c[1] or "", "email": c[2] or "", "company": c[3] or ""}
+        for c in contacts
+    }
+
+    # Last message touch per contact
+    msg_result = await db.execute(
+        select(Message.contact_id, func.max(Message.received_at).label("last_msg"))
+        .where(Message.contact_id.in_(contact_ids))
+        .group_by(Message.contact_id)
+    )
+    msg_touches = {row[0]: row[1] for row in msg_result.all()}
+
+    # Last note touch per contact
+    note_result = await db.execute(
+        select(ContactNote.contact_id, func.max(ContactNote.created_at).label("last_note"))
+        .where(ContactNote.contact_id.in_(contact_ids))
+        .group_by(ContactNote.contact_id)
+    )
+    note_touches = {row[0]: row[1] for row in note_result.all()}
+
+    critical_contacts: list[dict] = []
+    high_risk_contacts: list[dict] = []
+    watch_contacts: list[dict] = []
+
+    for cid in contact_ids:
+        mt = msg_touches.get(cid)
+        nt = note_touches.get(cid)
+        candidates = [t for t in (mt, nt) if t is not None]
+        if not candidates:
+            days_since = 999
+        else:
+            last = max(candidates)
+            if hasattr(last, "tzinfo") and last.tzinfo is not None:
+                last = last.replace(tzinfo=None)
+            days_since = (now - last).days
+
+        entry = {**contact_map[cid], "days_since_touch": days_since}
+        if days_since > 60:
+            critical_contacts.append(entry)
+        elif days_since > 30:
+            high_risk_contacts.append(entry)
+        elif days_since > 14:
+            watch_contacts.append(entry)
+
+    critical_count = len(critical_contacts)
+    high_risk_count = len(high_risk_contacts)
+    watch_count = len(watch_contacts)
+
+    contacts_by_bucket: list[dict] = []
+    if critical_contacts:
+        contacts_by_bucket.append({"bucket": "critical", "contacts": critical_contacts})
+    if high_risk_contacts:
+        contacts_by_bucket.append({"bucket": "high_risk", "contacts": high_risk_contacts})
+    if watch_contacts:
+        contacts_by_bucket.append({"bucket": "watch", "contacts": watch_contacts})
+
+    if critical_count == 0 and high_risk_count == 0 and watch_count == 0:
+        return {
+            "critical_count": 0,
+            "high_risk_count": 0,
+            "watch_count": 0,
+            "total_contacts": total_contacts,
+            "contacts_by_bucket": [],
+            "insight": "All contacts have been recently engaged — excellent relationship health.",
+            "recommendations": [
+                "Maintain the current engagement cadence to keep contacts active.",
+                "Set up recurring reminders to check in every 2 weeks.",
+                "Review contact goals quarterly to ensure alignment.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Contact inactivity risk snapshot:\n"
+        f"- Total customer/prospect contacts: {total_contacts}\n"
+        f"- Critical (>60 days without any contact): {critical_count}\n"
+        f"- High risk (30–60 days silent): {high_risk_count}\n"
+        f"- Watch (14–30 days silent): {watch_count}\n"
+    )
+
+    _default_insight = (
+        f"{critical_count} contact{'s are' if critical_count != 1 else ' is'} critically overdue for outreach "
+        f"(60+ days silent), with {high_risk_count} more at high risk of going dark."
+    )
+    _default_recs = [
+        f"Immediately reach out to the {critical_count} critically inactive contact{'s' if critical_count != 1 else ''}.",
+        f"Schedule follow-up calls for the {high_risk_count} high-risk contact{'s' if high_risk_count != 1 else ''} this week.",
+        "Set up automated email sequences to maintain a consistent 2-week engagement cadence.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_INACTIVITY_RISK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data_json = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data_json.get("insight", _default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = _default_insight
+
+    raw_recs = data_json.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(_default_recs[len(recommendations) % 3])
+
+    return {
+        "critical_count": critical_count,
+        "high_risk_count": high_risk_count,
+        "watch_count": watch_count,
+        "total_contacts": total_contacts,
+        "contacts_by_bucket": contacts_by_bucket,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
