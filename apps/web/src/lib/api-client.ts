@@ -8,6 +8,7 @@ import {
   demoPendingOutreach,
   demoLeadFunnel,
   demoLeadEvents,
+  demoDiscoveryRun,
 } from './demo-data'
 import type { KpiSnapshot, Commitment, CommitmentWeekStats } from './types'
 
@@ -1071,6 +1072,61 @@ export const apiClient = {
       answer: `Nova here. Across your 5 open deals ($517K in pipeline), two need attention this week. The Global Finance Enterprise Suite deal ($250K, Proposal) is your biggest risk — health score 35, stalled 21 days with no reply to the last two follow-ups. ScalePath Japan Starter ($18K, Discovery) is lower at 22 but earlier-stage. I'd prioritize re-engaging Marcus Rivera at Global Finance — open his Pre-Meeting Brief for a ready-made re-engagement plan. You can also check the full Deal Health Alerts on /dashboard.`
     })
     return apiFetch(`/workspaces/${workspaceId}/ai/query`, { method: 'POST', body: JSON.stringify({ query }) }, token)
+  },
+
+  // Agentic assistant chat (Autonomous Lead Engine, Inc 1). Unlike aiQuery
+  // (single-shot, read-only), this drives the bounded tool-use loop on the API
+  // (POST /workspaces/{id}/ai/chat) which can dispatch actuating actions such as
+  // market discovery. `messages` is the running transcript ({role, content});
+  // `confirm` is the action name the operator is approving after a clamp forced
+  // needs_confirmation (fail-closed authority — R11/R12), or null on a plain turn.
+  // The response mirrors the API's ChatResponse: a text `answer`, the `actions`
+  // the turn produced, a top-level `needs_confirmation` + `pending_action` when a
+  // clamped actuating action awaits approval, and a `job_id` when a long-running
+  // job (discovery) was dispatched — polled via the existing GET /jobs/{id}.
+  aiChat: (
+    workspaceId: string,
+    messages: Array<{ role: string; content: string }>,
+    confirm: string | null | undefined,
+    token: string,
+  ): Promise<{
+    answer: string
+    actions?: Array<{ name: string; status: string; job_id?: string | null; needs_confirmation?: boolean; summary?: string | null; args?: Record<string, unknown> }>
+    needs_confirmation?: boolean
+    pending_action?: string | null
+    job_id?: string | null
+  }> => {
+    if (isDemoMode) {
+      const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content ?? ''
+      // Operator confirmed the clamped discovery action → "dispatch" a demo job.
+      if (confirm) {
+        return Promise.resolve({
+          answer: `On it — starting a discovery run over ${demoDiscoveryRun.locality}. I'll rubric-score every likely photo-booth venue and load the strongest fits into your Leads. Watch the progress below.`,
+          actions: [{ name: 'discovery', status: 'dispatched', job_id: demoDiscoveryRun.jobId, needs_confirmation: false, summary: `Discovery run queued for ${demoDiscoveryRun.locality}` }],
+          needs_confirmation: false,
+          pending_action: null,
+          job_id: demoDiscoveryRun.jobId,
+        })
+      }
+      const wantsDiscovery = /\b(discover|find\s+(leads|venues|prospects|photo)|prospect|burlington|photo\s?booth|new\s+leads|scan\s+the\s+market|market)\b/i.test(lastUser)
+      if (wantsDiscovery) {
+        return Promise.resolve({
+          answer: `I can run a market-discovery pass over ${demoDiscoveryRun.locality} — I'll pull every likely photo-booth venue (bars, breweries, museums, event spaces), rubric-score each one for fit, and load the best into your Leads. Autonomy is off, so I need your go-ahead before I spend on the places + research APIs. Want me to run it?`,
+          actions: [{ name: 'discovery', status: 'needs_confirmation', needs_confirmation: true, summary: `Discover venues in ${demoDiscoveryRun.locality}`, args: { locality: demoDiscoveryRun.locality } }],
+          needs_confirmation: true,
+          pending_action: 'discovery',
+          job_id: null,
+        })
+      }
+      return Promise.resolve({
+        answer: `Nova here. Ask me to "find photo-booth leads in Burlington" and I'll run a discovery pass, or ask about your pipeline, deals, or contacts. I currently see ${demoLeads.length} leads across your funnel.`,
+        actions: [],
+        needs_confirmation: false,
+        pending_action: null,
+        job_id: null,
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/chat`, { method: 'POST', body: JSON.stringify({ messages, confirm: confirm ?? null }) }, token)
   },
 
   // ─── Life / Accountability ledger ───────────────────────────────────────────
