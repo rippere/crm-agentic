@@ -9,6 +9,11 @@ import {
   demoLeadFunnel,
   demoLeadEvents,
   demoDiscoveryRun,
+  demoEscalationControls,
+  demoAutonomy,
+  demoEscalationQueue,
+  type DemoStageControl,
+  type DemoQueueItem,
 } from './demo-data'
 import type { KpiSnapshot, Commitment, CommitmentWeekStats } from './types'
 
@@ -4965,6 +4970,96 @@ export const apiClient = {
   getJob: (_workspaceId: string, jobId: string, token: string): Promise<{ job_id: string; state: string; result?: Record<string, unknown> | null; error?: string | null }> => {
     if (isDemoMode) return Promise.resolve({ job_id: jobId, state: 'success', result: {} })
     return apiFetch(`/jobs/${jobId}`, {}, token)
+  },
+
+  // ─── Autonomous Lead Engine — Increment 2: escalation control-plane (R15) ─────
+  // The operator surface over the control graph: per-stage auto/ask/off caps, the
+  // workspace autonomy master switch (fail-closed off — R12), the escalation
+  // queue (waiting enrollments joined to their newest decision), and the post-call
+  // outcome form (a human outcome re-enters the graph event-sourced). Mirrors
+  // routers/escalation.py exactly. Every method carries an isDemoMode branch.
+
+  // GET the per-stage cap for all six stages (missing rows default to 'ask').
+  getEscalationControls: (workspaceId: string, token: string): Promise<DemoStageControl[]> => {
+    if (isDemoMode) return Promise.resolve(demoEscalationControls)
+    return apiFetch(`/workspaces/${workspaceId}/escalation/controls`, {}, token)
+  },
+
+  // PUT the cap for one stage (auto/ask/off). 422 on a bad stage/mode.
+  setStageControl: (
+    workspaceId: string,
+    stage: string,
+    mode: 'auto' | 'ask' | 'off',
+    token: string,
+    config?: Record<string, unknown>,
+  ): Promise<DemoStageControl> => {
+    if (isDemoMode) return Promise.resolve({ stage, mode, config: config ?? {} })
+    return apiFetch(
+      `/workspaces/${workspaceId}/escalation/controls/${stage}`,
+      { method: 'PUT', body: JSON.stringify({ mode, config }) },
+      token,
+    )
+  },
+
+  // GET the workspace autonomy master switch (defaults { autonomy_enabled: false }).
+  getAutonomy: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{ autonomy_enabled: boolean; settings: Record<string, unknown> }> => {
+    if (isDemoMode) return Promise.resolve(demoAutonomy)
+    return apiFetch(`/workspaces/${workspaceId}/escalation/autonomy`, {}, token)
+  },
+
+  // PUT (toggle) the autonomy master switch (R12).
+  setAutonomy: (
+    workspaceId: string,
+    autonomyEnabled: boolean,
+    token: string,
+    settings?: Record<string, unknown>,
+  ): Promise<{ autonomy_enabled: boolean; settings: Record<string, unknown> }> => {
+    if (isDemoMode) return Promise.resolve({ autonomy_enabled: autonomyEnabled, settings: settings ?? {} })
+    return apiFetch(
+      `/workspaces/${workspaceId}/escalation/autonomy`,
+      { method: 'PUT', body: JSON.stringify({ autonomy_enabled: autonomyEnabled, settings }) },
+      token,
+    )
+  },
+
+  // GET the escalation queue (waiting enrollments + newest decision; needs_judgment
+  // flags the ones the graph escalated to a human vs a plain approval park).
+  getEscalationQueue: (workspaceId: string, token: string): Promise<DemoQueueItem[]> => {
+    if (isDemoMode) return Promise.resolve(demoEscalationQueue)
+    return apiFetch(`/workspaces/${workspaceId}/escalation/queue`, {}, token)
+  },
+
+  // POST a human post-call outcome for a lead — re-enters the graph event-sourced.
+  recordCallOutcome: (
+    workspaceId: string,
+    leadId: string,
+    outcome: 'converted' | 'booked' | 'callback' | 'not_interested' | 'no_answer',
+    token: string,
+    notes?: string,
+  ): Promise<{ lead_id: string; stage: string | null; enrollment_status: string | null; converted_emitted: boolean; decision_id: string }> => {
+    if (isDemoMode) {
+      const stageMap: Record<string, string | null> = {
+        converted: 'converted', booked: 'qualified', callback: 'engaged', not_interested: 'lost', no_answer: null,
+      }
+      const statusMap: Record<string, string | null> = {
+        converted: 'completed', booked: 'waiting', callback: 'active', not_interested: 'stopped', no_answer: 'active',
+      }
+      return Promise.resolve({
+        lead_id: leadId,
+        stage: stageMap[outcome] ?? null,
+        enrollment_status: statusMap[outcome] ?? null,
+        converted_emitted: outcome === 'converted',
+        decision_id: `demo-decision-${Date.now()}`,
+      })
+    }
+    return apiFetch(
+      `/workspaces/${workspaceId}/escalation/leads/${leadId}/call-outcome`,
+      { method: 'POST', body: JSON.stringify({ outcome, notes }) },
+      token,
+    )
   },
 }
 
