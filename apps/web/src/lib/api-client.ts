@@ -5333,5 +5333,66 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/revenue/trend-analysis`, {}, token)
   },
+
+  // Phase 16n: Contact Inactivity Risk
+  getContactInactivityRisk: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    critical_count: number
+    high_risk_count: number
+    watch_count: number
+    total_contacts: number
+    contacts_by_bucket: Array<{
+      bucket: 'critical' | 'high_risk' | 'watch'
+      contacts: Array<{ id: string; name: string; email: string; company: string; days_since_touch: number }>
+    }>
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        critical_count: 3,
+        high_risk_count: 5,
+        watch_count: 7,
+        total_contacts: 47,
+        contacts_by_bucket: [
+          {
+            bucket: 'critical',
+            contacts: [
+              { id: 'c-001', name: 'Sarah Chen', email: 'sarah.chen@techcorp.com', company: 'TechCorp', days_since_touch: 82 },
+              { id: 'c-002', name: 'Marcus Johnson', email: 'mjohnson@globalinc.com', company: 'Global Inc', days_since_touch: 74 },
+              { id: 'c-003', name: 'Priya Patel', email: 'p.patel@innovate.io', company: 'Innovate.io', days_since_touch: 63 },
+            ],
+          },
+          {
+            bucket: 'high_risk',
+            contacts: [
+              { id: 'c-004', name: 'David Kim', email: 'd.kim@nexusco.com', company: 'NexusCo', days_since_touch: 45 },
+              { id: 'c-005', name: 'Emma Walsh', email: 'ewalsh@pinnacle.com', company: 'Pinnacle Ltd', days_since_touch: 38 },
+            ],
+          },
+          {
+            bucket: 'watch',
+            contacts: [
+              { id: 'c-006', name: 'James Rivera', email: 'j.rivera@apexgroup.com', company: 'Apex Group', days_since_touch: 22 },
+              { id: 'c-007', name: 'Lisa Tanaka', email: 'ltanaka@fusiontech.com', company: 'FusionTech', days_since_touch: 18 },
+            ],
+          },
+        ],
+        insight:
+          '3 contacts are critically overdue for outreach (60+ days silent), putting high-value relationships at serious churn risk. ' +
+          'Act immediately on the critical tier before these accounts are lost.',
+        recommendations: [
+          'Send personalised re-engagement emails to the 3 critically inactive contacts within 24 hours.',
+          'Block out time this week to call the 5 high-risk contacts before they cross the 60-day threshold.',
+          'Set up a recurring 2-week check-in reminder for all active prospects to prevent future gaps.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/inactivity-risk`, {}, token)
+  },
 }
 

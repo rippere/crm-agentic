@@ -13,8 +13,9 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
   AreaChart, Area,
 } from "recharts";
+import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -265,6 +266,17 @@ export default function ReportsPage() {
   const [revenueTrendLoading, setRevenueTrendLoading] = useState(false);
   const [revenueTrendOpen, setRevenueTrendOpen] = useState(true);
 
+  type InactivityBucketContact = { id: string; name: string; email: string; company: string; days_since_touch: number };
+  type InactivityBucket = { bucket: 'critical' | 'high_risk' | 'watch'; contacts: InactivityBucketContact[] };
+  type InactivityRisk = {
+    critical_count: number; high_risk_count: number; watch_count: number; total_contacts: number;
+    contacts_by_bucket: InactivityBucket[]; insight: string; recommendations: string[]; generated_at: string;
+  };
+  const [inactivityRisk, setInactivityRisk] = useState<InactivityRisk | null>(null);
+  const [inactivityRiskLoading, setInactivityRiskLoading] = useState(false);
+  const [inactivityRiskOpen, setInactivityRiskOpen] = useState(true);
+  const [inactivityExpandedBuckets, setInactivityExpandedBuckets] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -317,6 +329,8 @@ export default function ReportsPage() {
       apiClient.getStageTransitionAnalysis("demo-workspace-1", "demo-token").then(setStageTransitionAnalysis).catch(() => {}).finally(() => setStageTransitionLoading(false));
       setRevenueTrendLoading(true);
       apiClient.getRevenueTrendAnalysis("demo-workspace-1", "demo-token").then(setRevenueTrend).catch(() => {}).finally(() => setRevenueTrendLoading(false));
+      setInactivityRiskLoading(true);
+      apiClient.getContactInactivityRisk("demo-workspace-1", "demo-token").then(setInactivityRisk).catch(() => {}).finally(() => setInactivityRiskLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -374,6 +388,8 @@ export default function ReportsPage() {
       apiClient.getStageTransitionAnalysis(workspaceId, session.access_token).then(setStageTransitionAnalysis).catch(() => {}).finally(() => setStageTransitionLoading(false));
       setRevenueTrendLoading(true);
       apiClient.getRevenueTrendAnalysis(workspaceId, session.access_token).then(setRevenueTrend).catch(() => {}).finally(() => setRevenueTrendLoading(false));
+      setInactivityRiskLoading(true);
+      apiClient.getContactInactivityRisk(workspaceId, session.access_token).then(setInactivityRisk).catch(() => {}).finally(() => setInactivityRiskLoading(false));
     });
   }, []);
 
@@ -656,6 +672,27 @@ export default function ReportsPage() {
         if (!session) { setRevenueTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setRevenueTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateInactivityRisk = () => {
+    setInactivityRiskLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getContactInactivityRisk(wid, tok)
+        .then(setInactivityRisk)
+        .catch(() => {})
+        .finally(() => setInactivityRiskLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setInactivityRiskLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setInactivityRiskLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -3071,6 +3108,121 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No revenue trend data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Phase 16n: Contact Inactivity Risk */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between p-4">
+          <div className="flex items-center gap-2">
+            <UserX className="h-4 w-4 text-rose-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Contact Inactivity Risk</h3>
+            {inactivityRisk && (inactivityRisk.critical_count + inactivityRisk.high_risk_count + inactivityRisk.watch_count) > 0 && (
+              <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-xs font-medium text-rose-400 border border-rose-500/20">
+                {inactivityRisk.critical_count + inactivityRisk.high_risk_count + inactivityRisk.watch_count} at risk
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateInactivityRisk}
+              disabled={inactivityRiskLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", inactivityRiskLoading && "animate-spin")} />
+              {inactivityRiskLoading ? "Loading…" : "Regenerate"}
+            </button>
+            <button onClick={() => setInactivityRiskOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {inactivityRiskOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {inactivityRiskOpen && (
+          inactivityRiskLoading && !inactivityRisk ? (
+            <div className="h-24 animate-pulse rounded-b-xl bg-zinc-800/50" />
+          ) : inactivityRisk ? (
+            <div className={cn("space-y-4 p-4 pt-0", inactivityRiskLoading && "opacity-40")}>
+              {/* Bucket summary row */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3 text-center">
+                  <p className="text-xl font-bold text-rose-400">{inactivityRisk.critical_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Critical</p>
+                  <p className="text-xs text-zinc-600">&gt;60 days</p>
+                </div>
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-center">
+                  <p className="text-xl font-bold text-amber-400">{inactivityRisk.high_risk_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">High Risk</p>
+                  <p className="text-xs text-zinc-600">30–60 days</p>
+                </div>
+                <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 p-3 text-center">
+                  <p className="text-xl font-bold text-yellow-400">{inactivityRisk.watch_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Watch</p>
+                  <p className="text-xs text-zinc-600">14–30 days</p>
+                </div>
+              </div>
+
+              {/* Per-bucket expandable lists */}
+              {inactivityRisk.contacts_by_bucket.map((bucketData) => {
+                const isExpanded = inactivityExpandedBuckets.has(bucketData.bucket);
+                const BUCKET_LABEL: Record<string, string> = { critical: "Critical (>60 days)", high_risk: "High Risk (30–60 days)", watch: "Watch (14–30 days)" };
+                const BUCKET_COLOR: Record<string, string> = { critical: "text-rose-400", high_risk: "text-amber-400", watch: "text-yellow-400" };
+                return (
+                  <div key={bucketData.bucket}>
+                    <button
+                      onClick={() => setInactivityExpandedBuckets((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(bucketData.bucket)) next.delete(bucketData.bucket); else next.add(bucketData.bucket);
+                        return next;
+                      })}
+                      className="flex w-full items-center justify-between text-xs text-zinc-400 hover:text-zinc-200 py-1"
+                    >
+                      <span className={cn("font-medium", BUCKET_COLOR[bucketData.bucket])}>
+                        {BUCKET_LABEL[bucketData.bucket]} ({bucketData.contacts.length})
+                      </span>
+                      {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    </button>
+                    {isExpanded && (
+                      <div className="mt-1 space-y-1 rounded-lg border border-zinc-800 bg-zinc-900/50 p-2">
+                        {bucketData.contacts.map((c) => (
+                          <div key={c.id} className="flex items-center justify-between gap-2 rounded px-2 py-1.5 hover:bg-zinc-800/50 transition-colors">
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-medium text-zinc-200">{c.name || c.email}</p>
+                              <p className="truncate text-xs text-zinc-500">{c.company || c.email}</p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <span className="text-xs text-zinc-500">{c.days_since_touch > 900 ? "Never touched" : `${c.days_since_touch}d ago`}</span>
+                              <Link href={`/contacts/${c.id}`} className="text-zinc-500 hover:text-indigo-400 transition-colors">
+                                <ExternalLink className="h-3 w-3" />
+                              </Link>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {inactivityRisk.contacts_by_bucket.length === 0 && (
+                <p className="text-xs text-emerald-400">All contacts have been recently engaged.</p>
+              )}
+
+              <p className="text-xs text-zinc-400 italic">{inactivityRisk.insight}</p>
+              <ul className="space-y-1">
+                {inactivityRisk.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(inactivityRisk.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No inactivity risk data available.</p>
           )
         )}
       </Card>
