@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -116,6 +116,117 @@ async def test_create_task_wrong_workspace_returns_403(app_client):
         resp = await ac.post(f"/workspaces/{wrong_id}/tasks", json={"title": "x"})
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# PUT /workspaces/{wid}/tasks/by-external/{external_id} — upsert
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upsert_cc_task_defaults_due_date_when_omitted(app_client):
+    """A cc:-namespaced follow-up created with no due_date gets a default so
+    carry-forward logic has something to sort on."""
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+    created = _fake_task(workspace_id, external_id="cc:session-abc123", title="Follow up on X")
+
+    def fake_refresh(obj):
+        for attr in ("id", "workspace_id", "external_id", "title", "description",
+                     "status", "due_date", "project_id", "contact_id", "deal_id"):
+            if getattr(obj, attr, None) is None and hasattr(created, attr):
+                setattr(obj, attr, getattr(created, attr))
+
+    mock_db.refresh.side_effect = fake_refresh
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{workspace_id}/tasks/by-external/cc:session-abc123",
+            json={"title": "Follow up on X"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["due_date"] is not None
+    expected = date.today() + timedelta(days=7)
+    assert body["due_date"] == expected.isoformat()
+    mock_db.add.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_upsert_cc_task_respects_explicit_due_date(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+    created = _fake_task(
+        workspace_id,
+        external_id="cc:session-xyz789",
+        title="Follow up on Y",
+        due_date=date(2026, 12, 25),
+    )
+
+    def fake_refresh(obj):
+        for attr in ("id", "workspace_id", "external_id", "title", "description",
+                     "status", "due_date", "project_id", "contact_id", "deal_id"):
+            if getattr(obj, attr, None) is None and hasattr(created, attr):
+                setattr(obj, attr, getattr(created, attr))
+
+    mock_db.refresh.side_effect = fake_refresh
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{workspace_id}/tasks/by-external/cc:session-xyz789",
+            json={"title": "Follow up on Y", "due_date": "2026-12-25"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["due_date"] == "2026-12-25"
+
+
+@pytest.mark.asyncio
+async def test_upsert_non_cc_task_leaves_due_date_none_when_omitted(app_client):
+    """Non-cc: tasks (e.g. the sync- namespace) keep today's no-default behavior."""
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(None))
+    created = _fake_task(workspace_id, external_id="sync-42", title="Regular sync task")
+
+    def fake_refresh(obj):
+        for attr in ("id", "workspace_id", "external_id", "title", "description",
+                     "status", "due_date", "project_id", "contact_id", "deal_id"):
+            if getattr(obj, attr, None) is None and hasattr(created, attr):
+                setattr(obj, attr, getattr(created, attr))
+
+    mock_db.refresh.side_effect = fake_refresh
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{workspace_id}/tasks/by-external/sync-42",
+            json={"title": "Regular sync task"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["due_date"] is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_cc_task_updates_existing_without_overwriting_due_date_logic(app_client):
+    """Updating an existing cc: task goes through the normal update path — the
+    default only applies at creation, never clobbering an existing row's due_date."""
+    fastapi_app, mock_db, workspace_id = app_client
+    existing = _fake_task(
+        workspace_id, external_id="cc:session-existing", title="Old title", due_date=None
+    )
+    mock_db.execute = AsyncMock(return_value=_make_scalar_result(existing))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.put(
+            f"/workspaces/{workspace_id}/tasks/by-external/cc:session-existing",
+            json={"title": "New title"},
+        )
+
+    assert resp.status_code == 200
+    # Update path passes body.due_date through as-is (None here) — no
+    # creation-time default is applied on update.
+    assert existing.due_date is None
 
 
 # ---------------------------------------------------------------------------
