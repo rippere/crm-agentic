@@ -9069,3 +9069,153 @@ async def get_contact_inactivity_risk(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16o — AI workspace deal pipeline momentum snapshot
+# ---------------------------------------------------------------------------
+
+_PIPELINE_MOMENTUM_SYSTEM = (
+    "You are a CRM sales analytics expert. Analyse the pipeline momentum data "
+    "and return a JSON object with exactly these keys:\n"
+    "- highlights: list of 3 short positive observations about pipeline momentum\n"
+    "- warnings: list of 3 short risk signals or concerns\n"
+    "Return only valid JSON, no markdown."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-momentum")
+@limiter.limit("5/minute")
+async def get_deals_pipeline_momentum(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.utcnow()
+    cutoff_14d = now - datetime.timedelta(days=14)
+
+    # Query 1: open deal count, at-risk count (health < 50), avg health
+    deals_result = await db.execute(
+        select(Deal.id, Deal.health_score, Deal.created_at, Deal.stage)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals = deals_result.all()
+
+    # Query 2: stage moves in last 14 days from activity_events
+    moves_result = await db.execute(
+        select(func.count(ActivityEvent.id))
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "deal_moved",
+            ActivityEvent.created_at >= cutoff_14d,
+        )
+    )
+    stage_moves_14d = moves_result.scalar() or 0
+
+    total_open = len(open_deals)
+    new_deals_14d = sum(
+        1 for d in open_deals
+        if d.created_at and (
+            (d.created_at.replace(tzinfo=None) if d.created_at.tzinfo else d.created_at) >= cutoff_14d
+        )
+    )
+    at_risk_count = sum(1 for d in open_deals if (d.health_score or 0) < 50)
+    avg_health = (
+        sum((d.health_score or 0) for d in open_deals) / total_open
+        if total_open > 0 else 0
+    )
+
+    # Momentum score: 0-100
+    # Components: stage_moves (0-40), new deals (0-30), health (0-30)
+    moves_score = min(40, stage_moves_14d * 4)
+    new_deals_score = min(30, new_deals_14d * 5)
+    health_score_comp = int(avg_health * 0.3)
+    momentum_score = min(100, moves_score + new_deals_score + health_score_comp)
+
+    if momentum_score >= 70:
+        momentum_rating = "accelerating"
+    elif momentum_score >= 45:
+        momentum_rating = "steady"
+    elif momentum_score >= 20:
+        momentum_rating = "stalling"
+    else:
+        momentum_rating = "declining"
+
+    if total_open == 0:
+        return {
+            "momentum_score": 0,
+            "momentum_rating": "declining",
+            "new_deals_14d": 0,
+            "stage_moves_14d": 0,
+            "at_risk_count": 0,
+            "highlights": [
+                "Pipeline is empty — add deals to start tracking momentum.",
+                "Connect your CRM data sources to enable momentum tracking.",
+                "Create your first deal to begin building pipeline velocity.",
+            ],
+            "warnings": [
+                "No open deals in the pipeline.",
+                "Pipeline momentum cannot be calculated without active deals.",
+                "Revenue risk is high with no deals in progress.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Open deals: {total_open}\n"
+        f"New deals in last 14 days: {new_deals_14d}\n"
+        f"Stage moves in last 14 days: {stage_moves_14d}\n"
+        f"At-risk deals (health < 50): {at_risk_count}\n"
+        f"Average deal health: {round(avg_health, 1)}\n"
+        f"Momentum score: {momentum_score}/100 ({momentum_rating})\n"
+    )
+
+    _default_highlights = [
+        f"Pipeline has {total_open} active deal{'s' if total_open != 1 else ''}.",
+        f"{stage_moves_14d} stage move{'s' if stage_moves_14d != 1 else ''} recorded in the last 14 days.",
+        f"{new_deals_14d} new deal{'s' if new_deals_14d != 1 else ''} entered the pipeline this fortnight.",
+    ]
+    _default_warnings = [
+        f"{at_risk_count} deal{'s' if at_risk_count != 1 else ''} flagged as at-risk (health < 50).",
+        "Review stalled deals to re-activate pipeline movement.",
+        "Monitor close dates to avoid revenue forecast slippage.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_PIPELINE_MOMENTUM_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data_json = json.loads(raw)
+        highlights = [str(h) for h in (data_json.get("highlights") or [])[:3]]
+        warnings = [str(w) for w in (data_json.get("warnings") or [])[:3]]
+    except Exception:
+        highlights = []
+        warnings = []
+
+    while len(highlights) < 3:
+        highlights.append(_default_highlights[len(highlights) % 3])
+    while len(warnings) < 3:
+        warnings.append(_default_warnings[len(warnings) % 3])
+
+    return {
+        "momentum_score": momentum_score,
+        "momentum_rating": momentum_rating,
+        "new_deals_14d": new_deals_14d,
+        "stage_moves_14d": stage_moves_14d,
+        "at_risk_count": at_risk_count,
+        "highlights": highlights,
+        "warnings": warnings,
+        "generated_at": now.isoformat() + "Z",
+    }

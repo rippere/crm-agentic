@@ -5394,5 +5394,39 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/inactivity-risk`, {}, token)
   },
+
+  async getDealsPipelineMomentum(workspaceId: string, token: string): Promise<{
+    momentum_score: number
+    momentum_rating: 'accelerating' | 'steady' | 'stalling' | 'declining'
+    new_deals_14d: number
+    stage_moves_14d: number
+    at_risk_count: number
+    highlights: string[]
+    warnings: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 750))
+      return Promise.resolve({
+        momentum_score: 68,
+        momentum_rating: 'steady',
+        new_deals_14d: 4,
+        stage_moves_14d: 9,
+        at_risk_count: 3,
+        highlights: [
+          '4 new deals entered the pipeline in the last 14 days, indicating healthy top-of-funnel activity.',
+          '9 stage advances recorded this fortnight — deals are progressing through the funnel.',
+          'Average deal health is 71/100, showing a majority of opportunities are well-managed.',
+        ],
+        warnings: [
+          '3 deals are flagged as at-risk (health < 50) and need immediate attention.',
+          'Stage move velocity has plateaued — consider pushing stalled deals with targeted outreach.',
+          'No new deals in the negotiation stage this fortnight; check for proposal bottlenecks.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-momentum`, {}, token)
+  },
 }
 

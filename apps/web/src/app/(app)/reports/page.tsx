@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -277,6 +277,20 @@ export default function ReportsPage() {
   const [inactivityRiskOpen, setInactivityRiskOpen] = useState(true);
   const [inactivityExpandedBuckets, setInactivityExpandedBuckets] = useState<Set<string>>(new Set());
 
+  type PipelineMomentum = {
+    momentum_score: number
+    momentum_rating: 'accelerating' | 'steady' | 'stalling' | 'declining'
+    new_deals_14d: number
+    stage_moves_14d: number
+    at_risk_count: number
+    highlights: string[]
+    warnings: string[]
+    generated_at: string
+  };
+  const [pipelineMomentum, setPipelineMomentum] = useState<PipelineMomentum | null>(null);
+  const [pipelineMomentumLoading, setPipelineMomentumLoading] = useState(false);
+  const [pipelineMomentumOpen, setPipelineMomentumOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -331,6 +345,8 @@ export default function ReportsPage() {
       apiClient.getRevenueTrendAnalysis("demo-workspace-1", "demo-token").then(setRevenueTrend).catch(() => {}).finally(() => setRevenueTrendLoading(false));
       setInactivityRiskLoading(true);
       apiClient.getContactInactivityRisk("demo-workspace-1", "demo-token").then(setInactivityRisk).catch(() => {}).finally(() => setInactivityRiskLoading(false));
+      setPipelineMomentumLoading(true);
+      apiClient.getDealsPipelineMomentum("demo-workspace-1", "demo-token").then(setPipelineMomentum).catch(() => {}).finally(() => setPipelineMomentumLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -390,6 +406,8 @@ export default function ReportsPage() {
       apiClient.getRevenueTrendAnalysis(workspaceId, session.access_token).then(setRevenueTrend).catch(() => {}).finally(() => setRevenueTrendLoading(false));
       setInactivityRiskLoading(true);
       apiClient.getContactInactivityRisk(workspaceId, session.access_token).then(setInactivityRisk).catch(() => {}).finally(() => setInactivityRiskLoading(false));
+      setPipelineMomentumLoading(true);
+      apiClient.getDealsPipelineMomentum(workspaceId, session.access_token).then(setPipelineMomentum).catch(() => {}).finally(() => setPipelineMomentumLoading(false));
     });
   }, []);
 
@@ -696,6 +714,34 @@ export default function ReportsPage() {
         doFetch(wid, session.access_token);
       });
     }
+  };
+
+  const regeneratePipelineMomentum = () => {
+    setPipelineMomentumLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealsPipelineMomentum(wid, tok)
+        .then(setPipelineMomentum)
+        .catch(() => {})
+        .finally(() => setPipelineMomentumLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPipelineMomentumLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPipelineMomentumLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const MOMENTUM_RATING_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+    accelerating: { label: "Accelerating", color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
+    steady:       { label: "Steady",       color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
+    stalling:     { label: "Stalling",     color: "text-amber-400",   bg: "bg-amber-500/10 border-amber-500/20"   },
+    declining:    { label: "Declining",    color: "text-rose-400",    bg: "bg-rose-500/10 border-rose-500/20"     },
   };
 
   const RATING_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -3223,6 +3269,103 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No inactivity risk data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Phase 16o: Pipeline Momentum Snapshot */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between p-4">
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-violet-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Pipeline Momentum</h3>
+            {pipelineMomentum && (() => {
+              const cfg = MOMENTUM_RATING_CONFIG[pipelineMomentum.momentum_rating];
+              return (
+                <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", cfg.bg, cfg.color)}>
+                  {cfg.label}
+                </span>
+              );
+            })()}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePipelineMomentum}
+              disabled={pipelineMomentumLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", pipelineMomentumLoading && "animate-spin")} />
+              {pipelineMomentumLoading ? "Loading…" : "Regenerate"}
+            </button>
+            <button onClick={() => setPipelineMomentumOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {pipelineMomentumOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {pipelineMomentumOpen && (
+          pipelineMomentumLoading && !pipelineMomentum ? (
+            <div className="h-24 animate-pulse rounded-b-xl bg-zinc-800/50" />
+          ) : pipelineMomentum ? (
+            <div className={cn("space-y-4 p-4 pt-0", pipelineMomentumLoading && "opacity-40")}>
+              {/* Score + 3-metric row */}
+              <div className="grid grid-cols-4 gap-3">
+                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 p-3 text-center col-span-1">
+                  <p className="text-2xl font-bold text-violet-400">{pipelineMomentum.momentum_score}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Score</p>
+                </div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+                  <p className="text-xl font-bold text-zinc-200">{pipelineMomentum.new_deals_14d}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">New Deals</p>
+                  <p className="text-xs text-zinc-600">last 14d</p>
+                </div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+                  <p className="text-xl font-bold text-zinc-200">{pipelineMomentum.stage_moves_14d}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Stage Moves</p>
+                  <p className="text-xs text-zinc-600">last 14d</p>
+                </div>
+                <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3 text-center">
+                  <p className="text-xl font-bold text-rose-400">{pipelineMomentum.at_risk_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">At Risk</p>
+                  <p className="text-xs text-zinc-600">health &lt;50</p>
+                </div>
+              </div>
+
+              {/* Highlights */}
+              {pipelineMomentum.highlights.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-400 mb-1">Highlights</p>
+                  <ul className="space-y-1">
+                    {pipelineMomentum.highlights.map((h, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-400" />
+                        {h}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Warnings */}
+              {pipelineMomentum.warnings.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-400 mb-1">Watch</p>
+                  <ul className="space-y-1">
+                    {pipelineMomentum.warnings.map((w, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-400" />
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(pipelineMomentum.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No pipeline momentum data available.</p>
           )
         )}
       </Card>

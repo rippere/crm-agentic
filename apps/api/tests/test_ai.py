@@ -5029,3 +5029,76 @@ async def test_contact_inactivity_risk_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/inactivity-risk")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16o: GET /workspaces/{wid}/ai/deals/pipeline-momentum
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_momentum_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+
+    now = _dt.datetime.utcnow()
+
+    # 3 open deals: 1 new (5d), 2 older; 1 at-risk
+    d1 = MagicMock()
+    d1.id = uuid.uuid4()
+    d1.health_score = 80
+    d1.created_at = now - _dt.timedelta(days=5)  # new deal
+    d1.stage = "qualified"
+
+    d2 = MagicMock()
+    d2.id = uuid.uuid4()
+    d2.health_score = 40  # at-risk
+    d2.created_at = now - _dt.timedelta(days=30)
+    d2.stage = "proposal"
+
+    d3 = MagicMock()
+    d3.id = uuid.uuid4()
+    d3.health_score = 75
+    d3.created_at = now - _dt.timedelta(days=20)
+    d3.stage = "discovery"
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result([d1, d2, d3]),  # open deals
+        MagicMock(scalar=MagicMock(return_value=3)),  # stage moves count
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"highlights": ["h1", "h2", "h3"], "warnings": ["w1", "w2", "w3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/pipeline-momentum")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "momentum_score" in data
+    assert data["momentum_score"] >= 0
+    assert data["momentum_score"] <= 100
+    assert data["momentum_rating"] in ("accelerating", "steady", "stalling", "declining")
+    assert data["new_deals_14d"] == 1   # only d1 created within 14 days
+    assert data["stage_moves_14d"] == 3
+    assert data["at_risk_count"] == 1   # d2 has health 40 < 50
+    assert len(data["highlights"]) == 3
+    assert len(data["warnings"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_pipeline_momentum_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-momentum")
+    assert resp.status_code == 403
