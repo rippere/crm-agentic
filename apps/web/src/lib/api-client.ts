@@ -5428,5 +5428,43 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-momentum`, {}, token)
   },
+
+  async getDealAgeRisk(workspaceId: string, token: string): Promise<{
+    overdue_count: number
+    at_risk_count: number
+    on_track_count: number
+    total_open_deals: number
+    deals: Array<{ id: string; title: string | null; stage: string; days_open: number; expected_days: number; risk_level: 'overdue' | 'at_risk' | 'on_track' }>
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        overdue_count: 2,
+        at_risk_count: 3,
+        on_track_count: 7,
+        total_open_deals: 12,
+        deals: [
+          { id: 'd-001', title: 'TechCorp Enterprise License', stage: 'proposal', days_open: 65, expected_days: 30, risk_level: 'overdue' },
+          { id: 'd-002', title: 'Startup IO Growth Plan', stage: 'negotiation', days_open: 98, expected_days: 45, risk_level: 'overdue' },
+          { id: 'd-demo-3', title: 'Global Corp Platform', stage: 'qualified', days_open: 35, expected_days: 21, risk_level: 'at_risk' },
+          { id: 'd-demo-4', title: 'Agency LLC Upgrade', stage: 'discovery', days_open: 22, expected_days: 14, risk_level: 'at_risk' },
+          { id: 'd-demo-5', title: 'Enterprise Co Suite', stage: 'proposal', days_open: 40, expected_days: 30, risk_level: 'at_risk' },
+          { id: 'd-003', title: 'Ventures VC Series B', stage: 'discovery', days_open: 8, expected_days: 14, risk_level: 'on_track' },
+          { id: 'd-demo-7', title: 'Media Co Renewal', stage: 'qualified', days_open: 12, expected_days: 21, risk_level: 'on_track' },
+        ],
+        insight: '2 deals have exceeded twice their expected stage duration, signalling pipeline stagnation that risks revenue slippage.',
+        recommendations: [
+          'Prioritise immediate outreach to the 2 overdue deals to identify blockers and re-engage decision makers.',
+          'Set next-action reminders on all 3 at-risk deals before they cross the overdue threshold.',
+          'Review stage benchmarks quarterly — if expected days are consistently underestimated, update them.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/age-risk`, {}, token)
+  },
 }
 

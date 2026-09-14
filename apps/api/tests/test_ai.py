@@ -5102,3 +5102,86 @@ async def test_pipeline_momentum_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-momentum")
     assert resp.status_code == 403
+
+
+# Phase 16p: GET /workspaces/{wid}/ai/deals/age-risk
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_age_risk_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    # 3 open deals with different ages
+    d1 = MagicMock()
+    d1.id = uuid.uuid4()
+    d1.title = "Overdue Deal"
+    d1.stage = "proposal"
+    d1.created_at = now - _dt.timedelta(days=90)  # well over 2× expected ~30d → overdue
+
+    d2 = MagicMock()
+    d2.id = uuid.uuid4()
+    d2.title = "At-risk Deal"
+    d2.stage = "qualified"
+    d2.created_at = now - _dt.timedelta(days=38)  # ~1.8× expected ~21d → at_risk
+
+    d3 = MagicMock()
+    d3.id = uuid.uuid4()
+    d3.title = "On-track Deal"
+    d3.stage = "discovery"
+    d3.created_at = now - _dt.timedelta(days=7)  # well under expected ~14d → on_track
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result([d1, d2, d3]),  # open deals
+        _make_execute_result([]),             # closed_won deals (empty)
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "2 deals are aging past their expected close window.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/age-risk")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["overdue_count"] == 1
+    assert data["at_risk_count"] == 1
+    assert data["on_track_count"] == 1
+    assert data["total_open_deals"] == 3
+    assert isinstance(data["deals"], list)
+    assert len(data["deals"]) == 3
+    # Check sort order: overdue first
+    assert data["deals"][0]["risk_level"] == "overdue"
+    assert data["deals"][1]["risk_level"] == "at_risk"
+    assert data["deals"][2]["risk_level"] == "on_track"
+    for deal in data["deals"]:
+        assert "id" in deal
+        assert "title" in deal
+        assert "stage" in deal
+        assert "days_open" in deal
+        assert "expected_days" in deal
+        assert deal["risk_level"] in ("overdue", "at_risk", "on_track")
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_deal_age_risk_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/age-risk")
+    assert resp.status_code == 403

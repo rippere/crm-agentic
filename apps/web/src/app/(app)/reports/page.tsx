@@ -291,6 +291,28 @@ export default function ReportsPage() {
   const [pipelineMomentumLoading, setPipelineMomentumLoading] = useState(false);
   const [pipelineMomentumOpen, setPipelineMomentumOpen] = useState(true);
 
+  type DealAgeRiskDeal = {
+    id: string
+    title: string | null
+    stage: string
+    days_open: number
+    expected_days: number
+    risk_level: 'overdue' | 'at_risk' | 'on_track'
+  };
+  type DealAgeRisk = {
+    overdue_count: number
+    at_risk_count: number
+    on_track_count: number
+    total_open_deals: number
+    deals: DealAgeRiskDeal[]
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [dealAgeRisk, setDealAgeRisk] = useState<DealAgeRisk | null>(null);
+  const [dealAgeRiskLoading, setDealAgeRiskLoading] = useState(false);
+  const [dealAgeRiskOpen, setDealAgeRiskOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -347,6 +369,8 @@ export default function ReportsPage() {
       apiClient.getContactInactivityRisk("demo-workspace-1", "demo-token").then(setInactivityRisk).catch(() => {}).finally(() => setInactivityRiskLoading(false));
       setPipelineMomentumLoading(true);
       apiClient.getDealsPipelineMomentum("demo-workspace-1", "demo-token").then(setPipelineMomentum).catch(() => {}).finally(() => setPipelineMomentumLoading(false));
+      setDealAgeRiskLoading(true);
+      apiClient.getDealAgeRisk("demo-workspace-1", "demo-token").then(setDealAgeRisk).catch(() => {}).finally(() => setDealAgeRiskLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -408,6 +432,8 @@ export default function ReportsPage() {
       apiClient.getContactInactivityRisk(workspaceId, session.access_token).then(setInactivityRisk).catch(() => {}).finally(() => setInactivityRiskLoading(false));
       setPipelineMomentumLoading(true);
       apiClient.getDealsPipelineMomentum(workspaceId, session.access_token).then(setPipelineMomentum).catch(() => {}).finally(() => setPipelineMomentumLoading(false));
+      setDealAgeRiskLoading(true);
+      apiClient.getDealAgeRisk(workspaceId, session.access_token).then(setDealAgeRisk).catch(() => {}).finally(() => setDealAgeRiskLoading(false));
     });
   }, []);
 
@@ -732,6 +758,27 @@ export default function ReportsPage() {
         if (!session) { setPipelineMomentumLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setPipelineMomentumLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealAgeRisk = () => {
+    setDealAgeRiskLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealAgeRisk(wid, tok)
+        .then(setDealAgeRisk)
+        .catch(() => {})
+        .finally(() => setDealAgeRiskLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealAgeRiskLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealAgeRiskLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -3366,6 +3413,102 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No pipeline momentum data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Age Risk */}
+      <Card className="border-amber-500/15">
+        <div className="flex items-center justify-between p-4">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-amber-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Age Risk</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealAgeRisk}
+              disabled={dealAgeRiskLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealAgeRiskLoading && "animate-spin")} />
+              {dealAgeRiskLoading ? "Loading…" : "Regenerate"}
+            </button>
+            <button onClick={() => setDealAgeRiskOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {dealAgeRiskOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealAgeRiskOpen && (
+          dealAgeRiskLoading && !dealAgeRisk ? (
+            <div className="h-24 animate-pulse rounded-b-xl bg-zinc-800/50" />
+          ) : dealAgeRisk ? (
+            <div className={cn("space-y-4 p-4 pt-0", dealAgeRiskLoading && "opacity-40")}>
+              {/* 3-bucket count row */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3 text-center">
+                  <p className="text-2xl font-bold text-rose-400">{dealAgeRisk.overdue_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Overdue</p>
+                </div>
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-center">
+                  <p className="text-2xl font-bold text-amber-400">{dealAgeRisk.at_risk_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">At Risk</p>
+                </div>
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-center">
+                  <p className="text-2xl font-bold text-emerald-400">{dealAgeRisk.on_track_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">On Track</p>
+                </div>
+              </div>
+
+              {/* Deal list */}
+              {dealAgeRisk.deals.length > 0 && (
+                <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                  {dealAgeRisk.deals.map((deal) => {
+                    const chipColor = deal.risk_level === 'overdue'
+                      ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                      : deal.risk_level === 'at_risk'
+                      ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                      : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+                    return (
+                      <div key={deal.id} className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium text-zinc-200">{deal.title ?? '(Untitled)'}</p>
+                          <p className="text-xs text-zinc-500 capitalize">{deal.stage.replace(/_/g, ' ')}</p>
+                        </div>
+                        <span className={cn("ml-3 flex-shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium", chipColor)}>
+                          {deal.days_open}d / {deal.expected_days}d
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Insight */}
+              {dealAgeRisk.insight && (
+                <p className="text-xs italic text-zinc-400">{dealAgeRisk.insight}</p>
+              )}
+
+              {/* Recommendations */}
+              {dealAgeRisk.recommendations.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-400 mb-1">Recommendations</p>
+                  <ul className="space-y-1">
+                    {dealAgeRisk.recommendations.map((rec, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                        {rec}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(dealAgeRisk.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No deal age risk data available.</p>
           )
         )}
       </Card>

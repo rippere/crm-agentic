@@ -9219,3 +9219,181 @@ async def get_deals_pipeline_momentum(
         "warnings": warnings,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# Phase 16p — AI workspace deal age risk report
+# ---------------------------------------------------------------------------
+
+_DEAL_AGE_RISK_PROMPT = """You are Nova, a CRM AI sales analyst. Given a deal age risk report, provide a 1-sentence insight and 3 actionable recommendations to reduce deal aging risk.
+
+Deal age context:
+{context}
+
+Return JSON:
+{{
+  "insight": "one sentence summarising the key deal aging risk finding",
+  "recommendations": ["action 1", "action 2", "action 3"]
+}}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/age-risk")
+@limiter.limit("5/minute")
+async def get_deals_age_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(timezone.utc)
+    open_stages = ["discovery", "qualified", "proposal", "negotiation"]
+
+    # Query open deals
+    open_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.created_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(open_stages),
+        )
+    )
+    open_deals = open_result.all()
+
+    if not open_deals:
+        return {
+            "overdue_count": 0,
+            "at_risk_count": 0,
+            "on_track_count": 0,
+            "total_open_deals": 0,
+            "deals": [],
+            "insight": "No open deals found. Add deals to begin tracking age risk.",
+            "recommendations": [
+                "Create your first deals and set expected close dates to enable age tracking.",
+                "Import historical deal data to establish per-stage time benchmarks.",
+                "Use the pipeline view to quickly add new deals from your prospect list.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    # Compute median days-to-close per stage from closed_won deals
+    closed_result = await db.execute(
+        select(Deal.stage, Deal.created_at, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    closed_rows = closed_result.all()
+
+    # Build stage cycle-time benchmarks from closed deals
+    # Use precursor stage as proxy: discovery→qualified→proposal→negotiation→closed
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closed_won"]
+    stage_defaults = {
+        "discovery": 14, "qualified": 21, "proposal": 30, "negotiation": 45,
+    }
+
+    # Compute days from created_at to stage_changed_at for closed deals
+    closed_cycle_days: list[float] = []
+    for row in closed_rows:
+        if row.created_at and row.stage_changed_at:
+            ca = row.created_at.replace(tzinfo=timezone.utc) if not row.created_at.tzinfo else row.created_at
+            sa = row.stage_changed_at.replace(tzinfo=timezone.utc) if not row.stage_changed_at.tzinfo else row.stage_changed_at
+            days = (sa - ca).total_seconds() / 86400
+            if days > 0:
+                closed_cycle_days.append(days)
+
+    # Median overall cycle time — use as scaling reference
+    if closed_cycle_days:
+        closed_cycle_days.sort()
+        n = len(closed_cycle_days)
+        median_cycle = closed_cycle_days[n // 2]
+    else:
+        median_cycle = None  # fall back to defaults
+
+    # Classify each open deal
+    overdue_deals = []
+    at_risk_deals = []
+    on_track_deals = []
+
+    for d in open_deals:
+        stage = d.stage
+        expected = stage_defaults.get(stage, 21)
+        if median_cycle is not None:
+            # Scale expected by ratio of median cycle vs sum of defaults up to this stage
+            stage_idx = stage_order.index(stage) if stage in stage_order else 1
+            default_until = sum(list(stage_defaults.values())[:stage_idx + 1])
+            scale = median_cycle / max(sum(stage_defaults.values()), 1)
+            expected = max(7, round(expected * scale))
+
+        created = d.created_at
+        if created and not created.tzinfo:
+            created = created.replace(tzinfo=timezone.utc)
+        days_open = (now - created).days if created else 0
+
+        entry = {
+            "id": str(d.id),
+            "title": d.title,
+            "stage": stage,
+            "days_open": days_open,
+            "expected_days": expected,
+            "risk_level": "on_track",
+        }
+
+        if days_open > expected * 2:
+            entry["risk_level"] = "overdue"
+            overdue_deals.append(entry)
+        elif days_open > expected * 1.5:
+            entry["risk_level"] = "at_risk"
+            at_risk_deals.append(entry)
+        else:
+            on_track_deals.append(entry)
+
+    risk_order = {"overdue": 0, "at_risk": 1, "on_track": 2}
+    all_deals = sorted(
+        overdue_deals + at_risk_deals + on_track_deals,
+        key=lambda x: (risk_order[x["risk_level"]], -x["days_open"]),
+    )
+
+    context = (
+        f"Total open deals: {len(open_deals)}.\n"
+        f"Overdue (>2× expected): {len(overdue_deals)} deals.\n"
+        f"At-risk (>1.5× expected): {len(at_risk_deals)} deals.\n"
+        f"On-track: {len(on_track_deals)} deals.\n"
+    )
+    if overdue_deals:
+        oldest = max(overdue_deals, key=lambda x: x["days_open"])
+        context += f"Most overdue: '{oldest['title']}' at {oldest['days_open']} days open in {oldest['stage']} stage.\n"
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": _DEAL_AGE_RISK_PROMPT.format(context=context),
+        }],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = text[:200]
+        recommendations = []
+
+    while len(recommendations) < 3:
+        recommendations.append("Review aging deals and schedule follow-ups to re-activate them.")
+
+    return {
+        "overdue_count": len(overdue_deals),
+        "at_risk_count": len(at_risk_deals),
+        "on_track_count": len(on_track_deals),
+        "total_open_deals": len(open_deals),
+        "deals": all_deals,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
