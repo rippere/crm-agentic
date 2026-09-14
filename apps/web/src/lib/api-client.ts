@@ -5333,5 +5333,173 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/revenue/trend-analysis`, {}, token)
   },
+
+  // Phase 16n: Contact Inactivity Risk
+  getContactInactivityRisk: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    critical_count: number
+    high_risk_count: number
+    watch_count: number
+    total_contacts: number
+    contacts_by_bucket: Array<{
+      bucket: 'critical' | 'high_risk' | 'watch'
+      contacts: Array<{ id: string; name: string; email: string; company: string; days_since_touch: number }>
+    }>
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        critical_count: 3,
+        high_risk_count: 5,
+        watch_count: 7,
+        total_contacts: 47,
+        contacts_by_bucket: [
+          {
+            bucket: 'critical',
+            contacts: [
+              { id: 'c-001', name: 'Sarah Chen', email: 'sarah.chen@techcorp.com', company: 'TechCorp', days_since_touch: 82 },
+              { id: 'c-002', name: 'Marcus Johnson', email: 'mjohnson@globalinc.com', company: 'Global Inc', days_since_touch: 74 },
+              { id: 'c-003', name: 'Priya Patel', email: 'p.patel@innovate.io', company: 'Innovate.io', days_since_touch: 63 },
+            ],
+          },
+          {
+            bucket: 'high_risk',
+            contacts: [
+              { id: 'c-004', name: 'David Kim', email: 'd.kim@nexusco.com', company: 'NexusCo', days_since_touch: 45 },
+              { id: 'c-005', name: 'Emma Walsh', email: 'ewalsh@pinnacle.com', company: 'Pinnacle Ltd', days_since_touch: 38 },
+            ],
+          },
+          {
+            bucket: 'watch',
+            contacts: [
+              { id: 'c-006', name: 'James Rivera', email: 'j.rivera@apexgroup.com', company: 'Apex Group', days_since_touch: 22 },
+              { id: 'c-007', name: 'Lisa Tanaka', email: 'ltanaka@fusiontech.com', company: 'FusionTech', days_since_touch: 18 },
+            ],
+          },
+        ],
+        insight:
+          '3 contacts are critically overdue for outreach (60+ days silent), putting high-value relationships at serious churn risk. ' +
+          'Act immediately on the critical tier before these accounts are lost.',
+        recommendations: [
+          'Send personalised re-engagement emails to the 3 critically inactive contacts within 24 hours.',
+          'Block out time this week to call the 5 high-risk contacts before they cross the 60-day threshold.',
+          'Set up a recurring 2-week check-in reminder for all active prospects to prevent future gaps.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/inactivity-risk`, {}, token)
+  },
+
+  async getDealsPipelineMomentum(workspaceId: string, token: string): Promise<{
+    momentum_score: number
+    momentum_rating: 'accelerating' | 'steady' | 'stalling' | 'declining'
+    new_deals_14d: number
+    stage_moves_14d: number
+    at_risk_count: number
+    highlights: string[]
+    warnings: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 750))
+      return Promise.resolve({
+        momentum_score: 68,
+        momentum_rating: 'steady',
+        new_deals_14d: 4,
+        stage_moves_14d: 9,
+        at_risk_count: 3,
+        highlights: [
+          '4 new deals entered the pipeline in the last 14 days, indicating healthy top-of-funnel activity.',
+          '9 stage advances recorded this fortnight — deals are progressing through the funnel.',
+          'Average deal health is 71/100, showing a majority of opportunities are well-managed.',
+        ],
+        warnings: [
+          '3 deals are flagged as at-risk (health < 50) and need immediate attention.',
+          'Stage move velocity has plateaued — consider pushing stalled deals with targeted outreach.',
+          'No new deals in the negotiation stage this fortnight; check for proposal bottlenecks.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-momentum`, {}, token)
+  },
+
+  async getDealAgeRisk(workspaceId: string, token: string): Promise<{
+    overdue_count: number
+    at_risk_count: number
+    on_track_count: number
+    total_open_deals: number
+    deals: Array<{ id: string; title: string | null; stage: string; days_open: number; expected_days: number; risk_level: 'overdue' | 'at_risk' | 'on_track' }>
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        overdue_count: 2,
+        at_risk_count: 3,
+        on_track_count: 7,
+        total_open_deals: 12,
+        deals: [
+          { id: 'd-001', title: 'TechCorp Enterprise License', stage: 'proposal', days_open: 65, expected_days: 30, risk_level: 'overdue' },
+          { id: 'd-002', title: 'Startup IO Growth Plan', stage: 'negotiation', days_open: 98, expected_days: 45, risk_level: 'overdue' },
+          { id: 'd-demo-3', title: 'Global Corp Platform', stage: 'qualified', days_open: 35, expected_days: 21, risk_level: 'at_risk' },
+          { id: 'd-demo-4', title: 'Agency LLC Upgrade', stage: 'discovery', days_open: 22, expected_days: 14, risk_level: 'at_risk' },
+          { id: 'd-demo-5', title: 'Enterprise Co Suite', stage: 'proposal', days_open: 40, expected_days: 30, risk_level: 'at_risk' },
+          { id: 'd-003', title: 'Ventures VC Series B', stage: 'discovery', days_open: 8, expected_days: 14, risk_level: 'on_track' },
+          { id: 'd-demo-7', title: 'Media Co Renewal', stage: 'qualified', days_open: 12, expected_days: 21, risk_level: 'on_track' },
+        ],
+        insight: '2 deals have exceeded twice their expected stage duration, signalling pipeline stagnation that risks revenue slippage.',
+        recommendations: [
+          'Prioritise immediate outreach to the 2 overdue deals to identify blockers and re-engage decision makers.',
+          'Set next-action reminders on all 3 at-risk deals before they cross the overdue threshold.',
+          'Review stage benchmarks quarterly — if expected days are consistently underestimated, update them.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/age-risk`, {}, token)
+  },
+
+  async getTopPerformerDeals(workspaceId: string, token: string): Promise<{
+    top_by_value: Array<{ id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null }>
+    top_by_speed: Array<{ id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null }>
+    top_by_confidence: Array<{ id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null }>
+    avg_win_rate: number | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 750))
+      const deals = [
+        { id: 'd-001', title: 'Enterprise Platform Deal', company: 'Acme Corp', value: 142000, win_probability: 92, cycle_days: 18 },
+        { id: 'd-002', title: 'Mid-Market Expansion', company: 'BetaTech', value: 88000, win_probability: 85, cycle_days: 24 },
+        { id: 'd-003', title: 'Strategic Partnership', company: 'Gamma Ltd', value: 95000, win_probability: 88, cycle_days: 12 },
+        { id: 'd-004', title: 'SaaS Bundle Close', company: 'Delta Inc', value: 62000, win_probability: 79, cycle_days: 9 },
+        { id: 'd-005', title: 'Upsell — Advanced Tier', company: 'Acme Corp', value: 55000, win_probability: 76, cycle_days: 7 },
+      ]
+      return Promise.resolve({
+        top_by_value: [...deals].sort((a, b) => b.value - a.value),
+        top_by_speed: [...deals].sort((a, b) => (a.cycle_days ?? 999) - (b.cycle_days ?? 999)),
+        top_by_confidence: [...deals].sort((a, b) => b.win_probability - a.win_probability),
+        avg_win_rate: 84,
+        insight: 'Enterprise deals above $80K close with 88%+ confidence and an average 21-day cycle — replicating this profile is your fastest path to revenue growth.',
+        recommendations: [
+          'Prioritise enterprise-tier prospects in your pipeline to replicate the high-value close pattern.',
+          'Study the 7–12 day fast-close playbook for SMB deals and apply it to stalled mid-market opportunities.',
+          'Set win probability floor of 79%+ as a qualification signal for deals worth pursuing aggressively.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/top-performers`, {}, token)
+  },
 }
 

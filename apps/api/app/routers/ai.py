@@ -8890,3 +8890,625 @@ async def get_revenue_trend_analysis(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+# ── Contact Inactivity Risk ───────────────────────────────────────────────────
+
+_INACTIVITY_RISK_SYSTEM = """\
+You are a CRM analyst specialising in contact re-engagement. Given contact inactivity statistics, \
+write a concise 2-sentence insight and 3 prioritised recommendations. \
+Reply ONLY with a valid JSON object: \
+{"insight": "<2-sentence analysis>", "recommendations": ["...", "...", "..."]} \
+Exactly 3 recommendations. No markdown. Pure JSON only."""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/inactivity-risk")
+@limiter.limit("5/minute")
+async def get_contact_inactivity_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+
+    # All customer/prospect contacts in workspace
+    contacts_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.email, Contact.company)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+        )
+    )
+    contacts = contacts_result.all()
+    total_contacts = len(contacts)
+
+    if total_contacts == 0:
+        return {
+            "critical_count": 0,
+            "high_risk_count": 0,
+            "watch_count": 0,
+            "total_contacts": 0,
+            "contacts_by_bucket": [],
+            "insight": "No customer or prospect contacts exist in this workspace yet. Add contacts to track inactivity.",
+            "recommendations": [
+                "Import your existing contacts and set their status to prospect or customer.",
+                "Connect your email to automatically track message activity.",
+                "Add notes after meetings to build engagement history.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    contact_ids = [c[0] for c in contacts]
+    contact_map = {
+        c[0]: {"id": str(c[0]), "name": c[1] or "", "email": c[2] or "", "company": c[3] or ""}
+        for c in contacts
+    }
+
+    # Last message touch per contact
+    msg_result = await db.execute(
+        select(Message.contact_id, func.max(Message.received_at).label("last_msg"))
+        .where(Message.contact_id.in_(contact_ids))
+        .group_by(Message.contact_id)
+    )
+    msg_touches = {row[0]: row[1] for row in msg_result.all()}
+
+    # Last note touch per contact
+    note_result = await db.execute(
+        select(ContactNote.contact_id, func.max(ContactNote.created_at).label("last_note"))
+        .where(ContactNote.contact_id.in_(contact_ids))
+        .group_by(ContactNote.contact_id)
+    )
+    note_touches = {row[0]: row[1] for row in note_result.all()}
+
+    critical_contacts: list[dict] = []
+    high_risk_contacts: list[dict] = []
+    watch_contacts: list[dict] = []
+
+    for cid in contact_ids:
+        mt = msg_touches.get(cid)
+        nt = note_touches.get(cid)
+        candidates = [t for t in (mt, nt) if t is not None]
+        if not candidates:
+            days_since = 999
+        else:
+            last = max(candidates)
+            if hasattr(last, "tzinfo") and last.tzinfo is not None:
+                last = last.replace(tzinfo=None)
+            days_since = (now - last).days
+
+        entry = {**contact_map[cid], "days_since_touch": days_since}
+        if days_since > 60:
+            critical_contacts.append(entry)
+        elif days_since > 30:
+            high_risk_contacts.append(entry)
+        elif days_since > 14:
+            watch_contacts.append(entry)
+
+    critical_count = len(critical_contacts)
+    high_risk_count = len(high_risk_contacts)
+    watch_count = len(watch_contacts)
+
+    contacts_by_bucket: list[dict] = []
+    if critical_contacts:
+        contacts_by_bucket.append({"bucket": "critical", "contacts": critical_contacts})
+    if high_risk_contacts:
+        contacts_by_bucket.append({"bucket": "high_risk", "contacts": high_risk_contacts})
+    if watch_contacts:
+        contacts_by_bucket.append({"bucket": "watch", "contacts": watch_contacts})
+
+    if critical_count == 0 and high_risk_count == 0 and watch_count == 0:
+        return {
+            "critical_count": 0,
+            "high_risk_count": 0,
+            "watch_count": 0,
+            "total_contacts": total_contacts,
+            "contacts_by_bucket": [],
+            "insight": "All contacts have been recently engaged — excellent relationship health.",
+            "recommendations": [
+                "Maintain the current engagement cadence to keep contacts active.",
+                "Set up recurring reminders to check in every 2 weeks.",
+                "Review contact goals quarterly to ensure alignment.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Contact inactivity risk snapshot:\n"
+        f"- Total customer/prospect contacts: {total_contacts}\n"
+        f"- Critical (>60 days without any contact): {critical_count}\n"
+        f"- High risk (30–60 days silent): {high_risk_count}\n"
+        f"- Watch (14–30 days silent): {watch_count}\n"
+    )
+
+    _default_insight = (
+        f"{critical_count} contact{'s are' if critical_count != 1 else ' is'} critically overdue for outreach "
+        f"(60+ days silent), with {high_risk_count} more at high risk of going dark."
+    )
+    _default_recs = [
+        f"Immediately reach out to the {critical_count} critically inactive contact{'s' if critical_count != 1 else ''}.",
+        f"Schedule follow-up calls for the {high_risk_count} high-risk contact{'s' if high_risk_count != 1 else ''} this week.",
+        "Set up automated email sequences to maintain a consistent 2-week engagement cadence.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_INACTIVITY_RISK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data_json = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data_json.get("insight", _default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = _default_insight
+
+    raw_recs = data_json.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(_default_recs[len(recommendations) % 3])
+
+    return {
+        "critical_count": critical_count,
+        "high_risk_count": high_risk_count,
+        "watch_count": watch_count,
+        "total_contacts": total_contacts,
+        "contacts_by_bucket": contacts_by_bucket,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16o — AI workspace deal pipeline momentum snapshot
+# ---------------------------------------------------------------------------
+
+_PIPELINE_MOMENTUM_SYSTEM = (
+    "You are a CRM sales analytics expert. Analyse the pipeline momentum data "
+    "and return a JSON object with exactly these keys:\n"
+    "- highlights: list of 3 short positive observations about pipeline momentum\n"
+    "- warnings: list of 3 short risk signals or concerns\n"
+    "Return only valid JSON, no markdown."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-momentum")
+@limiter.limit("5/minute")
+async def get_deals_pipeline_momentum(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.utcnow()
+    cutoff_14d = now - datetime.timedelta(days=14)
+
+    # Query 1: open deal count, at-risk count (health < 50), avg health
+    deals_result = await db.execute(
+        select(Deal.id, Deal.health_score, Deal.created_at, Deal.stage)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals = deals_result.all()
+
+    # Query 2: stage moves in last 14 days from activity_events
+    moves_result = await db.execute(
+        select(func.count(ActivityEvent.id))
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "deal_moved",
+            ActivityEvent.created_at >= cutoff_14d,
+        )
+    )
+    stage_moves_14d = moves_result.scalar() or 0
+
+    total_open = len(open_deals)
+    new_deals_14d = sum(
+        1 for d in open_deals
+        if d.created_at and (
+            (d.created_at.replace(tzinfo=None) if d.created_at.tzinfo else d.created_at) >= cutoff_14d
+        )
+    )
+    at_risk_count = sum(1 for d in open_deals if (d.health_score or 0) < 50)
+    avg_health = (
+        sum((d.health_score or 0) for d in open_deals) / total_open
+        if total_open > 0 else 0
+    )
+
+    # Momentum score: 0-100
+    # Components: stage_moves (0-40), new deals (0-30), health (0-30)
+    moves_score = min(40, stage_moves_14d * 4)
+    new_deals_score = min(30, new_deals_14d * 5)
+    health_score_comp = int(avg_health * 0.3)
+    momentum_score = min(100, moves_score + new_deals_score + health_score_comp)
+
+    if momentum_score >= 70:
+        momentum_rating = "accelerating"
+    elif momentum_score >= 45:
+        momentum_rating = "steady"
+    elif momentum_score >= 20:
+        momentum_rating = "stalling"
+    else:
+        momentum_rating = "declining"
+
+    if total_open == 0:
+        return {
+            "momentum_score": 0,
+            "momentum_rating": "declining",
+            "new_deals_14d": 0,
+            "stage_moves_14d": 0,
+            "at_risk_count": 0,
+            "highlights": [
+                "Pipeline is empty — add deals to start tracking momentum.",
+                "Connect your CRM data sources to enable momentum tracking.",
+                "Create your first deal to begin building pipeline velocity.",
+            ],
+            "warnings": [
+                "No open deals in the pipeline.",
+                "Pipeline momentum cannot be calculated without active deals.",
+                "Revenue risk is high with no deals in progress.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Open deals: {total_open}\n"
+        f"New deals in last 14 days: {new_deals_14d}\n"
+        f"Stage moves in last 14 days: {stage_moves_14d}\n"
+        f"At-risk deals (health < 50): {at_risk_count}\n"
+        f"Average deal health: {round(avg_health, 1)}\n"
+        f"Momentum score: {momentum_score}/100 ({momentum_rating})\n"
+    )
+
+    _default_highlights = [
+        f"Pipeline has {total_open} active deal{'s' if total_open != 1 else ''}.",
+        f"{stage_moves_14d} stage move{'s' if stage_moves_14d != 1 else ''} recorded in the last 14 days.",
+        f"{new_deals_14d} new deal{'s' if new_deals_14d != 1 else ''} entered the pipeline this fortnight.",
+    ]
+    _default_warnings = [
+        f"{at_risk_count} deal{'s' if at_risk_count != 1 else ''} flagged as at-risk (health < 50).",
+        "Review stalled deals to re-activate pipeline movement.",
+        "Monitor close dates to avoid revenue forecast slippage.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_PIPELINE_MOMENTUM_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data_json = json.loads(raw)
+        highlights = [str(h) for h in (data_json.get("highlights") or [])[:3]]
+        warnings = [str(w) for w in (data_json.get("warnings") or [])[:3]]
+    except Exception:
+        highlights = []
+        warnings = []
+
+    while len(highlights) < 3:
+        highlights.append(_default_highlights[len(highlights) % 3])
+    while len(warnings) < 3:
+        warnings.append(_default_warnings[len(warnings) % 3])
+
+    return {
+        "momentum_score": momentum_score,
+        "momentum_rating": momentum_rating,
+        "new_deals_14d": new_deals_14d,
+        "stage_moves_14d": stage_moves_14d,
+        "at_risk_count": at_risk_count,
+        "highlights": highlights,
+        "warnings": warnings,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# Phase 16p — AI workspace deal age risk report
+# ---------------------------------------------------------------------------
+
+_DEAL_AGE_RISK_PROMPT = """You are Nova, a CRM AI sales analyst. Given a deal age risk report, provide a 1-sentence insight and 3 actionable recommendations to reduce deal aging risk.
+
+Deal age context:
+{context}
+
+Return JSON:
+{{
+  "insight": "one sentence summarising the key deal aging risk finding",
+  "recommendations": ["action 1", "action 2", "action 3"]
+}}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/age-risk")
+@limiter.limit("5/minute")
+async def get_deals_age_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(timezone.utc)
+    open_stages = ["discovery", "qualified", "proposal", "negotiation"]
+
+    # Query open deals
+    open_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.created_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(open_stages),
+        )
+    )
+    open_deals = open_result.all()
+
+    if not open_deals:
+        return {
+            "overdue_count": 0,
+            "at_risk_count": 0,
+            "on_track_count": 0,
+            "total_open_deals": 0,
+            "deals": [],
+            "insight": "No open deals found. Add deals to begin tracking age risk.",
+            "recommendations": [
+                "Create your first deals and set expected close dates to enable age tracking.",
+                "Import historical deal data to establish per-stage time benchmarks.",
+                "Use the pipeline view to quickly add new deals from your prospect list.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    # Compute median days-to-close per stage from closed_won deals
+    closed_result = await db.execute(
+        select(Deal.stage, Deal.created_at, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    closed_rows = closed_result.all()
+
+    # Build stage cycle-time benchmarks from closed deals
+    # Use precursor stage as proxy: discovery→qualified→proposal→negotiation→closed
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closed_won"]
+    stage_defaults = {
+        "discovery": 14, "qualified": 21, "proposal": 30, "negotiation": 45,
+    }
+
+    # Compute days from created_at to stage_changed_at for closed deals
+    closed_cycle_days: list[float] = []
+    for row in closed_rows:
+        if row.created_at and row.stage_changed_at:
+            ca = row.created_at.replace(tzinfo=timezone.utc) if not row.created_at.tzinfo else row.created_at
+            sa = row.stage_changed_at.replace(tzinfo=timezone.utc) if not row.stage_changed_at.tzinfo else row.stage_changed_at
+            days = (sa - ca).total_seconds() / 86400
+            if days > 0:
+                closed_cycle_days.append(days)
+
+    # Median overall cycle time — use as scaling reference
+    if closed_cycle_days:
+        closed_cycle_days.sort()
+        n = len(closed_cycle_days)
+        median_cycle = closed_cycle_days[n // 2]
+    else:
+        median_cycle = None  # fall back to defaults
+
+    # Classify each open deal
+    overdue_deals = []
+    at_risk_deals = []
+    on_track_deals = []
+
+    for d in open_deals:
+        stage = d.stage
+        expected = stage_defaults.get(stage, 21)
+        if median_cycle is not None:
+            # Scale expected by ratio of median cycle vs sum of defaults up to this stage
+            stage_idx = stage_order.index(stage) if stage in stage_order else 1
+            default_until = sum(list(stage_defaults.values())[:stage_idx + 1])
+            scale = median_cycle / max(sum(stage_defaults.values()), 1)
+            expected = max(7, round(expected * scale))
+
+        created = d.created_at
+        if created and not created.tzinfo:
+            created = created.replace(tzinfo=timezone.utc)
+        days_open = (now - created).days if created else 0
+
+        entry = {
+            "id": str(d.id),
+            "title": d.title,
+            "stage": stage,
+            "days_open": days_open,
+            "expected_days": expected,
+            "risk_level": "on_track",
+        }
+
+        if days_open > expected * 2:
+            entry["risk_level"] = "overdue"
+            overdue_deals.append(entry)
+        elif days_open > expected * 1.5:
+            entry["risk_level"] = "at_risk"
+            at_risk_deals.append(entry)
+        else:
+            on_track_deals.append(entry)
+
+    risk_order = {"overdue": 0, "at_risk": 1, "on_track": 2}
+    all_deals = sorted(
+        overdue_deals + at_risk_deals + on_track_deals,
+        key=lambda x: (risk_order[x["risk_level"]], -x["days_open"]),
+    )
+
+    context = (
+        f"Total open deals: {len(open_deals)}.\n"
+        f"Overdue (>2× expected): {len(overdue_deals)} deals.\n"
+        f"At-risk (>1.5× expected): {len(at_risk_deals)} deals.\n"
+        f"On-track: {len(on_track_deals)} deals.\n"
+    )
+    if overdue_deals:
+        oldest = max(overdue_deals, key=lambda x: x["days_open"])
+        context += f"Most overdue: '{oldest['title']}' at {oldest['days_open']} days open in {oldest['stage']} stage.\n"
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": _DEAL_AGE_RISK_PROMPT.format(context=context),
+        }],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = text[:200]
+        recommendations = []
+
+    while len(recommendations) < 3:
+        recommendations.append("Review aging deals and schedule follow-ups to re-activate them.")
+
+    return {
+        "overdue_count": len(overdue_deals),
+        "at_risk_count": len(at_risk_deals),
+        "on_track_count": len(on_track_deals),
+        "total_open_deals": len(open_deals),
+        "deals": all_deals,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16q: GET /workspaces/{wid}/ai/deals/top-performers
+# ---------------------------------------------------------------------------
+
+_TOP_PERFORMERS_SYSTEM = """\
+You are a sales analytics AI. Given data about top-performing closed-won deals across three dimensions (value, speed, confidence), write a 1-sentence insight and exactly 3 specific recommendations to replicate the success patterns.
+Respond with JSON only: {"insight": "...", "recommendations": ["...", "...", "..."]}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/top-performers")
+@limiter.limit("5/minute")
+async def top_performer_deals(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+
+    result = await db.execute(
+        select(
+            Deal.id, Deal.title, Deal.company, Deal.value,
+            Deal.ml_win_probability, Deal.created_at, Deal.updated_at,
+        ).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    closed_won = result.all()
+
+    if not closed_won:
+        return {
+            "top_by_value": [],
+            "top_by_speed": [],
+            "top_by_confidence": [],
+            "avg_win_rate": None,
+            "insight": "No closed-won deals to analyse yet.",
+            "recommendations": [
+                "Close your first deal to start building top-performer insights.",
+                "Set ML win probability on open deals to enable confidence tracking.",
+                "Record cycle time by tracking created_at and close date on each deal.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    deals_data = []
+    for row in closed_won:
+        deal_id, title, company, value, ml_win_prob, created_at, updated_at = (
+            row[0], row[1], row[2], float(row[3] or 0), row[4] or 0, row[5], row[6],
+        )
+        ca = created_at.replace(tzinfo=None) if (created_at and created_at.tzinfo) else created_at
+        ua = updated_at.replace(tzinfo=None) if (updated_at and updated_at.tzinfo) else updated_at
+        cycle_days = (ua - ca).days if (ca and ua) else 9999
+
+        deals_data.append({
+            "id": str(deal_id),
+            "title": title,
+            "company": company,
+            "value": round(float(value)),
+            "win_probability": ml_win_prob,
+            "cycle_days": cycle_days if cycle_days < 9999 else None,
+        })
+
+    top_by_value = sorted(deals_data, key=lambda d: -d["value"])[:5]
+    top_by_speed = sorted(
+        [d for d in deals_data if d["cycle_days"] is not None],
+        key=lambda d: d["cycle_days"]
+    )[:5]
+    top_by_confidence = sorted(deals_data, key=lambda d: -d["win_probability"])[:5]
+
+    avg_win_rate = round(sum(d["win_probability"] for d in deals_data) / len(deals_data), 1)
+
+    summary_context = (
+        f"Top performer deals analysis:\n"
+        f"- total_closed_won: {len(deals_data)}\n"
+        f"- avg_win_probability_at_close: {avg_win_rate}%\n"
+        f"- top_value_deal: {top_by_value[0]['title']} (${top_by_value[0]['value']:,})\n"
+        f"- fastest_deal_days: {top_by_speed[0]['cycle_days'] if top_by_speed else 'N/A'}\n"
+        f"- highest_confidence_probability: {top_by_confidence[0]['win_probability']}%"
+    )
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        system=_TOP_PERFORMERS_SYSTEM,
+        messages=[{"role": "user", "content": summary_context}],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "High-value deals drive the most revenue impact.")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = "High-value deals drive the most revenue impact."
+        recommendations = []
+
+    while len(recommendations) < 3:
+        recommendations.append("Study the patterns of your fastest-closing deals to replicate success.")
+
+    return {
+        "top_by_value": top_by_value,
+        "top_by_speed": top_by_speed,
+        "top_by_confidence": top_by_confidence,
+        "avg_win_rate": avg_win_rate,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
