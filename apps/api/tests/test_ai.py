@@ -5185,3 +5185,72 @@ async def test_deal_age_risk_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/age-risk")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16q: GET /workspaces/{wid}/ai/deals/top-performers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_top_performer_deals_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+
+    now = _dt.datetime.utcnow()
+    # 4 closed_won deals with varying value/speed/confidence
+    created_90 = now - _dt.timedelta(days=90)
+    created_60 = now - _dt.timedelta(days=60)
+    created_30 = now - _dt.timedelta(days=30)
+    updated_80 = now - _dt.timedelta(days=80)  # 10-day cycle
+    updated_50 = now - _dt.timedelta(days=50)  # 10-day cycle
+    updated_20 = now - _dt.timedelta(days=20)  # 10-day cycle
+
+    rows = [
+        (uuid.uuid4(), "Enterprise Deal", "Acme", 120000.0, 90, created_90, updated_80),
+        (uuid.uuid4(), "Mid-Market Deal", "Beta", 45000.0, 75, created_60, updated_50),
+        (uuid.uuid4(), "SMB Deal", "Gamma", 12000.0, 60, created_30, updated_20),
+        (uuid.uuid4(), "Upsell Deal", "Acme", 80000.0, 85, created_60, updated_50),
+    ]
+
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "Enterprise deals drive highest value per close.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/top-performers")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "top_by_value" in data
+    assert "top_by_speed" in data
+    assert "top_by_confidence" in data
+    assert isinstance(data["top_by_value"], list)
+    assert len(data["top_by_value"]) <= 5
+    # Enterprise deal ($120k) should be first by value
+    assert data["top_by_value"][0]["value"] == 120000
+    # avg_win_rate should be computed
+    assert data["avg_win_rate"] is not None
+    assert 0 <= data["avg_win_rate"] <= 100
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_top_performer_deals_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/top-performers")
+    assert resp.status_code == 403

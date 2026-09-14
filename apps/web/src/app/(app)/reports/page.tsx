@@ -313,6 +313,21 @@ export default function ReportsPage() {
   const [dealAgeRiskLoading, setDealAgeRiskLoading] = useState(false);
   const [dealAgeRiskOpen, setDealAgeRiskOpen] = useState(true);
 
+  type TopPerformerDeal = { id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null };
+  type TopPerformerDeals = {
+    top_by_value: TopPerformerDeal[]
+    top_by_speed: TopPerformerDeal[]
+    top_by_confidence: TopPerformerDeal[]
+    avg_win_rate: number | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [topPerformers, setTopPerformers] = useState<TopPerformerDeals | null>(null);
+  const [topPerformersLoading, setTopPerformersLoading] = useState(false);
+  const [topPerformersOpen, setTopPerformersOpen] = useState(true);
+  const [topPerformersTab, setTopPerformersTab] = useState<'value' | 'speed' | 'confidence'>('value');
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -371,6 +386,8 @@ export default function ReportsPage() {
       apiClient.getDealsPipelineMomentum("demo-workspace-1", "demo-token").then(setPipelineMomentum).catch(() => {}).finally(() => setPipelineMomentumLoading(false));
       setDealAgeRiskLoading(true);
       apiClient.getDealAgeRisk("demo-workspace-1", "demo-token").then(setDealAgeRisk).catch(() => {}).finally(() => setDealAgeRiskLoading(false));
+      setTopPerformersLoading(true);
+      apiClient.getTopPerformerDeals("demo-workspace-1", "demo-token").then(setTopPerformers).catch(() => {}).finally(() => setTopPerformersLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -434,6 +451,8 @@ export default function ReportsPage() {
       apiClient.getDealsPipelineMomentum(workspaceId, session.access_token).then(setPipelineMomentum).catch(() => {}).finally(() => setPipelineMomentumLoading(false));
       setDealAgeRiskLoading(true);
       apiClient.getDealAgeRisk(workspaceId, session.access_token).then(setDealAgeRisk).catch(() => {}).finally(() => setDealAgeRiskLoading(false));
+      setTopPerformersLoading(true);
+      apiClient.getTopPerformerDeals(workspaceId, session.access_token).then(setTopPerformers).catch(() => {}).finally(() => setTopPerformersLoading(false));
     });
   }, []);
 
@@ -779,6 +798,27 @@ export default function ReportsPage() {
         if (!session) { setDealAgeRiskLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealAgeRiskLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateTopPerformers = () => {
+    setTopPerformersLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getTopPerformerDeals(wid, tok)
+        .then(setTopPerformers)
+        .catch(() => {})
+        .finally(() => setTopPerformersLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setTopPerformersLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setTopPerformersLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -3509,6 +3549,103 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No deal age risk data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Phase 16q: Top Performer Deals */}
+      <Card className="border-zinc-800 p-0 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+          <Trophy className="h-4 w-4 text-emerald-400" />
+          <span className="text-sm font-semibold text-zinc-200">Top Performer Deals</span>
+          {topPerformers?.avg_win_rate != null && (
+            <span className="rounded-full border px-2 py-0.5 text-xs text-emerald-400 bg-emerald-500/10 border-emerald-500/20">
+              {topPerformers.avg_win_rate}% avg confidence
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={regenerateTopPerformers}
+              disabled={topPerformersLoading}
+              className="flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", topPerformersLoading && "animate-spin")} />
+              {topPerformersLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setTopPerformersOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {topPerformersOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {topPerformersOpen && (
+          topPerformersLoading && !topPerformers ? (
+            <p className="p-4 text-xs text-zinc-500 animate-pulse">Ranking top performer deals…</p>
+          ) : topPerformers ? (
+            <div className={cn("space-y-4 p-4", topPerformersLoading && "opacity-40")}>
+              {/* 3-tab switcher */}
+              <div className="flex gap-1 rounded-lg bg-zinc-800/60 p-1">
+                {(['value', 'speed', 'confidence'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setTopPerformersTab(tab)}
+                    className={cn(
+                      "flex-1 rounded-md px-2 py-1 text-xs capitalize transition-colors",
+                      topPerformersTab === tab
+                        ? "bg-zinc-700 text-zinc-100"
+                        : "text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    {tab === 'value' ? 'By Value' : tab === 'speed' ? 'By Speed' : 'By Confidence'}
+                  </button>
+                ))}
+              </div>
+              {/* Deal list for active tab */}
+              {(() => {
+                const deals =
+                  topPerformersTab === 'value' ? topPerformers.top_by_value
+                  : topPerformersTab === 'speed' ? topPerformers.top_by_speed
+                  : topPerformers.top_by_confidence;
+                if (!deals.length) return <p className="text-xs text-zinc-500">No deals to show.</p>;
+                return (
+                  <div className="space-y-1.5">
+                    {deals.map((deal, idx) => (
+                      <div key={deal.id} className="flex items-center gap-2 rounded-md bg-zinc-800/50 px-2 py-1.5">
+                        <span className="text-xs font-mono text-zinc-600 w-4">{idx + 1}</span>
+                        <span className="text-xs text-zinc-300 flex-1 truncate">{deal.title ?? "Untitled"}</span>
+                        <span className="text-xs text-zinc-500 truncate max-w-[80px]">{deal.company}</span>
+                        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-xs font-mono text-emerald-300">
+                          ${deal.value >= 1000 ? `${Math.round(deal.value / 1000)}k` : deal.value}
+                        </span>
+                        {topPerformersTab === 'speed' && deal.cycle_days != null && (
+                          <span className="rounded-full border border-indigo-500/20 bg-indigo-500/10 px-1.5 py-0.5 text-xs font-mono text-indigo-300">
+                            {deal.cycle_days}d
+                          </span>
+                        )}
+                        {topPerformersTab === 'confidence' && (
+                          <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-xs font-mono text-violet-300">
+                            {deal.win_probability}%
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+              <p className="text-xs text-zinc-400 italic">{topPerformers.insight}</p>
+              <ul className="space-y-1">
+                {topPerformers.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(topPerformers.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No top performer data available.</p>
           )
         )}
       </Card>

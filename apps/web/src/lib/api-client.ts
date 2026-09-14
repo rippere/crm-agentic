@@ -5466,5 +5466,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/age-risk`, {}, token)
   },
+
+  async getTopPerformerDeals(workspaceId: string, token: string): Promise<{
+    top_by_value: Array<{ id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null }>
+    top_by_speed: Array<{ id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null }>
+    top_by_confidence: Array<{ id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null }>
+    avg_win_rate: number | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 750))
+      const deals = [
+        { id: 'd-001', title: 'Enterprise Platform Deal', company: 'Acme Corp', value: 142000, win_probability: 92, cycle_days: 18 },
+        { id: 'd-002', title: 'Mid-Market Expansion', company: 'BetaTech', value: 88000, win_probability: 85, cycle_days: 24 },
+        { id: 'd-003', title: 'Strategic Partnership', company: 'Gamma Ltd', value: 95000, win_probability: 88, cycle_days: 12 },
+        { id: 'd-004', title: 'SaaS Bundle Close', company: 'Delta Inc', value: 62000, win_probability: 79, cycle_days: 9 },
+        { id: 'd-005', title: 'Upsell — Advanced Tier', company: 'Acme Corp', value: 55000, win_probability: 76, cycle_days: 7 },
+      ]
+      return Promise.resolve({
+        top_by_value: [...deals].sort((a, b) => b.value - a.value),
+        top_by_speed: [...deals].sort((a, b) => (a.cycle_days ?? 999) - (b.cycle_days ?? 999)),
+        top_by_confidence: [...deals].sort((a, b) => b.win_probability - a.win_probability),
+        avg_win_rate: 84,
+        insight: 'Enterprise deals above $80K close with 88%+ confidence and an average 21-day cycle — replicating this profile is your fastest path to revenue growth.',
+        recommendations: [
+          'Prioritise enterprise-tier prospects in your pipeline to replicate the high-value close pattern.',
+          'Study the 7–12 day fast-close playbook for SMB deals and apply it to stalled mid-market opportunities.',
+          'Set win probability floor of 79%+ as a qualification signal for deals worth pursuing aggressively.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/top-performers`, {}, token)
+  },
 }
 

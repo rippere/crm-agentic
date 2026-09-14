@@ -9397,3 +9397,118 @@ async def get_deals_age_risk(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16q: GET /workspaces/{wid}/ai/deals/top-performers
+# ---------------------------------------------------------------------------
+
+_TOP_PERFORMERS_SYSTEM = """\
+You are a sales analytics AI. Given data about top-performing closed-won deals across three dimensions (value, speed, confidence), write a 1-sentence insight and exactly 3 specific recommendations to replicate the success patterns.
+Respond with JSON only: {"insight": "...", "recommendations": ["...", "...", "..."]}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/top-performers")
+@limiter.limit("5/minute")
+async def top_performer_deals(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+
+    result = await db.execute(
+        select(
+            Deal.id, Deal.title, Deal.company, Deal.value,
+            Deal.ml_win_probability, Deal.created_at, Deal.updated_at,
+        ).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    closed_won = result.all()
+
+    if not closed_won:
+        return {
+            "top_by_value": [],
+            "top_by_speed": [],
+            "top_by_confidence": [],
+            "avg_win_rate": None,
+            "insight": "No closed-won deals to analyse yet.",
+            "recommendations": [
+                "Close your first deal to start building top-performer insights.",
+                "Set ML win probability on open deals to enable confidence tracking.",
+                "Record cycle time by tracking created_at and close date on each deal.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    deals_data = []
+    for row in closed_won:
+        deal_id, title, company, value, ml_win_prob, created_at, updated_at = (
+            row[0], row[1], row[2], float(row[3] or 0), row[4] or 0, row[5], row[6],
+        )
+        ca = created_at.replace(tzinfo=None) if (created_at and created_at.tzinfo) else created_at
+        ua = updated_at.replace(tzinfo=None) if (updated_at and updated_at.tzinfo) else updated_at
+        cycle_days = (ua - ca).days if (ca and ua) else 9999
+
+        deals_data.append({
+            "id": str(deal_id),
+            "title": title,
+            "company": company,
+            "value": round(float(value)),
+            "win_probability": ml_win_prob,
+            "cycle_days": cycle_days if cycle_days < 9999 else None,
+        })
+
+    top_by_value = sorted(deals_data, key=lambda d: -d["value"])[:5]
+    top_by_speed = sorted(
+        [d for d in deals_data if d["cycle_days"] is not None],
+        key=lambda d: d["cycle_days"]
+    )[:5]
+    top_by_confidence = sorted(deals_data, key=lambda d: -d["win_probability"])[:5]
+
+    avg_win_rate = round(sum(d["win_probability"] for d in deals_data) / len(deals_data), 1)
+
+    summary_context = (
+        f"Top performer deals analysis:\n"
+        f"- total_closed_won: {len(deals_data)}\n"
+        f"- avg_win_probability_at_close: {avg_win_rate}%\n"
+        f"- top_value_deal: {top_by_value[0]['title']} (${top_by_value[0]['value']:,})\n"
+        f"- fastest_deal_days: {top_by_speed[0]['cycle_days'] if top_by_speed else 'N/A'}\n"
+        f"- highest_confidence_probability: {top_by_confidence[0]['win_probability']}%"
+    )
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        system=_TOP_PERFORMERS_SYSTEM,
+        messages=[{"role": "user", "content": summary_context}],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "High-value deals drive the most revenue impact.")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = "High-value deals drive the most revenue impact."
+        recommendations = []
+
+    while len(recommendations) < 3:
+        recommendations.append("Study the patterns of your fastest-closing deals to replicate success.")
+
+    return {
+        "top_by_value": top_by_value,
+        "top_by_speed": top_by_speed,
+        "top_by_confidence": top_by_confidence,
+        "avg_win_rate": avg_win_rate,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
