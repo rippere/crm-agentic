@@ -5501,5 +5501,38 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/top-performers`, {}, token)
   },
+
+  async getDealStageConcentration(workspaceId: string, token: string): Promise<{
+    stages: Array<{ stage: string; count: number; total_value: number; avg_health: number | null; pct_of_pipeline: number }>
+    highest_value_stage: string | null
+    most_stalled_stage: string | null
+    total_pipeline_value: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        stages: [
+          { stage: 'discovery',   count: 8, total_value: 92000,  avg_health: 71, pct_of_pipeline: 18.5 },
+          { stage: 'qualified',   count: 6, total_value: 145000, avg_health: 65, pct_of_pipeline: 29.2 },
+          { stage: 'proposal',    count: 5, total_value: 178000, avg_health: 58, pct_of_pipeline: 35.8 },
+          { stage: 'negotiation', count: 3, total_value: 82000,  avg_health: 43, pct_of_pipeline: 16.5 },
+        ],
+        highest_value_stage: 'proposal',
+        most_stalled_stage: 'negotiation',
+        total_pipeline_value: 497000,
+        insight: 'Over 35% of pipeline value ($178K) sits in Proposal with declining health — unblocking these 5 deals is the single highest-impact action.',
+        recommendations: [
+          'Review the 5 proposal-stage deals this week; schedule calls to address any objections before health drops further.',
+          'Accelerate the 3 negotiation deals (avg health 43) — offer a time-bound incentive to close in the next 30 days.',
+          'Ensure discovery-stage deals are qualified quickly: 8 deals represent 18.5% of pipeline value and need a clear next step.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/stage-concentration`, {}, token)
+  },
 }
 

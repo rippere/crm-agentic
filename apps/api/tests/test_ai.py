@@ -5254,3 +5254,67 @@ async def test_top_performer_deals_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/top-performers")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 16r: GET /workspaces/{wid}/ai/deals/stage-concentration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_stage_concentration_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # 5 open deals across 3 stages
+    rows = [
+        MagicMock(stage="proposal",    value=80000.0,  health_score=72),
+        MagicMock(stage="proposal",    value=60000.0,  health_score=65),
+        MagicMock(stage="qualified",   value=40000.0,  health_score=80),
+        MagicMock(stage="negotiation", value=120000.0, health_score=45),
+        MagicMock(stage="negotiation", value=50000.0,  health_score=38),
+    ]
+
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "Most pipeline value is concentrated in Negotiation stage.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/stage-concentration")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "stages" in data
+    assert isinstance(data["stages"], list)
+    assert len(data["stages"]) == 3
+    assert data["total_pipeline_value"] == 350000
+    # highest value stage is negotiation ($170k)
+    assert data["highest_value_stage"] == "negotiation"
+    # most stalled is negotiation (avg health ~41)
+    assert data["most_stalled_stage"] == "negotiation"
+    for s in data["stages"]:
+        assert "stage" in s
+        assert "count" in s
+        assert "total_value" in s
+        assert "avg_health" in s
+        assert "pct_of_pipeline" in s
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_deal_stage_concentration_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/stage-concentration")
+    assert resp.status_code == 403

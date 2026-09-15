@@ -9512,3 +9512,136 @@ async def top_performer_deals(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+# Phase 16r — AI workspace deal stage concentration report
+# ---------------------------------------------------------------------------
+
+_STAGE_CONCENTRATION_SYSTEM = """\
+You are a CRM sales analyst. Given a breakdown of open deals by pipeline stage \
+(count, total_value, avg_health per stage), write a 1-sentence insight about where \
+value is concentrated or stalled, and suggest the 3 most impactful actions. \
+Reply ONLY with valid JSON: \
+{"insight": "<1-sentence>", "recommendations": ["...", "...", "..."]} \
+No markdown. Pure JSON only."""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/stage-concentration")
+@limiter.limit("5/minute")
+async def get_deal_stage_concentration(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.utcnow()
+
+    deals_result = await db.execute(
+        select(Deal.stage, Deal.value, Deal.health_score)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = deals_result.all()
+
+    if not deals:
+        return {
+            "stages": [],
+            "highest_value_stage": None,
+            "most_stalled_stage": None,
+            "total_pipeline_value": 0,
+            "insight": "No open deals found. Add deals to your pipeline to see stage concentration insights.",
+            "recommendations": [
+                "Create your first deal in the pipeline to start tracking stage concentration.",
+                "Import existing opportunities to get an immediate pipeline view.",
+                "Review your lead qualification criteria to ensure deals enter the right stage.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    stage_data: dict = {}
+    for row in deals:
+        stage = row.stage or "unknown"
+        if stage not in stage_data:
+            stage_data[stage] = {"count": 0, "total_value": 0.0, "health_scores": []}
+        stage_data[stage]["count"] += 1
+        stage_data[stage]["total_value"] += float(row.value or 0)
+        if row.health_score is not None:
+            stage_data[stage]["health_scores"].append(int(row.health_score))
+
+    total_pipeline_value = sum(s["total_value"] for s in stage_data.values())
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation"]
+    sorted_stages = sorted(
+        stage_data.keys(),
+        key=lambda s: stage_order.index(s) if s in stage_order else len(stage_order),
+    )
+
+    stages = []
+    for stage in sorted_stages:
+        sd = stage_data[stage]
+        avg_h = round(sum(sd["health_scores"]) / len(sd["health_scores"])) if sd["health_scores"] else None
+        pct = round(sd["total_value"] / total_pipeline_value * 100, 1) if total_pipeline_value > 0 else 0.0
+        stages.append({
+            "stage": stage,
+            "count": sd["count"],
+            "total_value": round(sd["total_value"]),
+            "avg_health": avg_h,
+            "pct_of_pipeline": pct,
+        })
+
+    highest_value_stage = max(stages, key=lambda s: s["total_value"])["stage"] if stages else None
+    health_stages = [s for s in stages if s["avg_health"] is not None]
+    most_stalled_stage = min(health_stages, key=lambda s: s["avg_health"])["stage"] if health_stages else None  # type: ignore[arg-type]
+
+    context = (
+        f"Pipeline stage breakdown ({len(deals)} open deals, total ${total_pipeline_value:,.0f}):\n"
+        + "\n".join(
+            f"- {s['stage']}: {s['count']} deals, ${s['total_value']:,}, "
+            f"avg health {s['avg_health'] if s['avg_health'] is not None else 'N/A'}/100, "
+            f"{s['pct_of_pipeline']}% of pipeline"
+            for s in stages
+        )
+        + f"\nHighest-value stage: {highest_value_stage}. Most stalled: {most_stalled_stage}."
+    )
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        system=_STAGE_CONCENTRATION_SYSTEM,
+        messages=[{"role": "user", "content": context}],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = text[:200]
+        recommendations = []
+
+    if not insight:
+        insight = f"${total_pipeline_value:,.0f} in pipeline is concentrated in {len(stages)} stages — review stalled stages to unblock flow."
+    while len(recommendations) < 3:
+        defaults = [
+            f"Focus on advancing deals in {most_stalled_stage or 'the lowest-health stage'} to improve pipeline velocity.",
+            "Set stage-specific targets to balance deal distribution across the pipeline.",
+            "Review deals stuck in a single stage for more than 14 days and take action.",
+        ]
+        recommendations.append(defaults[len(recommendations) % 3])
+
+    return {
+        "stages": stages,
+        "highest_value_stage": highest_value_stage,
+        "most_stalled_stage": most_stalled_stage,
+        "total_pipeline_value": round(total_pipeline_value),
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

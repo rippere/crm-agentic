@@ -328,6 +328,20 @@ export default function ReportsPage() {
   const [topPerformersOpen, setTopPerformersOpen] = useState(true);
   const [topPerformersTab, setTopPerformersTab] = useState<'value' | 'speed' | 'confidence'>('value');
 
+  type StageConcentrationRow = { stage: string; count: number; total_value: number; avg_health: number | null; pct_of_pipeline: number };
+  type StageConcentration = {
+    stages: StageConcentrationRow[]
+    highest_value_stage: string | null
+    most_stalled_stage: string | null
+    total_pipeline_value: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [stageConcentration, setStageConcentration] = useState<StageConcentration | null>(null);
+  const [stageConcentrationLoading, setStageConcentrationLoading] = useState(false);
+  const [stageConcentrationOpen, setStageConcentrationOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -388,6 +402,8 @@ export default function ReportsPage() {
       apiClient.getDealAgeRisk("demo-workspace-1", "demo-token").then(setDealAgeRisk).catch(() => {}).finally(() => setDealAgeRiskLoading(false));
       setTopPerformersLoading(true);
       apiClient.getTopPerformerDeals("demo-workspace-1", "demo-token").then(setTopPerformers).catch(() => {}).finally(() => setTopPerformersLoading(false));
+      setStageConcentrationLoading(true);
+      apiClient.getDealStageConcentration("demo-workspace-1", "demo-token").then(setStageConcentration).catch(() => {}).finally(() => setStageConcentrationLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -453,6 +469,8 @@ export default function ReportsPage() {
       apiClient.getDealAgeRisk(workspaceId, session.access_token).then(setDealAgeRisk).catch(() => {}).finally(() => setDealAgeRiskLoading(false));
       setTopPerformersLoading(true);
       apiClient.getTopPerformerDeals(workspaceId, session.access_token).then(setTopPerformers).catch(() => {}).finally(() => setTopPerformersLoading(false));
+      setStageConcentrationLoading(true);
+      apiClient.getDealStageConcentration(workspaceId, session.access_token).then(setStageConcentration).catch(() => {}).finally(() => setStageConcentrationLoading(false));
     });
   }, []);
 
@@ -819,6 +837,27 @@ export default function ReportsPage() {
         if (!session) { setTopPerformersLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTopPerformersLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateStageConcentration = () => {
+    setStageConcentrationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealStageConcentration(wid, tok)
+        .then(setStageConcentration)
+        .catch(() => {})
+        .finally(() => setStageConcentrationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setStageConcentrationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setStageConcentrationLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -3646,6 +3685,106 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No top performer data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Stage Concentration AI Card */}
+      <Card className="border-violet-500/20">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-violet-400" />
+            <span className="text-sm font-semibold text-zinc-100">Stage Concentration</span>
+            {stageConcentration && (
+              <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-xs font-mono text-violet-300">
+                ${stageConcentration.total_pipeline_value >= 1000
+                  ? `${(stageConcentration.total_pipeline_value / 1000).toFixed(0)}k`
+                  : stageConcentration.total_pipeline_value}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateStageConcentration}
+              disabled={stageConcentrationLoading}
+              className="flex items-center gap-1 rounded-md bg-zinc-700/50 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${stageConcentrationLoading ? "animate-spin" : ""}`} />
+              Regenerate
+            </button>
+            <button
+              onClick={() => setStageConcentrationOpen(o => !o)}
+              className="rounded-md p-1 text-zinc-400 hover:bg-zinc-700/50"
+            >
+              <ChevronDown className={`h-4 w-4 transition-transform ${stageConcentrationOpen ? "" : "-rotate-90"}`} />
+            </button>
+          </div>
+        </div>
+        {stageConcentrationOpen && (
+          stageConcentrationLoading ? (
+            <div className="mt-3 space-y-2">
+              {[1, 2, 3].map(i => <div key={i} className="h-4 rounded bg-zinc-800/50 animate-pulse" />)}
+            </div>
+          ) : stageConcentration ? (
+            <div className="mt-3 space-y-3">
+              {/* Stacked bar */}
+              <div className="flex h-5 w-full overflow-hidden rounded-full">
+                {stageConcentration.stages.map((s, i) => {
+                  const colors = ["bg-violet-500", "bg-indigo-500", "bg-sky-500", "bg-teal-500"];
+                  return (
+                    <div
+                      key={s.stage}
+                      className={`${colors[i % colors.length]} transition-all`}
+                      style={{ width: `${s.pct_of_pipeline}%` }}
+                      title={`${s.stage}: ${s.pct_of_pipeline.toFixed(1)}%`}
+                    />
+                  );
+                })}
+              </div>
+              {/* Legend / per-stage rows */}
+              <div className="space-y-1">
+                {stageConcentration.stages.map((s, i) => {
+                  const colors = ["text-violet-300 border-violet-500/20 bg-violet-500/10", "text-indigo-300 border-indigo-500/20 bg-indigo-500/10", "text-sky-300 border-sky-500/20 bg-sky-500/10", "text-teal-300 border-teal-500/20 bg-teal-500/10"];
+                  const dotColors = ["bg-violet-400", "bg-indigo-400", "bg-sky-400", "bg-teal-400"];
+                  const isHighValue = s.stage === stageConcentration.highest_value_stage;
+                  const isStalled = s.stage === stageConcentration.most_stalled_stage;
+                  return (
+                    <div key={s.stage} className="flex items-center gap-2 rounded-md bg-zinc-800/40 px-2 py-1.5">
+                      <span className={`h-2 w-2 flex-shrink-0 rounded-full ${dotColors[i % dotColors.length]}`} />
+                      <span className="text-xs text-zinc-300 w-24 capitalize">{s.stage}</span>
+                      <span className={`rounded-full border px-1.5 py-0.5 text-xs font-mono ${colors[i % colors.length]}`}>
+                        {s.pct_of_pipeline.toFixed(1)}%
+                      </span>
+                      <span className="text-xs text-zinc-500 flex-1">{s.count} deal{s.count !== 1 ? "s" : ""}</span>
+                      <span className="text-xs font-mono text-zinc-400">
+                        ${s.total_value >= 1000 ? `${(s.total_value / 1000).toFixed(0)}k` : s.total_value}
+                      </span>
+                      {s.avg_health != null && (
+                        <span className={`text-xs font-mono ${s.avg_health >= 70 ? "text-emerald-400" : s.avg_health >= 50 ? "text-amber-400" : "text-rose-400"}`}>
+                          h{Math.round(s.avg_health)}
+                        </span>
+                      )}
+                      {isHighValue && <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1 py-0.5 text-xs text-emerald-400">top $</span>}
+                      {isStalled && <span className="rounded-full border border-rose-500/20 bg-rose-500/10 px-1 py-0.5 text-xs text-rose-400">stalled</span>}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{stageConcentration.insight}</p>
+              <ul className="space-y-1">
+                {stageConcentration.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(stageConcentration.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No stage concentration data available.</p>
           )
         )}
       </Card>
