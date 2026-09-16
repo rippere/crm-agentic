@@ -9723,6 +9723,7 @@ async def get_close_rate_by_stage(
     )
     events_rows = events_result.all()
 
+    import re as _re
     _close_re = _re.compile(r"moved[^:]*:\s*([a-z_]+)\s*→\s*(closed_won|closed_lost)")
     _title_re2 = _re.compile(r"Deal '([^']+)'")
     stage_wins: dict[str, int] = defaultdict(int)
