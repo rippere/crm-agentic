@@ -13,8 +13,9 @@ import {
   Tooltip, ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine,
   AreaChart, Area,
 } from "recharts";
+import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -265,6 +266,95 @@ export default function ReportsPage() {
   const [revenueTrendLoading, setRevenueTrendLoading] = useState(false);
   const [revenueTrendOpen, setRevenueTrendOpen] = useState(true);
 
+  type InactivityBucketContact = { id: string; name: string; email: string; company: string; days_since_touch: number };
+  type InactivityBucket = { bucket: 'critical' | 'high_risk' | 'watch'; contacts: InactivityBucketContact[] };
+  type InactivityRisk = {
+    critical_count: number; high_risk_count: number; watch_count: number; total_contacts: number;
+    contacts_by_bucket: InactivityBucket[]; insight: string; recommendations: string[]; generated_at: string;
+  };
+  const [inactivityRisk, setInactivityRisk] = useState<InactivityRisk | null>(null);
+  const [inactivityRiskLoading, setInactivityRiskLoading] = useState(false);
+  const [inactivityRiskOpen, setInactivityRiskOpen] = useState(true);
+  const [inactivityExpandedBuckets, setInactivityExpandedBuckets] = useState<Set<string>>(new Set());
+
+  type PipelineMomentum = {
+    momentum_score: number
+    momentum_rating: 'accelerating' | 'steady' | 'stalling' | 'declining'
+    new_deals_14d: number
+    stage_moves_14d: number
+    at_risk_count: number
+    highlights: string[]
+    warnings: string[]
+    generated_at: string
+  };
+  const [pipelineMomentum, setPipelineMomentum] = useState<PipelineMomentum | null>(null);
+  const [pipelineMomentumLoading, setPipelineMomentumLoading] = useState(false);
+  const [pipelineMomentumOpen, setPipelineMomentumOpen] = useState(true);
+
+  type DealAgeRiskDeal = {
+    id: string
+    title: string | null
+    stage: string
+    days_open: number
+    expected_days: number
+    risk_level: 'overdue' | 'at_risk' | 'on_track'
+  };
+  type DealAgeRisk = {
+    overdue_count: number
+    at_risk_count: number
+    on_track_count: number
+    total_open_deals: number
+    deals: DealAgeRiskDeal[]
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [dealAgeRisk, setDealAgeRisk] = useState<DealAgeRisk | null>(null);
+  const [dealAgeRiskLoading, setDealAgeRiskLoading] = useState(false);
+  const [dealAgeRiskOpen, setDealAgeRiskOpen] = useState(true);
+
+  type TopPerformerDeal = { id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null };
+  type TopPerformerDeals = {
+    top_by_value: TopPerformerDeal[]
+    top_by_speed: TopPerformerDeal[]
+    top_by_confidence: TopPerformerDeal[]
+    avg_win_rate: number | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [topPerformers, setTopPerformers] = useState<TopPerformerDeals | null>(null);
+  const [topPerformersLoading, setTopPerformersLoading] = useState(false);
+  const [topPerformersOpen, setTopPerformersOpen] = useState(true);
+  const [topPerformersTab, setTopPerformersTab] = useState<'value' | 'speed' | 'confidence'>('value');
+
+  type StageConcentrationRow = { stage: string; count: number; total_value: number; avg_health: number | null; pct_of_pipeline: number };
+  type StageConcentration = {
+    stages: StageConcentrationRow[]
+    highest_value_stage: string | null
+    most_stalled_stage: string | null
+    total_pipeline_value: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  };
+  const [stageConcentration, setStageConcentration] = useState<StageConcentration | null>(null);
+  const [stageConcentrationLoading, setStageConcentrationLoading] = useState(false);
+  const [stageConcentrationOpen, setStageConcentrationOpen] = useState(true);
+
+  type CloseRateStage = { stage: string; win_count: number; loss_count: number; total: number; win_rate: number };
+  type CloseRateByStage = {
+    stage_rates: CloseRateStage[];
+    best_converting_stage: string | null;
+    worst_converting_stage: string | null;
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [closeRateByStage, setCloseRateByStage] = useState<CloseRateByStage | null>(null);
+  const [closeRateByStageLoading, setCloseRateByStageLoading] = useState(false);
+  const [closeRateByStageOpen, setCloseRateByStageOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -317,6 +407,18 @@ export default function ReportsPage() {
       apiClient.getStageTransitionAnalysis("demo-workspace-1", "demo-token").then(setStageTransitionAnalysis).catch(() => {}).finally(() => setStageTransitionLoading(false));
       setRevenueTrendLoading(true);
       apiClient.getRevenueTrendAnalysis("demo-workspace-1", "demo-token").then(setRevenueTrend).catch(() => {}).finally(() => setRevenueTrendLoading(false));
+      setInactivityRiskLoading(true);
+      apiClient.getContactInactivityRisk("demo-workspace-1", "demo-token").then(setInactivityRisk).catch(() => {}).finally(() => setInactivityRiskLoading(false));
+      setPipelineMomentumLoading(true);
+      apiClient.getDealsPipelineMomentum("demo-workspace-1", "demo-token").then(setPipelineMomentum).catch(() => {}).finally(() => setPipelineMomentumLoading(false));
+      setDealAgeRiskLoading(true);
+      apiClient.getDealAgeRisk("demo-workspace-1", "demo-token").then(setDealAgeRisk).catch(() => {}).finally(() => setDealAgeRiskLoading(false));
+      setTopPerformersLoading(true);
+      apiClient.getTopPerformerDeals("demo-workspace-1", "demo-token").then(setTopPerformers).catch(() => {}).finally(() => setTopPerformersLoading(false));
+      setStageConcentrationLoading(true);
+      apiClient.getDealStageConcentration("demo-workspace-1", "demo-token").then(setStageConcentration).catch(() => {}).finally(() => setStageConcentrationLoading(false));
+      setCloseRateByStageLoading(true);
+      apiClient.getDealCloseRateByStage("demo-workspace-1", "demo-token").then(setCloseRateByStage).catch(() => {}).finally(() => setCloseRateByStageLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -374,6 +476,18 @@ export default function ReportsPage() {
       apiClient.getStageTransitionAnalysis(workspaceId, session.access_token).then(setStageTransitionAnalysis).catch(() => {}).finally(() => setStageTransitionLoading(false));
       setRevenueTrendLoading(true);
       apiClient.getRevenueTrendAnalysis(workspaceId, session.access_token).then(setRevenueTrend).catch(() => {}).finally(() => setRevenueTrendLoading(false));
+      setInactivityRiskLoading(true);
+      apiClient.getContactInactivityRisk(workspaceId, session.access_token).then(setInactivityRisk).catch(() => {}).finally(() => setInactivityRiskLoading(false));
+      setPipelineMomentumLoading(true);
+      apiClient.getDealsPipelineMomentum(workspaceId, session.access_token).then(setPipelineMomentum).catch(() => {}).finally(() => setPipelineMomentumLoading(false));
+      setDealAgeRiskLoading(true);
+      apiClient.getDealAgeRisk(workspaceId, session.access_token).then(setDealAgeRisk).catch(() => {}).finally(() => setDealAgeRiskLoading(false));
+      setTopPerformersLoading(true);
+      apiClient.getTopPerformerDeals(workspaceId, session.access_token).then(setTopPerformers).catch(() => {}).finally(() => setTopPerformersLoading(false));
+      setStageConcentrationLoading(true);
+      apiClient.getDealStageConcentration(workspaceId, session.access_token).then(setStageConcentration).catch(() => {}).finally(() => setStageConcentrationLoading(false));
+      setCloseRateByStageLoading(true);
+      apiClient.getDealCloseRateByStage(workspaceId, session.access_token).then(setCloseRateByStage).catch(() => {}).finally(() => setCloseRateByStageLoading(false));
     });
   }, []);
 
@@ -659,6 +773,139 @@ export default function ReportsPage() {
         doFetch(wid, session.access_token);
       });
     }
+  };
+
+  const regenerateInactivityRisk = () => {
+    setInactivityRiskLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getContactInactivityRisk(wid, tok)
+        .then(setInactivityRisk)
+        .catch(() => {})
+        .finally(() => setInactivityRiskLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setInactivityRiskLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setInactivityRiskLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regeneratePipelineMomentum = () => {
+    setPipelineMomentumLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealsPipelineMomentum(wid, tok)
+        .then(setPipelineMomentum)
+        .catch(() => {})
+        .finally(() => setPipelineMomentumLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPipelineMomentumLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPipelineMomentumLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealAgeRisk = () => {
+    setDealAgeRiskLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealAgeRisk(wid, tok)
+        .then(setDealAgeRisk)
+        .catch(() => {})
+        .finally(() => setDealAgeRiskLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealAgeRiskLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealAgeRiskLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateTopPerformers = () => {
+    setTopPerformersLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getTopPerformerDeals(wid, tok)
+        .then(setTopPerformers)
+        .catch(() => {})
+        .finally(() => setTopPerformersLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setTopPerformersLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setTopPerformersLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateStageConcentration = () => {
+    setStageConcentrationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealStageConcentration(wid, tok)
+        .then(setStageConcentration)
+        .catch(() => {})
+        .finally(() => setStageConcentrationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setStageConcentrationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setStageConcentrationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateCloseRateByStage = () => {
+    setCloseRateByStageLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealCloseRateByStage(wid, tok)
+        .then(setCloseRateByStage)
+        .catch(() => {})
+        .finally(() => setCloseRateByStageLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCloseRateByStageLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCloseRateByStageLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const MOMENTUM_RATING_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+    accelerating: { label: "Accelerating", color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
+    steady:       { label: "Steady",       color: "text-indigo-400",  bg: "bg-indigo-500/10 border-indigo-500/20"  },
+    stalling:     { label: "Stalling",     color: "text-amber-400",   bg: "bg-amber-500/10 border-amber-500/20"   },
+    declining:    { label: "Declining",    color: "text-rose-400",    bg: "bg-rose-500/10 border-rose-500/20"     },
   };
 
   const RATING_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -3071,6 +3318,589 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No revenue trend data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Phase 16n: Contact Inactivity Risk */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between p-4">
+          <div className="flex items-center gap-2">
+            <UserX className="h-4 w-4 text-rose-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Contact Inactivity Risk</h3>
+            {inactivityRisk && (inactivityRisk.critical_count + inactivityRisk.high_risk_count + inactivityRisk.watch_count) > 0 && (
+              <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-xs font-medium text-rose-400 border border-rose-500/20">
+                {inactivityRisk.critical_count + inactivityRisk.high_risk_count + inactivityRisk.watch_count} at risk
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateInactivityRisk}
+              disabled={inactivityRiskLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", inactivityRiskLoading && "animate-spin")} />
+              {inactivityRiskLoading ? "Loading…" : "Regenerate"}
+            </button>
+            <button onClick={() => setInactivityRiskOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {inactivityRiskOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {inactivityRiskOpen && (
+          inactivityRiskLoading && !inactivityRisk ? (
+            <div className="h-24 animate-pulse rounded-b-xl bg-zinc-800/50" />
+          ) : inactivityRisk ? (
+            <div className={cn("space-y-4 p-4 pt-0", inactivityRiskLoading && "opacity-40")}>
+              {/* Bucket summary row */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3 text-center">
+                  <p className="text-xl font-bold text-rose-400">{inactivityRisk.critical_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Critical</p>
+                  <p className="text-xs text-zinc-600">&gt;60 days</p>
+                </div>
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-center">
+                  <p className="text-xl font-bold text-amber-400">{inactivityRisk.high_risk_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">High Risk</p>
+                  <p className="text-xs text-zinc-600">30–60 days</p>
+                </div>
+                <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 p-3 text-center">
+                  <p className="text-xl font-bold text-yellow-400">{inactivityRisk.watch_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Watch</p>
+                  <p className="text-xs text-zinc-600">14–30 days</p>
+                </div>
+              </div>
+
+              {/* Per-bucket expandable lists */}
+              {inactivityRisk.contacts_by_bucket.map((bucketData) => {
+                const isExpanded = inactivityExpandedBuckets.has(bucketData.bucket);
+                const BUCKET_LABEL: Record<string, string> = { critical: "Critical (>60 days)", high_risk: "High Risk (30–60 days)", watch: "Watch (14–30 days)" };
+                const BUCKET_COLOR: Record<string, string> = { critical: "text-rose-400", high_risk: "text-amber-400", watch: "text-yellow-400" };
+                return (
+                  <div key={bucketData.bucket}>
+                    <button
+                      onClick={() => setInactivityExpandedBuckets((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(bucketData.bucket)) next.delete(bucketData.bucket); else next.add(bucketData.bucket);
+                        return next;
+                      })}
+                      className="flex w-full items-center justify-between text-xs text-zinc-400 hover:text-zinc-200 py-1"
+                    >
+                      <span className={cn("font-medium", BUCKET_COLOR[bucketData.bucket])}>
+                        {BUCKET_LABEL[bucketData.bucket]} ({bucketData.contacts.length})
+                      </span>
+                      {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    </button>
+                    {isExpanded && (
+                      <div className="mt-1 space-y-1 rounded-lg border border-zinc-800 bg-zinc-900/50 p-2">
+                        {bucketData.contacts.map((c) => (
+                          <div key={c.id} className="flex items-center justify-between gap-2 rounded px-2 py-1.5 hover:bg-zinc-800/50 transition-colors">
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-medium text-zinc-200">{c.name || c.email}</p>
+                              <p className="truncate text-xs text-zinc-500">{c.company || c.email}</p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <span className="text-xs text-zinc-500">{c.days_since_touch > 900 ? "Never touched" : `${c.days_since_touch}d ago`}</span>
+                              <Link href={`/contacts/${c.id}`} className="text-zinc-500 hover:text-indigo-400 transition-colors">
+                                <ExternalLink className="h-3 w-3" />
+                              </Link>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {inactivityRisk.contacts_by_bucket.length === 0 && (
+                <p className="text-xs text-emerald-400">All contacts have been recently engaged.</p>
+              )}
+
+              <p className="text-xs text-zinc-400 italic">{inactivityRisk.insight}</p>
+              <ul className="space-y-1">
+                {inactivityRisk.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(inactivityRisk.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No inactivity risk data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Phase 16o: Pipeline Momentum Snapshot */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between p-4">
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-violet-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Pipeline Momentum</h3>
+            {pipelineMomentum && (() => {
+              const cfg = MOMENTUM_RATING_CONFIG[pipelineMomentum.momentum_rating];
+              return (
+                <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", cfg.bg, cfg.color)}>
+                  {cfg.label}
+                </span>
+              );
+            })()}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePipelineMomentum}
+              disabled={pipelineMomentumLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", pipelineMomentumLoading && "animate-spin")} />
+              {pipelineMomentumLoading ? "Loading…" : "Regenerate"}
+            </button>
+            <button onClick={() => setPipelineMomentumOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {pipelineMomentumOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {pipelineMomentumOpen && (
+          pipelineMomentumLoading && !pipelineMomentum ? (
+            <div className="h-24 animate-pulse rounded-b-xl bg-zinc-800/50" />
+          ) : pipelineMomentum ? (
+            <div className={cn("space-y-4 p-4 pt-0", pipelineMomentumLoading && "opacity-40")}>
+              {/* Score + 3-metric row */}
+              <div className="grid grid-cols-4 gap-3">
+                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 p-3 text-center col-span-1">
+                  <p className="text-2xl font-bold text-violet-400">{pipelineMomentum.momentum_score}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Score</p>
+                </div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+                  <p className="text-xl font-bold text-zinc-200">{pipelineMomentum.new_deals_14d}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">New Deals</p>
+                  <p className="text-xs text-zinc-600">last 14d</p>
+                </div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-center">
+                  <p className="text-xl font-bold text-zinc-200">{pipelineMomentum.stage_moves_14d}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Stage Moves</p>
+                  <p className="text-xs text-zinc-600">last 14d</p>
+                </div>
+                <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3 text-center">
+                  <p className="text-xl font-bold text-rose-400">{pipelineMomentum.at_risk_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">At Risk</p>
+                  <p className="text-xs text-zinc-600">health &lt;50</p>
+                </div>
+              </div>
+
+              {/* Highlights */}
+              {pipelineMomentum.highlights.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-400 mb-1">Highlights</p>
+                  <ul className="space-y-1">
+                    {pipelineMomentum.highlights.map((h, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-400" />
+                        {h}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Warnings */}
+              {pipelineMomentum.warnings.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-400 mb-1">Watch</p>
+                  <ul className="space-y-1">
+                    {pipelineMomentum.warnings.map((w, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-400" />
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(pipelineMomentum.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No pipeline momentum data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Age Risk */}
+      <Card className="border-amber-500/15">
+        <div className="flex items-center justify-between p-4">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-amber-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Age Risk</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealAgeRisk}
+              disabled={dealAgeRiskLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealAgeRiskLoading && "animate-spin")} />
+              {dealAgeRiskLoading ? "Loading…" : "Regenerate"}
+            </button>
+            <button onClick={() => setDealAgeRiskOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {dealAgeRiskOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealAgeRiskOpen && (
+          dealAgeRiskLoading && !dealAgeRisk ? (
+            <div className="h-24 animate-pulse rounded-b-xl bg-zinc-800/50" />
+          ) : dealAgeRisk ? (
+            <div className={cn("space-y-4 p-4 pt-0", dealAgeRiskLoading && "opacity-40")}>
+              {/* 3-bucket count row */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3 text-center">
+                  <p className="text-2xl font-bold text-rose-400">{dealAgeRisk.overdue_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Overdue</p>
+                </div>
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-center">
+                  <p className="text-2xl font-bold text-amber-400">{dealAgeRisk.at_risk_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">At Risk</p>
+                </div>
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-center">
+                  <p className="text-2xl font-bold text-emerald-400">{dealAgeRisk.on_track_count}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">On Track</p>
+                </div>
+              </div>
+
+              {/* Deal list */}
+              {dealAgeRisk.deals.length > 0 && (
+                <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                  {dealAgeRisk.deals.map((deal) => {
+                    const chipColor = deal.risk_level === 'overdue'
+                      ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                      : deal.risk_level === 'at_risk'
+                      ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                      : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+                    return (
+                      <div key={deal.id} className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium text-zinc-200">{deal.title ?? '(Untitled)'}</p>
+                          <p className="text-xs text-zinc-500 capitalize">{deal.stage.replace(/_/g, ' ')}</p>
+                        </div>
+                        <span className={cn("ml-3 flex-shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium", chipColor)}>
+                          {deal.days_open}d / {deal.expected_days}d
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Insight */}
+              {dealAgeRisk.insight && (
+                <p className="text-xs italic text-zinc-400">{dealAgeRisk.insight}</p>
+              )}
+
+              {/* Recommendations */}
+              {dealAgeRisk.recommendations.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-400 mb-1">Recommendations</p>
+                  <ul className="space-y-1">
+                    {dealAgeRisk.recommendations.map((rec, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                        <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                        {rec}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(dealAgeRisk.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No deal age risk data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Phase 16q: Top Performer Deals */}
+      <Card className="border-zinc-800 p-0 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+          <Trophy className="h-4 w-4 text-emerald-400" />
+          <span className="text-sm font-semibold text-zinc-200">Top Performer Deals</span>
+          {topPerformers?.avg_win_rate != null && (
+            <span className="rounded-full border px-2 py-0.5 text-xs text-emerald-400 bg-emerald-500/10 border-emerald-500/20">
+              {topPerformers.avg_win_rate}% avg confidence
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={regenerateTopPerformers}
+              disabled={topPerformersLoading}
+              className="flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", topPerformersLoading && "animate-spin")} />
+              {topPerformersLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setTopPerformersOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {topPerformersOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {topPerformersOpen && (
+          topPerformersLoading && !topPerformers ? (
+            <p className="p-4 text-xs text-zinc-500 animate-pulse">Ranking top performer deals…</p>
+          ) : topPerformers ? (
+            <div className={cn("space-y-4 p-4", topPerformersLoading && "opacity-40")}>
+              {/* 3-tab switcher */}
+              <div className="flex gap-1 rounded-lg bg-zinc-800/60 p-1">
+                {(['value', 'speed', 'confidence'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setTopPerformersTab(tab)}
+                    className={cn(
+                      "flex-1 rounded-md px-2 py-1 text-xs capitalize transition-colors",
+                      topPerformersTab === tab
+                        ? "bg-zinc-700 text-zinc-100"
+                        : "text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    {tab === 'value' ? 'By Value' : tab === 'speed' ? 'By Speed' : 'By Confidence'}
+                  </button>
+                ))}
+              </div>
+              {/* Deal list for active tab */}
+              {(() => {
+                const deals =
+                  topPerformersTab === 'value' ? topPerformers.top_by_value
+                  : topPerformersTab === 'speed' ? topPerformers.top_by_speed
+                  : topPerformers.top_by_confidence;
+                if (!deals.length) return <p className="text-xs text-zinc-500">No deals to show.</p>;
+                return (
+                  <div className="space-y-1.5">
+                    {deals.map((deal, idx) => (
+                      <div key={deal.id} className="flex items-center gap-2 rounded-md bg-zinc-800/50 px-2 py-1.5">
+                        <span className="text-xs font-mono text-zinc-600 w-4">{idx + 1}</span>
+                        <span className="text-xs text-zinc-300 flex-1 truncate">{deal.title ?? "Untitled"}</span>
+                        <span className="text-xs text-zinc-500 truncate max-w-[80px]">{deal.company}</span>
+                        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-xs font-mono text-emerald-300">
+                          ${deal.value >= 1000 ? `${Math.round(deal.value / 1000)}k` : deal.value}
+                        </span>
+                        {topPerformersTab === 'speed' && deal.cycle_days != null && (
+                          <span className="rounded-full border border-indigo-500/20 bg-indigo-500/10 px-1.5 py-0.5 text-xs font-mono text-indigo-300">
+                            {deal.cycle_days}d
+                          </span>
+                        )}
+                        {topPerformersTab === 'confidence' && (
+                          <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-xs font-mono text-violet-300">
+                            {deal.win_probability}%
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+              <p className="text-xs text-zinc-400 italic">{topPerformers.insight}</p>
+              <ul className="space-y-1">
+                {topPerformers.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(topPerformers.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No top performer data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Stage Concentration AI Card */}
+      <Card className="border-violet-500/20">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-violet-400" />
+            <span className="text-sm font-semibold text-zinc-100">Stage Concentration</span>
+            {stageConcentration && (
+              <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-xs font-mono text-violet-300">
+                ${stageConcentration.total_pipeline_value >= 1000
+                  ? `${(stageConcentration.total_pipeline_value / 1000).toFixed(0)}k`
+                  : stageConcentration.total_pipeline_value}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateStageConcentration}
+              disabled={stageConcentrationLoading}
+              className="flex items-center gap-1 rounded-md bg-zinc-700/50 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${stageConcentrationLoading ? "animate-spin" : ""}`} />
+              Regenerate
+            </button>
+            <button
+              onClick={() => setStageConcentrationOpen(o => !o)}
+              className="rounded-md p-1 text-zinc-400 hover:bg-zinc-700/50"
+            >
+              <ChevronDown className={`h-4 w-4 transition-transform ${stageConcentrationOpen ? "" : "-rotate-90"}`} />
+            </button>
+          </div>
+        </div>
+        {stageConcentrationOpen && (
+          stageConcentrationLoading ? (
+            <div className="mt-3 space-y-2">
+              {[1, 2, 3].map(i => <div key={i} className="h-4 rounded bg-zinc-800/50 animate-pulse" />)}
+            </div>
+          ) : stageConcentration ? (
+            <div className="mt-3 space-y-3">
+              {/* Stacked bar */}
+              <div className="flex h-5 w-full overflow-hidden rounded-full">
+                {stageConcentration.stages.map((s, i) => {
+                  const colors = ["bg-violet-500", "bg-indigo-500", "bg-sky-500", "bg-teal-500"];
+                  return (
+                    <div
+                      key={s.stage}
+                      className={`${colors[i % colors.length]} transition-all`}
+                      style={{ width: `${s.pct_of_pipeline}%` }}
+                      title={`${s.stage}: ${s.pct_of_pipeline.toFixed(1)}%`}
+                    />
+                  );
+                })}
+              </div>
+              {/* Legend / per-stage rows */}
+              <div className="space-y-1">
+                {stageConcentration.stages.map((s, i) => {
+                  const colors = ["text-violet-300 border-violet-500/20 bg-violet-500/10", "text-indigo-300 border-indigo-500/20 bg-indigo-500/10", "text-sky-300 border-sky-500/20 bg-sky-500/10", "text-teal-300 border-teal-500/20 bg-teal-500/10"];
+                  const dotColors = ["bg-violet-400", "bg-indigo-400", "bg-sky-400", "bg-teal-400"];
+                  const isHighValue = s.stage === stageConcentration.highest_value_stage;
+                  const isStalled = s.stage === stageConcentration.most_stalled_stage;
+                  return (
+                    <div key={s.stage} className="flex items-center gap-2 rounded-md bg-zinc-800/40 px-2 py-1.5">
+                      <span className={`h-2 w-2 flex-shrink-0 rounded-full ${dotColors[i % dotColors.length]}`} />
+                      <span className="text-xs text-zinc-300 w-24 capitalize">{s.stage}</span>
+                      <span className={`rounded-full border px-1.5 py-0.5 text-xs font-mono ${colors[i % colors.length]}`}>
+                        {s.pct_of_pipeline.toFixed(1)}%
+                      </span>
+                      <span className="text-xs text-zinc-500 flex-1">{s.count} deal{s.count !== 1 ? "s" : ""}</span>
+                      <span className="text-xs font-mono text-zinc-400">
+                        ${s.total_value >= 1000 ? `${(s.total_value / 1000).toFixed(0)}k` : s.total_value}
+                      </span>
+                      {s.avg_health != null && (
+                        <span className={`text-xs font-mono ${s.avg_health >= 70 ? "text-emerald-400" : s.avg_health >= 50 ? "text-amber-400" : "text-rose-400"}`}>
+                          h{Math.round(s.avg_health)}
+                        </span>
+                      )}
+                      {isHighValue && <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1 py-0.5 text-xs text-emerald-400">top $</span>}
+                      {isStalled && <span className="rounded-full border border-rose-500/20 bg-rose-500/10 px-1 py-0.5 text-xs text-rose-400">stalled</span>}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{stageConcentration.insight}</p>
+              <ul className="space-y-1">
+                {stageConcentration.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(stageConcentration.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No stage concentration data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Close Rate by Stage */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center gap-2 p-4 border-b border-zinc-800/60">
+          <BarChart2 className="h-4 w-4 text-indigo-400 flex-shrink-0" />
+          <h2 className="text-sm font-semibold text-zinc-200">Close Rate by Stage</h2>
+          {closeRateByStage?.best_converting_stage && (
+            <span className="rounded-full border px-2 py-0.5 text-xs text-emerald-400 bg-emerald-500/10 border-emerald-500/20">
+              Best: {closeRateByStage.best_converting_stage}
+            </span>
+          )}
+          {closeRateByStage?.worst_converting_stage && (
+            <span className="rounded-full border px-2 py-0.5 text-xs text-rose-400 bg-rose-500/10 border-rose-500/20">
+              Worst: {closeRateByStage.worst_converting_stage}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={regenerateCloseRateByStage}
+              disabled={closeRateByStageLoading}
+              className="flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", closeRateByStageLoading && "animate-spin")} />
+              {closeRateByStageLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setCloseRateByStageOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {closeRateByStageOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {closeRateByStageOpen && (
+          closeRateByStageLoading && !closeRateByStage ? (
+            <p className="p-4 text-xs text-zinc-500 animate-pulse">Analysing close rates by stage…</p>
+          ) : closeRateByStage ? (
+            <div className={cn("space-y-4 p-4", closeRateByStageLoading && "opacity-40")}>
+              {closeRateByStage.stage_rates.length > 0 ? (
+                <div className="space-y-2">
+                  {closeRateByStage.stage_rates.map((s) => {
+                    const isBest = s.stage === closeRateByStage.best_converting_stage;
+                    const isWorst = s.stage === closeRateByStage.worst_converting_stage;
+                    return (
+                      <div key={s.stage} className="flex items-center gap-3">
+                        <span className="w-24 flex-shrink-0 text-xs capitalize text-zinc-400">{s.stage}</span>
+                        <div className="flex-1 h-4 rounded-full bg-zinc-800 overflow-hidden relative">
+                          <div
+                            className={cn("h-full rounded-full transition-all", isBest ? "bg-emerald-500" : isWorst ? "bg-rose-500" : "bg-indigo-500")}
+                            style={{ width: `${s.win_rate}%` }}
+                          />
+                        </div>
+                        <span className={cn("w-12 flex-shrink-0 text-right text-xs font-mono", isBest ? "text-emerald-400" : isWorst ? "text-rose-400" : "text-zinc-300")}>
+                          {s.win_rate}%
+                        </span>
+                        <span className="text-xs text-zinc-500 flex-shrink-0">{s.win_count}W/{s.loss_count}L</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500">No closed deals to analyse yet.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{closeRateByStage.insight}</p>
+              <ul className="space-y-1">
+                {closeRateByStage.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(closeRateByStage.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No close rate data available.</p>
           )
         )}
       </Card>
