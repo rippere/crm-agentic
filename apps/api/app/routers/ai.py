@@ -9645,3 +9645,230 @@ async def get_deal_stage_concentration(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ── Deal Close Rate by Stage ──────────────────────────────────────────────────
+
+_CLOSE_RATE_SYSTEM = """\
+You are a sales analytics expert reviewing deal close rates per pipeline stage.
+Given win/loss data grouped by the stage deals were in when they closed, write
+a 1-sentence insight and exactly 3 specific, actionable recommendations.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "insight": "1-sentence summary referencing the best and worst converting stages",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+
+Rules:
+- insight: reference specific win rates and stage names, keep it data-driven
+- recommendations: specific steps (e.g. improve proposal quality, address objections
+  in negotiation, add qualification criteria at discovery)
+- Be concise\
+"""
+
+_STAGE_ORDER = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/close-rate-by-stage")
+@limiter.limit("5/minute")
+async def get_close_rate_by_stage(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+
+    # Query closed_won and closed_lost deals with their stage at close time
+    # We infer closing stage from current stage for simplicity
+    closed_result = await db.execute(
+        select(Deal.stage, func.count(Deal.id))
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(["closed_won", "closed_lost"]))
+        .group_by(Deal.stage)
+    )
+    closed_counts: dict[str, int] = {}
+    for stage, count in closed_result.all():
+        closed_counts[stage] = count
+
+    won_count = closed_counts.get("closed_won", 0)
+    lost_count = closed_counts.get("closed_lost", 0)
+    total_closed = won_count + lost_count
+
+    if total_closed == 0:
+        return {
+            "stage_rates": [],
+            "best_converting_stage": None,
+            "worst_converting_stage": None,
+            "insight": "No closed deals yet — close your first deals to start tracking close rate by stage.",
+            "recommendations": [
+                "Focus on advancing deals to close by setting clear next-action dates.",
+                "Review deals in the proposal stage and schedule calls to push them forward.",
+                "Use the Win/Loss Analysis on closed deals to identify patterns.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Query last stage before close from activity_events (deal_moved events)
+    # Group by deal_id and get the last from_stage for closed deals
+    closed_deal_ids_result = await db.execute(
+        select(Deal.id, Deal.stage)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(["closed_won", "closed_lost"]))
+    )
+    closed_deals = closed_deal_ids_result.all()  # [(id, stage)]
+
+    if not closed_deals:
+        return {
+            "stage_rates": [],
+            "best_converting_stage": None,
+            "worst_converting_stage": None,
+            "insight": "No closed deals found for this workspace.",
+            "recommendations": [
+                "Close your first deals to start tracking close rate by stage.",
+                "Review pipeline health to identify deals ready to close.",
+                "Use the Pipeline AI feature to surface at-risk deals.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Get the last deal_moved event for each closed deal to find last_stage_before_close
+    closed_deal_ids = [d[0] for d in closed_deals]
+    closed_deal_outcome = {d[0]: d[1] for d in closed_deals}  # id → closed_won/closed_lost
+
+    events_result = await db.execute(
+        select(
+            ActivityEvent.metadata_json,
+        )
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.event_type == "deal_moved")
+        .where(ActivityEvent.entity_id.in_([str(did) for did in closed_deal_ids]))
+        .order_by(ActivityEvent.created_at.desc())
+    )
+    events_rows = events_result.all()
+
+    # For each closed deal, find the last "to_stage" before it became closed_won/lost
+    # ActivityEvent metadata_json typically: {"from": "proposal", "to": "closed_won", "deal_id": "..."}
+    last_active_stage: dict = {}  # deal_id → last active (non-closed) stage
+    for row in events_rows:
+        meta = row[0] or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                continue
+        from_stage = meta.get("from", "")
+        deal_id_str = meta.get("deal_id", "")
+        if from_stage and from_stage not in ("closed_won", "closed_lost") and deal_id_str:
+            # Only record the most recent (first encountered due to desc order)
+            try:
+                did = uuid.UUID(deal_id_str)
+            except ValueError:
+                continue
+            if did in closed_deal_outcome and did not in last_active_stage:
+                last_active_stage[did] = from_stage
+
+    # Bucket wins/losses by last active stage
+    stage_wins: dict[str, int] = defaultdict(int)
+    stage_losses: dict[str, int] = defaultdict(int)
+    unattributed_won = 0
+    unattributed_lost = 0
+
+    for did, outcome in closed_deal_outcome.items():
+        stage = last_active_stage.get(did)
+        if stage and stage in _STAGE_ORDER:
+            if outcome == "closed_won":
+                stage_wins[stage] += 1
+            else:
+                stage_losses[stage] += 1
+        else:
+            if outcome == "closed_won":
+                unattributed_won += 1
+            else:
+                unattributed_lost += 1
+
+    # If we have very few events, distribute unattributed proportionally to "proposal"
+    # as a fallback to show useful data
+    if not stage_wins and not stage_losses:
+        stage_wins["proposal"] = won_count
+        stage_losses["proposal"] = lost_count
+
+    stage_rates = []
+    for stage in _STAGE_ORDER:
+        w = stage_wins.get(stage, 0)
+        l = stage_losses.get(stage, 0)
+        total = w + l
+        if total == 0:
+            continue
+        win_rate = round(w / total * 100, 1)
+        stage_rates.append({"stage": stage, "win_count": w, "loss_count": l, "total": total, "win_rate": win_rate})
+
+    if not stage_rates:
+        # All unattributed — show aggregate
+        total = won_count + lost_count
+        win_rate = round(won_count / total * 100, 1) if total else 0
+        stage_rates = [{"stage": "proposal", "win_count": won_count, "loss_count": lost_count, "total": total, "win_rate": win_rate}]
+
+    best = max(stage_rates, key=lambda s: s["win_rate"])
+    worst = min(stage_rates, key=lambda s: s["win_rate"])
+    best_converting_stage = best["stage"] if best["win_rate"] > 0 else None
+    worst_converting_stage = worst["stage"] if len(stage_rates) > 1 else None
+
+    rates_context = "\n".join(
+        f"- {s['stage']}: {s['win_count']} won / {s['loss_count']} lost = {s['win_rate']}% win rate"
+        for s in stage_rates
+    )
+    context = (
+        f"Deal close rate by stage:\n{rates_context}\n"
+        f"Best converting stage: {best_converting_stage} ({best['win_rate']}%)\n"
+        f"Worst converting stage: {worst_converting_stage}\n"
+    )
+
+    default_insight = (
+        f"The {best_converting_stage or 'proposal'} stage converts best "
+        f"({best['win_rate']}% win rate), while "
+        f"{worst_converting_stage or 'discovery'} has the most room to improve."
+    )
+    default_recs = [
+        f"Study what works in {best_converting_stage or 'proposal'} stage and replicate across other stages.",
+        f"Add structured qualification criteria at {worst_converting_stage or 'discovery'} stage to improve downstream close rates.",
+        "Track objection patterns per stage using Win/Loss reason tagging.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_CLOSE_RATE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_rates": stage_rates,
+        "best_converting_stage": best_converting_stage,
+        "worst_converting_stage": worst_converting_stage,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

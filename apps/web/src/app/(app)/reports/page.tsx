@@ -342,6 +342,19 @@ export default function ReportsPage() {
   const [stageConcentrationLoading, setStageConcentrationLoading] = useState(false);
   const [stageConcentrationOpen, setStageConcentrationOpen] = useState(true);
 
+  type CloseRateStage = { stage: string; win_count: number; loss_count: number; total: number; win_rate: number };
+  type CloseRateByStage = {
+    stage_rates: CloseRateStage[];
+    best_converting_stage: string | null;
+    worst_converting_stage: string | null;
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [closeRateByStage, setCloseRateByStage] = useState<CloseRateByStage | null>(null);
+  const [closeRateByStageLoading, setCloseRateByStageLoading] = useState(false);
+  const [closeRateByStageOpen, setCloseRateByStageOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -404,6 +417,8 @@ export default function ReportsPage() {
       apiClient.getTopPerformerDeals("demo-workspace-1", "demo-token").then(setTopPerformers).catch(() => {}).finally(() => setTopPerformersLoading(false));
       setStageConcentrationLoading(true);
       apiClient.getDealStageConcentration("demo-workspace-1", "demo-token").then(setStageConcentration).catch(() => {}).finally(() => setStageConcentrationLoading(false));
+      setCloseRateByStageLoading(true);
+      apiClient.getDealCloseRateByStage("demo-workspace-1", "demo-token").then(setCloseRateByStage).catch(() => {}).finally(() => setCloseRateByStageLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -471,6 +486,8 @@ export default function ReportsPage() {
       apiClient.getTopPerformerDeals(workspaceId, session.access_token).then(setTopPerformers).catch(() => {}).finally(() => setTopPerformersLoading(false));
       setStageConcentrationLoading(true);
       apiClient.getDealStageConcentration(workspaceId, session.access_token).then(setStageConcentration).catch(() => {}).finally(() => setStageConcentrationLoading(false));
+      setCloseRateByStageLoading(true);
+      apiClient.getDealCloseRateByStage(workspaceId, session.access_token).then(setCloseRateByStage).catch(() => {}).finally(() => setCloseRateByStageLoading(false));
     });
   }, []);
 
@@ -858,6 +875,27 @@ export default function ReportsPage() {
         if (!session) { setStageConcentrationLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setStageConcentrationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateCloseRateByStage = () => {
+    setCloseRateByStageLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealCloseRateByStage(wid, tok)
+        .then(setCloseRateByStage)
+        .catch(() => {})
+        .finally(() => setCloseRateByStageLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCloseRateByStageLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCloseRateByStageLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -3785,6 +3823,84 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No stage concentration data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Close Rate by Stage */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center gap-2 p-4 border-b border-zinc-800/60">
+          <BarChart2 className="h-4 w-4 text-indigo-400 flex-shrink-0" />
+          <h2 className="text-sm font-semibold text-zinc-200">Close Rate by Stage</h2>
+          {closeRateByStage?.best_converting_stage && (
+            <span className="rounded-full border px-2 py-0.5 text-xs text-emerald-400 bg-emerald-500/10 border-emerald-500/20">
+              Best: {closeRateByStage.best_converting_stage}
+            </span>
+          )}
+          {closeRateByStage?.worst_converting_stage && (
+            <span className="rounded-full border px-2 py-0.5 text-xs text-rose-400 bg-rose-500/10 border-rose-500/20">
+              Worst: {closeRateByStage.worst_converting_stage}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={regenerateCloseRateByStage}
+              disabled={closeRateByStageLoading}
+              className="flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", closeRateByStageLoading && "animate-spin")} />
+              {closeRateByStageLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setCloseRateByStageOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {closeRateByStageOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {closeRateByStageOpen && (
+          closeRateByStageLoading && !closeRateByStage ? (
+            <p className="p-4 text-xs text-zinc-500 animate-pulse">Analysing close rates by stage…</p>
+          ) : closeRateByStage ? (
+            <div className={cn("space-y-4 p-4", closeRateByStageLoading && "opacity-40")}>
+              {closeRateByStage.stage_rates.length > 0 ? (
+                <div className="space-y-2">
+                  {closeRateByStage.stage_rates.map((s) => {
+                    const isBest = s.stage === closeRateByStage.best_converting_stage;
+                    const isWorst = s.stage === closeRateByStage.worst_converting_stage;
+                    return (
+                      <div key={s.stage} className="flex items-center gap-3">
+                        <span className="w-24 flex-shrink-0 text-xs capitalize text-zinc-400">{s.stage}</span>
+                        <div className="flex-1 h-4 rounded-full bg-zinc-800 overflow-hidden relative">
+                          <div
+                            className={cn("h-full rounded-full transition-all", isBest ? "bg-emerald-500" : isWorst ? "bg-rose-500" : "bg-indigo-500")}
+                            style={{ width: `${s.win_rate}%` }}
+                          />
+                        </div>
+                        <span className={cn("w-12 flex-shrink-0 text-right text-xs font-mono", isBest ? "text-emerald-400" : isWorst ? "text-rose-400" : "text-zinc-300")}>
+                          {s.win_rate}%
+                        </span>
+                        <span className="text-xs text-zinc-500 flex-shrink-0">{s.win_count}W/{s.loss_count}L</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500">No closed deals to analyse yet.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{closeRateByStage.insight}</p>
+              <ul className="space-y-1">
+                {closeRateByStage.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(closeRateByStage.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No close rate data available.</p>
           )
         )}
       </Card>

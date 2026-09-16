@@ -5534,5 +5534,36 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/stage-concentration`, {}, token)
   },
+
+  async getDealCloseRateByStage(workspaceId: string, token: string): Promise<{
+    stage_rates: Array<{ stage: string; win_count: number; loss_count: number; total: number; win_rate: number }>
+    best_converting_stage: string | null
+    worst_converting_stage: string | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 650))
+      return Promise.resolve({
+        stage_rates: [
+          { stage: 'discovery',   win_count: 4,  loss_count: 8,  total: 12, win_rate: 33.3 },
+          { stage: 'qualified',   win_count: 9,  loss_count: 7,  total: 16, win_rate: 56.3 },
+          { stage: 'proposal',    win_count: 14, loss_count: 6,  total: 20, win_rate: 70.0 },
+          { stage: 'negotiation', win_count: 11, loss_count: 3,  total: 14, win_rate: 78.6 },
+        ],
+        best_converting_stage: 'negotiation',
+        worst_converting_stage: 'discovery',
+        insight: 'Negotiation closes at 78.6% — the highest of any stage — while discovery converts just 33.3%, suggesting poor early qualification is the main drag on overall win rate.',
+        recommendations: [
+          'Tighten discovery qualification criteria to filter out low-fit leads before they consume proposal resources.',
+          'Study what makes negotiation-stage deals succeed at 78.6% and codify those as a playbook for earlier stages.',
+          'Add Win/Loss reason tagging to every closed deal to identify recurring objection patterns by stage.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/close-rate-by-stage`, {}, token)
+  },
 }
 

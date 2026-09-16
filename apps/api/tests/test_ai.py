@@ -5318,3 +5318,65 @@ async def test_deal_stage_concentration_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/stage-concentration")
     assert resp.status_code == 403
+
+
+# Phase 16s: GET /workspaces/{wid}/ai/deals/close-rate-by-stage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_close_rate_by_stage_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # contacts_result → 3 closed deals: 2 closed_won (proposal), 1 closed_lost (negotiation)
+    # First query: closed deal stage counts
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result([
+            ("closed_won",  2),
+            ("closed_lost", 1),
+        ]),
+        # Second query: closed deal ids/stages
+        _make_execute_result([
+            (uuid.uuid4(), "closed_won"),
+            (uuid.uuid4(), "closed_won"),
+            (uuid.uuid4(), "closed_lost"),
+        ]),
+        # Third query: activity events for deal_moved
+        _make_execute_result([]),  # no events → falls back to proposal bucket
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "Proposal stage closes at 66.7%, best in pipeline.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/close-rate-by-stage")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["stage_rates"], list)
+    assert len(data["stage_rates"]) >= 1
+    stage = data["stage_rates"][0]
+    assert "stage" in stage
+    assert "win_count" in stage
+    assert "loss_count" in stage
+    assert "win_rate" in stage
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_close_rate_by_stage_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/close-rate-by-stage")
+    assert resp.status_code == 403
