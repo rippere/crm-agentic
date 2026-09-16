@@ -9713,89 +9713,49 @@ async def get_close_rate_by_stage(
             "generated_at": now.isoformat() + "Z",
         }
 
-    # Query last stage before close from activity_events (deal_moved events)
-    # Group by deal_id and get the last from_stage for closed deals
-    closed_deal_ids_result = await db.execute(
-        select(Deal.id, Deal.stage)
-        .where(Deal.workspace_id == workspace_id)
-        .where(Deal.stage.in_(["closed_won", "closed_lost"]))
-    )
-    closed_deals = closed_deal_ids_result.all()  # [(id, stage)]
-
-    if not closed_deals:
-        return {
-            "stage_rates": [],
-            "best_converting_stage": None,
-            "worst_converting_stage": None,
-            "insight": "No closed deals found for this workspace.",
-            "recommendations": [
-                "Close your first deals to start tracking close rate by stage.",
-                "Review pipeline health to identify deals ready to close.",
-                "Use the Pipeline AI feature to surface at-risk deals.",
-            ],
-            "generated_at": now.isoformat() + "Z",
-        }
-
-    # Get the last deal_moved event for each closed deal to find last_stage_before_close
-    closed_deal_ids = [d[0] for d in closed_deals]
-    closed_deal_outcome = {d[0]: d[1] for d in closed_deals}  # id → closed_won/closed_lost
-
+    # Query deal_moved activity events to infer last active stage before close
+    # Description format: "Deal 'Title' moved: from_stage → to_stage"
     events_result = await db.execute(
-        select(
-            ActivityEvent.metadata_json,
-        )
+        select(ActivityEvent.description)
         .where(ActivityEvent.workspace_id == workspace_id)
-        .where(ActivityEvent.event_type == "deal_moved")
-        .where(ActivityEvent.entity_id.in_([str(did) for did in closed_deal_ids]))
+        .where(ActivityEvent.type == "deal_moved")
         .order_by(ActivityEvent.created_at.desc())
     )
     events_rows = events_result.all()
 
-    # For each closed deal, find the last "to_stage" before it became closed_won/lost
-    # ActivityEvent metadata_json typically: {"from": "proposal", "to": "closed_won", "deal_id": "..."}
-    last_active_stage: dict = {}  # deal_id → last active (non-closed) stage
-    for row in events_rows:
-        meta = row[0] or {}
-        if isinstance(meta, str):
-            try:
-                meta = json.loads(meta)
-            except Exception:
-                continue
-        from_stage = meta.get("from", "")
-        deal_id_str = meta.get("deal_id", "")
-        if from_stage and from_stage not in ("closed_won", "closed_lost") and deal_id_str:
-            # Only record the most recent (first encountered due to desc order)
-            try:
-                did = uuid.UUID(deal_id_str)
-            except ValueError:
-                continue
-            if did in closed_deal_outcome and did not in last_active_stage:
-                last_active_stage[did] = from_stage
-
-    # Bucket wins/losses by last active stage
+    _close_re = _re.compile(r"moved[^:]*:\s*([a-z_]+)\s*→\s*(closed_won|closed_lost)")
+    _title_re2 = _re.compile(r"Deal '([^']+)'")
     stage_wins: dict[str, int] = defaultdict(int)
     stage_losses: dict[str, int] = defaultdict(int)
-    unattributed_won = 0
-    unattributed_lost = 0
+    seen_titles: set[str] = set()
 
-    for did, outcome in closed_deal_outcome.items():
-        stage = last_active_stage.get(did)
-        if stage and stage in _STAGE_ORDER:
-            if outcome == "closed_won":
-                stage_wins[stage] += 1
-            else:
-                stage_losses[stage] += 1
+    for (desc,) in events_rows:
+        if not desc or not isinstance(desc, str):
+            continue
+        m = _close_re.search(desc)
+        if not m:
+            continue
+        from_s, to_s = m.group(1), m.group(2)
+        if from_s not in _STAGE_ORDER:
+            continue
+        tm = _title_re2.search(desc)
+        title_key = tm.group(1) if tm else desc[:50]
+        if title_key in seen_titles:
+            continue
+        seen_titles.add(title_key)
+        if to_s == "closed_won":
+            stage_wins[from_s] += 1
         else:
-            if outcome == "closed_won":
-                unattributed_won += 1
-            else:
-                unattributed_lost += 1
+            stage_losses[from_s] += 1
 
-    # If we have very few events, distribute unattributed proportionally to "proposal"
-    # as a fallback to show useful data
-    if not stage_wins and not stage_losses:
-        stage_wins["proposal"] = won_count
-        stage_losses["proposal"] = lost_count
+    # Unattributed deals (no event match) → fall back to "proposal" bucket
+    attributed_won = sum(stage_wins.values())
+    attributed_lost = sum(stage_losses.values())
+    unattributed_won = max(0, won_count - attributed_won)
+    unattributed_lost = max(0, lost_count - attributed_lost)
+    if unattributed_won or unattributed_lost:
+        stage_wins["proposal"] += unattributed_won
+        stage_losses["proposal"] += unattributed_lost
 
     stage_rates = []
     for stage in _STAGE_ORDER:

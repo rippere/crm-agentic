@@ -5328,20 +5328,13 @@ async def test_deal_stage_concentration_wrong_workspace_returns_403(app_client):
 async def test_close_rate_by_stage_returns_structured_response(app_client):
     fastapi_app, mock_db, workspace_id = app_client
 
-    # contacts_result → 3 closed deals: 2 closed_won (proposal), 1 closed_lost (negotiation)
     # First query: closed deal stage counts
+    # Second query: activity events for deal_moved (empty → fallback to proposal bucket)
     mock_db.execute = AsyncMock(side_effect=[
         _make_execute_result([
             ("closed_won",  2),
             ("closed_lost", 1),
         ]),
-        # Second query: closed deal ids/stages
-        _make_execute_result([
-            (uuid.uuid4(), "closed_won"),
-            (uuid.uuid4(), "closed_won"),
-            (uuid.uuid4(), "closed_lost"),
-        ]),
-        # Third query: activity events for deal_moved
         _make_execute_result([]),  # no events → falls back to proposal bucket
     ])
 
