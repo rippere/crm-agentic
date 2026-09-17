@@ -6447,5 +6447,36 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/close-date-accuracy`, {}, token)
   },
+
+  async getAIDealScoreDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        win_prob_buckets: [
+          { range: '0-20', count: 4 },
+          { range: '21-40', count: 6 },
+          { range: '41-60', count: 8 },
+          { range: '61-80', count: 7 },
+          { range: '81-100', count: 3 },
+        ],
+        health_buckets: [
+          { label: 'healthy', count: 12 },
+          { label: 'at_risk', count: 9 },
+          { label: 'critical', count: 7 },
+        ],
+        avg_win_prob: 51.4,
+        avg_health_score: 56.8,
+        high_confidence_count: 10,
+        critical_count: 7,
+        scoring_narrative: '28 open deals show an average win probability of 51% and health score of 57. 7 deals are in critical health — these require immediate attention to prevent revenue loss. 10 high-confidence deals represent a strong near-term revenue opportunity.',
+        recommendations: [
+          'Immediately review the 7 critical-health deals with their assigned reps — low health scores are the strongest predictor of churn and loss.',
+          'Nurture the 10 high-confidence deals (win_prob>70%) to close this quarter — these are your most predictable near-term revenue.',
+          'Set a team target of keeping fewer than 20% of deals in the 0–20% win probability bucket and review the distribution weekly.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/score-distribution`, {}, token)
+  },
 }
 

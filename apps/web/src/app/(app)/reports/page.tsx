@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -671,6 +671,13 @@ export default function ReportsPage() {
   const [aiFunnelLoading, setAiFunnelLoading] = useState(false);
   const [aiFunnelOpen, setAiFunnelOpen] = useState(true);
 
+  type WinProbBucket = { range: string; count: number };
+  type HealthBucket = { label: string; count: number };
+  type AIDealScoreDistributionData = { win_prob_buckets: WinProbBucket[]; health_buckets: HealthBucket[]; avg_win_prob: number; avg_health_score: number; high_confidence_count: number; critical_count: number; scoring_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealScoreDist, setDealScoreDist] = useState<AIDealScoreDistributionData | null>(null);
+  const [dealScoreDistLoading, setDealScoreDistLoading] = useState(false);
+  const [dealScoreDistOpen, setDealScoreDistOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -785,6 +792,8 @@ export default function ReportsPage() {
       apiClient.getRepPerformance("demo-workspace-1", "demo-token").then(setRepPerformance).catch(() => {}).finally(() => setRepPerformanceLoading(false));
       setAiFunnelLoading(true);
       apiClient.getAIPipelineConversionFunnel("demo-workspace-1", "demo-token").then(setAiFunnel).catch(() => {}).finally(() => setAiFunnelLoading(false));
+      setDealScoreDistLoading(true);
+      apiClient.getAIDealScoreDistribution("demo-workspace-1", "demo-token").then(setDealScoreDist).catch(() => {}).finally(() => setDealScoreDistLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -904,6 +913,8 @@ export default function ReportsPage() {
       apiClient.getRepPerformance(workspaceId, session.access_token).then(setRepPerformance).catch(() => {}).finally(() => setRepPerformanceLoading(false));
       setAiFunnelLoading(true);
       apiClient.getAIPipelineConversionFunnel(workspaceId, session.access_token).then(setAiFunnel).catch(() => {}).finally(() => setAiFunnelLoading(false));
+      setDealScoreDistLoading(true);
+      apiClient.getAIDealScoreDistribution(workspaceId, session.access_token).then(setDealScoreDist).catch(() => {}).finally(() => setDealScoreDistLoading(false));
     });
   }, []);
 
@@ -1627,6 +1638,27 @@ export default function ReportsPage() {
         if (!session) { setDealCloseDateAccuracyLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealCloseDateAccuracyLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealScoreDist = () => {
+    setDealScoreDistLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealScoreDistribution(wid, tok)
+        .then(setDealScoreDist)
+        .catch(() => {})
+        .finally(() => setDealScoreDistLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealScoreDistLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealScoreDistLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -7087,6 +7119,104 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No funnel data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Score Distribution */}
+      <Card className="border-pink-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Percent className="h-4 w-4 text-pink-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Score Distribution</h3>
+            {dealScoreDist && (
+              <span className="text-xs bg-pink-900/40 text-pink-300 px-2 py-0.5 rounded-full border border-pink-700/30">
+                {dealScoreDist.high_confidence_count} high-confidence
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealScoreDist}
+              disabled={dealScoreDistLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded border border-zinc-700 hover:border-zinc-500 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealScoreDistLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setDealScoreDistOpen(o => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {dealScoreDistOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealScoreDistOpen && (
+          dealScoreDistLoading && !dealScoreDist ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : dealScoreDist ? (
+            <div className={cn("p-4 space-y-4", dealScoreDistLoading && "opacity-40")}>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs font-medium text-zinc-400 mb-2">Win Probability</p>
+                  {dealScoreDist.win_prob_buckets.map((b) => {
+                    const maxCount = Math.max(...dealScoreDist.win_prob_buckets.map(x => x.count), 1);
+                    const barPct = Math.round((b.count / maxCount) * 100);
+                    return (
+                      <div key={b.range} className="flex items-center gap-2 mb-1.5">
+                        <span className="text-xs text-zinc-400 w-14 flex-shrink-0">{b.range}%</span>
+                        <div className="flex-1 h-3 bg-zinc-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-pink-500/60 rounded-full" style={{ width: `${barPct}%` }} />
+                        </div>
+                        <span className="text-xs font-mono text-zinc-300 w-6 text-right">{b.count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-zinc-400 mb-2">Health Score</p>
+                  {dealScoreDist.health_buckets.map((b) => {
+                    const maxCount = Math.max(...dealScoreDist.health_buckets.map(x => x.count), 1);
+                    const barPct = Math.round((b.count / maxCount) * 100);
+                    const color = b.label === 'healthy' ? 'bg-emerald-500/60' : b.label === 'at_risk' ? 'bg-amber-500/60' : 'bg-rose-500/60';
+                    return (
+                      <div key={b.label} className="flex items-center gap-2 mb-1.5">
+                        <span className="text-xs text-zinc-400 w-14 flex-shrink-0 capitalize">{b.label.replace('_', ' ')}</span>
+                        <div className="flex-1 h-3 bg-zinc-800 rounded-full overflow-hidden">
+                          <div className={cn("h-full rounded-full", color)} style={{ width: `${barPct}%` }} />
+                        </div>
+                        <span className="text-xs font-mono text-zinc-300 w-6 text-right">{b.count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex gap-3 flex-wrap">
+                <span className="text-xs px-2 py-0.5 rounded border border-pink-700/30 bg-pink-900/20 text-pink-300 font-mono">
+                  avg win prob {dealScoreDist.avg_win_prob}%
+                </span>
+                <span className="text-xs px-2 py-0.5 rounded border border-zinc-700 bg-zinc-800/50 text-zinc-300 font-mono">
+                  avg health {dealScoreDist.avg_health_score}
+                </span>
+                {dealScoreDist.critical_count > 0 && (
+                  <span className="text-xs px-2 py-0.5 rounded border border-rose-700/30 bg-rose-900/20 text-rose-300 font-mono">
+                    {dealScoreDist.critical_count} critical
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{dealScoreDist.scoring_narrative}</p>
+              <ul className="space-y-1.5">
+                {dealScoreDist.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealScoreDist.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No scoring data available.</p>
           )
         )}
       </Card>

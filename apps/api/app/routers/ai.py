@@ -14114,3 +14114,147 @@ async def get_pipeline_conversion_funnel_ai(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_DEAL_SCORE_DISTRIBUTION_SYSTEM = """\
+You are a senior sales operations AI analysing deal scoring distribution across a pipeline.
+Given win probability bucket counts and health score bucket counts, generate a scoring narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "scoring_narrative": "2-3 sentence narrative about the overall deal scoring health and key risk areas",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/score-distribution")
+@limiter.limit("5/minute")
+async def get_deal_score_distribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    closed_stages = {"closed_won", "closed_lost"}
+    rows_result = await db.execute(
+        select(Deal.ml_win_probability, Deal.health_score).where(
+            Deal.workspace_id == workspace_id,
+            ~Deal.stage.in_(closed_stages),
+        )
+    )
+    rows = rows_result.all()
+
+    win_prob_ranges = [
+        ("0-20", 0, 20),
+        ("21-40", 21, 40),
+        ("41-60", 41, 60),
+        ("61-80", 61, 80),
+        ("81-100", 81, 100),
+    ]
+    win_prob_counts: dict[str, int] = {r[0]: 0 for r in win_prob_ranges}
+
+    health_labels = [
+        ("healthy", 70, 101),
+        ("at_risk", 40, 70),
+        ("critical", 0, 40),
+    ]
+    health_counts: dict[str, int] = {h[0]: 0 for h in health_labels}
+
+    total_win_prob = 0.0
+    total_health = 0.0
+    win_prob_n = 0
+    health_n = 0
+    high_confidence_count = 0
+    critical_count = 0
+
+    for win_prob, health in rows:
+        wp = float(win_prob) if win_prob is not None else 0.0
+        hs = float(health) if health is not None else 0.0
+
+        for label, lo, hi in win_prob_ranges:
+            if lo <= wp <= hi:
+                win_prob_counts[label] += 1
+                break
+
+        for label, lo, hi in health_labels:
+            if lo <= hs < hi:
+                health_counts[label] += 1
+                break
+
+        total_win_prob += wp
+        win_prob_n += 1
+        total_health += hs
+        health_n += 1
+
+        if wp > 70:
+            high_confidence_count += 1
+        if hs < 40:
+            critical_count += 1
+
+    avg_win_prob = round(total_win_prob / win_prob_n, 1) if win_prob_n else 0.0
+    avg_health_score = round(total_health / health_n, 1) if health_n else 0.0
+
+    win_prob_buckets = [{"range": r[0], "count": win_prob_counts[r[0]]} for r in win_prob_ranges]
+    health_buckets = [{"label": h[0], "count": health_counts[h[0]]} for h in health_labels]
+
+    context_lines = [
+        f"Win probability buckets: " + ", ".join(f"{r['range']}%: {r['count']} deals" for r in win_prob_buckets),
+        f"Health score buckets: " + ", ".join(f"{h['label']}: {h['count']} deals" for h in health_buckets),
+        f"Average win probability: {avg_win_prob}%",
+        f"Average health score: {avg_health_score}",
+        f"High confidence deals (win_prob>70): {high_confidence_count}",
+        f"Critical health deals (health<40): {critical_count}",
+    ]
+    context = "\n".join(context_lines)
+
+    total_deals = win_prob_n
+    default_narrative = (
+        f"The pipeline contains {total_deals} open deals with an average win probability of {avg_win_prob}% "
+        f"and average health score of {avg_health_score}. "
+        + (f"There are {critical_count} critically unhealthy deals that require immediate attention." if critical_count else "Overall deal health is strong.")
+    )
+    default_recs = [
+        f"Prioritise the {critical_count} critical-health deals — low health scores strongly predict churn and loss." if critical_count else "Maintain deal hygiene by reviewing health scores weekly and addressing any drops promptly.",
+        f"Nurture the {high_confidence_count} high-confidence deals (win_prob>70%) to close — these represent your most reliable near-term revenue." if high_confidence_count else "Focus on building more deals into the high-confidence tier through disciplined qualification.",
+        "Use score distributions to set rep-level targets: aim for fewer than 20% of deals in the 0-20% win probability bucket.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_DEAL_SCORE_DISTRIBUTION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    scoring_narrative = str(data.get("scoring_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "win_prob_buckets": win_prob_buckets,
+        "health_buckets": health_buckets,
+        "avg_win_prob": avg_win_prob,
+        "avg_health_score": avg_health_score,
+        "high_confidence_count": high_confidence_count,
+        "critical_count": critical_count,
+        "scoring_narrative": scoring_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
