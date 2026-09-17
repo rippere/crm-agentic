@@ -14953,3 +14953,138 @@ async def get_ai_contact_lifetime_value(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+_REACTIVATION_SYSTEM = """\
+You are a senior sales AI specialising in win-back and reactivation strategy.
+You will receive a list of closed-lost deals ranked by reactivation potential.
+Return ONLY a valid JSON object with keys:
+  "reactivation_narrative": string — 2-3 sentence insight about the reactivation opportunity
+  "recommendations": list of exactly 3 actionable strings for re-engaging these lost deals
+No markdown, no extra keys.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/reactivation-candidates")
+@limiter.limit("5/minute")
+async def get_ai_deal_reactivation_candidates(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=365)
+
+    rows = (await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+            Deal.stage_changed_at,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff,
+        )
+        .order_by(Deal.value.desc())
+    )).all()
+
+    if not rows:
+        return {
+            "candidates": [],
+            "reactivation_narrative": "No closed-lost deals in the last 12 months to reactivate.",
+            "recommendations": [
+                "Keep working on active pipeline to generate future reactivation opportunities.",
+                "Document loss reasons on deals to improve win/loss analysis.",
+                "Set follow-up reminders on closed-lost deals for 90 days post-close.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    max_value = max(float(r.value or 0) for r in rows) or 1.0
+
+    candidates = []
+    for row in rows:
+        val = float(row.value or 0)
+        prob = float(row.ml_win_probability or 50.0)
+        health = float(row.health_score or 50.0)
+        norm_value = val / max_value
+        reactivation_score = round(norm_value * 0.4 + (prob / 100.0) * 0.4 + (health / 100.0) * 0.2, 3)
+        days_since_close = (now - row.stage_changed_at.replace(tzinfo=timezone.utc)).days if row.stage_changed_at else 0
+        candidates.append({
+            "deal_id": str(row.id),
+            "title": row.title or "Untitled",
+            "stage": row.stage,
+            "value": round(val, 2),
+            "days_since_close": days_since_close,
+            "reactivation_score": reactivation_score,
+            "win_probability": round(prob, 1),
+        })
+
+    candidates.sort(key=lambda x: x["reactivation_score"], reverse=True)
+    top5 = candidates[:5]
+
+    default_narrative = (
+        f"Top reactivation candidate is '{top5[0]['title']}' with a score of "
+        f"{top5[0]['reactivation_score']:.2f} — valued at ${top5[0]['value']:,.0f} and "
+        f"closed {top5[0]['days_since_close']} days ago. "
+        "Re-engaging high-value recently-lost deals is the fastest path to recovering pipeline. "
+        "Focus on deals lost within 90 days with win probabilities above 50%."
+    ) if top5 else "No candidates found."
+    default_recs = [
+        f"Re-engage '{top5[0]['title']}' immediately — highest reactivation score with ${top5[0]['value']:,.0f} in potential value.",
+        "Send a personalised check-in email to top reactivation candidates referencing specific objections from the original deal.",
+        "Offer a limited-time incentive or updated proposal to deals closed 60–90 days ago with high reactivation scores.",
+    ] if top5 else [
+        "Document loss reasons to improve future reactivation targeting.",
+        "Set 90-day follow-up reminders on all newly closed-lost deals.",
+        "Review competitor activity for recently lost deals to identify re-engagement windows.",
+    ]
+
+    context = (
+        f"Deal reactivation candidates from the last 12 months.\n"
+        f"Total closed-lost deals: {len(rows)}, top 5 by reactivation score:\n"
+        + "\n".join(
+            f"  {i+1}. '{c['title']}': score={c['reactivation_score']:.2f}, "
+            f"value=${c['value']:,.0f}, days_since_close={c['days_since_close']}, "
+            f"win_prob={c['win_probability']}%"
+            for i, c in enumerate(top5)
+        )
+        + "\nProvide a reactivation_narrative and 3 recommendations for re-engaging these deals."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_REACTIVATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    reactivation_narrative = str(data.get("reactivation_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "candidates": top5,
+        "reactivation_narrative": reactivation_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

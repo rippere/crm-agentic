@@ -708,6 +708,12 @@ export default function ReportsPage() {
   const [contactLTVLoading, setContactLTVLoading] = useState(false);
   const [contactLTVOpen, setContactLTVOpen] = useState(true);
 
+  type ReactivationCandidate = { deal_id: string; title: string; stage: string; value: number; days_since_close: number; reactivation_score: number; win_probability: number };
+  type AIReactivationData = { candidates: ReactivationCandidate[]; reactivation_narrative: string; recommendations: string[]; generated_at: string };
+  const [reactivationCandidates, setReactivationCandidates] = useState<AIReactivationData | null>(null);
+  const [reactivationLoading, setReactivationLoading] = useState(false);
+  const [reactivationOpen, setReactivationOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -834,6 +840,8 @@ export default function ReportsPage() {
       apiClient.getAITopContactOpportunities("demo-workspace-1", "demo-token").then(setTopOpportunities).catch(() => {}).finally(() => setTopOpportunitiesLoading(false));
       setContactLTVLoading(true);
       apiClient.getAIContactLifetimeValue("demo-workspace-1", "demo-token").then(setContactLTV).catch(() => {}).finally(() => setContactLTVLoading(false));
+      setReactivationLoading(true);
+      apiClient.getAIDealReactivationCandidates("demo-workspace-1", "demo-token").then(setReactivationCandidates).catch(() => {}).finally(() => setReactivationLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -965,6 +973,8 @@ export default function ReportsPage() {
       apiClient.getAITopContactOpportunities(workspaceId, session.access_token).then(setTopOpportunities).catch(() => {}).finally(() => setTopOpportunitiesLoading(false));
       setContactLTVLoading(true);
       apiClient.getAIContactLifetimeValue(workspaceId, session.access_token).then(setContactLTV).catch(() => {}).finally(() => setContactLTVLoading(false));
+      setReactivationLoading(true);
+      apiClient.getAIDealReactivationCandidates(workspaceId, session.access_token).then(setReactivationCandidates).catch(() => {}).finally(() => setReactivationLoading(false));
     });
   }, []);
 
@@ -1772,6 +1782,27 @@ export default function ReportsPage() {
         if (!session) { setDealVelocityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealVelocityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateReactivation = () => {
+    setReactivationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealReactivationCandidates(wid, tok)
+        .then(setReactivationCandidates)
+        .catch(() => {})
+        .finally(() => setReactivationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setReactivationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setReactivationLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -7784,6 +7815,85 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No LTV data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Reactivation Candidates */}
+      <Card className="border-rose-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <RefreshCw className="h-4 w-4 text-rose-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Reactivation Candidates</h3>
+            {reactivationCandidates && reactivationCandidates.candidates.length > 0 && (
+              <span className="text-xs bg-rose-900/40 text-rose-300 px-2 py-0.5 rounded-full border border-rose-700/30">
+                {reactivationCandidates.candidates.length} deals
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateReactivation}
+              disabled={reactivationLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", reactivationLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setReactivationOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {reactivationOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {reactivationOpen && (
+          reactivationLoading && !reactivationCandidates ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-zinc-800 rounded" />)}
+            </div>
+          ) : reactivationCandidates && reactivationCandidates.candidates.length > 0 ? (
+            <div className={cn("p-4 space-y-4", reactivationLoading && "opacity-40")}>
+              <ul className="space-y-3">
+                {reactivationCandidates.candidates.map((c, i) => {
+                  const maxScore = reactivationCandidates.candidates[0]?.reactivation_score || 1;
+                  const pct = Math.round((c.reactivation_score / maxScore) * 100);
+                  return (
+                    <li key={c.deal_id} className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono text-zinc-500 w-5">#{i + 1}</span>
+                          <span className="text-sm font-medium text-zinc-100">{c.title}</span>
+                        </div>
+                        <span className="text-xs font-mono font-semibold text-rose-300">{(c.reactivation_score * 100).toFixed(0)}</span>
+                      </div>
+                      <div className="flex items-center gap-2 ml-7">
+                        <div className="flex-1 h-2 bg-zinc-800 rounded overflow-hidden">
+                          <div className="h-full bg-rose-500/70 rounded" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 ml-7 text-xs text-zinc-500">
+                        <span className="text-zinc-300">${c.value.toLocaleString()}</span>
+                        <span className="text-zinc-700">·</span>
+                        <span className={c.days_since_close <= 30 ? 'text-emerald-400' : c.days_since_close <= 90 ? 'text-amber-400' : 'text-zinc-400'}>{c.days_since_close}d ago</span>
+                        <span className="text-zinc-700">·</span>
+                        <span>Win prob {c.win_probability.toFixed(0)}%</span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-xs text-zinc-400 italic">{reactivationCandidates.reactivation_narrative}</p>
+              <ul className="space-y-1.5">
+                {reactivationCandidates.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(reactivationCandidates.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No reactivation candidates found in the last 12 months.</p>
           )
         )}
       </Card>

@@ -7327,3 +7327,58 @@ async def test_contact_lifetime_value_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/lifetime-value")
     assert resp.status_code == 403
+
+# ── Phase 17y: deal reactivation candidates ───────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_deal_reactivation_candidates_returns_structured_response(app_client, monkeypatch):
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    class FakeDealRow:
+        def __init__(self, id_, title, stage, value, health_score, ml_win_probability, stage_changed_at):
+            self.id = id_
+            self.title = title
+            self.stage = stage
+            self.value = value
+            self.health_score = health_score
+            self.ml_win_probability = ml_win_probability
+            self.stage_changed_at = stage_changed_at
+
+    deal_rows = [
+        FakeDealRow(uuid.uuid4(), "Deal Alpha", "closed_lost", 80000.0, 70.0, 60.0, now - _dt.timedelta(days=30)),
+        FakeDealRow(uuid.uuid4(), "Deal Beta", "closed_lost", 50000.0, 55.0, 45.0, now - _dt.timedelta(days=60)),
+        FakeDealRow(uuid.uuid4(), "Deal Gamma", "closed_lost", 20000.0, 40.0, 35.0, now - _dt.timedelta(days=90)),
+    ]
+
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(deal_rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"reactivation_narrative": "Alpha is the top pick.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/reactivation-candidates")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["candidates"], list)
+    assert len(body["candidates"]) >= 1
+    top = body["candidates"][0]
+    assert "deal_id" in top
+    assert "reactivation_score" in top
+    assert "days_since_close" in top
+    assert isinstance(body["reactivation_narrative"], str)
+    assert len(body["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_deal_reactivation_candidates_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/reactivation-candidates")
+    assert resp.status_code == 403

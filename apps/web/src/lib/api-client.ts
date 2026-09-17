@@ -6610,5 +6610,27 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/lifetime-value`, {}, token)
   },
+
+  async getAIDealReactivationCandidates(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        candidates: [
+          { deal_id: 'demo-1', title: 'Acme Corp Enterprise', stage: 'closed_lost', value: 120000, days_since_close: 28, reactivation_score: 0.872, win_probability: 62.0 },
+          { deal_id: 'demo-2', title: 'TechVentures Platform', stage: 'closed_lost', value: 85000, days_since_close: 45, reactivation_score: 0.741, win_probability: 55.0 },
+          { deal_id: 'demo-3', title: 'GlobalRetail Suite', stage: 'closed_lost', value: 60000, days_since_close: 72, reactivation_score: 0.618, win_probability: 48.0 },
+          { deal_id: 'demo-4', title: 'Meridian Analytics', stage: 'closed_lost', value: 40000, days_since_close: 110, reactivation_score: 0.492, win_probability: 40.0 },
+          { deal_id: 'demo-5', title: 'Summit Group Basic', stage: 'closed_lost', value: 25000, days_since_close: 180, reactivation_score: 0.331, win_probability: 32.0 },
+        ],
+        reactivation_narrative: "Acme Corp Enterprise leads reactivation candidates with a 0.87 score — lost just 28 days ago on a $120K deal at 62% historical win probability. TechVentures and GlobalRetail are also strong bets with losses under 75 days. Deals within 90 days of close have the highest receptivity to win-back outreach, especially when competitors' implementations reveal gaps.",
+        recommendations: [
+          "Re-engage Acme Corp Enterprise immediately with a revised proposal — 28 days is within the optimal win-back window and the deal value justifies senior rep involvement.",
+          "Send a personalised case study to TechVentures Platform showing a comparable customer's success story to reopen the conversation.",
+          "Create a structured win-back sequence: personalised email at 30d, phone call at 45d, executive touch at 60d for all top-3 candidates.",
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/reactivation-candidates`, {}, token)
+  },
 }
 
