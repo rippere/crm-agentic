@@ -5428,3 +5428,64 @@ async def test_pipeline_churn_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-churn")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/conversion-quality
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_conversion_quality_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import uuid as _uuid
+    deal_id1 = _uuid.uuid4()
+    deal_id2 = _uuid.uuid4()
+
+    # Deal rows: (id, value, created_at, stage_changed_at, competitors)
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result([
+            (deal_id1, 50000.0, None, None, []),
+            (deal_id2, 20000.0, None, None, ["Salesforce"]),
+        ]),
+        # DealHealthHistory rows: (deal_id, score)
+        _make_execute_result([
+            (deal_id1, 80),
+            (deal_id2, 45),
+        ]),
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "2 high-quality wins averaging strong health scores.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/conversion-quality")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["quality_tiers"], list)
+    assert len(data["quality_tiers"]) == 3
+    tiers = {t["tier"]: t for t in data["quality_tiers"]}
+    assert "high" in tiers and "medium" in tiers and "low" in tiers
+    assert isinstance(data["avg_quality_score"], (int, float))
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_conversion_quality_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/conversion-quality")
+    assert resp.status_code == 403

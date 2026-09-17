@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -367,6 +367,18 @@ export default function ReportsPage() {
   const [pipelineChurnLoading, setPipelineChurnLoading] = useState(false);
   const [pipelineChurnOpen, setPipelineChurnOpen] = useState(true);
 
+  type ConversionQualityTier = { tier: string; count: number; avg_value: number; avg_cycle_days: number; avg_health: number };
+  type ConversionQuality = {
+    quality_tiers: ConversionQualityTier[];
+    avg_quality_score: number;
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [conversionQuality, setConversionQuality] = useState<ConversionQuality | null>(null);
+  const [conversionQualityLoading, setConversionQualityLoading] = useState(false);
+  const [conversionQualityOpen, setConversionQualityOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -433,6 +445,8 @@ export default function ReportsPage() {
       apiClient.getDealCloseRateByStage("demo-workspace-1", "demo-token").then(setCloseRateByStage).catch(() => {}).finally(() => setCloseRateByStageLoading(false));
       setPipelineChurnLoading(true);
       apiClient.getDealPipelineChurn("demo-workspace-1", "demo-token").then(setPipelineChurn).catch(() => {}).finally(() => setPipelineChurnLoading(false));
+      setConversionQualityLoading(true);
+      apiClient.getDealConversionQuality("demo-workspace-1", "demo-token").then(setConversionQuality).catch(() => {}).finally(() => setConversionQualityLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -504,6 +518,8 @@ export default function ReportsPage() {
       apiClient.getDealCloseRateByStage(workspaceId, session.access_token).then(setCloseRateByStage).catch(() => {}).finally(() => setCloseRateByStageLoading(false));
       setPipelineChurnLoading(true);
       apiClient.getDealPipelineChurn(workspaceId, session.access_token).then(setPipelineChurn).catch(() => {}).finally(() => setPipelineChurnLoading(false));
+      setConversionQualityLoading(true);
+      apiClient.getDealConversionQuality(workspaceId, session.access_token).then(setConversionQuality).catch(() => {}).finally(() => setConversionQualityLoading(false));
     });
   }, []);
 
@@ -933,6 +949,27 @@ export default function ReportsPage() {
         if (!session) { setPipelineChurnLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setPipelineChurnLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateConversionQuality = () => {
+    setConversionQualityLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealConversionQuality(wid, tok)
+        .then(setConversionQuality)
+        .catch(() => {})
+        .finally(() => setConversionQualityLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setConversionQualityLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setConversionQualityLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -4028,6 +4065,82 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No pipeline churn data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Conversion Quality */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+            <span className="text-sm font-semibold text-zinc-200">Conversion Quality</span>
+            {conversionQuality && (
+              <span className="text-xs text-zinc-500">
+                Avg score: <span className="text-emerald-400 font-semibold">{conversionQuality.avg_quality_score}</span>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateConversionQuality}
+              disabled={conversionQualityLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              <RefreshCw className={cn("h-3 w-3", conversionQualityLoading && "animate-spin")} />
+              {conversionQualityLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setConversionQualityOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {conversionQualityOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {conversionQualityOpen && (
+          conversionQualityLoading && !conversionQuality ? (
+            <div className="h-24 animate-pulse bg-zinc-800/40 m-4 rounded" />
+          ) : conversionQuality ? (
+            <div className={cn("space-y-4 p-4", conversionQualityLoading && "opacity-40")}>
+              {/* Tier bars */}
+              <div className="space-y-2">
+                {conversionQuality.quality_tiers.map((tier) => {
+                  const total = conversionQuality.quality_tiers.reduce((s, t) => s + t.count, 0);
+                  const pct = total > 0 ? Math.round((tier.count / total) * 100) : 0;
+                  const tierConfig: Record<string, { label: string; color: string; bar: string }> = {
+                    high:   { label: "High",   color: "text-emerald-400", bar: "bg-emerald-500" },
+                    medium: { label: "Medium", color: "text-amber-400",   bar: "bg-amber-500"   },
+                    low:    { label: "Low",    color: "text-rose-400",    bar: "bg-rose-500"    },
+                  };
+                  const cfg = tierConfig[tier.tier] ?? { label: tier.tier, color: "text-zinc-400", bar: "bg-zinc-500" };
+                  return (
+                    <div key={tier.tier}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={cn("text-xs font-medium", cfg.color)}>{cfg.label}</span>
+                        <span className="text-xs text-zinc-400">
+                          {tier.count} deal{tier.count !== 1 ? "s" : ""} · avg ${tier.avg_value.toLocaleString()} · {tier.avg_cycle_days}d · health {tier.avg_health}
+                        </span>
+                      </div>
+                      <div className="h-2 w-full rounded bg-zinc-800">
+                        <div className={cn("h-2 rounded", cfg.bar)} style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{conversionQuality.insight}</p>
+              <ul className="space-y-1">
+                {conversionQuality.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(conversionQuality.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No conversion quality data available.</p>
           )
         )}
       </Card>

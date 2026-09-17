@@ -5594,5 +5594,33 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-churn`, {}, token)
   },
+
+  async getDealConversionQuality(workspaceId: string, token: string): Promise<{
+    quality_tiers: Array<{ tier: string; count: number; avg_value: number; avg_cycle_days: number; avg_health: number }>
+    avg_quality_score: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        quality_tiers: [
+          { tier: 'high',   count: 8,  avg_value: 52000, avg_cycle_days: 18, avg_health: 88 },
+          { tier: 'medium', count: 11, avg_value: 24000, avg_cycle_days: 35, avg_health: 62 },
+          { tier: 'low',    count: 4,  avg_value: 9000,  avg_cycle_days: 61, avg_health: 38 },
+        ],
+        avg_quality_score: 61.4,
+        insight: '8 high-quality wins averaging 18 days to close — fast cycle and strong health scores are the defining traits of top-tier deals.',
+        recommendations: [
+          'Review high-quality deal timelines to identify the engagement cadence that drives fast closes.',
+          'Set minimum health score thresholds for deals entering the negotiation stage.',
+          'Create playbooks based on high-quality deal patterns for reps to follow.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/conversion-quality`, {}, token)
+  },
 }
 
