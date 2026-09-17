@@ -596,6 +596,16 @@ export default function ReportsPage() {
   const [salesForecastLoading, setSalesForecastLoading] = useState(false);
   const [salesForecastOpen, setSalesForecastOpen] = useState(true);
 
+  type AgeBucket = { label: string; count: number; total_value: number; pct_of_pipeline: number };
+  type AgeDeal = { title: string; days: number };
+  type DealAgeDistributionData = {
+    buckets: AgeBucket[]; oldest_deal: AgeDeal | null; newest_deal: AgeDeal | null;
+    avg_age_days: number; aging_insight: string; recommendations: string[]; generated_at: string;
+  };
+  const [dealAgeDistribution, setDealAgeDistribution] = useState<DealAgeDistributionData | null>(null);
+  const [dealAgeLoading, setDealAgeLoading] = useState(false);
+  const [dealAgeOpen, setDealAgeOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -694,6 +704,8 @@ export default function ReportsPage() {
       apiClient.getWinLossSummary("demo-workspace-1", "demo-token").then(setWinLossSummary).catch(() => {}).finally(() => setWinLossSummaryLoading(false));
       setSalesForecastLoading(true);
       apiClient.getSalesForecast("demo-workspace-1", "demo-token").then(setSalesForecast).catch(() => {}).finally(() => setSalesForecastLoading(false));
+      setDealAgeLoading(true);
+      apiClient.getDealAgeDistribution("demo-workspace-1", "demo-token").then(setDealAgeDistribution).catch(() => {}).finally(() => setDealAgeLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -797,6 +809,8 @@ export default function ReportsPage() {
       apiClient.getWinLossSummary(workspaceId, session.access_token).then(setWinLossSummary).catch(() => {}).finally(() => setWinLossSummaryLoading(false));
       setSalesForecastLoading(true);
       apiClient.getSalesForecast(workspaceId, session.access_token).then(setSalesForecast).catch(() => {}).finally(() => setSalesForecastLoading(false));
+      setDealAgeLoading(true);
+      apiClient.getDealAgeDistribution(workspaceId, session.access_token).then(setDealAgeDistribution).catch(() => {}).finally(() => setDealAgeLoading(false));
     });
   }, []);
 
@@ -1415,6 +1429,27 @@ export default function ReportsPage() {
         if (!session) { setSalesForecastLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setSalesForecastLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealAge = () => {
+    setDealAgeLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealAgeDistribution(wid, tok)
+        .then(setDealAgeDistribution)
+        .catch(() => {})
+        .finally(() => setDealAgeLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealAgeLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealAgeLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5638,6 +5673,103 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No forecast data available. Click Regenerate to generate.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Age Distribution */}
+      <Card className="border-amber-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-amber-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Age Distribution</h3>
+            {dealAgeDistribution && (
+              <span className="text-xs bg-amber-900/40 text-amber-300 px-2 py-0.5 rounded-full border border-amber-700/30">
+                avg {dealAgeDistribution.avg_age_days}d
+              </span>
+            )}
+            {dealAgeDistribution?.oldest_deal && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                oldest {dealAgeDistribution.oldest_deal.days}d
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealAge}
+              disabled={dealAgeLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealAgeLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setDealAgeOpen(!dealAgeOpen)}>
+              {dealAgeOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealAgeOpen && (
+          dealAgeLoading && !dealAgeDistribution ? (
+            <div className="p-6 text-center text-xs text-zinc-500 animate-pulse">Analysing deal ages…</div>
+          ) : dealAgeDistribution ? (
+            <div className={cn("p-4 space-y-4", dealAgeLoading && "opacity-40")}>
+              {/* Age buckets */}
+              <div className="space-y-2">
+                {dealAgeDistribution.buckets.map((b, i) => {
+                  const severity = i === 0 ? "emerald" : i === 1 ? "amber" : i === 2 ? "orange" : "rose";
+                  const barColor = severity === "emerald" ? "bg-emerald-500" : severity === "amber" ? "bg-amber-500" : severity === "orange" ? "bg-orange-500" : "bg-rose-500";
+                  const textColor = severity === "emerald" ? "text-emerald-400" : severity === "amber" ? "text-amber-400" : severity === "orange" ? "text-orange-400" : "text-rose-400";
+                  return (
+                    <div key={b.label} className="flex items-center gap-3">
+                      <span className={cn("text-xs font-mono font-medium w-14 flex-shrink-0", textColor)}>{b.label}</span>
+                      <div className="flex-1 bg-zinc-800 rounded-full h-2 overflow-hidden">
+                        <div className={cn("h-2 rounded-full", barColor)} style={{ width: `${b.pct_of_pipeline}%` }} />
+                      </div>
+                      <span className="text-xs text-zinc-400 w-16 text-right">{b.count} deals</span>
+                      <span className="text-xs text-zinc-500 w-20 text-right">${b.total_value.toLocaleString()}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Oldest / newest chips */}
+              {(dealAgeDistribution.oldest_deal || dealAgeDistribution.newest_deal) && (
+                <div className="grid grid-cols-2 gap-3">
+                  {dealAgeDistribution.oldest_deal && (
+                    <div className="rounded-md bg-rose-950/30 border border-rose-800/20 p-2">
+                      <p className="text-xs text-zinc-500 mb-0.5">Oldest Deal</p>
+                      <p className="text-xs font-medium text-rose-300 truncate">{dealAgeDistribution.oldest_deal.title}</p>
+                      <p className="text-xs text-zinc-500">{dealAgeDistribution.oldest_deal.days} days</p>
+                    </div>
+                  )}
+                  {dealAgeDistribution.newest_deal && (
+                    <div className="rounded-md bg-emerald-950/30 border border-emerald-800/20 p-2">
+                      <p className="text-xs text-zinc-500 mb-0.5">Newest Deal</p>
+                      <p className="text-xs font-medium text-emerald-300 truncate">{dealAgeDistribution.newest_deal.title}</p>
+                      <p className="text-xs text-zinc-500">{dealAgeDistribution.newest_deal.days} days</p>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Insight */}
+              <div className="rounded-md bg-zinc-800/50 border border-zinc-700/30 p-3">
+                <p className="text-xs text-zinc-300 italic">{dealAgeDistribution.aging_insight}</p>
+              </div>
+              {/* Recommendations */}
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1.5">Recommendations</p>
+                <ul className="space-y-1">
+                  {dealAgeDistribution.recommendations.map((rec, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {rec}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealAgeDistribution.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No age data available. Click Regenerate to generate.</p>
           )
         )}
       </Card>

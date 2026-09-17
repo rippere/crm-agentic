@@ -12972,3 +12972,160 @@ async def get_sales_forecast(
         "adjustments": adjustments,
         "generated_at": now.isoformat() + "Z",
     }
+
+_DEAL_AGE_SYSTEM = """\
+You are a senior sales operations AI analysing the age distribution of open CRM deals.
+Given deal count and total value per age bucket (<30d, 30-60d, 60-90d, >90d), plus the oldest and newest deal and average pipeline age, generate an aging insight and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "aging_insight": "2-3 sentence insight about pipeline aging",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/age-distribution")
+@limiter.limit("5/minute")
+async def get_deal_age_distribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.value, Deal.created_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .order_by(Deal.created_at.asc())
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "buckets": [
+                {"label": "<30d", "count": 0, "total_value": 0, "pct_of_pipeline": 0},
+                {"label": "30-60d", "count": 0, "total_value": 0, "pct_of_pipeline": 0},
+                {"label": "60-90d", "count": 0, "total_value": 0, "pct_of_pipeline": 0},
+                {"label": ">90d", "count": 0, "total_value": 0, "pct_of_pipeline": 0},
+            ],
+            "oldest_deal": None,
+            "newest_deal": None,
+            "avg_age_days": 0,
+            "aging_insight": "No open deals found in the pipeline.",
+            "recommendations": [
+                "Create new deals in the pipeline to start tracking age distribution.",
+                "Import existing opportunities from your CRM or spreadsheet.",
+                "Set up inbound lead capture to automatically create deals.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    bucket_labels = ["<30d", "30-60d", "60-90d", ">90d"]
+    bucket_data: dict[str, dict] = {b: {"count": 0, "total_value": 0.0} for b in bucket_labels}
+
+    total_pipeline = 0.0
+    ages = []
+    oldest = None
+    newest = None
+
+    for row in rows:
+        title = str(row[1])
+        value = float(row[2] or 0)
+        created_at = row[3]
+        if created_at and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+        days = (now - created_at).days if created_at else 0
+        ages.append(days)
+        total_pipeline += value
+
+        if days < 30:
+            bucket = "<30d"
+        elif days < 60:
+            bucket = "30-60d"
+        elif days < 90:
+            bucket = "60-90d"
+        else:
+            bucket = ">90d"
+
+        bucket_data[bucket]["count"] += 1
+        bucket_data[bucket]["total_value"] += value
+
+        if oldest is None or days > oldest["days"]:
+            oldest = {"title": title, "days": days}
+        if newest is None or days < newest["days"]:
+            newest = {"title": title, "days": days}
+
+    avg_age_days = round(sum(ages) / len(ages)) if ages else 0
+
+    buckets = [
+        {
+            "label": label,
+            "count": bucket_data[label]["count"],
+            "total_value": round(bucket_data[label]["total_value"]),
+            "pct_of_pipeline": round(bucket_data[label]["total_value"] / total_pipeline * 100) if total_pipeline > 0 else 0,
+        }
+        for label in bucket_labels
+    ]
+
+    default_insight = (
+        f"Your pipeline has {len(rows)} open deals with an average age of {avg_age_days} days. "
+        f"The oldest deal has been open for {oldest['days']} days — review whether it is still progressing. "
+        "Focus on clearing stale deals to keep pipeline accuracy high."
+    )
+    default_recs = [
+        f"Review the {bucket_data['>90d']['count']} deals older than 90 days — close or disqualify those with no recent activity.",
+        "Set a maximum pipeline age policy (e.g. 120 days) and automate health-score alerts for deals approaching it.",
+        "Run a weekly aging report to identify deals at risk of becoming stale before they miss the quarter.",
+    ]
+
+    old_deal_count = bucket_data[">90d"]["count"]
+    context_lines = [
+        f"Open deals: {len(rows)}, avg age: {avg_age_days} days",
+        f"<30d: {bucket_data['<30d']['count']} deals (${bucket_data['<30d']['total_value']:,.0f})",
+        f"30-60d: {bucket_data['30-60d']['count']} deals (${bucket_data['30-60d']['total_value']:,.0f})",
+        f"60-90d: {bucket_data['60-90d']['count']} deals (${bucket_data['60-90d']['total_value']:,.0f})",
+        f">90d: {old_deal_count} deals (${bucket_data['>90d']['total_value']:,.0f})",
+        f"Oldest deal: {oldest['title']} at {oldest['days']} days",
+        f"Newest deal: {newest['title']} at {newest['days']} days",
+    ]
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_DEAL_AGE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    aging_insight = str(data.get("aging_insight", "")).strip() or default_insight
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "buckets": buckets,
+        "oldest_deal": oldest,
+        "newest_deal": newest,
+        "avg_age_days": avg_age_days,
+        "aging_insight": aging_insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

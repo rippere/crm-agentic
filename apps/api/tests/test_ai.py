@@ -6521,3 +6521,66 @@ async def test_sales_forecast_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/sales-forecast")
     assert resp.status_code == 403
+
+
+# Phase 17k — Deal Age Distribution
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_deal_age_distribution_returns_structured_response(app_client):
+    import datetime as _dt
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    rows = [
+        (uuid.uuid4(), "New Deal Alpha", 40000, now - _dt.timedelta(days=10)),
+        (uuid.uuid4(), "Growing Deal Beta", 75000, now - _dt.timedelta(days=45)),
+        (uuid.uuid4(), "Stale Deal Gamma", 30000, now - _dt.timedelta(days=75)),
+        (uuid.uuid4(), "Old Deal Delta", 50000, now - _dt.timedelta(days=120)),
+    ]
+
+    ai_response = {
+        "aging_insight": "Pipeline has 4 open deals averaging 62 days. One deal is over 90 days and may need reassessment.",
+        "recommendations": [
+            "Review and close or disqualify the deal over 90 days old.",
+            "Set a 120-day max pipeline age policy with automated alerts.",
+            "Run a weekly aging report to catch stale deals early.",
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/age-distribution")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["buckets"]) == 4
+    assert all("label" in b and "count" in b and "total_value" in b and "pct_of_pipeline" in b for b in body["buckets"])
+    total_count = sum(b["count"] for b in body["buckets"])
+    assert total_count == 4
+    assert body["oldest_deal"]["days"] == 120
+    assert body["newest_deal"]["days"] == 10
+    assert body["avg_age_days"] == 62
+    assert isinstance(body["aging_insight"], str) and body["aging_insight"]
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_age_distribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/age-distribution")
+    assert resp.status_code == 403
