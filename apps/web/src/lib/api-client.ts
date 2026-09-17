@@ -6931,5 +6931,38 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/seasonal-patterns`, {}, token)
   },
+
+  async getAIDealStallAnalysis(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        buckets: [
+          { bucket: 'fresh', label: '0–6 days', deal_count: 4, total_value: 95000, avg_stall_days: 3.5 },
+          { bucket: 'warming', label: '7–13 days', deal_count: 5, total_value: 142000, avg_stall_days: 10.2 },
+          { bucket: 'stalling', label: '14–29 days', deal_count: 6, total_value: 198000, avg_stall_days: 21.4 },
+          { bucket: 'at_risk', label: '30–59 days', deal_count: 4, total_value: 165000, avg_stall_days: 44.8 },
+          { bucket: 'critical', label: '60+ days', deal_count: 3, total_value: 210000, avg_stall_days: 82.3 },
+        ],
+        top_stalled_deals: [
+          { id: 'd1', title: 'Apex Corp Enterprise', stage: 'negotiation', value: 90000, health_score: 32.0, stall_days: 94 },
+          { id: 'd2', title: 'BlueSky SaaS Renewal', stage: 'proposal', value: 75000, health_score: 41.0, stall_days: 78 },
+          { id: 'd3', title: 'Meridian Consulting', stage: 'negotiation', value: 45000, health_score: 38.0, stall_days: 75 },
+          { id: 'd4', title: 'NovaTech Platform', stage: 'qualified', value: 38000, health_score: 55.0, stall_days: 52 },
+          { id: 'd5', title: 'Pinnacle Logistics', stage: 'proposal', value: 29000, health_score: 62.0, stall_days: 47 },
+        ],
+        avg_stall_days: 28.6,
+        critical_count: 3,
+        at_risk_count: 4,
+        total_active: 22,
+        stall_narrative: '3 deals have been stalled for over 60 days, collectively representing $210K in at-risk pipeline. The negotiation stage shows the highest concentration of critical stalls, suggesting pricing or approval bottlenecks.',
+        recommendations: [
+          'Escalate the 3 critical deals (90+ days) to senior leadership with a clear decision deadline within 2 weeks.',
+          'Implement a 30-day stall alert so reps receive an automatic nudge before deals enter the at-risk bucket.',
+          'Review the proposal-to-negotiation handoff — 6 deals are stalling in proposal, indicating a process gap.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/stall-analysis`, {}, token)
+  },
 }
 

@@ -774,6 +774,12 @@ export default function ReportsPage() {
   const [seasonalPatterns, setSeasonalPatterns] = useState<AISeasonalPatternsData | null>(null);
   const [seasonalPatternsLoading, setSeasonalPatternsLoading] = useState(false);
   const [seasonalPatternsOpen, setSeasonalPatternsOpen] = useState(true);
+  type AIStallBucket = { bucket: string; label: string; deal_count: number; total_value: number; avg_stall_days: number };
+  type AITopStalledDeal = { id: string; title: string; stage: string; value: number; health_score: number; stall_days: number };
+  type AIStallAnalysisData = { buckets: AIStallBucket[]; top_stalled_deals: AITopStalledDeal[]; avg_stall_days: number; critical_count: number; at_risk_count: number; total_active: number; stall_narrative: string; recommendations: string[]; generated_at: string };
+  const [stallAnalysis, setStallAnalysis] = useState<AIStallAnalysisData | null>(null);
+  const [stallAnalysisLoading, setStallAnalysisLoading] = useState(false);
+  const [stallAnalysisOpen, setStallAnalysisOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -925,6 +931,8 @@ export default function ReportsPage() {
       apiClient.getAIDealTierSegmentation("demo-workspace-1", "demo-token").then(setTierSegmentation).catch(() => {}).finally(() => setTierSegmentationLoading(false));
       setSeasonalPatternsLoading(true);
       apiClient.getAIDealSeasonalPatterns("demo-workspace-1", "demo-token").then(setSeasonalPatterns).catch(() => {}).finally(() => setSeasonalPatternsLoading(false));
+      setStallAnalysisLoading(true);
+      apiClient.getAIDealStallAnalysis("demo-workspace-1", "demo-token").then(setStallAnalysis).catch(() => {}).finally(() => setStallAnalysisLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1080,6 +1088,8 @@ export default function ReportsPage() {
       apiClient.getAIDealTierSegmentation(workspaceId, session.access_token).then(setTierSegmentation).catch(() => {}).finally(() => setTierSegmentationLoading(false));
       setSeasonalPatternsLoading(true);
       apiClient.getAIDealSeasonalPatterns(workspaceId, session.access_token).then(setSeasonalPatterns).catch(() => {}).finally(() => setSeasonalPatternsLoading(false));
+      setStallAnalysisLoading(true);
+      apiClient.getAIDealStallAnalysis(workspaceId, session.access_token).then(setStallAnalysis).catch(() => {}).finally(() => setStallAnalysisLoading(false));
     });
   }, []);
 
@@ -2076,6 +2086,27 @@ export default function ReportsPage() {
         if (!session) { setSeasonalPatternsLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setSeasonalPatternsLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateStallAnalysis = () => {
+    setStallAnalysisLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealStallAnalysis(wid, tok)
+        .then(setStallAnalysis)
+        .catch(() => {})
+        .finally(() => setStallAnalysisLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setStallAnalysisLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setStallAnalysisLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -9046,6 +9077,113 @@ export default function ReportsPage() {
             <p className="text-xs text-zinc-500 p-4 italic">No open deals to segment into tiers.</p>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No tier segmentation data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Stall Analysis */}
+      <Card className="border-amber-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Timer className="h-4 w-4 text-amber-400" />
+            <span className="text-sm font-semibold text-zinc-200">Deal Stall Analysis</span>
+            {stallAnalysis && stallAnalysis.critical_count > 0 && (
+              <span className="text-xs bg-rose-900/40 text-rose-300 px-1.5 py-0.5 rounded border border-rose-700/30">
+                {stallAnalysis.critical_count} critical
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateStallAnalysis}
+              disabled={stallAnalysisLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", stallAnalysisLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setStallAnalysisOpen((v) => !v)} className="text-zinc-400 hover:text-zinc-200 transition-colors">
+              {stallAnalysisOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {stallAnalysisOpen && (
+          stallAnalysisLoading && !stallAnalysis ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-zinc-800 rounded" />)}
+            </div>
+          ) : stallAnalysis && stallAnalysis.total_active > 0 ? (
+            <div className={cn("p-4 space-y-4", stallAnalysisLoading && "opacity-40")}>
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="rounded-lg bg-zinc-800/60 border border-zinc-700/30 p-2">
+                  <p className="text-xs text-zinc-500">Active Deals</p>
+                  <p className="text-lg font-bold text-zinc-200">{stallAnalysis.total_active}</p>
+                </div>
+                <div className="rounded-lg bg-amber-900/20 border border-amber-700/20 p-2">
+                  <p className="text-xs text-amber-500">Avg Stall</p>
+                  <p className="text-lg font-bold text-amber-300">{stallAnalysis.avg_stall_days}d</p>
+                </div>
+                <div className="rounded-lg bg-rose-900/20 border border-rose-700/20 p-2">
+                  <p className="text-xs text-rose-500">Critical (60+d)</p>
+                  <p className="text-lg font-bold text-rose-300">{stallAnalysis.critical_count}</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {stallAnalysis.buckets.map((b) => {
+                  const bucketColor = b.bucket === 'fresh'
+                    ? { bar: 'bg-emerald-500/60', label: 'text-emerald-400', pct: 'text-emerald-500' }
+                    : b.bucket === 'warming'
+                    ? { bar: 'bg-amber-400/60', label: 'text-amber-400', pct: 'text-amber-500' }
+                    : b.bucket === 'stalling'
+                    ? { bar: 'bg-orange-500/60', label: 'text-orange-400', pct: 'text-orange-500' }
+                    : b.bucket === 'at_risk'
+                    ? { bar: 'bg-rose-500/60', label: 'text-rose-400', pct: 'text-rose-500' }
+                    : { bar: 'bg-red-600/60', label: 'text-red-400', pct: 'text-red-500' };
+                  const pct = stallAnalysis.total_active > 0 ? Math.round(b.deal_count / stallAnalysis.total_active * 100) : 0;
+                  return (
+                    <div key={b.bucket} className="flex items-center gap-3">
+                      <span className={cn("text-xs w-16 flex-shrink-0 capitalize", bucketColor.label)}>{b.bucket}</span>
+                      <div className="flex-1 h-4 bg-zinc-800 rounded-sm overflow-hidden">
+                        <div className={cn("h-full rounded-sm", bucketColor.bar)} style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-xs text-zinc-400 w-14 flex-shrink-0">{b.deal_count} deal{b.deal_count !== 1 ? 's' : ''}</span>
+                      <span className="text-xs text-zinc-600 w-16 flex-shrink-0">{b.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {stallAnalysis.top_stalled_deals.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Top Stalled</p>
+                  {stallAnalysis.top_stalled_deals.map((d) => (
+                    <div key={d.id} className="flex items-center justify-between gap-2 rounded bg-zinc-800/50 px-2 py-1.5">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-zinc-200 truncate">{d.title}</p>
+                        <p className="text-xs text-zinc-500">{stageConfig[d.stage as keyof typeof stageConfig]?.label ?? d.stage}</p>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <span className="text-xs text-zinc-400">${(d.value / 1000).toFixed(0)}K</span>
+                        <span className={cn("text-xs font-mono font-semibold", d.stall_days >= 60 ? 'text-red-400' : d.stall_days >= 30 ? 'text-rose-400' : 'text-amber-400')}>{d.stall_days}d</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{stallAnalysis.stall_narrative}</p>
+              <ul className="space-y-1">
+                {stallAnalysis.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(stallAnalysis.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : stallAnalysis ? (
+            <p className="text-xs text-zinc-500 p-4 italic">No active deals found to analyse stall patterns.</p>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No stall analysis data available.</p>
           )
         )}
       </Card>
