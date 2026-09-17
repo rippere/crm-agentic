@@ -7795,3 +7795,66 @@ async def test_value_leak_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/value-leak")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 18g: pipeline coverage
+# ---------------------------------------------------------------------------
+
+class FakeCoverageRow:
+    def __init__(self, stage, value, ml_win_probability=50.0):
+        self.stage = stage
+        self.value = value
+        self.ml_win_probability = ml_win_probability
+
+
+@pytest.mark.asyncio
+async def test_pipeline_coverage_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    won_rows = [FakeCoverageRow("closed_won", 50000), FakeCoverageRow("closed_won", 30000)]
+    open_rows = [
+        FakeCoverageRow("proposal", 80000, 60.0),
+        FakeCoverageRow("negotiation", 60000, 75.0),
+        FakeCoverageRow("qualified", 40000, 30.0),
+    ]
+
+    call_count = 0
+
+    async def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_execute_result(won_rows)
+        return _make_execute_result(open_rows)
+
+    mock_db.execute = fake_execute
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"coverage_narrative": "Pipeline is healthy.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/pipeline-coverage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "coverage_ratio" in body
+    assert "coverage_status" in body
+    assert "weighted_pipeline" in body
+    assert body["target_revenue"] == pytest.approx(240000.0)  # (50000+30000)*3
+    assert len(body["stage_breakdown"]) == 3
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_pipeline_coverage_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-coverage")
+    assert resp.status_code == 403
+    assert resp.status_code == 403

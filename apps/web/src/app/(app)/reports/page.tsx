@@ -753,6 +753,11 @@ export default function ReportsPage() {
   const [valueLeak, setValueLeak] = useState<AIValueLeakData | null>(null);
   const [valueLeakLoading, setValueLeakLoading] = useState(false);
   const [valueLeakOpen, setValueLeakOpen] = useState(true);
+  type CoverageStage = { stage: string; deal_count: number; total_value: number; weighted_value: number; pct_of_weighted: number };
+  type AIPipelineCoverageData = { coverage_ratio: number; coverage_status: string; weighted_pipeline: number; target_revenue: number; total_open_pipeline: number; stage_breakdown: CoverageStage[]; coverage_narrative: string; recommendations: string[]; generated_at: string };
+  const [pipelineCoverage, setPipelineCoverage] = useState<AIPipelineCoverageData | null>(null);
+  const [pipelineCoverageLoading, setPipelineCoverageLoading] = useState(false);
+  const [pipelineCoverageOpen, setPipelineCoverageOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -896,6 +901,8 @@ export default function ReportsPage() {
       apiClient.getAIDealRevenueForecast("demo-workspace-1", "demo-token").then(setAIForecast).catch(() => {}).finally(() => setAIForecastLoading(false));
       setValueLeakLoading(true);
       apiClient.getAIDealValueLeak("demo-workspace-1", "demo-token").then(setValueLeak).catch(() => {}).finally(() => setValueLeakLoading(false));
+      setPipelineCoverageLoading(true);
+      apiClient.getAIDealPipelineCoverage("demo-workspace-1", "demo-token").then(setPipelineCoverage).catch(() => {}).finally(() => setPipelineCoverageLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1043,6 +1050,8 @@ export default function ReportsPage() {
       apiClient.getAIDealRevenueForecast(workspaceId, session.access_token).then(setAIForecast).catch(() => {}).finally(() => setAIForecastLoading(false));
       setValueLeakLoading(true);
       apiClient.getAIDealValueLeak(workspaceId, session.access_token).then(setValueLeak).catch(() => {}).finally(() => setValueLeakLoading(false));
+      setPipelineCoverageLoading(true);
+      apiClient.getAIDealPipelineCoverage(workspaceId, session.access_token).then(setPipelineCoverage).catch(() => {}).finally(() => setPipelineCoverageLoading(false));
     });
   }, []);
 
@@ -1997,6 +2006,27 @@ export default function ReportsPage() {
         if (!session) { setValueLeakLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setValueLeakLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regeneratePipelineCoverage = () => {
+    setPipelineCoverageLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealPipelineCoverage(wid, tok)
+        .then(setPipelineCoverage)
+        .catch(() => {})
+        .finally(() => setPipelineCoverageLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPipelineCoverageLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPipelineCoverageLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -8663,6 +8693,90 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No value leak data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Pipeline Coverage */}
+      <Card className="border-sky-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Target className="h-4 w-4 text-sky-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Pipeline Coverage</h3>
+            {pipelineCoverage && (
+              <span className={`text-xs px-2 py-0.5 rounded-full border ${
+                pipelineCoverage.coverage_status === 'excellent' ? 'bg-emerald-900/40 text-emerald-300 border-emerald-700/30' :
+                pipelineCoverage.coverage_status === 'good' ? 'bg-sky-900/40 text-sky-300 border-sky-700/30' :
+                pipelineCoverage.coverage_status === 'needs_attention' ? 'bg-amber-900/40 text-amber-300 border-amber-700/30' :
+                'bg-rose-900/40 text-rose-300 border-rose-700/30'
+              }`}>
+                {pipelineCoverage.coverage_ratio}× coverage · {pipelineCoverage.coverage_status.replace('_', ' ')}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePipelineCoverage}
+              disabled={pipelineCoverageLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${pipelineCoverageLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            <button onClick={() => setPipelineCoverageOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {pipelineCoverageOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {pipelineCoverageOpen && (
+          pipelineCoverageLoading ? (
+            <div className="h-24 animate-pulse bg-zinc-800/50 m-4 rounded" />
+          ) : pipelineCoverage ? (
+            <div className="p-4 space-y-3">
+              {/* Coverage ratio summary */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-400">Weighted Pipeline</p>
+                  <p className="text-base font-bold text-sky-300">${(pipelineCoverage.weighted_pipeline / 1000).toFixed(0)}k</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-400">Target (3× run rate)</p>
+                  <p className="text-base font-bold text-zinc-200">${(pipelineCoverage.target_revenue / 1000).toFixed(0)}k</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-400">Total Open Pipeline</p>
+                  <p className="text-base font-bold text-zinc-200">${(pipelineCoverage.total_open_pipeline / 1000).toFixed(0)}k</p>
+                </div>
+              </div>
+              {/* Stage breakdown bars */}
+              {pipelineCoverage.stage_breakdown.length > 0 && (
+                <div className="space-y-2">
+                  {pipelineCoverage.stage_breakdown.map((sb) => (
+                    <div key={sb.stage} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300 capitalize">{sb.stage}</span>
+                        <span className="text-zinc-400">{sb.deal_count} deals · ${(sb.weighted_value / 1000).toFixed(0)}k weighted ({sb.pct_of_weighted}%)</span>
+                      </div>
+                      <div className="h-1.5 bg-zinc-700 rounded-full overflow-hidden">
+                        <div className="h-full bg-sky-500 rounded-full" style={{ width: `${Math.min(sb.pct_of_weighted, 100)}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{pipelineCoverage.coverage_narrative}</p>
+              <ul className="space-y-1.5">
+                {pipelineCoverage.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(pipelineCoverage.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No pipeline coverage data available.</p>
           )
         )}
       </Card>
