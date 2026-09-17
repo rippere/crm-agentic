@@ -738,6 +738,11 @@ export default function ReportsPage() {
   const [velocityAnomaliesLoading, setVelocityAnomaliesLoading] = useState(false);
   const [velocityAnomaliesOpen, setVelocityAnomaliesOpen] = useState(true);
 
+  type AIOutcomeFactorsData = { won_count: number; lost_count: number; win_rate: number; won_avg_value: number; lost_avg_value: number; won_avg_health: number; lost_avg_health: number; won_avg_win_prob: number; lost_avg_win_prob: number; won_avg_days_to_close: number; lost_avg_days_to_close: number; value_sweet_spot_min: number; value_sweet_spot_max: number; win_loss_narrative: string; recommendations: string[]; generated_at: string };
+  const [outcomeFactors, setOutcomeFactors] = useState<AIOutcomeFactorsData | null>(null);
+  const [outcomeFactorsLoading, setOutcomeFactorsLoading] = useState(false);
+  const [outcomeFactorsOpen, setOutcomeFactorsOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -874,6 +879,8 @@ export default function ReportsPage() {
       apiClient.getAIContactScoreRecencyHeatmap("demo-workspace-1", "demo-token").then(setSRHeatmap).catch(() => {}).finally(() => setSRHeatmapLoading(false));
       setVelocityAnomaliesLoading(true);
       apiClient.getAIDealVelocityAnomalies("demo-workspace-1", "demo-token").then(setVelocityAnomalies).catch(() => {}).finally(() => setVelocityAnomaliesLoading(false));
+      setOutcomeFactorsLoading(true);
+      apiClient.getAIDealOutcomeFactors("demo-workspace-1", "demo-token").then(setOutcomeFactors).catch(() => {}).finally(() => setOutcomeFactorsLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1015,6 +1022,8 @@ export default function ReportsPage() {
       apiClient.getAIContactScoreRecencyHeatmap(workspaceId, session.access_token).then(setSRHeatmap).catch(() => {}).finally(() => setSRHeatmapLoading(false));
       setVelocityAnomaliesLoading(true);
       apiClient.getAIDealVelocityAnomalies(workspaceId, session.access_token).then(setVelocityAnomalies).catch(() => {}).finally(() => setVelocityAnomaliesLoading(false));
+      setOutcomeFactorsLoading(true);
+      apiClient.getAIDealOutcomeFactors(workspaceId, session.access_token).then(setOutcomeFactors).catch(() => {}).finally(() => setOutcomeFactorsLoading(false));
     });
   }, []);
 
@@ -1906,6 +1915,27 @@ export default function ReportsPage() {
         if (!session) { setVelocityAnomaliesLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setVelocityAnomaliesLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateOutcomeFactors = () => {
+    setOutcomeFactorsLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealOutcomeFactors(wid, tok)
+        .then(setOutcomeFactors)
+        .catch(() => {})
+        .finally(() => setOutcomeFactorsLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setOutcomeFactorsLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setOutcomeFactorsLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -8354,6 +8384,82 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No velocity data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Win/Loss Outcome Factors */}
+      <Card className="border-emerald-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-emerald-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Win/Loss Outcome Factors</h3>
+            {outcomeFactors && (
+              <span className="text-xs bg-emerald-900/40 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-700/30">
+                {outcomeFactors.win_rate}% win rate
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateOutcomeFactors}
+              disabled={outcomeFactorsLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", outcomeFactorsLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setOutcomeFactorsOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {outcomeFactorsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {outcomeFactorsOpen && (
+          outcomeFactorsLoading ? (
+            <p className="text-xs text-zinc-500 p-4 animate-pulse">Analysing win/loss patterns…</p>
+          ) : outcomeFactors ? (
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: 'Avg Value', won: `$${outcomeFactors.won_avg_value.toLocaleString()}`, lost: `$${outcomeFactors.lost_avg_value.toLocaleString()}` },
+                  { label: 'Avg Health', won: `${outcomeFactors.won_avg_health.toFixed(0)}`, lost: `${outcomeFactors.lost_avg_health.toFixed(0)}` },
+                  { label: 'Avg Win Prob', won: `${outcomeFactors.won_avg_win_prob.toFixed(0)}%`, lost: `${outcomeFactors.lost_avg_win_prob.toFixed(0)}%` },
+                  { label: 'Days to Close', won: `${outcomeFactors.won_avg_days_to_close}d`, lost: `${outcomeFactors.lost_avg_days_to_close}d` },
+                ].map(({ label, won, lost }) => (
+                  <div key={label} className="bg-zinc-900/50 rounded-lg p-3 border border-zinc-800">
+                    <p className="text-xs text-zinc-500 mb-1.5">{label}</p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-emerald-400">{won}</span>
+                      <span className="text-xs text-zinc-600">vs</span>
+                      <span className="text-xs font-semibold text-rose-400">{lost}</span>
+                    </div>
+                    <div className="flex gap-0.5 text-[10px] text-zinc-600 mt-0.5">
+                      <span className="text-emerald-600">{outcomeFactors.won_count}W</span>
+                      <span>/</span>
+                      <span className="text-rose-600">{outcomeFactors.lost_count}L</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {outcomeFactors.value_sweet_spot_max > 0 && (
+                <div className="flex items-center gap-2 text-xs text-zinc-400">
+                  <span className="text-zinc-500">Value sweet spot:</span>
+                  <span className="text-emerald-400 font-medium">${outcomeFactors.value_sweet_spot_min.toLocaleString()}–${outcomeFactors.value_sweet_spot_max.toLocaleString()}</span>
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{outcomeFactors.win_loss_narrative}</p>
+              <ul className="space-y-1.5">
+                {outcomeFactors.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(outcomeFactors.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No outcome data available.</p>
           )
         )}
       </Card>
