@@ -6165,5 +6165,29 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/momentum`, {}, token)
   },
+
+  async getVelocityHeatmap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        transitions: [
+          { from_stage: 'proposal', to_stage: 'negotiation', median_days: 21, deal_count: 8 },
+          { from_stage: 'qualified', to_stage: 'proposal', median_days: 14, deal_count: 12 },
+          { from_stage: 'negotiation', to_stage: 'closed_won', median_days: 11, deal_count: 6 },
+          { from_stage: 'discovery', to_stage: 'qualified', median_days: 7, deal_count: 15 },
+        ],
+        bottleneck_stage: 'proposal',
+        fastest_transition: 'discovery -> qualified',
+        slowest_transition: 'proposal -> negotiation',
+        insight: 'The proposal stage is the primary bottleneck in your pipeline, with a median of 21 days to advance to negotiation. Deals that do advance tend to move quickly through negotiation, suggesting the bottleneck is in getting stakeholder alignment on the proposal itself. Discovery to qualification is healthy at 7 days.',
+        recommendations: [
+          'Introduce a proposal review checklist to ensure every proposal includes a clear ROI section, success metrics, and a specific ask — this reduces back-and-forth that inflates proposal time.',
+          'Set a 14-day SLA on proposals: if a deal hasn\'t moved in 14 days, it requires a manager-level review call with the customer.',
+          'Templatize your top-performing proposals and share them with all reps — deals using the top-3 proposal templates advance 40% faster on average.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/pipeline/velocity-heatmap`, {}, token)
+  },
 }
 

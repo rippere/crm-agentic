@@ -563,6 +563,16 @@ export default function ReportsPage() {
   const [momentumLoading, setMomentumLoading] = useState(false);
   const [momentumOpen, setMomentumOpen] = useState(true);
 
+  type VelocityTransition = { from_stage: string; to_stage: string; median_days: number; deal_count: number };
+  type VelocityHeatmapData = {
+    transitions: VelocityTransition[]; bottleneck_stage: string;
+    fastest_transition: string; slowest_transition: string;
+    insight: string; recommendations: string[]; generated_at: string;
+  };
+  const [velocityHeatmap, setVelocityHeatmap] = useState<VelocityHeatmapData | null>(null);
+  const [velocityHeatmapLoading, setVelocityHeatmapLoading] = useState(false);
+  const [velocityHeatmapOpen, setVelocityHeatmapOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -655,6 +665,8 @@ export default function ReportsPage() {
       apiClient.getDealRiskEscalation("demo-workspace-1", "demo-token").then(setRiskEscalation).catch(() => {}).finally(() => setRiskEscalationLoading(false));
       setMomentumLoading(true);
       apiClient.getWorkspaceMomentum("demo-workspace-1", "demo-token").then(setMomentum).catch(() => {}).finally(() => setMomentumLoading(false));
+      setVelocityHeatmapLoading(true);
+      apiClient.getVelocityHeatmap("demo-workspace-1", "demo-token").then(setVelocityHeatmap).catch(() => {}).finally(() => setVelocityHeatmapLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -752,6 +764,8 @@ export default function ReportsPage() {
       apiClient.getDealRiskEscalation(workspaceId, session.access_token).then(setRiskEscalation).catch(() => {}).finally(() => setRiskEscalationLoading(false));
       setMomentumLoading(true);
       apiClient.getWorkspaceMomentum(workspaceId, session.access_token).then(setMomentum).catch(() => {}).finally(() => setMomentumLoading(false));
+      setVelocityHeatmapLoading(true);
+      apiClient.getVelocityHeatmap(workspaceId, session.access_token).then(setVelocityHeatmap).catch(() => {}).finally(() => setVelocityHeatmapLoading(false));
     });
   }, []);
 
@@ -1307,6 +1321,27 @@ export default function ReportsPage() {
         if (!session) { setCoachingDigestLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCoachingDigestLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateVelocityHeatmap = () => {
+    setVelocityHeatmapLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getVelocityHeatmap(wid, tok)
+        .then(setVelocityHeatmap)
+        .catch(() => {})
+        .finally(() => setVelocityHeatmapLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setVelocityHeatmapLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setVelocityHeatmapLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5191,6 +5226,105 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No coaching digest data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Pipeline Velocity Heatmap */}
+      <Card className="border-violet-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-violet-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Pipeline Velocity Heatmap</h3>
+            {velocityHeatmap && (
+              <span className="text-xs bg-violet-900/40 text-violet-300 px-2 py-0.5 rounded-full border border-violet-700/30">
+                Bottleneck: {velocityHeatmap.bottleneck_stage}
+              </span>
+            )}
+            {velocityHeatmap && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                {velocityHeatmap.transitions.length} transitions
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateVelocityHeatmap}
+              disabled={velocityHeatmapLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", velocityHeatmapLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setVelocityHeatmapOpen(!velocityHeatmapOpen)}>
+              {velocityHeatmapOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {velocityHeatmapOpen && (
+          velocityHeatmapLoading && !velocityHeatmap ? (
+            <div className="p-6 text-center text-xs text-zinc-500 animate-pulse">Analysing pipeline velocity…</div>
+          ) : velocityHeatmap && velocityHeatmap.transitions.length > 0 ? (
+            <div className={cn("p-4 space-y-4", velocityHeatmapLoading && "opacity-40")}>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-zinc-800">
+                      <th className="text-left text-zinc-500 font-medium pb-2 pr-4">From</th>
+                      <th className="text-left text-zinc-500 font-medium pb-2 pr-4">To</th>
+                      <th className="text-right text-zinc-500 font-medium pb-2 pr-4">Median Days</th>
+                      <th className="text-right text-zinc-500 font-medium pb-2">Deals</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {velocityHeatmap.transitions.map((t, i) => {
+                      const maxDays = Math.max(...velocityHeatmap.transitions.map(x => x.median_days));
+                      const pct = maxDays > 0 ? t.median_days / maxDays : 0;
+                      const color = pct > 0.7 ? "text-rose-400" : pct > 0.4 ? "text-amber-400" : "text-emerald-400";
+                      return (
+                        <tr key={i} className="border-b border-zinc-800/50">
+                          <td className="py-2 pr-4 text-zinc-300 capitalize">{t.from_stage.replace(/_/g, " ")}</td>
+                          <td className="py-2 pr-4 text-zinc-300 capitalize">{t.to_stage.replace(/_/g, " ")}</td>
+                          <td className={cn("py-2 pr-4 text-right font-mono font-semibold", color)}>{t.median_days}d</td>
+                          <td className="py-2 text-right text-zinc-500">{t.deal_count}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-md bg-emerald-950/30 border border-emerald-800/20 p-2">
+                  <p className="text-xs text-zinc-500 mb-0.5">Fastest</p>
+                  <p className="text-xs font-medium text-emerald-300">{velocityHeatmap.fastest_transition}</p>
+                </div>
+                <div className="rounded-md bg-rose-950/30 border border-rose-800/20 p-2">
+                  <p className="text-xs text-zinc-500 mb-0.5">Slowest</p>
+                  <p className="text-xs font-medium text-rose-300">{velocityHeatmap.slowest_transition}</p>
+                </div>
+              </div>
+              <div className="rounded-md bg-zinc-800/50 border border-zinc-700/30 p-3">
+                <p className="text-xs text-zinc-300 italic">{velocityHeatmap.insight}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1">Recommendations</p>
+                <ul className="space-y-1">
+                  {velocityHeatmap.recommendations.map((r, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(velocityHeatmap.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : velocityHeatmap && velocityHeatmap.transitions.length === 0 ? (
+            <div className="p-4">
+              <p className="text-xs text-zinc-400 italic">No stage transition data found for the last 180 days. Move deals between stages to start tracking velocity.</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No velocity data available.</p>
           )
         )}
       </Card>
