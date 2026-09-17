@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -768,6 +768,12 @@ export default function ReportsPage() {
   const [tierSegmentation, setTierSegmentation] = useState<AITierSegmentationData | null>(null);
   const [tierSegmentationLoading, setTierSegmentationLoading] = useState(false);
   const [tierSegmentationOpen, setTierSegmentationOpen] = useState(true);
+  type AIMonthlyPattern = { month: string; month_number: number; deal_count: number; revenue: number; pct_of_annual: number };
+  type AIQuarterlyBreakdown = { quarter: string; deal_count: number; revenue: number; pct_of_annual: number };
+  type AISeasonalPatternsData = { monthly_patterns: AIMonthlyPattern[]; quarterly_breakdown: AIQuarterlyBreakdown[]; peak_month: string | null; slowest_month: string | null; total_annual_revenue: number; seasonal_narrative: string; recommendations: string[]; generated_at: string };
+  const [seasonalPatterns, setSeasonalPatterns] = useState<AISeasonalPatternsData | null>(null);
+  const [seasonalPatternsLoading, setSeasonalPatternsLoading] = useState(false);
+  const [seasonalPatternsOpen, setSeasonalPatternsOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -917,6 +923,8 @@ export default function ReportsPage() {
       apiClient.getAIDealQuarterReadiness("demo-workspace-1", "demo-token").then(setQuarterReadiness).catch(() => {}).finally(() => setQuarterReadinessLoading(false));
       setTierSegmentationLoading(true);
       apiClient.getAIDealTierSegmentation("demo-workspace-1", "demo-token").then(setTierSegmentation).catch(() => {}).finally(() => setTierSegmentationLoading(false));
+      setSeasonalPatternsLoading(true);
+      apiClient.getAIDealSeasonalPatterns("demo-workspace-1", "demo-token").then(setSeasonalPatterns).catch(() => {}).finally(() => setSeasonalPatternsLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1070,6 +1078,8 @@ export default function ReportsPage() {
       apiClient.getAIDealQuarterReadiness(workspaceId, session.access_token).then(setQuarterReadiness).catch(() => {}).finally(() => setQuarterReadinessLoading(false));
       setTierSegmentationLoading(true);
       apiClient.getAIDealTierSegmentation(workspaceId, session.access_token).then(setTierSegmentation).catch(() => {}).finally(() => setTierSegmentationLoading(false));
+      setSeasonalPatternsLoading(true);
+      apiClient.getAIDealSeasonalPatterns(workspaceId, session.access_token).then(setSeasonalPatterns).catch(() => {}).finally(() => setSeasonalPatternsLoading(false));
     });
   }, []);
 
@@ -2045,6 +2055,27 @@ export default function ReportsPage() {
         if (!session) { setTierSegmentationLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTierSegmentationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateSeasonalPatterns = () => {
+    setSeasonalPatternsLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealSeasonalPatterns(wid, tok)
+        .then(setSeasonalPatterns)
+        .catch(() => {})
+        .finally(() => setSeasonalPatternsLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setSeasonalPatternsLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setSeasonalPatternsLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -9015,6 +9046,87 @@ export default function ReportsPage() {
             <p className="text-xs text-zinc-500 p-4 italic">No open deals to segment into tiers.</p>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No tier segmentation data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Seasonal Deal Patterns */}
+      <Card className="border-teal-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Calendar className="h-4 w-4 text-teal-400" />
+            <span className="text-sm font-semibold text-zinc-200">Seasonal Deal Patterns</span>
+            {seasonalPatterns && seasonalPatterns.peak_month && (
+              <span className="text-xs bg-teal-900/40 text-teal-300 px-1.5 py-0.5 rounded border border-teal-700/30">
+                Peak: {seasonalPatterns.peak_month}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateSeasonalPatterns}
+              disabled={seasonalPatternsLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", seasonalPatternsLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setSeasonalPatternsOpen((v) => !v)} className="text-zinc-400 hover:text-zinc-200 transition-colors">
+              {seasonalPatternsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {seasonalPatternsOpen && (
+          seasonalPatternsLoading && !seasonalPatterns ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-zinc-800 rounded" />)}
+            </div>
+          ) : seasonalPatterns && seasonalPatterns.monthly_patterns.some((m) => m.deal_count > 0) ? (
+            <div className={cn("p-4 space-y-4", seasonalPatternsLoading && "opacity-40")}>
+              <div className="grid grid-cols-4 gap-2">
+                {seasonalPatterns.quarterly_breakdown.map((q) => (
+                  <div key={q.quarter} className="rounded-lg bg-zinc-800/60 border border-zinc-700/30 p-2 text-center">
+                    <p className="text-xs font-semibold text-teal-400">{q.quarter}</p>
+                    <p className="text-sm font-bold text-zinc-200">${(q.revenue / 1000).toFixed(0)}K</p>
+                    <p className="text-xs text-zinc-500">{q.pct_of_annual}%</p>
+                    <p className="text-xs text-zinc-600">{q.deal_count} deal{q.deal_count !== 1 ? 's' : ''}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-1.5">
+                {seasonalPatterns.monthly_patterns.map((m) => {
+                  const isPeak = m.month === seasonalPatterns.peak_month;
+                  const isSlowest = m.month === seasonalPatterns.slowest_month;
+                  return (
+                    <div key={m.month} className="flex items-center gap-2">
+                      <span className={cn("text-xs w-7 flex-shrink-0 text-right", isPeak ? 'text-teal-300 font-semibold' : isSlowest ? 'text-zinc-500' : 'text-zinc-400')}>{m.month}</span>
+                      <div className="flex-1 h-4 bg-zinc-800 rounded-sm overflow-hidden">
+                        <div
+                          className={cn("h-full rounded-sm", isPeak ? 'bg-teal-500/70' : isSlowest ? 'bg-zinc-600/50' : 'bg-teal-500/30')}
+                          style={{ width: `${m.pct_of_annual}%` }}
+                        />
+                      </div>
+                      <span className="text-xs text-zinc-500 w-16 flex-shrink-0">${(m.revenue / 1000).toFixed(0)}K</span>
+                      <span className="text-xs text-zinc-600 w-8 flex-shrink-0">{m.pct_of_annual}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{seasonalPatterns.seasonal_narrative}</p>
+              <ul className="space-y-1">
+                {seasonalPatterns.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(seasonalPatterns.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : seasonalPatterns ? (
+            <p className="text-xs text-zinc-500 p-4 italic">No closed-won deals in the last 2 years to analyse seasonal patterns.</p>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No seasonal pattern data available.</p>
           )
         )}
       </Card>

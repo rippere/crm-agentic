@@ -7974,3 +7974,47 @@ async def test_tier_segmentation_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/tier-segmentation")
     assert resp.status_code == 403
+
+
+class FakeSeasonalRow:
+    def __init__(self, value, month):
+        self.value = value
+        self.stage_changed_at = datetime.datetime(2025, month, 15, tzinfo=datetime.timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_seasonal_patterns_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    rows = [
+        FakeSeasonalRow(20000, 3),   # March
+        FakeSeasonalRow(15000, 3),   # March
+        FakeSeasonalRow(45000, 6),   # June
+        FakeSeasonalRow(90000, 10),  # October (peak)
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"seasonal_narrative": "Q4 leads closings.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/seasonal-patterns")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["monthly_patterns"]) == 12
+    assert len(body["quarterly_breakdown"]) == 4
+    assert body["peak_month"] == "Oct"
+    assert body["total_annual_revenue"] == pytest.approx(170000.0)
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_seasonal_patterns_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/seasonal-patterns")
+    assert resp.status_code == 403
