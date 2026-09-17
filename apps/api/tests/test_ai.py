@@ -5549,3 +5549,60 @@ async def test_win_loss_patterns_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-loss-patterns")
     assert resp.status_code == 403
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/avg-deal-size-trend
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_avg_deal_size_trend_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+    now = _dt.datetime(2026, 9, 1, tzinfo=_dt.timezone.utc)
+    prev1 = _dt.datetime(2026, 6, 15, tzinfo=_dt.timezone.utc)
+    prev2 = _dt.datetime(2026, 3, 10, tzinfo=_dt.timezone.utc)
+
+    mock_db.execute = AsyncMock(return_value=_make_execute_result([
+        (50000.0, prev2),
+        (40000.0, prev1),
+        (60000.0, now),
+        (70000.0, now),
+    ]))
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "Deal sizes are growing quarter over quarter.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/avg-deal-size-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["months"], list)
+    assert len(data["months"]) >= 1
+    for m in data["months"]:
+        assert "month" in m and "avg_value" in m and "deal_count" in m
+    assert data["trend_direction"] in ("accelerating", "growing", "stable", "declining")
+    assert isinstance(data["best_month"], str)
+    assert isinstance(data["pct_change"], (int, float))
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_avg_deal_size_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/avg-deal-size-trend")
+    assert resp.status_code == 403

@@ -10390,3 +10390,149 @@ async def get_win_loss_patterns(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{workspace_id}/ai/deals/avg-deal-size-trend
+# ---------------------------------------------------------------------------
+
+_AVG_DEAL_SIZE_TREND_SYSTEM = """You are a revenue analytics assistant. Given monthly closed-won deal data,
+write a one-sentence insight about the deal size trend and three actionable recommendations.
+Respond ONLY with valid JSON: {"insight": "...", "recommendations": ["...", "...", "..."]}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/avg-deal-size-trend")
+@limiter.limit("5/minute")
+async def get_avg_deal_size_trend(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=365)
+
+    result = await db.execute(
+        select(Deal.value, Deal.updated_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.updated_at >= cutoff)
+        .order_by(Deal.updated_at)
+    )
+    rows = result.all()
+
+    # Group by year-month in Python
+    from collections import defaultdict as _dd2
+    monthly: dict[str, list[float]] = _dd2(list)
+    for val, closed_at in rows:
+        if closed_at is None:
+            continue
+        if hasattr(closed_at, "tzinfo") and closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=datetime.timezone.utc)
+        key = closed_at.strftime("%Y-%m")
+        monthly[key].append(float(val or 0))
+
+    sorted_keys = sorted(monthly.keys())
+    months_data = [
+        {
+            "month": k,
+            "avg_value": round(sum(monthly[k]) / len(monthly[k]), 2) if monthly[k] else 0.0,
+            "deal_count": len(monthly[k]),
+        }
+        for k in sorted_keys
+    ]
+
+    # Graceful empty default
+    if not months_data:
+        return {
+            "months": [],
+            "trend_direction": "stable",
+            "best_month": None,
+            "pct_change": 0.0,
+            "insight": "No closed-won deals in the last 12 months — start closing deals to see your avg deal size trend.",
+            "recommendations": [
+                "Set a target average deal size to benchmark your pipeline value.",
+                "Review deals stuck in late stages and develop a closing strategy.",
+                "Identify your highest-value customers and look for similar prospects.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Trend: compare first-half vs second-half avg values
+    mid = len(months_data) // 2
+    first_vals = [m["avg_value"] for m in months_data[:mid]] if mid > 0 else []
+    second_vals = [m["avg_value"] for m in months_data[mid:]]
+    first_avg = sum(first_vals) / len(first_vals) if first_vals else 0.0
+    second_avg = sum(second_vals) / len(second_vals) if second_vals else 0.0
+    if first_avg > 0:
+        pct_change = round(((second_avg - first_avg) / first_avg) * 100, 1)
+    else:
+        pct_change = 0.0
+
+    if pct_change >= 20:
+        trend_direction = "accelerating"
+    elif pct_change >= 5:
+        trend_direction = "growing"
+    elif pct_change <= -5:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    best_month_obj = max(months_data, key=lambda m: m["avg_value"])
+    best_month = best_month_obj["month"]
+
+    overall_avg = round(sum(m["avg_value"] for m in months_data) / len(months_data), 2)
+
+    default_insight = (
+        f"Average deal size is {trend_direction} at ${overall_avg:,.0f}/month; "
+        f"best month was {best_month} with ${best_month_obj['avg_value']:,.0f} avg."
+    )
+    default_recs = [
+        f"Focus on the tactics used in {best_month} — the best-performing month — to replicate that avg deal size.",
+        "Consider upsell or expansion offers to grow average deal value across all stages.",
+        "Review pricing strategy if deal size trend is declining to identify whether discounting is eroding value.",
+    ]
+
+    context = (
+        f"Monthly closed-won deal data (last 12 months):\n" +
+        "\n".join(f"  {m['month']}: {m['deal_count']} deals, avg ${m['avg_value']:,.0f}" for m in months_data) +
+        f"\nTrend: {trend_direction} ({pct_change:+.1f}% change first-half vs second-half)\n"
+        f"Best month: {best_month}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_AVG_DEAL_SIZE_TREND_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "months": months_data,
+        "trend_direction": trend_direction,
+        "best_month": best_month,
+        "pct_change": pct_change,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
