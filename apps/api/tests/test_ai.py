@@ -5385,22 +5385,12 @@ async def test_pipeline_churn_returns_structured_response(app_client):
 
     # Two activity events: one deal enters 'qualified' then churns to 'closed_lost'
     # Another deal enters 'proposal' then regresses to 'qualified'
-    from unittest.mock import MagicMock
-    from datetime import datetime, timezone as _tz
-    _now = datetime.now(_tz.utc)
-
-    row1 = MagicMock()
-    row1.__iter__ = lambda s: iter(("Deal 'Alpha' moved: discovery → qualified", _now))
-    row2 = MagicMock()
-    row2.__iter__ = lambda s: iter(("Deal 'Alpha' moved: qualified → closed_lost", _now))
-    row3 = MagicMock()
-    row3.__iter__ = lambda s: iter(("Deal 'Beta' moved: discovery → proposal", _now))
-    row4 = MagicMock()
-    row4.__iter__ = lambda s: iter(("Deal 'Beta' moved: proposal → qualified", _now))
-
-    exec_result = MagicMock()
-    exec_result.all.return_value = [row1, row2, row3, row4]
-    mock_db.execute = AsyncMock(return_value=exec_result)
+    mock_db.execute = AsyncMock(return_value=_make_execute_result([
+        ("Deal 'Alpha' moved: discovery → qualified", None),
+        ("Deal 'Alpha' moved: qualified → closed_lost", None),
+        ("Deal 'Beta' moved: discovery → proposal", None),
+        ("Deal 'Beta' moved: proposal → qualified", None),
+    ]))
 
     with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
         mock_client = MagicMock()
