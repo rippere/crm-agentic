@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, Route,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -459,6 +459,27 @@ export default function ReportsPage() {
   const [coachingDigestOpen, setCoachingDigestOpen] = useState(true);
   const [coachingExpandedDeal, setCoachingExpandedDeal] = useState<string | null>(null);
 
+  type QbrTopWin = { id: string; title: string; company: string; value: number; closed_at: string | null };
+  type QbrTopRisk = { id: string; title: string; company: string; stage: string; value: number; health_score: number };
+  type QbrMetrics = {
+    closed_won_count: number; closed_won_revenue: number; closed_lost_count: number;
+    win_rate: number; open_deal_count: number; total_pipeline_value: number;
+    at_risk_count: number; avg_win_probability: number;
+  };
+  type QbrSummary = {
+    quarter: string;
+    wins_summary: string;
+    pipeline_status: string;
+    top_wins: QbrTopWin[];
+    top_risks: QbrTopRisk[];
+    strategic_recommendations: string[];
+    metrics: QbrMetrics;
+    generated_at: string;
+  };
+  const [qbrSummary, setQbrSummary] = useState<QbrSummary | null>(null);
+  const [qbrSummaryLoading, setQbrSummaryLoading] = useState(false);
+  const [qbrSummaryOpen, setQbrSummaryOpen] = useState(true);
+
   type ConversionPath = { stages_sequence: string[]; deal_count: number; win_rate: number; avg_days: number };
   type ConversionPathData = {
     paths: ConversionPath[];
@@ -552,6 +573,8 @@ export default function ReportsPage() {
       apiClient.getDealNextBestActions("demo-workspace-1", "demo-token").then(setNextBestActions).catch(() => {}).finally(() => setNextBestActionsLoading(false));
       setCoachingDigestLoading(true);
       apiClient.getDealCoachingDigest("demo-workspace-1", "demo-token").then(setCoachingDigest).catch(() => {}).finally(() => setCoachingDigestLoading(false));
+      setQbrSummaryLoading(true);
+      apiClient.getQbrSummary("demo-workspace-1", "demo-token").then(setQbrSummary).catch(() => {}).finally(() => setQbrSummaryLoading(false));
       setConversionPathsLoading(true);
       apiClient.getDealConversionPaths("demo-workspace-1", "demo-token").then(setConversionPaths).catch(() => {}).finally(() => setConversionPathsLoading(false));
       return;
@@ -639,6 +662,8 @@ export default function ReportsPage() {
       apiClient.getDealNextBestActions(workspaceId, session.access_token).then(setNextBestActions).catch(() => {}).finally(() => setNextBestActionsLoading(false));
       setCoachingDigestLoading(true);
       apiClient.getDealCoachingDigest(workspaceId, session.access_token).then(setCoachingDigest).catch(() => {}).finally(() => setCoachingDigestLoading(false));
+      setQbrSummaryLoading(true);
+      apiClient.getQbrSummary(workspaceId, session.access_token).then(setQbrSummary).catch(() => {}).finally(() => setQbrSummaryLoading(false));
       setConversionPathsLoading(true);
       apiClient.getDealConversionPaths(workspaceId, session.access_token).then(setConversionPaths).catch(() => {}).finally(() => setConversionPathsLoading(false));
     });
@@ -1217,6 +1242,27 @@ export default function ReportsPage() {
         if (!session) { setConversionPathsLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setConversionPathsLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateQbrSummary = () => {
+    setQbrSummaryLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getQbrSummary(wid, tok)
+        .then(setQbrSummary)
+        .catch(() => {})
+        .finally(() => setQbrSummaryLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setQbrSummaryLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setQbrSummaryLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5054,6 +5100,115 @@ export default function ReportsPage() {
             <p className="text-xs text-zinc-500 p-4 italic">{conversionPaths.insight}</p>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No conversion path data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* QBR Summary */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <ClipboardList className="h-4 w-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-zinc-200">QBR Summary</span>
+            {qbrSummary && (
+              <span className="rounded-full bg-indigo-500/15 border border-indigo-500/25 px-2 py-0.5 text-xs font-medium text-indigo-300">
+                {qbrSummary.quarter}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={regenerateQbrSummary}
+              disabled={qbrSummaryLoading}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", qbrSummaryLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setQbrSummaryOpen((p) => !p)} className="rounded p-1 hover:bg-zinc-700 transition-colors">
+              {qbrSummaryOpen ? <ChevronUp className="h-3.5 w-3.5 text-zinc-400" /> : <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />}
+            </button>
+          </div>
+        </div>
+        {qbrSummaryOpen && (
+          qbrSummaryLoading && !qbrSummary ? (
+            <div className="p-4 space-y-2">
+              {[1,2,3].map(i => <div key={i} className="h-3 rounded bg-zinc-700/50 animate-pulse" style={{width: `${70 + i * 8}%`}} />)}
+            </div>
+          ) : qbrSummary ? (
+            <div className={cn("p-4 space-y-4", qbrSummaryLoading && "opacity-50")}>
+              {/* Metrics row */}
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { label: "Won", value: qbrSummary.metrics.closed_won_count, suffix: " deals", color: "text-emerald-400" },
+                  { label: "Revenue", value: `$${(qbrSummary.metrics.closed_won_revenue / 1000).toFixed(0)}K`, color: "text-emerald-300" },
+                  { label: "Win Rate", value: `${qbrSummary.metrics.win_rate}%`, color: "text-indigo-400" },
+                  { label: "Pipeline", value: `$${(qbrSummary.metrics.total_pipeline_value / 1000).toFixed(0)}K`, color: "text-zinc-300" },
+                ].map(({ label, value, suffix, color }) => (
+                  <div key={label} className="rounded-lg bg-zinc-800/60 p-2 text-center">
+                    <p className={cn("text-sm font-bold font-mono", color)}>{value}{suffix ?? ""}</p>
+                    <p className="text-xs text-zinc-500 mt-0.5">{label}</p>
+                  </div>
+                ))}
+              </div>
+              {/* Wins & Pipeline narrative */}
+              <div className="rounded-lg bg-emerald-500/8 border border-emerald-500/15 p-3">
+                <p className="text-xs font-semibold text-emerald-400 mb-1">Wins This Quarter</p>
+                <p className="text-xs text-zinc-300">{qbrSummary.wins_summary}</p>
+              </div>
+              <div className="rounded-lg bg-amber-500/8 border border-amber-500/15 p-3">
+                <p className="text-xs font-semibold text-amber-400 mb-1">Pipeline Status</p>
+                <p className="text-xs text-zinc-300">{qbrSummary.pipeline_status}</p>
+              </div>
+              {/* Top Wins / Top Risks two-column */}
+              {(qbrSummary.top_wins.length > 0 || qbrSummary.top_risks.length > 0) && (
+                <div className="grid grid-cols-2 gap-3">
+                  {qbrSummary.top_wins.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-emerald-400 mb-1.5">Top Wins</p>
+                      <ul className="space-y-1.5">
+                        {qbrSummary.top_wins.map((w) => (
+                          <li key={w.id} className="flex items-center gap-2 text-xs">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                            <span className="text-zinc-200 truncate">{w.title}</span>
+                            <span className="ml-auto font-mono text-emerald-300 flex-shrink-0">${(w.value / 1000).toFixed(0)}K</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {qbrSummary.top_risks.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-rose-400 mb-1.5">Top Risks</p>
+                      <ul className="space-y-1.5">
+                        {qbrSummary.top_risks.map((r) => (
+                          <li key={r.id} className="flex items-center gap-2 text-xs">
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0" />
+                            <span className="text-zinc-200 truncate">{r.title}</span>
+                            <span className={cn("ml-auto font-mono flex-shrink-0", r.health_score < 40 ? "text-rose-400" : "text-amber-400")}>h:{r.health_score}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Strategic recommendations */}
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1.5">Strategic Recommendations</p>
+                <ul className="space-y-1">
+                  {qbrSummary.strategic_recommendations.map((rec, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {rec}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(qbrSummary.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No QBR data available. Click Regenerate to generate.</p>
           )
         )}
       </Card>
