@@ -8067,3 +8067,54 @@ async def test_stall_analysis_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/stall-analysis")
     assert resp.status_code == 403
+
+
+class FakePriorityRow:
+    def __init__(self, id, title, stage, value, ml_win_probability, health_score):
+        self.id = id
+        self.title = title
+        self.stage = stage
+        self.value = value
+        self.ml_win_probability = ml_win_probability
+        self.health_score = health_score
+
+
+@pytest.mark.asyncio
+async def test_priority_matrix_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    rows = [
+        FakePriorityRow(uuid.uuid4(), "Alpha Deal", "negotiation", 80000, 75.0, 80.0),   # close_now
+        FakePriorityRow(uuid.uuid4(), "Beta Deal", "proposal", 90000, 30.0, 45.0),       # invest
+        FakePriorityRow(uuid.uuid4(), "Gamma Deal", "discovery", 20000, 70.0, 70.0),     # quick_win
+        FakePriorityRow(uuid.uuid4(), "Delta Deal", "qualified", 15000, 25.0, 40.0),     # deprioritize
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"matrix_narrative": "Focus on close_now.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/priority-matrix")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["quadrants"]) == 4
+    assert body["total_active"] == 4
+    close_now = next(q for q in body["quadrants"] if q["quadrant"] == "close_now")
+    assert close_now["deal_count"] == 1
+    invest = next(q for q in body["quadrants"] if q["quadrant"] == "invest")
+    assert invest["deal_count"] == 1
+    assert body["avg_deal_value"] == pytest.approx(51250.0)
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_priority_matrix_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/priority-matrix")
+    assert resp.status_code == 403

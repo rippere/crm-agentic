@@ -780,6 +780,12 @@ export default function ReportsPage() {
   const [stallAnalysis, setStallAnalysis] = useState<AIStallAnalysisData | null>(null);
   const [stallAnalysisLoading, setStallAnalysisLoading] = useState(false);
   const [stallAnalysisOpen, setStallAnalysisOpen] = useState(true);
+  type AIPriorityDeal = { id: string; title: string; stage: string; value: number; win_probability: number; health_score: number };
+  type AIPriorityQuadrant = { quadrant: string; label: string; deal_count: number; total_value: number; avg_win_prob: number; top_deals: AIPriorityDeal[] };
+  type AIPriorityMatrixData = { quadrants: AIPriorityQuadrant[]; avg_deal_value: number; total_active: number; matrix_narrative: string; recommendations: string[]; generated_at: string };
+  const [priorityMatrix, setPriorityMatrix] = useState<AIPriorityMatrixData | null>(null);
+  const [priorityMatrixLoading, setPriorityMatrixLoading] = useState(false);
+  const [priorityMatrixOpen, setPriorityMatrixOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -933,6 +939,8 @@ export default function ReportsPage() {
       apiClient.getAIDealSeasonalPatterns("demo-workspace-1", "demo-token").then(setSeasonalPatterns).catch(() => {}).finally(() => setSeasonalPatternsLoading(false));
       setStallAnalysisLoading(true);
       apiClient.getAIDealStallAnalysis("demo-workspace-1", "demo-token").then(setStallAnalysis).catch(() => {}).finally(() => setStallAnalysisLoading(false));
+      setPriorityMatrixLoading(true);
+      apiClient.getAIDealPriorityMatrix("demo-workspace-1", "demo-token").then(setPriorityMatrix).catch(() => {}).finally(() => setPriorityMatrixLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1090,6 +1098,8 @@ export default function ReportsPage() {
       apiClient.getAIDealSeasonalPatterns(workspaceId, session.access_token).then(setSeasonalPatterns).catch(() => {}).finally(() => setSeasonalPatternsLoading(false));
       setStallAnalysisLoading(true);
       apiClient.getAIDealStallAnalysis(workspaceId, session.access_token).then(setStallAnalysis).catch(() => {}).finally(() => setStallAnalysisLoading(false));
+      setPriorityMatrixLoading(true);
+      apiClient.getAIDealPriorityMatrix(workspaceId, session.access_token).then(setPriorityMatrix).catch(() => {}).finally(() => setPriorityMatrixLoading(false));
     });
   }, []);
 
@@ -2107,6 +2117,27 @@ export default function ReportsPage() {
         if (!session) { setStallAnalysisLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setStallAnalysisLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regeneratePriorityMatrix = () => {
+    setPriorityMatrixLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealPriorityMatrix(wid, tok)
+        .then(setPriorityMatrix)
+        .catch(() => {})
+        .finally(() => setPriorityMatrixLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPriorityMatrixLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPriorityMatrixLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -9077,6 +9108,90 @@ export default function ReportsPage() {
             <p className="text-xs text-zinc-500 p-4 italic">No open deals to segment into tiers.</p>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No tier segmentation data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Priority Matrix */}
+      <Card className="border-purple-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Target className="h-4 w-4 text-purple-400" />
+            <span className="text-sm font-semibold text-zinc-200">Deal Priority Matrix</span>
+            {priorityMatrix && (
+              <span className="text-xs bg-purple-900/40 text-purple-300 px-1.5 py-0.5 rounded border border-purple-700/30">
+                {priorityMatrix.total_active} active deals
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePriorityMatrix}
+              disabled={priorityMatrixLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", priorityMatrixLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setPriorityMatrixOpen((v) => !v)} className="text-zinc-400 hover:text-zinc-200 transition-colors">
+              {priorityMatrixOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {priorityMatrixOpen && (
+          priorityMatrixLoading && !priorityMatrix ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2].map((i) => <div key={i} className="h-16 bg-zinc-800 rounded" />)}
+            </div>
+          ) : priorityMatrix && priorityMatrix.total_active > 0 ? (
+            <div className={cn("p-4 space-y-4", priorityMatrixLoading && "opacity-40")}>
+              <div className="grid grid-cols-2 gap-3">
+                {priorityMatrix.quadrants.map((q) => {
+                  const qColor = q.quadrant === 'close_now'
+                    ? { border: 'border-emerald-500/25', bg: 'bg-emerald-500/8', label: 'text-emerald-400', badge: 'bg-emerald-900/40 text-emerald-300 border-emerald-700/30' }
+                    : q.quadrant === 'invest'
+                    ? { border: 'border-blue-500/25', bg: 'bg-blue-500/8', label: 'text-blue-400', badge: 'bg-blue-900/40 text-blue-300 border-blue-700/30' }
+                    : q.quadrant === 'quick_win'
+                    ? { border: 'border-amber-500/25', bg: 'bg-amber-500/8', label: 'text-amber-400', badge: 'bg-amber-900/40 text-amber-300 border-amber-700/30' }
+                    : { border: 'border-zinc-600/25', bg: 'bg-zinc-700/10', label: 'text-zinc-500', badge: 'bg-zinc-800 text-zinc-400 border-zinc-700' };
+                  return (
+                    <div key={q.quadrant} className={cn("rounded-lg border p-3 space-y-1.5", qColor.border, qColor.bg)}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={cn("text-xs font-semibold", qColor.label)}>{q.label}</span>
+                        <span className={cn("text-xs px-1.5 py-0.5 rounded border", qColor.badge)}>{q.deal_count} deal{q.deal_count !== 1 ? 's' : ''}</span>
+                      </div>
+                      <p className="text-sm font-bold text-zinc-200">${(q.total_value / 1000).toFixed(0)}K</p>
+                      <p className="text-xs text-zinc-500">avg win prob {q.avg_win_prob}%</p>
+                      {q.top_deals.length > 0 && (
+                        <ul className="space-y-0.5 pt-1 border-t border-zinc-700/40">
+                          {q.top_deals.slice(0, 2).map((d) => (
+                            <li key={d.id} className="flex items-center justify-between gap-1">
+                              <span className="text-xs text-zinc-400 truncate">{d.title}</span>
+                              <span className="text-xs text-zinc-600 flex-shrink-0">${(d.value / 1000).toFixed(0)}K</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-500 italic">Threshold: avg deal value ${(priorityMatrix.avg_deal_value / 1000).toFixed(0)}K · Win prob 60%</p>
+              <p className="text-xs text-zinc-400 italic">{priorityMatrix.matrix_narrative}</p>
+              <ul className="space-y-1">
+                {priorityMatrix.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(priorityMatrix.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : priorityMatrix ? (
+            <p className="text-xs text-zinc-500 p-4 italic">No active deals to classify in the priority matrix.</p>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No priority matrix data available.</p>
           )
         )}
       </Card>
