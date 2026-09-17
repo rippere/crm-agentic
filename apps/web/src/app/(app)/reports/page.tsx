@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, Route,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -459,6 +459,19 @@ export default function ReportsPage() {
   const [coachingDigestOpen, setCoachingDigestOpen] = useState(true);
   const [coachingExpandedDeal, setCoachingExpandedDeal] = useState<string | null>(null);
 
+  type ConversionPath = { stages_sequence: string[]; deal_count: number; win_rate: number; avg_days: number };
+  type ConversionPathData = {
+    paths: ConversionPath[];
+    most_common_path: string[] | null;
+    fastest_path: string[] | null;
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [conversionPaths, setConversionPaths] = useState<ConversionPathData | null>(null);
+  const [conversionPathsLoading, setConversionPathsLoading] = useState(false);
+  const [conversionPathsOpen, setConversionPathsOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -539,6 +552,8 @@ export default function ReportsPage() {
       apiClient.getDealNextBestActions("demo-workspace-1", "demo-token").then(setNextBestActions).catch(() => {}).finally(() => setNextBestActionsLoading(false));
       setCoachingDigestLoading(true);
       apiClient.getDealCoachingDigest("demo-workspace-1", "demo-token").then(setCoachingDigest).catch(() => {}).finally(() => setCoachingDigestLoading(false));
+      setConversionPathsLoading(true);
+      apiClient.getDealConversionPaths("demo-workspace-1", "demo-token").then(setConversionPaths).catch(() => {}).finally(() => setConversionPathsLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -624,6 +639,8 @@ export default function ReportsPage() {
       apiClient.getDealNextBestActions(workspaceId, session.access_token).then(setNextBestActions).catch(() => {}).finally(() => setNextBestActionsLoading(false));
       setCoachingDigestLoading(true);
       apiClient.getDealCoachingDigest(workspaceId, session.access_token).then(setCoachingDigest).catch(() => {}).finally(() => setCoachingDigestLoading(false));
+      setConversionPathsLoading(true);
+      apiClient.getDealConversionPaths(workspaceId, session.access_token).then(setConversionPaths).catch(() => {}).finally(() => setConversionPathsLoading(false));
     });
   }, []);
 
@@ -1179,6 +1196,27 @@ export default function ReportsPage() {
         if (!session) { setCoachingDigestLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCoachingDigestLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateConversionPaths = () => {
+    setConversionPathsLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealConversionPaths(wid, tok)
+        .then(setConversionPaths)
+        .catch(() => {})
+        .finally(() => setConversionPathsLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setConversionPathsLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setConversionPathsLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -4937,6 +4975,85 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No coaching digest data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Conversion Path Analysis */}
+      <Card className="border-sky-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Route className="h-4 w-4 text-sky-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Conversion Path Analysis</h3>
+            {conversionPaths && conversionPaths.paths.length > 0 && (
+              <span className="text-xs bg-sky-900/40 text-sky-300 px-2 py-0.5 rounded-full border border-sky-700/30">
+                {conversionPaths.paths.length} path{conversionPaths.paths.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateConversionPaths}
+              disabled={conversionPathsLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", conversionPathsLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setConversionPathsOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {conversionPathsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {conversionPathsOpen && (
+          conversionPathsLoading && !conversionPaths ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : conversionPaths && conversionPaths.paths.length > 0 ? (
+            <div className={cn("p-4 space-y-4", conversionPathsLoading && "opacity-40")}>
+              <ul className="space-y-3">
+                {conversionPaths.paths.map((p, i) => (
+                  <li key={i} className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {p.stages_sequence.map((s, si) => (
+                        <span key={si} className="flex items-center gap-1">
+                          <span className="text-xs px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 font-mono">{s}</span>
+                          {si < p.stages_sequence.length - 1 && <ArrowRight className="h-3 w-3 text-zinc-600 flex-shrink-0" />}
+                        </span>
+                      ))}
+                      {conversionPaths.most_common_path && JSON.stringify(p.stages_sequence) === JSON.stringify(conversionPaths.most_common_path) && (
+                        <span className="text-xs bg-sky-900/40 text-sky-300 px-1.5 py-0.5 rounded border border-sky-700/30">most common</span>
+                      )}
+                      {conversionPaths.fastest_path && JSON.stringify(p.stages_sequence) === JSON.stringify(conversionPaths.fastest_path) && (
+                        <span className="text-xs bg-emerald-900/40 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-700/30">fastest</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-zinc-500">
+                      <span>{p.deal_count} deal{p.deal_count !== 1 ? "s" : ""}</span>
+                      <span>{p.win_rate}% win rate</span>
+                      {p.avg_days > 0 && <span>{p.avg_days}d avg</span>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-400 italic">{conversionPaths.insight}</p>
+              <ul className="space-y-1">
+                {conversionPaths.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(conversionPaths.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : conversionPaths && conversionPaths.paths.length === 0 ? (
+            <p className="text-xs text-zinc-500 p-4 italic">{conversionPaths.insight}</p>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No conversion path data available.</p>
           )
         )}
       </Card>

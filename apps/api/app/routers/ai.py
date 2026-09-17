@@ -11205,3 +11205,189 @@ async def get_coaching_digest(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_CONVERSION_PATH_SYSTEM = """\
+You are a senior sales analytics AI analysing deal conversion path patterns.
+
+Given the most common winning stage paths for a workspace, write a short, actionable analysis.
+
+Respond with valid JSON only, no prose outside JSON:
+{
+  "insight": "2-sentence insight on what the paths reveal about the team's sales process and where leverage is",
+  "recommendations": ["specific actionable recommendation 1", "specific recommendation 2", "specific recommendation 3"]
+}
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/conversion-path")
+@limiter.limit("5/minute")
+async def get_deal_conversion_paths(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_90 = now - datetime.timedelta(days=90)
+    cutoff_180 = now - datetime.timedelta(days=180)
+
+    won_result = await db.execute(
+        select(Deal.title).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+    )
+    won_rows = won_result.all()
+    won_titles = {row[0] for row in won_rows if row[0]}
+
+    lost_result = await db.execute(
+        select(Deal.title).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+    )
+    lost_rows = lost_result.all()
+    lost_titles = {row[0] for row in lost_rows if row[0]}
+
+    all_closed_titles = won_titles | lost_titles
+
+    import re as _re
+    events_result = await db.execute(
+        select(ActivityEvent.description, ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "deal_moved",
+            ActivityEvent.created_at >= cutoff_180,
+        )
+        .order_by(ActivityEvent.created_at.asc())
+    )
+    event_rows = events_result.all()
+
+    _stage_re = _re.compile(r"→\s*([a-z_]+)")
+    _title_re = _re.compile(r"Deal '([^']+)'")
+
+    deal_events: dict[str, list[tuple[str, datetime.datetime]]] = defaultdict(list)
+    for desc, ts in event_rows:
+        if not desc:
+            continue
+        title_m = _title_re.search(desc)
+        stage_m = _stage_re.search(desc)
+        if title_m and stage_m:
+            title = title_m.group(1)
+            stage = stage_m.group(1)
+            tz_ts = ts.replace(tzinfo=datetime.timezone.utc) if not ts.tzinfo else ts
+            deal_events[title].append((stage, tz_ts))
+
+    path_data: dict[str, dict] = {}
+    for title in all_closed_titles:
+        events_list = deal_events.get(title, [])
+        if not events_list:
+            continue
+        stages = [s for s, _ in events_list]
+        path_key = " → ".join(stages)
+        is_won = title in won_titles
+        total_days = 0.0
+        if len(events_list) > 1:
+            total_days = (events_list[-1][1] - events_list[0][1]).total_seconds() / 86400.0
+        if path_key not in path_data:
+            path_data[path_key] = {"stages": stages, "won_count": 0, "lost_count": 0, "days_list": []}
+        if is_won:
+            path_data[path_key]["won_count"] += 1
+            path_data[path_key]["days_list"].append(total_days)
+        else:
+            path_data[path_key]["lost_count"] += 1
+
+    if not path_data:
+        return {
+            "paths": [],
+            "most_common_path": None,
+            "fastest_path": None,
+            "insight": "No deal conversion path data available for the last 90 days.",
+            "recommendations": [
+                "Move deals through stages in the CRM to start building conversion path data.",
+                "Ensure stage transitions are logged for every deal in the pipeline.",
+                "Aim to close at least 3 deals per quarter to generate meaningful path analysis.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    paths = []
+    for pk, d in path_data.items():
+        won = d["won_count"]
+        lost = d["lost_count"]
+        total = won + lost
+        win_rate = round(won / total * 100) if total > 0 else 0
+        avg_days = round(sum(d["days_list"]) / len(d["days_list"]), 1) if d["days_list"] else 0.0
+        paths.append({
+            "stages_sequence": d["stages"],
+            "deal_count": total,
+            "win_rate": win_rate,
+            "avg_days": avg_days,
+        })
+
+    paths.sort(key=lambda p: (-p["deal_count"], -p["win_rate"]))
+
+    won_paths = [p for p in paths if p["win_rate"] > 0 and p["avg_days"] > 0]
+    most_common_path = paths[0]["stages_sequence"] if paths else None
+    fastest_path = min(won_paths, key=lambda p: p["avg_days"])["stages_sequence"] if won_paths else most_common_path
+
+    path_context = "\n".join(
+        f"- Path: {' → '.join(p['stages_sequence'])} | Deals: {p['deal_count']} | Win Rate: {p['win_rate']}% | Avg days: {p['avg_days']}"
+        for p in paths[:8]
+    )
+    most_common_str = " → ".join(most_common_path) if most_common_path else "N/A"
+    fastest_str = " → ".join(fastest_path) if fastest_path else "N/A"
+    context = (
+        f"Workspace deal conversion paths (last 90 days):\n{path_context}\n\n"
+        f"Most common path: {most_common_str}\nFastest path: {fastest_str}"
+    )
+
+    default_insight = (
+        f"The most common winning path is {most_common_str}. "
+        "Focus on replicating this process across the team."
+    )
+    default_recs = [
+        "Train your team to follow the most common winning path consistently.",
+        "Identify why deals deviate from winning paths and address those root causes.",
+        "Set stage-specific SLAs to keep deals on the fastest winning track.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_CONVERSION_PATH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "paths": paths[:8],
+        "most_common_path": most_common_path,
+        "fastest_path": fastest_path,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

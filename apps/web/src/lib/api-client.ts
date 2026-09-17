@@ -5842,5 +5842,42 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/coaching-digest`, {}, token)
   },
+
+  async getDealConversionPaths(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        paths: [
+          {
+            stages_sequence: ['discovery', 'qualified', 'proposal', 'negotiation', 'closed_won'],
+            deal_count: 4,
+            win_rate: 75,
+            avg_days: 38.5,
+          },
+          {
+            stages_sequence: ['discovery', 'qualified', 'proposal', 'closed_won'],
+            deal_count: 3,
+            win_rate: 60,
+            avg_days: 22.0,
+          },
+          {
+            stages_sequence: ['discovery', 'proposal', 'closed_won'],
+            deal_count: 2,
+            win_rate: 50,
+            avg_days: 14.0,
+          },
+        ],
+        most_common_path: ['discovery', 'qualified', 'proposal', 'negotiation', 'closed_won'],
+        fastest_path: ['discovery', 'proposal', 'closed_won'],
+        insight: 'Your most common winning path runs through negotiation — deals that skip it close 41 % faster but convert at a lower rate. Consider a lightweight negotiation checkpoint for mid-value deals to maintain both speed and quality.',
+        recommendations: [
+          'For deals over $50K, always include a structured negotiation phase to protect win rate.',
+          'Fast-track deals under $20K through the short path (discovery → proposal → closed_won) to maximise throughput.',
+          'Flag any deal stuck in a stage for more than 14 days — it signals the path has stalled and needs intervention.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/conversion-path`, {}, token)
+  },
 }
 

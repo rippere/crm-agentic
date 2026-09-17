@@ -5855,3 +5855,79 @@ async def test_coaching_digest_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/coaching-digest")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_conversion_path_returns_structured_response(app_client):
+    import datetime as _dt
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    won_rows = [("TechCorp Enterprise Suite",), ("Acme Platform Pro",)]
+    lost_rows = [("HealthPlus Clinical Suite",)]
+
+    ts1 = now - _dt.timedelta(days=40)
+    ts2 = now - _dt.timedelta(days=30)
+    ts3 = now - _dt.timedelta(days=20)
+    ts4 = now - _dt.timedelta(days=35)
+    ts5 = now - _dt.timedelta(days=25)
+    ts6 = now - _dt.timedelta(days=15)
+    ts7 = now - _dt.timedelta(days=30)
+    ts8 = now - _dt.timedelta(days=10)
+
+    event_rows = [
+        ("Deal 'TechCorp Enterprise Suite' → qualified (reason: good fit)", ts1),
+        ("Deal 'TechCorp Enterprise Suite' → proposal (reason: demo done)", ts2),
+        ("Deal 'TechCorp Enterprise Suite' → closed_won (reason: signed)", ts3),
+        ("Deal 'Acme Platform Pro' → qualified (reason: budget confirmed)", ts4),
+        ("Deal 'Acme Platform Pro' → proposal (reason: rfp)", ts5),
+        ("Deal 'Acme Platform Pro' → closed_won (reason: approved)", ts6),
+        ("Deal 'HealthPlus Clinical Suite' → qualified (reason: intro done)", ts7),
+        ("Deal 'HealthPlus Clinical Suite' → closed_lost (reason: competitor)", ts8),
+    ]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "The qualified-proposal-closed_won path dominates wins.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(won_rows),
+            _make_execute_result(lost_rows),
+            _make_execute_result(event_rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/conversion-path")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["paths"], list)
+    assert len(data["paths"]) >= 1
+    path = data["paths"][0]
+    assert "stages_sequence" in path and isinstance(path["stages_sequence"], list)
+    assert "deal_count" in path
+    assert "win_rate" in path
+    assert "avg_days" in path
+    assert path["deal_count"] == 2
+    assert path["win_rate"] == 100
+    assert isinstance(data["most_common_path"], list)
+    assert isinstance(data["fastest_path"], list)
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_conversion_path_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/conversion-path")
+    assert resp.status_code == 403
