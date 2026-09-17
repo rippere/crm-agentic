@@ -659,6 +659,12 @@ export default function ReportsPage() {
   const [dealCloseDateAccuracyLoading, setDealCloseDateAccuracyLoading] = useState(false);
   const [dealCloseDateAccuracyOpen, setDealCloseDateAccuracyOpen] = useState(true);
 
+  type RepData = { name: string; won_count: number; lost_count: number; win_rate: number; total_revenue: number; avg_deal_size: number };
+  type RepPerformanceData = { reps: RepData[]; top_rep: string | null; total_reps: number; performance_narrative: string; recommendations: string[]; generated_at: string };
+  const [repPerformance, setRepPerformance] = useState<RepPerformanceData | null>(null);
+  const [repPerformanceLoading, setRepPerformanceLoading] = useState(false);
+  const [repPerformanceOpen, setRepPerformanceOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -769,6 +775,8 @@ export default function ReportsPage() {
       apiClient.getDealValueConcentration("demo-workspace-1", "demo-token").then(setDealValueConcentration).catch(() => {}).finally(() => setDealValueConcentrationLoading(false));
       setDealCloseDateAccuracyLoading(true);
       apiClient.getDealCloseDateAccuracySummary("demo-workspace-1", "demo-token").then(setDealCloseDateAccuracy).catch(() => {}).finally(() => setDealCloseDateAccuracyLoading(false));
+      setRepPerformanceLoading(true);
+      apiClient.getRepPerformance("demo-workspace-1", "demo-token").then(setRepPerformance).catch(() => {}).finally(() => setRepPerformanceLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -884,6 +892,8 @@ export default function ReportsPage() {
       apiClient.getDealValueConcentration(workspaceId, session.access_token).then(setDealValueConcentration).catch(() => {}).finally(() => setDealValueConcentrationLoading(false));
       setDealCloseDateAccuracyLoading(true);
       apiClient.getDealCloseDateAccuracySummary(workspaceId, session.access_token).then(setDealCloseDateAccuracy).catch(() => {}).finally(() => setDealCloseDateAccuracyLoading(false));
+      setRepPerformanceLoading(true);
+      apiClient.getRepPerformance(workspaceId, session.access_token).then(setRepPerformance).catch(() => {}).finally(() => setRepPerformanceLoading(false));
     });
   }, []);
 
@@ -1544,6 +1554,27 @@ export default function ReportsPage() {
         if (!session) { setDealValueConcentrationLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealValueConcentrationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateRepPerformance = () => {
+    setRepPerformanceLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getRepPerformance(wid, tok)
+        .then(setRepPerformance)
+        .catch(() => {})
+        .finally(() => setRepPerformanceLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setRepPerformanceLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setRepPerformanceLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -6948,6 +6979,90 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No QBR data available. Click Regenerate to generate.</p>
+          )
+        )}
+      </Card>
+
+      {/* Rep Performance */}
+      <Card className="border-violet-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Trophy className="h-4 w-4 text-violet-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Rep Performance</h3>
+            {repPerformance && repPerformance.top_rep && (
+              <span className="text-xs bg-violet-900/40 text-violet-300 px-2 py-0.5 rounded-full border border-violet-700/30">
+                🏆 {repPerformance.top_rep}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateRepPerformance}
+              disabled={repPerformanceLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", repPerformanceLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setRepPerformanceOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {repPerformanceOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {repPerformanceOpen && (
+          repPerformanceLoading && !repPerformance ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : repPerformance && repPerformance.reps.length > 0 ? (
+            <div className={cn("p-4 space-y-4", repPerformanceLoading && "opacity-40")}>
+              <ul className="space-y-3">
+                {repPerformance.reps.map((rep, i) => {
+                  const maxRev = repPerformance.reps[0]?.total_revenue || 1;
+                  const barPct = Math.round((rep.total_revenue / maxRev) * 100);
+                  return (
+                    <li key={rep.name} className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs text-zinc-500 font-mono w-4 flex-shrink-0">#{i + 1}</span>
+                          <span className="text-xs font-medium text-zinc-200 truncate">{rep.name}</span>
+                          {rep.name === repPerformance.top_rep && (
+                            <span className="text-xs bg-violet-900/40 text-violet-300 px-1.5 py-0.5 rounded border border-violet-700/30 flex-shrink-0">top</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className={cn(
+                            "text-xs px-1.5 py-0.5 rounded border font-mono",
+                            rep.win_rate >= 60 ? "bg-emerald-900/40 text-emerald-300 border-emerald-700/30" :
+                            rep.win_rate >= 40 ? "bg-amber-900/40 text-amber-300 border-amber-700/30" :
+                            "bg-rose-900/40 text-rose-300 border-rose-700/30"
+                          )}>{rep.win_rate}%</span>
+                          <span className="text-xs font-mono text-zinc-300">${(rep.total_revenue / 1000).toFixed(0)}K</span>
+                        </div>
+                      </div>
+                      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-violet-500/60 rounded-full" style={{ width: `${barPct}%` }} />
+                      </div>
+                      <p className="text-xs text-zinc-500">{rep.won_count}W / {rep.lost_count}L · avg ${(rep.avg_deal_size / 1000).toFixed(0)}K/deal</p>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-xs text-zinc-400 italic">{repPerformance.performance_narrative}</p>
+              <ul className="space-y-1">
+                {repPerformance.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(repPerformance.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : repPerformance ? (
+            <p className="text-xs text-zinc-500 p-4 italic">No closed deals in the last 90 days to analyse rep performance.</p>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No rep performance data available.</p>
           )
         )}
       </Card>

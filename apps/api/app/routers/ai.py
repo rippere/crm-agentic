@@ -13860,3 +13860,128 @@ async def get_deal_close_date_accuracy(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_REP_PERFORMANCE_SYSTEM = """\
+You are a senior sales operations AI analysing sales rep performance data.
+Given a leaderboard of reps with their closed deal counts, win rates, and revenue generated in the last 90 days, generate a performance narrative and 3 coaching recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "performance_narrative": "2-3 sentence narrative about overall rep performance patterns and standouts",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/rep-performance")
+@limiter.limit("5/minute")
+async def get_rep_performance(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=90)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.stage,
+            Deal.value,
+            Deal.assigned_agent,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= cutoff,
+        )
+        .order_by(Deal.stage_changed_at.desc())
+    )
+    rows = result.all()
+
+    # Group by rep name
+    rep_map: dict[str, dict] = {}
+    for r in rows:
+        rep_name = str(r[3]).strip() if r[3] else "Unassigned"
+        stage = str(r[1])
+        value = float(r[2] or 0)
+        if rep_name not in rep_map:
+            rep_map[rep_name] = {"won": 0, "lost": 0, "revenue": 0.0}
+        if stage == "closed_won":
+            rep_map[rep_name]["won"] += 1
+            rep_map[rep_name]["revenue"] += value
+        else:
+            rep_map[rep_name]["lost"] += 1
+
+    reps = []
+    for name, stats in rep_map.items():
+        total = stats["won"] + stats["lost"]
+        win_rate = round(stats["won"] / total * 100) if total > 0 else 0
+        avg_deal = round(stats["revenue"] / stats["won"]) if stats["won"] > 0 else 0
+        reps.append({
+            "name": name,
+            "won_count": stats["won"],
+            "lost_count": stats["lost"],
+            "win_rate": win_rate,
+            "total_revenue": round(stats["revenue"], 2),
+            "avg_deal_size": avg_deal,
+        })
+
+    reps.sort(key=lambda x: x["total_revenue"], reverse=True)
+    top_rep = reps[0]["name"] if reps else None
+    total_reps = len(reps)
+
+    default_narrative = (
+        f"{total_reps} rep{'s' if total_reps != 1 else ''} closed deals in the last 90 days. "
+        + (f"{top_rep} leads the team in revenue." if top_rep else "No closed deals found.")
+        + " Reviewing individual win rates alongside revenue reveals where coaching will have the highest impact."
+    )
+    default_recs = [
+        "Pair top performers with lower-revenue reps for deal reviews to spread best practices across the team.",
+        "Focus coaching on reps with low win rates — improving qualification and objection-handling can unlock significant revenue.",
+        "Set individual revenue targets for next quarter based on each rep's 90-day baseline to create clear, motivating benchmarks.",
+    ]
+
+    context_lines = [f"Rep performance — last 90 days, {total_reps} rep(s):"]
+    for rep in reps[:8]:
+        context_lines.append(
+            f"{rep['name']}: {rep['won_count']}W/{rep['lost_count']}L, "
+            f"win rate {rep['win_rate']}%, revenue ${rep['total_revenue']:,.0f}, avg deal ${rep['avg_deal_size']:,.0f}"
+        )
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_REP_PERFORMANCE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    performance_narrative = str(data.get("performance_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "reps": reps,
+        "top_rep": top_rep,
+        "total_reps": total_reps,
+        "performance_narrative": performance_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

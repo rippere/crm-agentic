@@ -6381,6 +6381,29 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-concentration`, {}, token)
   },
 
+  async getRepPerformance(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        reps: [
+          { name: 'Alice Chen',    won_count: 8, lost_count: 3, win_rate: 73, total_revenue: 312000, avg_deal_size: 39000 },
+          { name: 'Bob Martinez',  won_count: 5, lost_count: 4, win_rate: 56, total_revenue: 195000, avg_deal_size: 39000 },
+          { name: 'Carol Smith',   won_count: 4, lost_count: 2, win_rate: 67, total_revenue: 148000, avg_deal_size: 37000 },
+          { name: 'David Kim',     won_count: 3, lost_count: 5, win_rate: 38, total_revenue: 92000,  avg_deal_size: 30667 },
+        ],
+        top_rep: 'Alice Chen',
+        total_reps: 4,
+        performance_narrative: 'Alice Chen leads the team with $312K in revenue and a 73% win rate — the highest on the team. Bob and Carol are solid mid-performers, while David\'s 38% win rate signals a need for focused coaching on deal qualification and late-stage objection handling.',
+        recommendations: [
+          'Pair Alice Chen with David Kim for bi-weekly deal reviews to transfer qualification and closing techniques to the lower-performing rep.',
+          'Investigate David Kim\'s 38% win rate — analyse lost deals to find common objections and gaps in the sales process.',
+          'Set Q4 revenue targets anchored to each rep\'s 90-day baseline to create clear, motivating benchmarks and track improvement.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/rep-performance`, {}, token)
+  },
+
   async getDealCloseDateAccuracySummary(workspaceId: string, token: string) {
     if (isDemoMode) {
       return Promise.resolve({

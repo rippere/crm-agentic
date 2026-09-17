@@ -6896,3 +6896,71 @@ async def test_deal_close_date_accuracy_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/close-date-accuracy")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 17q: GET /workspaces/{wid}/ai/deals/rep-performance
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rep_performance_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    rows = [
+        (uuid.uuid4(), "closed_won",  120000, "Alice"),
+        (uuid.uuid4(), "closed_won",   85000, "Alice"),
+        (uuid.uuid4(), "closed_lost",      0, "Alice"),
+        (uuid.uuid4(), "closed_won",   60000, "Bob"),
+        (uuid.uuid4(), "closed_lost",      0, "Bob"),
+        (uuid.uuid4(), "closed_lost",      0, "Bob"),
+        (uuid.uuid4(), "closed_won",   45000, "Carol"),
+    ]
+
+    ai_response = {
+        "performance_narrative": "Alice leads the team with $205K revenue and a strong 67% win rate. Bob and Carol have room to grow through improved qualification and follow-up consistency.",
+        "recommendations": [
+            "Pair Alice with Bob for deal-review sessions to transfer her qualification techniques.",
+            "Coach Bob on objection handling — his 33% win rate suggests deals are slipping late in the cycle.",
+            "Set Q4 revenue targets for each rep anchored to their 90-day baseline to drive accountability.",
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/rep-performance")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["reps"], list)
+    assert len(body["reps"]) == 3
+    top = body["reps"][0]
+    assert top["name"] == "Alice"
+    assert isinstance(top["won_count"], int)
+    assert isinstance(top["win_rate"], int)
+    assert isinstance(top["total_revenue"], float)
+    assert body["top_rep"] == "Alice"
+    assert body["total_reps"] == 3
+    assert isinstance(body["performance_narrative"], str) and body["performance_narrative"]
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_rep_performance_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/rep-performance")
+    assert resp.status_code == 403
