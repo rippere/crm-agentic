@@ -743,6 +743,12 @@ export default function ReportsPage() {
   const [outcomeFactorsLoading, setOutcomeFactorsLoading] = useState(false);
   const [outcomeFactorsOpen, setOutcomeFactorsOpen] = useState(true);
 
+  type AIForecastDeal = { deal_id: string; title: string; stage: string; value: number; win_probability: number; expected_revenue: number; close_horizon: string };
+  type AIForecastData = { forecast_30d: number; forecast_60d: number; forecast_90d: number; total_pipeline: number; total_expected: number; deal_count: number; top_deals: AIForecastDeal[]; forecast_narrative: string; recommendations: string[]; generated_at: string };
+  const [aiForecast, setAIForecast] = useState<AIForecastData | null>(null);
+  const [aiForecastLoading, setAIForecastLoading] = useState(false);
+  const [aiForecastOpen, setAIForecastOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -881,6 +887,8 @@ export default function ReportsPage() {
       apiClient.getAIDealVelocityAnomalies("demo-workspace-1", "demo-token").then(setVelocityAnomalies).catch(() => {}).finally(() => setVelocityAnomaliesLoading(false));
       setOutcomeFactorsLoading(true);
       apiClient.getAIDealOutcomeFactors("demo-workspace-1", "demo-token").then(setOutcomeFactors).catch(() => {}).finally(() => setOutcomeFactorsLoading(false));
+      setAIForecastLoading(true);
+      apiClient.getAIDealRevenueForecast("demo-workspace-1", "demo-token").then(setAIForecast).catch(() => {}).finally(() => setAIForecastLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1024,6 +1032,8 @@ export default function ReportsPage() {
       apiClient.getAIDealVelocityAnomalies(workspaceId, session.access_token).then(setVelocityAnomalies).catch(() => {}).finally(() => setVelocityAnomaliesLoading(false));
       setOutcomeFactorsLoading(true);
       apiClient.getAIDealOutcomeFactors(workspaceId, session.access_token).then(setOutcomeFactors).catch(() => {}).finally(() => setOutcomeFactorsLoading(false));
+      setAIForecastLoading(true);
+      apiClient.getAIDealRevenueForecast(workspaceId, session.access_token).then(setAIForecast).catch(() => {}).finally(() => setAIForecastLoading(false));
     });
   }, []);
 
@@ -1936,6 +1946,27 @@ export default function ReportsPage() {
         if (!session) { setOutcomeFactorsLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setOutcomeFactorsLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAIForecast = () => {
+    setAIForecastLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealRevenueForecast(wid, tok)
+        .then(setAIForecast)
+        .catch(() => {})
+        .finally(() => setAIForecastLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAIForecastLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAIForecastLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -8460,6 +8491,79 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No outcome data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Revenue Forecast */}
+      <Card className="border-sky-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <DollarSign className="h-4 w-4 text-sky-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Revenue Forecast</h3>
+            {aiForecast && (
+              <span className="text-xs bg-sky-900/40 text-sky-300 px-2 py-0.5 rounded-full border border-sky-700/30">
+                ${aiForecast.total_expected.toLocaleString()} expected
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateAIForecast}
+              disabled={aiForecastLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", aiForecastLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setAIForecastOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {aiForecastOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {aiForecastOpen && (
+          aiForecastLoading ? (
+            <p className="text-xs text-zinc-500 p-4 animate-pulse">Calculating revenue forecast…</p>
+          ) : aiForecast ? (
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: '30 days', value: aiForecast.forecast_30d, color: 'text-sky-400' },
+                  { label: '60 days', value: aiForecast.forecast_60d, color: 'text-sky-300' },
+                  { label: '90 days', value: aiForecast.forecast_90d, color: 'text-sky-200' },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="bg-zinc-900/50 rounded-lg p-3 border border-zinc-800 text-center">
+                    <p className="text-xs text-zinc-500 mb-1">{label}</p>
+                    <p className={`text-sm font-bold ${color}`}>${value.toLocaleString()}</p>
+                  </div>
+                ))}
+              </div>
+              {aiForecast.top_deals.length > 0 && (
+                <div className="space-y-1.5">
+                  {aiForecast.top_deals.map((d) => (
+                    <div key={d.deal_id} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-zinc-300 truncate">{d.title}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] ${d.close_horizon === '30d' ? 'bg-sky-900/40 text-sky-300' : d.close_horizon === '60d' ? 'bg-indigo-900/40 text-indigo-300' : 'bg-zinc-800 text-zinc-400'}`}>{d.close_horizon}</span>
+                        <span className="text-emerald-400 font-medium">${d.expected_revenue.toLocaleString()}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{aiForecast.forecast_narrative}</p>
+              <ul className="space-y-1.5">
+                {aiForecast.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(aiForecast.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No forecast data available.</p>
           )
         )}
       </Card>

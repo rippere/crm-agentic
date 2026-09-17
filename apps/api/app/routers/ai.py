@@ -15809,3 +15809,169 @@ async def get_ai_deal_outcome_factors(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 18e: revenue forecast
+# ---------------------------------------------------------------------------
+
+_REVENUE_FORECAST_SYSTEM = """You are a sales revenue forecasting expert. Given pipeline forecast data, write a 2-sentence forecast_narrative summarising the revenue outlook and the biggest risk or opportunity in the pipeline, then provide 3 specific recommendations to improve forecast accuracy or accelerate closings. Return JSON: {"forecast_narrative": "...", "recommendations": ["...", "...", "..."]}"""
+
+# Estimated total remaining days to close from current stage
+_STAGE_REMAINING_DAYS = {
+    "discovery": 43,   # 7+14+10+12
+    "qualified": 36,   # 14+10+12
+    "proposal": 22,    # 10+12
+    "negotiation": 12, # 12
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/revenue-forecast")
+@limiter.limit("5/minute")
+async def get_ai_deal_revenue_forecast(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    active_stages = list(_STAGE_REMAINING_DAYS.keys())
+    stmt = (
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability, Deal.stage_changed_at, Deal.created_at)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(active_stages),
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+
+    buckets: dict[str, dict] = {
+        "30d": {"expected_revenue": 0.0, "deal_count": 0},
+        "60d": {"expected_revenue": 0.0, "deal_count": 0},
+        "90d": {"expected_revenue": 0.0, "deal_count": 0},
+    }
+    top_deals_raw: list[dict] = []
+
+    for row in rows:
+        stage = row.stage
+        base_remaining = _STAGE_REMAINING_DAYS.get(stage, 30)
+        # Adjust for time already spent in current stage
+        ref = row.stage_changed_at or row.created_at
+        if ref is not None:
+            if hasattr(ref, "tzinfo") and ref.tzinfo is None:
+                ref = ref.replace(tzinfo=timezone.utc)
+            days_in = (now - ref).days
+            stage_avg = _STAGE_AVG_DAYS.get(stage, 10)
+            remaining_in_stage = max(0, stage_avg - days_in)
+            subsequent = base_remaining - stage_avg
+            total_remaining = remaining_in_stage + max(0, subsequent)
+        else:
+            total_remaining = base_remaining
+
+        value = float(row.value or 0)
+        win_prob = float(row.ml_win_probability or 0) / 100.0
+        expected = round(value * win_prob, 2)
+
+        if total_remaining <= 30:
+            bucket = "30d"
+        elif total_remaining <= 60:
+            bucket = "60d"
+        else:
+            bucket = "90d"
+
+        buckets[bucket]["expected_revenue"] += expected
+        buckets[bucket]["deal_count"] += 1
+
+        top_deals_raw.append({
+            "deal_id": str(row.id),
+            "title": row.title or "Untitled",
+            "stage": stage,
+            "value": value,
+            "win_probability": float(row.ml_win_probability or 0),
+            "expected_revenue": expected,
+            "close_horizon": bucket,
+        })
+
+    for k in buckets:
+        buckets[k]["expected_revenue"] = round(buckets[k]["expected_revenue"], 2)
+
+    top_deals = sorted(top_deals_raw, key=lambda x: x["expected_revenue"], reverse=True)[:5]
+    total_pipeline = sum(float(r.value or 0) for r in rows)
+    total_expected = sum(d["expected_revenue"] for d in top_deals_raw)
+
+    if not rows:
+        return {
+            "forecast_30d": 0.0,
+            "forecast_60d": 0.0,
+            "forecast_90d": 0.0,
+            "total_pipeline": 0.0,
+            "total_expected": 0.0,
+            "deal_count": 0,
+            "top_deals": [],
+            "forecast_narrative": "No active deals in the pipeline to forecast. Add deals and move them through stages to generate a revenue forecast.",
+            "recommendations": [
+                "Add at least 5 deals to your pipeline to begin generating meaningful revenue forecasts.",
+                "Set win probability on each deal — accurate probabilities are the foundation of a reliable forecast.",
+                "Move deals through stages consistently; stale deals in early stages inflate 90-day forecast figures.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_narrative = (
+        f"Expected revenue over the next 90 days: ${total_expected:,.0f} weighted across {len(rows)} active deals "
+        f"(30d: ${buckets['30d']['expected_revenue']:,.0f} / 60d: ${buckets['60d']['expected_revenue']:,.0f} / 90d: ${buckets['90d']['expected_revenue']:,.0f}). "
+        "Top deals by expected value are the highest-impact targets for acceleration this quarter."
+    )
+    default_recs = [
+        f"Focus outreach on the top {min(3, len(top_deals))} deals by expected revenue — they represent the majority of 90-day forecast value.",
+        "Review deals in the 60-90 day bucket for stalls; pulling even one into the 30-day bucket significantly improves near-term revenue.",
+        "Update win probabilities weekly — stale probabilities make the forecast misleading and can cause mis-allocation of resources.",
+    ]
+
+    context = (
+        f"Revenue forecast for workspace. {len(rows)} active deals, total pipeline ${total_pipeline:,.0f}, total expected ${total_expected:,.0f}.\n"
+        f"30-day bucket: {buckets['30d']['deal_count']} deals, ${buckets['30d']['expected_revenue']:,.0f} expected.\n"
+        f"60-day bucket: {buckets['60d']['deal_count']} deals, ${buckets['60d']['expected_revenue']:,.0f} expected.\n"
+        f"90-day bucket: {buckets['90d']['deal_count']} deals, ${buckets['90d']['expected_revenue']:,.0f} expected.\n"
+        "Top deals: " + ", ".join(d["title"] + " $" + f"{d['expected_revenue']:,.0f}" for d in top_deals[:3]) + ".\n"
+        "Provide forecast_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_REVENUE_FORECAST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    forecast_narrative = str(data.get("forecast_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "forecast_30d": buckets["30d"]["expected_revenue"],
+        "forecast_60d": buckets["60d"]["expected_revenue"],
+        "forecast_90d": buckets["90d"]["expected_revenue"],
+        "total_pipeline": round(total_pipeline, 2),
+        "total_expected": round(total_expected, 2),
+        "deal_count": len(rows),
+        "top_deals": top_deals,
+        "forecast_narrative": forecast_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

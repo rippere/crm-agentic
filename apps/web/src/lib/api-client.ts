@@ -6765,5 +6765,33 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/outcome-factors`, {}, token)
   },
+
+  async getAIDealRevenueForecast(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        forecast_30d: 142500,
+        forecast_60d: 87300,
+        forecast_90d: 34200,
+        total_pipeline: 520000,
+        total_expected: 264000,
+        deal_count: 18,
+        top_deals: [
+          { deal_id: 'd1', title: 'Acme Enterprise Renewal', stage: 'negotiation', value: 180000, win_probability: 82, expected_revenue: 147600, close_horizon: '30d' },
+          { deal_id: 'd2', title: 'Globex Platform Expansion', stage: 'proposal', value: 95000, win_probability: 65, expected_revenue: 61750, close_horizon: '30d' },
+          { deal_id: 'd3', title: 'Initech Full Deployment', stage: 'qualified', value: 120000, win_probability: 55, expected_revenue: 66000, close_horizon: '60d' },
+          { deal_id: 'd4', title: 'Umbrella Corp Pilot', stage: 'qualified', value: 75000, win_probability: 40, expected_revenue: 30000, close_horizon: '60d' },
+          { deal_id: 'd5', title: 'Cyberdyne Integration', stage: 'discovery', value: 50000, win_probability: 35, expected_revenue: 17500, close_horizon: '90d' },
+        ],
+        forecast_narrative: 'Expected revenue of $264k over 90 days, with $143k weighted in the next 30 days from 2 high-probability negotiation and proposal deals. The 60-day bucket is healthy but relies heavily on 2 deals in qualified — any stall there would materially impact the quarter.',
+        recommendations: [
+          'The 30-day forecast is concentrated in just 2 deals — Acme and Globex. Prioritise executive engagement on both to protect near-term revenue.',
+          'Move at least 2 qualified deals to proposal this week to strengthen the 60-day bucket; a thin proposal pipeline means the Q4 back half is at risk.',
+          'Update win probabilities for all 18 active deals — stale probabilities at the tail of the pipeline inflate forecast figures and misallocate rep attention.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/revenue-forecast`, {}, token)
+  },
 }
 
