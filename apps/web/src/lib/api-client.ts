@@ -6841,5 +6841,35 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-coverage`, {}, token)
   },
+
+  async getAIDealQuarterReadiness(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        next_quarter: 'Q4 2026',
+        quarterly_target: 185000,
+        expected_revenue: 221000,
+        readiness_score: 90,
+        readiness_status: 'on_track',
+        gap: 36000,
+        open_deal_count: 11,
+        avg_health_score: 71.4,
+        high_confidence_count: 4,
+        stage_mix: [
+          { stage: 'discovery', deal_count: 3, total_value: 90000, expected_value: 12600 },
+          { stage: 'qualified', deal_count: 3, total_value: 120000, expected_value: 38400 },
+          { stage: 'proposal', deal_count: 3, total_value: 145000, expected_value: 87000 },
+          { stage: 'negotiation', deal_count: 2, total_value: 120000, expected_value: 83000 },
+        ],
+        readiness_narrative: 'With $221k in expected revenue against a $185k target, the pipeline covers Q4 2026 with a comfortable surplus. Strong negotiation and proposal stages are the key drivers. Maintain momentum by advancing the 3 qualified deals and ensuring proposal-stage deals don\'t stall.',
+        recommendations: [
+          'Accelerate the 3 proposal-stage deals by scheduling executive sign-off meetings before quarter-end.',
+          'Convert the 3 qualified deals to proposal within the next 2 weeks to secure the Q4 revenue buffer.',
+          'Monitor the 2 negotiation-stage deals weekly — a slip in either would bring coverage below target.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/quarter-readiness`, {}, token)
+  },
 }
 

@@ -758,6 +758,11 @@ export default function ReportsPage() {
   const [pipelineCoverage, setPipelineCoverage] = useState<AIPipelineCoverageData | null>(null);
   const [pipelineCoverageLoading, setPipelineCoverageLoading] = useState(false);
   const [pipelineCoverageOpen, setPipelineCoverageOpen] = useState(true);
+  type QuarterStageMix = { stage: string; deal_count: number; total_value: number; expected_value: number };
+  type AIQuarterReadinessData = { next_quarter: string; quarterly_target: number; expected_revenue: number; readiness_score: number; readiness_status: string; gap: number; open_deal_count: number; avg_health_score: number; high_confidence_count: number; stage_mix: QuarterStageMix[]; readiness_narrative: string; recommendations: string[]; generated_at: string };
+  const [quarterReadiness, setQuarterReadiness] = useState<AIQuarterReadinessData | null>(null);
+  const [quarterReadinessLoading, setQuarterReadinessLoading] = useState(false);
+  const [quarterReadinessOpen, setQuarterReadinessOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -903,6 +908,8 @@ export default function ReportsPage() {
       apiClient.getAIDealValueLeak("demo-workspace-1", "demo-token").then(setValueLeak).catch(() => {}).finally(() => setValueLeakLoading(false));
       setPipelineCoverageLoading(true);
       apiClient.getAIDealPipelineCoverage("demo-workspace-1", "demo-token").then(setPipelineCoverage).catch(() => {}).finally(() => setPipelineCoverageLoading(false));
+      setQuarterReadinessLoading(true);
+      apiClient.getAIDealQuarterReadiness("demo-workspace-1", "demo-token").then(setQuarterReadiness).catch(() => {}).finally(() => setQuarterReadinessLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1052,6 +1059,8 @@ export default function ReportsPage() {
       apiClient.getAIDealValueLeak(workspaceId, session.access_token).then(setValueLeak).catch(() => {}).finally(() => setValueLeakLoading(false));
       setPipelineCoverageLoading(true);
       apiClient.getAIDealPipelineCoverage(workspaceId, session.access_token).then(setPipelineCoverage).catch(() => {}).finally(() => setPipelineCoverageLoading(false));
+      setQuarterReadinessLoading(true);
+      apiClient.getAIDealQuarterReadiness(workspaceId, session.access_token).then(setQuarterReadiness).catch(() => {}).finally(() => setQuarterReadinessLoading(false));
     });
   }, []);
 
@@ -2006,6 +2015,27 @@ export default function ReportsPage() {
         if (!session) { setValueLeakLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setValueLeakLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateQuarterReadiness = () => {
+    setQuarterReadinessLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealQuarterReadiness(wid, tok)
+        .then(setQuarterReadiness)
+        .catch(() => {})
+        .finally(() => setQuarterReadinessLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setQuarterReadinessLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setQuarterReadinessLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -8777,6 +8807,97 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No pipeline coverage data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Quarter Readiness */}
+      <Card className="border-indigo-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-indigo-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">
+              {quarterReadiness ? `${quarterReadiness.next_quarter} Readiness` : 'Next Quarter Readiness'}
+            </h3>
+            {quarterReadiness && (
+              <span className={`text-xs px-2 py-0.5 rounded-full border ${
+                quarterReadiness.readiness_status === 'on_track' ? 'bg-emerald-900/40 text-emerald-300 border-emerald-700/30' :
+                quarterReadiness.readiness_status === 'at_risk' ? 'bg-amber-900/40 text-amber-300 border-amber-700/30' :
+                quarterReadiness.readiness_status === 'behind' ? 'bg-orange-900/40 text-orange-300 border-orange-700/30' :
+                'bg-rose-900/40 text-rose-300 border-rose-700/30'
+              }`}>
+                {quarterReadiness.readiness_score}/100 · {quarterReadiness.readiness_status.replace('_', ' ')}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateQuarterReadiness}
+              disabled={quarterReadinessLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${quarterReadinessLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            <button onClick={() => setQuarterReadinessOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {quarterReadinessOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {quarterReadinessOpen && (
+          quarterReadinessLoading ? (
+            <div className="h-24 animate-pulse bg-zinc-800/50 m-4 rounded" />
+          ) : quarterReadiness ? (
+            <div className="p-4 space-y-3">
+              {/* Revenue summary grid */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-400">Expected Revenue</p>
+                  <p className="text-base font-bold text-indigo-300">${(quarterReadiness.expected_revenue / 1000).toFixed(0)}k</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-400">Quarterly Target</p>
+                  <p className="text-base font-bold text-zinc-200">${(quarterReadiness.quarterly_target / 1000).toFixed(0)}k</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-400">{quarterReadiness.gap >= 0 ? 'Surplus' : 'Gap'}</p>
+                  <p className={`text-base font-bold ${quarterReadiness.gap >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                    {quarterReadiness.gap >= 0 ? '+' : ''}${(Math.abs(quarterReadiness.gap) / 1000).toFixed(0)}k
+                  </p>
+                </div>
+              </div>
+              {/* Metrics row */}
+              <div className="flex items-center gap-4 text-xs text-zinc-400">
+                <span>{quarterReadiness.open_deal_count} open deals</span>
+                <span>·</span>
+                <span>Avg health {quarterReadiness.avg_health_score}</span>
+                <span>·</span>
+                <span>{quarterReadiness.high_confidence_count} high-confidence</span>
+              </div>
+              {/* Stage mix */}
+              {quarterReadiness.stage_mix.length > 0 && (
+                <div className="space-y-2">
+                  {quarterReadiness.stage_mix.map((sm) => (
+                    <div key={sm.stage} className="flex items-center justify-between text-xs">
+                      <span className="text-zinc-300 capitalize w-24">{sm.stage}</span>
+                      <span className="text-zinc-400">{sm.deal_count} deals · ${(sm.expected_value / 1000).toFixed(0)}k expected</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{quarterReadiness.readiness_narrative}</p>
+              <ul className="space-y-1.5">
+                {quarterReadiness.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(quarterReadiness.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No quarter readiness data available.</p>
           )
         )}
       </Card>
