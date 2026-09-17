@@ -6655,5 +6655,36 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-gap`, {}, token)
   },
+
+  async getAIClosureProbabilityHeatmap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        cells: [
+          { stage: 'discovery', win_prob_tier: 'low', deal_count: 5, avg_value: 12000, total_value: 60000 },
+          { stage: 'discovery', win_prob_tier: 'mid', deal_count: 3, avg_value: 18000, total_value: 54000 },
+          { stage: 'discovery', win_prob_tier: 'high', deal_count: 1, avg_value: 22000, total_value: 22000 },
+          { stage: 'qualified', win_prob_tier: 'low', deal_count: 2, avg_value: 25000, total_value: 50000 },
+          { stage: 'qualified', win_prob_tier: 'mid', deal_count: 6, avg_value: 35000, total_value: 210000 },
+          { stage: 'qualified', win_prob_tier: 'high', deal_count: 3, avg_value: 42000, total_value: 126000 },
+          { stage: 'proposal', win_prob_tier: 'low', deal_count: 1, avg_value: 48000, total_value: 48000 },
+          { stage: 'proposal', win_prob_tier: 'mid', deal_count: 4, avg_value: 65000, total_value: 260000 },
+          { stage: 'proposal', win_prob_tier: 'high', deal_count: 5, avg_value: 80000, total_value: 400000 },
+          { stage: 'negotiation', win_prob_tier: 'low', deal_count: 0, avg_value: 0, total_value: 0 },
+          { stage: 'negotiation', win_prob_tier: 'mid', deal_count: 2, avg_value: 95000, total_value: 190000 },
+          { stage: 'negotiation', win_prob_tier: 'high', deal_count: 4, avg_value: 110000, total_value: 440000 },
+        ],
+        hotspot_stage: 'proposal',
+        hotspot_tier: 'high',
+        heatmap_narrative: 'The proposal/high tier is your most valuable concentration with 5 deals averaging $80k — these are the deals most likely to close and should receive maximum sales attention this week. Negotiation/high also shows 4 high-conviction deals at $110k average, representing immediate revenue. Discovery is skewed to low-probability, signalling a qualification gap that will affect pipeline quality in 60–90 days.',
+        recommendations: [
+          'Schedule executive business reviews for all 5 proposal/high deals this week — these are your highest-probability revenue drivers.',
+          'Move the 4 qualified/mid deals to high-tier by running discovery deep-dives; use AI Deal Coach for win-theme scripts.',
+          'Tighten discovery qualification to reduce the volume of low-probability deals entering the pipeline.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/closure-probability-heatmap`, {}, token)
+  },
 }
 

@@ -15220,3 +15220,149 @@ async def get_ai_deal_pipeline_gap(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_HEATMAP_SYSTEM = """\
+You are a senior sales analytics AI specialising in pipeline conversion and closure probability analysis.
+Given a 4×3 heatmap of open deals grouped by stage and win-probability tier, identify patterns,
+concentration risks, and actions to improve conversion rates.
+Return ONLY valid JSON with keys: heatmap_narrative (string, 2-3 sentences) and
+recommendations (list of exactly 3 strings). No markdown, no prose outside the JSON.
+"""
+
+_WIN_PROB_TIERS = [
+    ("low", 0, 40),
+    ("mid", 40, 70),
+    ("high", 70, 101),
+]
+_HEATMAP_STAGES = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/closure-probability-heatmap")
+@limiter.limit("5/minute")
+async def get_ai_deal_closure_probability_heatmap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    stmt = (
+        select(Deal.stage, Deal.value, Deal.ml_win_probability)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(_HEATMAP_STAGES),
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+
+    cells: dict[tuple[str, str], list[float]] = {}
+    for stage in _HEATMAP_STAGES:
+        for tier_name, _, _ in _WIN_PROB_TIERS:
+            cells[(stage, tier_name)] = []
+
+    for row in rows:
+        stage = row.stage
+        win_prob = float(row.ml_win_probability or 0)
+        value = float(row.value or 0)
+        for tier_name, lo, hi in _WIN_PROB_TIERS:
+            if lo <= win_prob < hi:
+                if (stage, tier_name) in cells:
+                    cells[(stage, tier_name)].append(value)
+                break
+
+    cell_list = []
+    hotspot_stage = "proposal"
+    hotspot_tier = "high"
+    hotspot_weight = -1.0
+    for stage in _HEATMAP_STAGES:
+        for tier_name, _, _ in _WIN_PROB_TIERS:
+            vals = cells[(stage, tier_name)]
+            total_val = sum(vals)
+            avg_val = total_val / len(vals) if vals else 0
+            tier_prob_mid = {"low": 20.0, "mid": 55.0, "high": 85.0}[tier_name]
+            weighted = total_val * (tier_prob_mid / 100)
+            cell_list.append({
+                "stage": stage,
+                "win_prob_tier": tier_name,
+                "deal_count": len(vals),
+                "avg_value": round(avg_val, 2),
+                "total_value": round(total_val, 2),
+            })
+            if weighted > hotspot_weight:
+                hotspot_weight = weighted
+                hotspot_stage = stage
+                hotspot_tier = tier_name
+
+    if not rows:
+        return {
+            "cells": cell_list,
+            "hotspot_stage": hotspot_stage,
+            "hotspot_tier": hotspot_tier,
+            "heatmap_narrative": "No open deals found in the pipeline. Build top-of-funnel activity to populate the heatmap.",
+            "recommendations": [
+                "Launch prospecting campaigns to generate discovery-stage deals.",
+                "Review closed-lost deals for reactivation opportunities.",
+                "Set weekly deal-creation targets per rep to accelerate pipeline growth.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_narrative = (
+        f"The hotspot cell is '{hotspot_stage}' stage with '{hotspot_tier}' win-probability deals — "
+        "this is where your highest weighted pipeline value is concentrated. "
+        "Focus acceleration and closing activities here to maximise near-term revenue."
+    )
+    default_recs = [
+        f"Prioritise '{hotspot_stage}/{hotspot_tier}' deals in weekly pipeline reviews — they carry the highest weighted value.",
+        "For low-tier deals stalled in late stages, schedule executive-level calls to accelerate or disqualify.",
+        "Move mid-tier proposal deals to high-tier by addressing the top objection; use AI Deal Coach for tailored scripts.",
+    ]
+
+    total_deals = len(rows)
+    context = (
+        f"Closure probability heatmap for workspace. {total_deals} open deals.\n"
+        f"Hotspot: {hotspot_stage}/{hotspot_tier} (highest weighted value).\n"
+        "Cell breakdown (stage, tier, count, avg_value):\n"
+        + "\n".join(
+            f"  {c['stage']}/{c['win_prob_tier']}: {c['deal_count']} deals, avg ${c['avg_value']:,.0f}"
+            for c in cell_list if c["deal_count"] > 0
+        )
+        + "\nProvide heatmap_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_HEATMAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    heatmap_narrative = str(data.get("heatmap_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "cells": cell_list,
+        "hotspot_stage": hotspot_stage,
+        "hotspot_tier": hotspot_tier,
+        "heatmap_narrative": heatmap_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

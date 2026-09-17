@@ -7431,3 +7431,58 @@ async def test_pipeline_gap_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-gap")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 18a: closure probability heatmap
+# ---------------------------------------------------------------------------
+
+class FakeHeatmapRow:
+    def __init__(self, stage, value, ml_win_probability):
+        self.stage = stage
+        self.value = value
+        self.ml_win_probability = ml_win_probability
+
+
+@pytest.mark.asyncio
+async def test_closure_probability_heatmap_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    rows = [
+        FakeHeatmapRow("proposal", 50000, 80.0),
+        FakeHeatmapRow("proposal", 70000, 85.0),
+        FakeHeatmapRow("qualified", 30000, 55.0),
+        FakeHeatmapRow("discovery", 15000, 25.0),
+        FakeHeatmapRow("negotiation", 90000, 75.0),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"heatmap_narrative": "Proposal/high is the hotspot.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/closure-probability-heatmap")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["cells"], list)
+    assert len(body["cells"]) == 12  # 4 stages × 3 tiers
+    proposal_high = next(c for c in body["cells"] if c["stage"] == "proposal" and c["win_prob_tier"] == "high")
+    assert proposal_high["deal_count"] == 2
+    assert proposal_high["total_value"] == 120000.0
+    assert body["hotspot_stage"] == "proposal"
+    assert body["hotspot_tier"] == "high"
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_closure_probability_heatmap_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/closure-probability-heatmap")
+    assert resp.status_code == 403
