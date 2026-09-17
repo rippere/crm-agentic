@@ -8018,3 +8018,52 @@ async def test_seasonal_patterns_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/seasonal-patterns")
     assert resp.status_code == 403
+
+
+class FakeStallRow:
+    def __init__(self, id, title, stage, value, health_score, stage_changed_at):
+        self.id = id
+        self.title = title
+        self.stage = stage
+        self.value = value
+        self.health_score = health_score
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_stall_analysis_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = datetime.datetime.now(datetime.timezone.utc)
+    rows = [
+        FakeStallRow(uuid.uuid4(), "Fresh Deal", "discovery", 20000, 80.0, now - datetime.timedelta(days=5)),
+        FakeStallRow(uuid.uuid4(), "Stalling Deal", "proposal", 40000, 60.0, now - datetime.timedelta(days=20)),
+        FakeStallRow(uuid.uuid4(), "Critical Deal", "negotiation", 80000, 35.0, now - datetime.timedelta(days=75)),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"stall_narrative": "Pipeline has critical stalls.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/stall-analysis")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["buckets"]) == 5
+    assert body["critical_count"] == 1
+    assert body["total_active"] == 3
+    assert len(body["top_stalled_deals"]) == 3
+    assert body["top_stalled_deals"][0]["title"] == "Critical Deal"
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_stall_analysis_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/stall-analysis")
+    assert resp.status_code == 403

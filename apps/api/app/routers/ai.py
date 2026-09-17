@@ -16772,3 +16772,176 @@ async def get_ai_deal_seasonal_patterns(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_DEAL_STALL_SYSTEM = (
+    "You are a sales analytics AI. Analyse deal stall patterns for a CRM. "
+    "Given active deals grouped by how long they have been stuck in the same stage, "
+    "write a 2-sentence narrative identifying the most urgent risk and 3 actionable recommendations "
+    "to unblock stalled deals and restore pipeline momentum. "
+    "Respond ONLY with valid JSON: "
+    "{\"stall_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_STALL_BUCKETS = [
+    ("fresh", 0, 7),
+    ("warming", 7, 14),
+    ("stalling", 14, 30),
+    ("at_risk", 30, 60),
+    ("critical", 60, None),
+]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/stall-analysis")
+@limiter.limit("5/minute")
+async def get_ai_deal_stall_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    now = datetime.datetime.now(timezone.utc)
+    active_stages = ["discovery", "qualified", "proposal", "negotiation"]
+    rows = (
+        await db.execute(
+            select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.health_score, Deal.stage_changed_at)
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage.in_(active_stages))
+        )
+    ).all()
+
+    bucket_data: dict[str, dict] = {
+        b[0]: {"deal_count": 0, "total_value": 0.0, "stall_days_sum": 0.0}
+        for b in _STALL_BUCKETS
+    }
+    deal_list = []
+
+    for row in rows:
+        ts = row.stage_changed_at
+        if ts is None:
+            stall_days = 0
+        else:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            stall_days = max(0, (now - ts).days)
+
+        val = float(row.value or 0)
+        health = float(row.health_score or 50)
+
+        bucket_name = "critical"
+        for name, lo, hi in _STALL_BUCKETS:
+            if hi is None or stall_days < hi:
+                bucket_name = name
+                break
+
+        bucket_data[bucket_name]["deal_count"] += 1
+        bucket_data[bucket_name]["total_value"] += val
+        bucket_data[bucket_name]["stall_days_sum"] += stall_days
+
+        deal_list.append({
+            "id": str(row.id),
+            "title": str(row.title or ""),
+            "stage": str(row.stage or ""),
+            "value": round(val, 2),
+            "health_score": round(health, 1),
+            "stall_days": stall_days,
+        })
+
+    buckets = []
+    for name, lo, hi in _STALL_BUCKETS:
+        d = bucket_data[name]
+        count = d["deal_count"]
+        total_val = round(d["total_value"], 2)
+        avg_stall = round(d["stall_days_sum"] / count, 1) if count else 0.0
+        label = f"{lo}–{hi - 1} days" if hi else f"{lo}+ days"
+        buckets.append({
+            "bucket": name,
+            "label": label,
+            "deal_count": count,
+            "total_value": total_val,
+            "avg_stall_days": avg_stall,
+        })
+
+    total_active = len(deal_list)
+    critical_count = bucket_data["critical"]["deal_count"]
+    at_risk_count = bucket_data["at_risk"]["deal_count"]
+    all_stall_days = [d["stall_days"] for d in deal_list]
+    avg_stall_days = round(sum(all_stall_days) / total_active, 1) if total_active else 0.0
+    top_stalled = sorted(deal_list, key=lambda d: d["stall_days"], reverse=True)[:5]
+
+    if not deal_list:
+        return {
+            "buckets": buckets,
+            "top_stalled_deals": [],
+            "avg_stall_days": 0.0,
+            "critical_count": 0,
+            "at_risk_count": 0,
+            "total_active": 0,
+            "stall_narrative": "No active deals found in the pipeline.",
+            "recommendations": [
+                "Add new deals to the pipeline to begin tracking stall patterns.",
+                "Set up regular pipeline reviews to catch stalling deals early.",
+                "Define stage exit criteria to ensure deals move forward consistently.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Active deals: {total_active}. Avg stall: {avg_stall_days} days. "
+        f"Critical (60+ days): {critical_count}. At risk (30-60 days): {at_risk_count}. "
+        "Buckets: "
+        + ", ".join(
+            f"{b['bucket']} {b['deal_count']} deals (avg {b['avg_stall_days']} days)"
+            for b in buckets if b["deal_count"] > 0
+        )
+        + ". Top stalled: "
+        + ", ".join(f"{d['title']} {d['stall_days']}d" for d in top_stalled[:3])
+        + "."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_STALL_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    stall_narrative = str(data.get("stall_narrative", "")).strip()
+    if not stall_narrative:
+        stall_narrative = (
+            f"{critical_count} deal{'s' if critical_count != 1 else ''} "
+            "stalled over 60 days represent urgent pipeline risk."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Schedule re-engagement calls for all deals stalled over 30 days within 48 hours.",
+        "Implement a weekly pipeline review cadence to catch new stalls before they become critical.",
+        "Define clear stage exit criteria so reps know exactly what action is needed to advance each deal.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "buckets": buckets,
+        "top_stalled_deals": top_stalled,
+        "avg_stall_days": avg_stall_days,
+        "critical_count": critical_count,
+        "at_risk_count": at_risk_count,
+        "total_active": total_active,
+        "stall_narrative": stall_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
