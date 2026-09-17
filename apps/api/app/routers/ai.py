@@ -10438,8 +10438,8 @@ async def get_avg_deal_size_trend(
     months_data = [
         {
             "month": k,
-            "avg_value": round(sum(v) / len(v), 2) if v else 0.0,
-            "deal_count": len(v),
+            "avg_value": round(sum(monthly[k]) / len(monthly[k]), 2) if monthly[k] else 0.0,
+            "deal_count": len(monthly[k]),
         }
         for k in sorted_keys
     ]
