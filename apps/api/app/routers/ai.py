@@ -12294,3 +12294,197 @@ async def get_deal_risk_escalation(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_MOMENTUM_SYSTEM = """\
+You are a senior sales operations AI analysing deal momentum in a CRM pipeline.
+Given a list of open deals with velocity scores, stage info, and days since last stage change, classify each into accelerating, decelerating, or stalled, and generate a momentum digest.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "accelerating": [{"deal_id": "uuid", "trend_description": "one sentence"}],
+  "decelerating": [{"deal_id": "uuid", "trend_description": "one sentence"}],
+  "stalled": [{"deal_id": "uuid", "trend_description": "one sentence"}],
+  "momentum_index": 0,
+  "insight": "one paragraph insight about pipeline momentum",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+momentum_index is 0-100 (100 = all deals accelerating, 0 = all stalled).
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/momentum")
+@limiter.limit("5/minute")
+async def get_deal_momentum(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.company,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+            Deal.stage_changed_at,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .order_by(Deal.stage_changed_at.asc())
+    )
+    rows = result.all()
+
+    deals_data = []
+    for r in rows:
+        deal_id = str(r[0])
+        title = r[1] or "Untitled"
+        company = r[2] or ""
+        stage = str(r[3] or "unknown")
+        value = float(r[4] or 0)
+        health = int(r[5] or 50)
+        win_prob = int(r[6] or 50)
+        stage_changed_at = r[7]
+        if stage_changed_at and stage_changed_at.tzinfo is None:
+            stage_changed_at = stage_changed_at.replace(tzinfo=datetime.timezone.utc)
+        days_stale = (now - stage_changed_at).days if stage_changed_at else 30
+
+        # velocity score: higher health + higher prob + fewer stale days = higher velocity
+        velocity_score = max(0, min(100, int((health + win_prob) / 2 - days_stale * 2)))
+
+        deals_data.append({
+            "deal_id": deal_id,
+            "title": title,
+            "company": company,
+            "stage": stage,
+            "value": value,
+            "health_score": health,
+            "win_probability": win_prob,
+            "days_stale": days_stale,
+            "velocity_score": velocity_score,
+        })
+
+    if not deals_data:
+        return {
+            "accelerating": [],
+            "decelerating": [],
+            "stalled": [],
+            "momentum_index": 0,
+            "insight": "No open deals found to analyse momentum.",
+            "recommendations": [
+                "Add open deals to start tracking pipeline momentum.",
+                "Ensure stage-change dates are kept up to date for accurate velocity scoring.",
+                "Review your pipeline stages to capture deal progression accurately.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Build default classification by velocity score
+    default_accelerating = [d for d in deals_data if d["velocity_score"] >= 60]
+    default_decelerating = [d for d in deals_data if 30 <= d["velocity_score"] < 60]
+    default_stalled = [d for d in deals_data if d["velocity_score"] < 30]
+
+    total = len(deals_data)
+    momentum_index = int((len(default_accelerating) * 100 + len(default_decelerating) * 50) / total) if total else 0
+
+    context_lines = [
+        f"Open Deals: {total}",
+        f"Momentum Index: {momentum_index}/100",
+        f"Accelerating (velocity>=60): {len(default_accelerating)}",
+        f"Decelerating (30<=velocity<60): {len(default_decelerating)}",
+        f"Stalled (velocity<30): {len(default_stalled)}",
+        "Deal Details:",
+    ]
+    for d in deals_data[:10]:
+        context_lines.append(
+            f"  {d['deal_id']} | {d['title']} | {d['company']} | {d['stage']} "
+            f"| health={d['health_score']} | prob={d['win_probability']}% "
+            f"| stale={d['days_stale']}d | velocity={d['velocity_score']}"
+        )
+    context = "\n".join(context_lines)
+
+    default_insight = (
+        f"The pipeline has {total} open deals with a momentum index of {momentum_index}/100. "
+        f"{len(default_accelerating)} deals are accelerating, {len(default_decelerating)} decelerating, "
+        f"and {len(default_stalled)} stalled."
+    )
+    default_recs = [
+        f"Prioritise the {len(default_stalled)} stalled deal(s) — schedule immediate outreach to revive momentum.",
+        "Review decelerating deals weekly and identify blockers before they stall entirely.",
+        "Use accelerating deals as templates — understand what's working and replicate those behaviours.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_MOMENTUM_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    def _parse_group(key: str, default_list: list[dict]) -> list[dict]:
+        raw_list = data.get(key, [])
+        if not isinstance(raw_list, list):
+            raw_list = []
+        out = []
+        deal_map = {d["deal_id"]: d for d in deals_data}
+        for item in raw_list[:10]:
+            if not isinstance(item, dict):
+                continue
+            did = str(item.get("deal_id", ""))
+            trend = str(item.get("trend_description", ""))
+            if did in deal_map:
+                d = deal_map[did]
+                out.append({
+                    "deal_id": did,
+                    "title": d["title"],
+                    "velocity_score": d["velocity_score"],
+                    "trend_description": trend or f"Velocity score {d['velocity_score']}",
+                })
+        if not out:
+            out = [{"deal_id": d["deal_id"], "title": d["title"], "velocity_score": d["velocity_score"], "trend_description": f"Velocity score {d['velocity_score']}"} for d in default_list[:3]]
+        return out
+
+    accelerating = _parse_group("accelerating", default_accelerating)
+    decelerating = _parse_group("decelerating", default_decelerating)
+    stalled = _parse_group("stalled", default_stalled)
+
+    ai_index = data.get("momentum_index")
+    if isinstance(ai_index, (int, float)) and 0 <= ai_index <= 100:
+        momentum_index = int(ai_index)
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "accelerating": accelerating,
+        "decelerating": decelerating,
+        "stalled": stalled,
+        "momentum_index": momentum_index,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

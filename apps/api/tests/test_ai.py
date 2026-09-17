@@ -6263,3 +6263,69 @@ async def test_risk_escalation_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/risk-escalation")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 17g — Deal Momentum Tracker
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_momentum_returns_structured_response(app_client):
+    import datetime as _dt
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.now(_dt.timezone.utc)
+    stale_date = now - _dt.timedelta(days=5)
+    deal_id_1 = uuid.uuid4()
+    deal_id_2 = uuid.uuid4()
+    deal_id_3 = uuid.uuid4()
+
+    rows = [
+        (deal_id_1, "FastTrack Deal", "Acme", "proposal", 30000.0, 85, 80, stale_date),
+        (deal_id_2, "Slow Mover", "Beta Inc", "qualified", 20000.0, 45, 40, stale_date - _dt.timedelta(days=20)),
+        (deal_id_3, "Dead Weight", "Gamma", "discovery", 10000.0, 20, 15, stale_date - _dt.timedelta(days=60)),
+    ]
+
+    ai_response = {
+        "accelerating": [{"deal_id": str(deal_id_1), "trend_description": "Strong progression"}],
+        "decelerating": [{"deal_id": str(deal_id_2), "trend_description": "Slowing down"}],
+        "stalled": [{"deal_id": str(deal_id_3), "trend_description": "No activity in 60 days"}],
+        "momentum_index": 45,
+        "insight": "Pipeline momentum is mixed with one strong deal.",
+        "recommendations": ["Focus on stalled deal.", "Push decelerating deal.", "Leverage accelerating deal."],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/momentum")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["accelerating"]) == 1
+    assert body["accelerating"][0]["deal_id"] == str(deal_id_1)
+    assert body["accelerating"][0]["velocity_score"] >= 0
+    assert isinstance(body["decelerating"], list)
+    assert isinstance(body["stalled"], list)
+    assert 0 <= body["momentum_index"] <= 100
+    assert isinstance(body["insight"], str) and body["insight"]
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_momentum_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/momentum")
+    assert resp.status_code == 403

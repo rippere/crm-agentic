@@ -6138,5 +6138,32 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/risk-escalation`, {}, token)
   },
+
+  async getWorkspaceMomentum(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        accelerating: [
+          { deal_id: 'd-mom-001', title: 'Acme Enterprise Suite', velocity_score: 78, trend_description: 'Moved from qualified to proposal in 4 days — champion is engaged and budget is confirmed.' },
+          { deal_id: 'd-mom-002', title: 'TechCorp Analytics', velocity_score: 65, trend_description: 'Executive sponsor identified last week — deal is gaining executive attention and moving fast.' },
+        ],
+        decelerating: [
+          { deal_id: 'd-mom-003', title: 'MedGroup Portal', velocity_score: 45, trend_description: 'Proposal sent 9 days ago — procurement review is slowing progress but deal is still alive.' },
+          { deal_id: 'd-mom-004', title: 'RetailX Omni', velocity_score: 38, trend_description: 'Discovery phase stagnating — rep cadence has dropped from 3x/week to 1x/week.' },
+        ],
+        stalled: [
+          { deal_id: 'd-mom-005', title: 'StartupX Growth Pack', velocity_score: 12, trend_description: 'No stage movement in 22 days — champion has gone quiet and last email bounced.' },
+        ],
+        momentum_index: 62,
+        insight: 'Pipeline momentum is moderately healthy with 2 deals accelerating. The stalled StartupX deal is the primary concern — without immediate intervention it is likely to churn. The 2 decelerating deals need a cadence reset this week.',
+        recommendations: [
+          'Immediately re-engage the StartupX champion — try a LinkedIn message or ask for a warm intro from a mutual contact, as emails are not landing.',
+          'Schedule a pipeline review for decelerating deals this week — identify the specific blocker for each and assign a concrete next step to the rep.',
+          'Use the accelerating Acme deal as a case study — document what is working and share the playbook with the rest of the team.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/momentum`, {}, token)
+  },
 }
 

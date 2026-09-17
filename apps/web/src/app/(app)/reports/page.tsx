@@ -554,6 +554,15 @@ export default function ReportsPage() {
   const [riskEscalationOpen, setRiskEscalationOpen] = useState(true);
   const [riskEscalationExpanded, setRiskEscalationExpanded] = useState<string | null>(null);
 
+  type MomentumDeal = { deal_id: string; title: string; velocity_score: number; trend_description: string };
+  type MomentumData = {
+    accelerating: MomentumDeal[]; decelerating: MomentumDeal[]; stalled: MomentumDeal[];
+    momentum_index: number; insight: string; recommendations: string[]; generated_at: string;
+  };
+  const [momentum, setMomentum] = useState<MomentumData | null>(null);
+  const [momentumLoading, setMomentumLoading] = useState(false);
+  const [momentumOpen, setMomentumOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -644,6 +653,8 @@ export default function ReportsPage() {
       apiClient.getDealBattleCard("demo-workspace-1", "demo-token").then(setBattleCard).catch(() => {}).finally(() => setBattleCardLoading(false));
       setRiskEscalationLoading(true);
       apiClient.getDealRiskEscalation("demo-workspace-1", "demo-token").then(setRiskEscalation).catch(() => {}).finally(() => setRiskEscalationLoading(false));
+      setMomentumLoading(true);
+      apiClient.getWorkspaceMomentum("demo-workspace-1", "demo-token").then(setMomentum).catch(() => {}).finally(() => setMomentumLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -739,6 +750,8 @@ export default function ReportsPage() {
       apiClient.getDealBattleCard(workspaceId, session.access_token).then(setBattleCard).catch(() => {}).finally(() => setBattleCardLoading(false));
       setRiskEscalationLoading(true);
       apiClient.getDealRiskEscalation(workspaceId, session.access_token).then(setRiskEscalation).catch(() => {}).finally(() => setRiskEscalationLoading(false));
+      setMomentumLoading(true);
+      apiClient.getWorkspaceMomentum(workspaceId, session.access_token).then(setMomentum).catch(() => {}).finally(() => setMomentumLoading(false));
     });
   }, []);
 
@@ -1294,6 +1307,27 @@ export default function ReportsPage() {
         if (!session) { setCoachingDigestLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCoachingDigestLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateMomentum = () => {
+    setMomentumLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getWorkspaceMomentum(wid, tok)
+        .then(setMomentum)
+        .catch(() => {})
+        .finally(() => setMomentumLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setMomentumLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setMomentumLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5157,6 +5191,112 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No coaching digest data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Momentum Tracker */}
+      <Card className="border-blue-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-blue-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Momentum</h3>
+            {momentum && (
+              <span className="text-xs bg-blue-900/40 text-blue-300 px-2 py-0.5 rounded-full border border-blue-700/30">
+                Index: {momentum.momentum_index}/100
+              </span>
+            )}
+            {momentum && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                {momentum.accelerating.length}↑ {momentum.decelerating.length}↓ {momentum.stalled.length}⏸
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateMomentum}
+              disabled={momentumLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", momentumLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setMomentumOpen(!momentumOpen)}>
+              {momentumOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {momentumOpen && (
+          momentumLoading && !momentum ? (
+            <div className="p-6 text-center text-xs text-zinc-500 animate-pulse">Analysing deal momentum…</div>
+          ) : momentum ? (
+            <div className={cn("p-4 space-y-4", momentumLoading && "opacity-40")}>
+              {momentum.accelerating.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-emerald-400 mb-2">Accelerating ({momentum.accelerating.length})</p>
+                  <div className="space-y-1">
+                    {momentum.accelerating.map((d) => (
+                      <div key={d.deal_id} className="flex items-start gap-3 rounded-md bg-emerald-950/20 border border-emerald-800/20 p-2">
+                        <span className="mt-0.5 flex-shrink-0 text-xs font-bold text-emerald-400 w-6 text-center">{d.velocity_score}</span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-zinc-100">{d.title}</p>
+                          <p className="text-xs text-zinc-400">{d.trend_description}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {momentum.decelerating.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-amber-400 mb-2">Decelerating ({momentum.decelerating.length})</p>
+                  <div className="space-y-1">
+                    {momentum.decelerating.map((d) => (
+                      <div key={d.deal_id} className="flex items-start gap-3 rounded-md bg-amber-950/20 border border-amber-800/20 p-2">
+                        <span className="mt-0.5 flex-shrink-0 text-xs font-bold text-amber-400 w-6 text-center">{d.velocity_score}</span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-zinc-100">{d.title}</p>
+                          <p className="text-xs text-zinc-400">{d.trend_description}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {momentum.stalled.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-rose-400 mb-2">Stalled ({momentum.stalled.length})</p>
+                  <div className="space-y-1">
+                    {momentum.stalled.map((d) => (
+                      <div key={d.deal_id} className="flex items-start gap-3 rounded-md bg-rose-950/20 border border-rose-800/20 p-2">
+                        <span className="mt-0.5 flex-shrink-0 text-xs font-bold text-rose-400 w-6 text-center">{d.velocity_score}</span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-zinc-100">{d.title}</p>
+                          <p className="text-xs text-zinc-400">{d.trend_description}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="rounded-md bg-zinc-800/50 border border-zinc-700/30 p-3">
+                <p className="text-xs text-zinc-300 italic">{momentum.insight}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1">Recommendations</p>
+                <ul className="space-y-1">
+                  {momentum.recommendations.map((r, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(momentum.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No momentum data available.</p>
           )
         )}
       </Card>
