@@ -10007,3 +10007,188 @@ async def get_pipeline_churn(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16u — AI workspace deal conversion quality report
+# ---------------------------------------------------------------------------
+
+_CONVERSION_QUALITY_SYSTEM = """\
+You are a sales quality analyst evaluating closed-won deal conversion quality.
+Given aggregated quality tier data (high/medium/low), write a 1-sentence insight
+and exactly 3 specific, actionable recommendations to improve deal quality.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "insight": "1-sentence summary referencing quality distribution and what drives top-tier deals",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+
+Rules:
+- insight: mention the high-quality tier count, avg health or cycle days, be concise and specific
+- recommendations: practical steps to replicate top-tier patterns and improve lower-tier deals
+- Be concise\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/conversion-quality")
+@limiter.limit("5/minute")
+async def get_deal_conversion_quality(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Fetch all closed_won deals with their metadata
+    deals_result = await db.execute(
+        select(
+            Deal.id,
+            Deal.value,
+            Deal.created_at,
+            Deal.stage_changed_at,
+            Deal.competitors,
+        )
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+    )
+    deals_rows = deals_result.all()
+
+    if not deals_rows:
+        return {
+            "quality_tiers": [
+                {"tier": "high", "count": 0, "avg_value": 0, "avg_cycle_days": 0, "avg_health": 0},
+                {"tier": "medium", "count": 0, "avg_value": 0, "avg_cycle_days": 0, "avg_health": 0},
+                {"tier": "low", "count": 0, "avg_value": 0, "avg_cycle_days": 0, "avg_health": 0},
+            ],
+            "avg_quality_score": 0,
+            "insight": "No closed-won deals found to assess conversion quality.",
+            "recommendations": [
+                "Close your first deals to unlock quality analysis.",
+                "Track deal health scores throughout the pipeline.",
+                "Record deal competitors to improve quality benchmarking.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # For each deal compute quality indicators
+    deal_ids = [r[0] for r in deals_rows]
+
+    # Fetch latest health score per deal from DealHealthHistory
+    health_result = await db.execute(
+        select(DealHealthHistory.deal_id, DealHealthHistory.score)
+        .where(DealHealthHistory.workspace_id == workspace_id)
+        .where(DealHealthHistory.deal_id.in_(deal_ids))
+        .order_by(DealHealthHistory.recorded_at.desc())
+    )
+    health_rows = health_result.all()
+    # Keep only first (most recent) score per deal
+    health_by_deal: dict[uuid.UUID, float] = {}
+    for deal_id, score in health_rows:
+        if deal_id not in health_by_deal:
+            health_by_deal[deal_id] = float(score)
+
+    # Compute per-deal composite quality score
+    # health×0.4 + velocity_score×0.3 + value_score×0.3
+    # velocity_score = max(0, 100 - cycle_days) capped 0-100
+    # value_score = min(100, value / 1000) capped 0-100
+    deal_scores: list[tuple[float, float, float, float, int]] = []  # (score, value, cycle_days, health, competitor_count)
+    for deal_id, value, created_at, stage_changed_at, competitors in deals_rows:
+        v = float(value or 0)
+        close_ts = stage_changed_at or now
+        if close_ts.tzinfo is None:
+            close_ts = close_ts.replace(tzinfo=datetime.timezone.utc)
+        created_ts = created_at or now
+        if created_ts.tzinfo is None:
+            created_ts = created_ts.replace(tzinfo=datetime.timezone.utc)
+        cycle_days = max(0, (close_ts - created_ts).days)
+        health = health_by_deal.get(deal_id, 50.0)
+        comp_count = len(competitors) if isinstance(competitors, list) else 0
+
+        velocity_score = max(0.0, min(100.0, 100.0 - cycle_days))
+        value_score = min(100.0, v / 1000.0)
+        composite = health * 0.4 + velocity_score * 0.3 + value_score * 0.3
+        deal_scores.append((composite, v, float(cycle_days), health, comp_count))
+
+    # Bucket into tiers: high ≥ 66, medium 33-66, low < 33
+    tiers: dict[str, list[tuple[float, float, float, float, int]]] = {"high": [], "medium": [], "low": []}
+    for row in deal_scores:
+        score = row[0]
+        if score >= 66:
+            tiers["high"].append(row)
+        elif score >= 33:
+            tiers["medium"].append(row)
+        else:
+            tiers["low"].append(row)
+
+    def _tier_summary(tier_name: str) -> dict:
+        rows = tiers[tier_name]
+        if not rows:
+            return {"tier": tier_name, "count": 0, "avg_value": 0, "avg_cycle_days": 0, "avg_health": 0}
+        count = len(rows)
+        avg_value = round(sum(r[1] for r in rows) / count)
+        avg_cycle_days = round(sum(r[2] for r in rows) / count)
+        avg_health = round(sum(r[3] for r in rows) / count, 1)
+        return {
+            "tier": tier_name,
+            "count": count,
+            "avg_value": avg_value,
+            "avg_cycle_days": avg_cycle_days,
+            "avg_health": avg_health,
+        }
+
+    quality_tiers = [_tier_summary("high"), _tier_summary("medium"), _tier_summary("low")]
+    avg_quality_score = round(sum(r[0] for r in deal_scores) / len(deal_scores), 1)
+
+    # Build Claude context
+    context = (
+        f"Total closed-won deals: {len(deal_scores)}\n"
+        f"Average quality score: {avg_quality_score}/100\n"
+        f"High-quality deals: {tiers['high'].__len__()} (avg health {quality_tiers[0]['avg_health']}, avg cycle {quality_tiers[0]['avg_cycle_days']} days, avg value ${quality_tiers[0]['avg_value']:,})\n"
+        f"Medium-quality deals: {tiers['medium'].__len__()} (avg health {quality_tiers[1]['avg_health']}, avg cycle {quality_tiers[1]['avg_cycle_days']} days, avg value ${quality_tiers[1]['avg_value']:,})\n"
+        f"Low-quality deals: {tiers['low'].__len__()} (avg health {quality_tiers[2]['avg_health']}, avg cycle {quality_tiers[2]['avg_cycle_days']} days, avg value ${quality_tiers[2]['avg_value']:,})\n"
+    )
+
+    default_insight = f"{len(tiers['high'])} high-quality wins averaging {quality_tiers[0]['avg_cycle_days']} days to close — focus on replicating their engagement patterns."
+    default_recs = [
+        "Review high-quality deal timelines to identify the engagement cadence that drives fast closes.",
+        "Set minimum health score thresholds for deals entering the negotiation stage.",
+        "Create playbooks based on high-quality deal patterns for reps to follow.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_CONVERSION_QUALITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "quality_tiers": quality_tiers,
+        "avg_quality_score": avg_quality_score,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
