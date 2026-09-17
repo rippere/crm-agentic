@@ -4351,7 +4351,7 @@ export default function ReportsPage() {
                   <XAxis dataKey="month" tick={{ fill: "#a1a1aa", fontSize: 10 }} />
                   <YAxis tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} tick={{ fill: "#a1a1aa", fontSize: 10 }} width={44} />
                   <Tooltip
-                    formatter={(v: number) => [`$${v.toLocaleString()}`, "Avg Deal Size"]}
+                    formatter={(v: unknown) => [`$${Number(v ?? 0).toLocaleString()}`, "Avg Deal Size"]}
                     contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8, fontSize: 11 }}
                     labelStyle={{ color: "#a1a1aa" }}
                   />
