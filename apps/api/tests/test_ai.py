@@ -5386,7 +5386,7 @@ async def test_pipeline_churn_returns_structured_response(app_client):
     # Two activity events: one deal enters 'qualified' then churns to 'closed_lost'
     # Another deal enters 'proposal' then regresses to 'qualified'
     from unittest.mock import MagicMock
-    from datetime import timezone as _tz
+    from datetime import datetime, timezone as _tz
     _now = datetime.now(_tz.utc)
 
     row1 = MagicMock()
