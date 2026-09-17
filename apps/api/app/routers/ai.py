@@ -15651,3 +15651,161 @@ async def get_ai_deal_velocity_anomalies(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 18d: win/loss pattern analysis
+# ---------------------------------------------------------------------------
+
+_OUTCOME_FACTORS_SYSTEM = """You are a sales analytics expert. Given aggregated win/loss deal metrics, write a 2-sentence win_loss_narrative identifying the most important pattern differentiating won from lost deals, and provide 3 specific, actionable recommendations to improve win rate. Return JSON: {"win_loss_narrative": "...", "recommendations": ["...", "...", "..."]}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/outcome-factors")
+@limiter.limit("5/minute")
+async def get_ai_deal_outcome_factors(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=180)
+
+    stmt = (
+        select(Deal.id, Deal.stage, Deal.value, Deal.health_score, Deal.ml_win_probability, Deal.stage_changed_at, Deal.created_at)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= cutoff,
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+
+    won_rows = [r for r in rows if r.stage == "closed_won"]
+    lost_rows = [r for r in rows if r.stage == "closed_lost"]
+
+    def _avg(lst: list[float]) -> float:
+        return sum(lst) / len(lst) if lst else 0.0
+
+    def _metrics(deal_rows: list) -> dict:
+        values = [float(r.value or 0) for r in deal_rows]
+        healths = [float(r.health_score or 0) for r in deal_rows]
+        probs = [float(r.ml_win_probability or 0) for r in deal_rows]
+        durations = []
+        for r in deal_rows:
+            ref = r.stage_changed_at or r.created_at
+            if ref is not None:
+                if hasattr(ref, "tzinfo") and ref.tzinfo is None:
+                    ref = ref.replace(tzinfo=timezone.utc)
+                durations.append((now - ref).days)
+        return {
+            "count": len(deal_rows),
+            "avg_value": round(_avg(values), 2),
+            "avg_health": round(_avg(healths), 2),
+            "avg_win_prob": round(_avg(probs), 2),
+            "avg_days_to_close": round(_avg(durations), 1),
+        }
+
+    won = _metrics(won_rows)
+    lost = _metrics(lost_rows)
+    total = won["count"] + lost["count"]
+    win_rate = round(won["count"] / total * 100, 1) if total > 0 else 0.0
+
+    # Value sweet spot: range where won deals cluster (p25–p75)
+    if won_rows:
+        sorted_vals = sorted(float(r.value or 0) for r in won_rows)
+        n = len(sorted_vals)
+        sweet_min = sorted_vals[max(0, n // 4)]
+        sweet_max = sorted_vals[min(n - 1, 3 * n // 4)]
+    else:
+        sweet_min = 0.0
+        sweet_max = 0.0
+
+    if total == 0:
+        return {
+            "won_count": 0,
+            "lost_count": 0,
+            "win_rate": 0.0,
+            "won_avg_value": 0.0,
+            "lost_avg_value": 0.0,
+            "won_avg_health": 0.0,
+            "lost_avg_health": 0.0,
+            "won_avg_win_prob": 0.0,
+            "lost_avg_win_prob": 0.0,
+            "won_avg_days_to_close": 0.0,
+            "lost_avg_days_to_close": 0.0,
+            "value_sweet_spot_min": 0.0,
+            "value_sweet_spot_max": 0.0,
+            "win_loss_narrative": "No closed deals in the last 180 days. Start closing deals to unlock win/loss pattern insights.",
+            "recommendations": [
+                "Focus on moving deals in negotiation to a close — even a few data points will unlock actionable pattern analysis.",
+                "Log loss reasons when marking deals closed_lost to build a qualitative pattern library alongside the quantitative analysis.",
+                "Review your qualification criteria: deals entering the pipeline should have a clear champion, budget, and timeline before moving past discovery.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_narrative = (
+        f"Win rate is {win_rate}% across {total} closed deals in the last 180 days. "
+        f"Won deals average ${won['avg_value']:,.0f} vs ${lost['avg_value']:,.0f} for lost, "
+        f"and score {won['avg_health']:.0f} health vs {lost['avg_health']:.0f} — "
+        "suggesting health score and deal size are key differentiators."
+    )
+    default_recs = [
+        f"Prioritize deals with health scores above {won['avg_health']:.0f} — won deals cluster here, while lost deals average {lost['avg_health']:.0f}.",
+        f"The value sweet spot for won deals is ${sweet_min:,.0f}–${sweet_max:,.0f}; deals outside this range need extra qualification or support.",
+        "Log loss reasons for every lost deal this quarter — 3 entries is enough to spot the top objection and build a rebuttal playbook.",
+    ]
+
+    context = (
+        f"Win/loss analysis for last 180 days. Won: {won['count']} deals, avg value ${won['avg_value']:,.0f}, "
+        f"avg health {won['avg_health']:.1f}, avg win_prob {won['avg_win_prob']:.1f}%, avg days {won['avg_days_to_close']:.0f}. "
+        f"Lost: {lost['count']} deals, avg value ${lost['avg_value']:,.0f}, "
+        f"avg health {lost['avg_health']:.1f}, avg win_prob {lost['avg_win_prob']:.1f}%, avg days {lost['avg_days_to_close']:.0f}. "
+        f"Win rate {win_rate}%. Value sweet spot ${sweet_min:,.0f}–${sweet_max:,.0f}. "
+        "Provide win_loss_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_OUTCOME_FACTORS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    win_loss_narrative = str(data.get("win_loss_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "won_count": won["count"],
+        "lost_count": lost["count"],
+        "win_rate": win_rate,
+        "won_avg_value": won["avg_value"],
+        "lost_avg_value": lost["avg_value"],
+        "won_avg_health": won["avg_health"],
+        "lost_avg_health": lost["avg_health"],
+        "won_avg_win_prob": won["avg_win_prob"],
+        "lost_avg_win_prob": lost["avg_win_prob"],
+        "won_avg_days_to_close": won["avg_days_to_close"],
+        "lost_avg_days_to_close": lost["avg_days_to_close"],
+        "value_sweet_spot_min": sweet_min,
+        "value_sweet_spot_max": sweet_max,
+        "win_loss_narrative": win_loss_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

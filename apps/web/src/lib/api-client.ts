@@ -6737,5 +6737,33 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/velocity-anomalies`, {}, token)
   },
+
+  async getAIDealOutcomeFactors(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        won_count: 28,
+        lost_count: 14,
+        win_rate: 66.7,
+        won_avg_value: 87500,
+        lost_avg_value: 32000,
+        won_avg_health: 78.4,
+        lost_avg_health: 41.2,
+        won_avg_win_prob: 76.8,
+        lost_avg_win_prob: 28.5,
+        won_avg_days_to_close: 38,
+        lost_avg_days_to_close: 62,
+        value_sweet_spot_min: 60000,
+        value_sweet_spot_max: 110000,
+        win_loss_narrative: 'Won deals score 78 avg health vs 41 for lost — health score is the single strongest predictor of outcome. Won deals also close in 38 days on average vs 62 for lost, suggesting that longer sales cycles signal unresolved blockers that compound into losses.',
+        recommendations: [
+          'Flag any deal with a health score below 50 for immediate review — these deals mirror your lost-deal profile and need intervention, not just follow-up.',
+          'Your value sweet spot is $60k–$110k; deals outside this range (especially below $32k) close at much lower rates and may not justify full-cycle pursuit.',
+          'If a deal exceeds 45 days in the pipeline without a stage change, schedule a executive sponsor call — cycle length beyond your won-deal average is a leading indicator of loss.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/outcome-factors`, {}, token)
+  },
 }
 
