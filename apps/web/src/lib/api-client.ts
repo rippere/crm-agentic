@@ -6504,5 +6504,39 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-factors`, {}, token)
   },
+
+  async getAIContactEngagementHeatmap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const hourBuckets = Array.from({ length: 24 }, (_, h) => ({
+        hour: h,
+        count: h >= 9 && h <= 17 ? Math.floor(Math.random() * 8) + 3 : Math.floor(Math.random() * 3),
+      }))
+      hourBuckets[10].count = 18
+      hourBuckets[14].count = 15
+      return Promise.resolve({
+        hour_buckets: hourBuckets,
+        day_buckets: [
+          { day: 'Mon', count: 22 },
+          { day: 'Tue', count: 31 },
+          { day: 'Wed', count: 28 },
+          { day: 'Thu', count: 25 },
+          { day: 'Fri', count: 19 },
+          { day: 'Sat', count: 7 },
+          { day: 'Sun', count: 4 },
+        ],
+        peak_hour: 10,
+        peak_day: 'Tuesday',
+        total_events: 136,
+        engagement_narrative: 'Contact engagement peaks at 10:00 UTC on Tuesdays, with strong secondary activity at 14:00 UTC mid-week. Weekend activity drops sharply, suggesting contacts are largely office-based professionals. Scheduling outreach during Tuesday-Thursday morning windows should yield the highest open and response rates.',
+        recommendations: [
+          'Schedule outreach emails to send at 10:00 UTC for maximum engagement — this is your historical peak hour.',
+          'Prioritise Tuesday as your primary outreach day; it consistently generates 25% more activity than other weekdays.',
+          'Avoid Saturday/Sunday sends — engagement is 4-5× lower on weekends, wasting send-time optimisation credits.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/engagement-heatmap`, {}, token)
+  },
 }
 

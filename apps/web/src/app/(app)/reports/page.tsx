@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -683,6 +683,13 @@ export default function ReportsPage() {
   const [dealWinFactorsLoading, setDealWinFactorsLoading] = useState(false);
   const [dealWinFactorsOpen, setDealWinFactorsOpen] = useState(true);
 
+  type HourBucket = { hour: number; count: number };
+  type DayBucket = { day: string; count: number };
+  type AIContactEngagementHeatmapData = { hour_buckets: HourBucket[]; day_buckets: DayBucket[]; peak_hour: number; peak_day: string; total_events: number; engagement_narrative: string; recommendations: string[]; generated_at: string };
+  const [engagementHeatmap, setEngagementHeatmap] = useState<AIContactEngagementHeatmapData | null>(null);
+  const [engagementHeatmapLoading, setEngagementHeatmapLoading] = useState(false);
+  const [engagementHeatmapOpen, setEngagementHeatmapOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -801,6 +808,8 @@ export default function ReportsPage() {
       apiClient.getAIDealScoreDistribution("demo-workspace-1", "demo-token").then(setDealScoreDist).catch(() => {}).finally(() => setDealScoreDistLoading(false));
       setDealWinFactorsLoading(true);
       apiClient.getAIDealWinFactors("demo-workspace-1", "demo-token").then(setDealWinFactors).catch(() => {}).finally(() => setDealWinFactorsLoading(false));
+      setEngagementHeatmapLoading(true);
+      apiClient.getAIContactEngagementHeatmap("demo-workspace-1", "demo-token").then(setEngagementHeatmap).catch(() => {}).finally(() => setEngagementHeatmapLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -924,6 +933,8 @@ export default function ReportsPage() {
       apiClient.getAIDealScoreDistribution(workspaceId, session.access_token).then(setDealScoreDist).catch(() => {}).finally(() => setDealScoreDistLoading(false));
       setDealWinFactorsLoading(true);
       apiClient.getAIDealWinFactors(workspaceId, session.access_token).then(setDealWinFactors).catch(() => {}).finally(() => setDealWinFactorsLoading(false));
+      setEngagementHeatmapLoading(true);
+      apiClient.getAIContactEngagementHeatmap(workspaceId, session.access_token).then(setEngagementHeatmap).catch(() => {}).finally(() => setEngagementHeatmapLoading(false));
     });
   }, []);
 
@@ -1689,6 +1700,27 @@ export default function ReportsPage() {
         if (!session) { setDealWinFactorsLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealWinFactorsLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateEngagementHeatmap = () => {
+    setEngagementHeatmapLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactEngagementHeatmap(wid, tok)
+        .then(setEngagementHeatmap)
+        .catch(() => {})
+        .finally(() => setEngagementHeatmapLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setEngagementHeatmapLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setEngagementHeatmapLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -7328,6 +7360,95 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No win factor data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Contact Engagement Heatmap */}
+      <Card className="border-indigo-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Flame className="h-4 w-4 text-indigo-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Contact Engagement Heatmap</h3>
+            {engagementHeatmap && (
+              <span className="text-xs bg-indigo-900/40 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-700/30">
+                Peak: {engagementHeatmap.peak_day} {engagementHeatmap.peak_hour}:00 UTC
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateEngagementHeatmap}
+              disabled={engagementHeatmapLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", engagementHeatmapLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setEngagementHeatmapOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {engagementHeatmapOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {engagementHeatmapOpen && (
+          engagementHeatmapLoading && !engagementHeatmap ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : engagementHeatmap ? (
+            <div className={cn("p-4 space-y-4", engagementHeatmapLoading && "opacity-40")}>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs text-zinc-500 mb-2">By Day of Week</p>
+                  <div className="space-y-1">
+                    {engagementHeatmap.day_buckets.map((b) => {
+                      const max = Math.max(...engagementHeatmap.day_buckets.map((x) => x.count)) || 1;
+                      const pct = Math.round((b.count / max) * 100);
+                      return (
+                        <div key={b.day} className="flex items-center gap-2">
+                          <span className="text-xs text-zinc-500 w-7 flex-shrink-0">{b.day}</span>
+                          <div className="flex-1 h-3 bg-zinc-800 rounded overflow-hidden">
+                            <div className="h-full bg-indigo-500/70 rounded transition-all" style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className="text-xs text-zinc-400 w-6 text-right">{b.count}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-2">By Hour of Day (UTC)</p>
+                  <div className="flex items-end gap-0.5 h-20">
+                    {engagementHeatmap.hour_buckets.map((b) => {
+                      const max = Math.max(...engagementHeatmap.hour_buckets.map((x) => x.count)) || 1;
+                      const pct = Math.round((b.count / max) * 100);
+                      return (
+                        <div key={b.hour} title={`${b.hour}:00 — ${b.count} events`} className="flex-1 bg-indigo-500/60 hover:bg-indigo-400/80 rounded-t transition-all" style={{ height: `${Math.max(pct, 2)}%` }} />
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-between text-xs text-zinc-600 mt-1">
+                    <span>0h</span><span>12h</span><span>23h</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-4 text-xs text-zinc-400">
+                <span>Total events: <span className="text-zinc-200 font-mono">{engagementHeatmap.total_events}</span></span>
+                <span>Peak: <span className="text-indigo-300 font-mono">{engagementHeatmap.peak_day} {engagementHeatmap.peak_hour}:00 UTC</span></span>
+              </div>
+              <p className="text-xs text-zinc-400 italic">{engagementHeatmap.engagement_narrative}</p>
+              <ul className="space-y-1.5">
+                {engagementHeatmap.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(engagementHeatmap.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No engagement data available.</p>
           )
         )}
       </Card>
