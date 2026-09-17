@@ -5695,5 +5695,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/avg-deal-size-trend`, {}, token)
   },
+
+  async getDealFollowupGaps(workspaceId: string, token: string): Promise<{
+    overdue: Array<{ deal_id: string; title: string; company: string; stage: string; days_since_contact: number }>
+    due_soon: Array<{ deal_id: string; title: string; company: string; stage: string; days_since_contact: number }>
+    on_track_count: number
+    avg_days_since_contact: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        overdue: [
+          { deal_id: 'd-001', title: 'TechCorp Platform Expansion', company: 'TechCorp', stage: 'negotiation', days_since_contact: 21 },
+          { deal_id: 'd-002', title: 'HealthPlus EHR Integration', company: 'HealthPlus', stage: 'proposal', days_since_contact: 17 },
+          { deal_id: 'd-003', title: 'RetailX Omnichannel Suite', company: 'RetailX', stage: 'qualified', days_since_contact: 16 },
+        ],
+        due_soon: [
+          { deal_id: 'd-004', title: 'FinCo Analytics Dashboard', company: 'FinCo', stage: 'proposal', days_since_contact: 12 },
+          { deal_id: 'd-005', title: 'EduLearn LMS Upgrade', company: 'EduLearn', stage: 'discovery', days_since_contact: 8 },
+        ],
+        on_track_count: 9,
+        avg_days_since_contact: 6.4,
+        insight: '3 deals in advanced stages haven\'t been contacted in 16+ days — silence in negotiation is the fastest way to lose a deal.',
+        recommendations: [
+          'Prioritise the 3 overdue deals immediately — send a personal note to each within 24 hours to re-establish contact.',
+          'Schedule weekly check-in calls for all negotiation-stage deals to maintain momentum and unblock objections early.',
+          'Set a 7-day follow-up SLA as a team standard and use the CRM to trigger automatic reminders for each rep.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/followup-gaps`, {}, token)
+  },
 }
 

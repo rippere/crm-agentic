@@ -405,6 +405,20 @@ export default function ReportsPage() {
   const [avgDealSizeTrendLoading, setAvgDealSizeTrendLoading] = useState(false);
   const [avgDealSizeTrendOpen, setAvgDealSizeTrendOpen] = useState(true);
 
+  type FollowupGapDeal = { deal_id: string; title: string; company: string; stage: string; days_since_contact: number };
+  type FollowupGaps = {
+    overdue: FollowupGapDeal[];
+    due_soon: FollowupGapDeal[];
+    on_track_count: number;
+    avg_days_since_contact: number;
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [followupGaps, setFollowupGaps] = useState<FollowupGaps | null>(null);
+  const [followupGapsLoading, setFollowupGapsLoading] = useState(false);
+  const [followupGapsOpen, setFollowupGapsOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -477,6 +491,8 @@ export default function ReportsPage() {
       apiClient.getDealWinLossPatterns("demo-workspace-1", "demo-token").then(setWinLossPatterns).catch(() => {}).finally(() => setWinLossPatternsLoading(false));
       setAvgDealSizeTrendLoading(true);
       apiClient.getAvgDealSizeTrend("demo-workspace-1", "demo-token").then(setAvgDealSizeTrend).catch(() => {}).finally(() => setAvgDealSizeTrendLoading(false));
+      setFollowupGapsLoading(true);
+      apiClient.getDealFollowupGaps("demo-workspace-1", "demo-token").then(setFollowupGaps).catch(() => {}).finally(() => setFollowupGapsLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -554,6 +570,8 @@ export default function ReportsPage() {
       apiClient.getDealWinLossPatterns(workspaceId, session.access_token).then(setWinLossPatterns).catch(() => {}).finally(() => setWinLossPatternsLoading(false));
       setAvgDealSizeTrendLoading(true);
       apiClient.getAvgDealSizeTrend(workspaceId, session.access_token).then(setAvgDealSizeTrend).catch(() => {}).finally(() => setAvgDealSizeTrendLoading(false));
+      setFollowupGapsLoading(true);
+      apiClient.getDealFollowupGaps(workspaceId, session.access_token).then(setFollowupGaps).catch(() => {}).finally(() => setFollowupGapsLoading(false));
     });
   }, []);
 
@@ -1046,6 +1064,27 @@ export default function ReportsPage() {
         if (!session) { setAvgDealSizeTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAvgDealSizeTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateFollowupGaps = () => {
+    setFollowupGapsLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealFollowupGaps(wid, tok)
+        .then(setFollowupGaps)
+        .catch(() => {})
+        .finally(() => setFollowupGapsLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setFollowupGapsLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setFollowupGapsLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -4400,6 +4439,114 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No avg deal size trend data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Follow-up Gap Analysis */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-amber-400" />
+            <span className="text-sm font-semibold text-zinc-200">Follow-up Gap Analysis</span>
+            {followupGaps && (
+              <span className={cn("text-xs font-medium", followupGaps.overdue.length > 0 ? "text-rose-400" : "text-emerald-400")}>
+                {followupGaps.overdue.length > 0
+                  ? `${followupGaps.overdue.length} overdue`
+                  : "All on track"}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateFollowupGaps}
+              disabled={followupGapsLoading}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", followupGapsLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setFollowupGapsOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {followupGapsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {followupGapsOpen && (
+          followupGapsLoading && !followupGaps ? (
+            <div className="h-24 animate-pulse bg-zinc-800/40 m-4 rounded" />
+          ) : followupGaps ? (
+            <div className={cn("space-y-4 p-4", followupGapsLoading && "opacity-40")}>
+              {/* 3-bucket summary row */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-center">
+                  <p className="text-xl font-bold text-rose-400">{followupGaps.overdue.length}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Overdue &gt;14d</p>
+                </div>
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-center">
+                  <p className="text-xl font-bold text-amber-400">{followupGaps.due_soon.length}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Due soon 7–14d</p>
+                </div>
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-center">
+                  <p className="text-xl font-bold text-emerald-400">{followupGaps.on_track_count}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">On track &lt;7d</p>
+                </div>
+              </div>
+              <p className="text-xs text-zinc-500">Avg {followupGaps.avg_days_since_contact}d since last contact</p>
+              {/* Overdue deals */}
+              {followupGaps.overdue.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-rose-400 mb-1">Overdue</p>
+                  <ul className="space-y-1">
+                    {followupGaps.overdue.map((d) => (
+                      <li key={d.deal_id} className="flex items-center justify-between rounded bg-zinc-800/50 px-3 py-1.5">
+                        <div>
+                          <span className="text-xs text-zinc-200 font-medium">{d.title}</span>
+                          {d.company && <span className="text-xs text-zinc-500 ml-1">· {d.company}</span>}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-zinc-400 capitalize">{d.stage.replace("_", " ")}</span>
+                          <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-xs font-mono text-rose-300">{d.days_since_contact}d</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {/* Due soon deals */}
+              {followupGaps.due_soon.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-amber-400 mb-1">Due soon</p>
+                  <ul className="space-y-1">
+                    {followupGaps.due_soon.map((d) => (
+                      <li key={d.deal_id} className="flex items-center justify-between rounded bg-zinc-800/50 px-3 py-1.5">
+                        <div>
+                          <span className="text-xs text-zinc-200 font-medium">{d.title}</span>
+                          {d.company && <span className="text-xs text-zinc-500 ml-1">· {d.company}</span>}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-zinc-400 capitalize">{d.stage.replace("_", " ")}</span>
+                          <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-mono text-amber-300">{d.days_since_contact}d</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{followupGaps.insight}</p>
+              <ul className="space-y-1">
+                {followupGaps.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(followupGaps.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No follow-up gap data available.</p>
           )
         )}
       </Card>

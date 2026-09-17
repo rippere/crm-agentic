@@ -10536,3 +10536,139 @@ async def get_avg_deal_size_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{workspace_id}/ai/deals/followup-gaps
+# ---------------------------------------------------------------------------
+
+_FOLLOWUP_GAPS_SYSTEM = """You are a sales coaching assistant. Given data on deals that haven't been contacted recently,
+write a one-sentence insight about the follow-up gap risk and three actionable recommendations.
+Respond ONLY with valid JSON: {"insight": "...", "recommendations": ["...", "...", "..."]}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/followup-gaps")
+@limiter.limit("5/minute")
+async def get_followup_gaps(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.company, Deal.stage, Deal.updated_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.not_in(["closed_won", "closed_lost"]))
+        .order_by(Deal.updated_at)
+    )
+    rows = result.all()
+
+    overdue = []
+    due_soon = []
+    on_track_count = 0
+    total_days = 0
+    total_count = 0
+
+    for deal_id, title, company, stage, updated_at in rows:
+        if updated_at is None:
+            days = 0
+        else:
+            if hasattr(updated_at, "tzinfo") and updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=datetime.timezone.utc)
+            days = (now - updated_at).days
+
+        total_days += days
+        total_count += 1
+
+        entry = {
+            "deal_id": str(deal_id),
+            "title": title or "Untitled",
+            "company": company or "",
+            "stage": stage,
+            "days_since_contact": days,
+        }
+        if days > 14:
+            overdue.append(entry)
+        elif days >= 7:
+            due_soon.append(entry)
+        else:
+            on_track_count += 1
+
+    avg_days = round(total_days / total_count, 1) if total_count > 0 else 0.0
+
+    # Graceful empty default
+    if total_count == 0:
+        return {
+            "overdue": [],
+            "due_soon": [],
+            "on_track_count": 0,
+            "avg_days_since_contact": 0.0,
+            "insight": "No open deals to track — add deals to the pipeline to start monitoring follow-up cadence.",
+            "recommendations": [
+                "Import or create deals so the follow-up gap tracker can monitor your pipeline.",
+                "Establish a follow-up SLA: aim to contact every open deal at least once every 7 days.",
+                "Set up automated reminders in the system to flag deals that haven't been touched in 7+ days.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_insight = (
+        f"{len(overdue)} deal{'' if len(overdue) == 1 else 's'} overdue for follow-up (>14 days), "
+        f"{len(due_soon)} due soon (7–14 days); avg {avg_days} days since last contact."
+    )
+    default_recs = [
+        f"Prioritise the {len(overdue)} overdue deal{'' if len(overdue) == 1 else 's'} for immediate outreach — radio silence beyond 14 days dramatically reduces close probability.",
+        "Implement a daily follow-up habit: review the due-soon list each morning and send one personalised touch per deal.",
+        "Set a 7-day follow-up SLA for all open deals and assign a team member as the DRI for each.",
+    ]
+
+    context = (
+        f"Open deals follow-up summary:\n"
+        f"  Overdue (>14 days): {len(overdue)} deal(s)\n"
+        f"  Due soon (7–14 days): {len(due_soon)} deal(s)\n"
+        f"  On track (<7 days): {on_track_count} deal(s)\n"
+        f"  Avg days since last contact: {avg_days}\n"
+    )
+    if overdue:
+        context += "Overdue deals:\n" + "\n".join(
+            f"  {d['title']} ({d['company']}) — {d['stage']}, {d['days_since_contact']}d" for d in overdue[:5]
+        ) + "\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_FOLLOWUP_GAPS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "overdue": overdue,
+        "due_soon": due_soon,
+        "on_track_count": on_track_count,
+        "avg_days_since_contact": avg_days,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
