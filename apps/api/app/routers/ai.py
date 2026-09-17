@@ -16945,3 +16945,162 @@ async def get_ai_deal_stall_analysis(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_PRIORITY_MATRIX_SYSTEM = (
+    "You are a sales analytics AI. Analyse a 2x2 deal priority matrix for a CRM. "
+    "Deals are classified by value (above/below average) and win probability (above/below 60%). "
+    "Quadrants: close_now (high value + high prob), invest (high value + low prob), "
+    "quick_win (low value + high prob), deprioritize (low value + low prob). "
+    "Write a 2-sentence narrative identifying the most important strategic focus and "
+    "3 actionable recommendations to optimise sales effort allocation. "
+    "Respond ONLY with valid JSON: "
+    "{\"matrix_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/priority-matrix")
+@limiter.limit("5/minute")
+async def get_ai_deal_priority_matrix(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    now = datetime.datetime.now(timezone.utc)
+    active_stages = ["discovery", "qualified", "proposal", "negotiation"]
+    rows = (
+        await db.execute(
+            select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability, Deal.health_score)
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage.in_(active_stages))
+        )
+    ).all()
+
+    deal_list = []
+    for row in rows:
+        val = float(row.value or 0)
+        prob = float(row.ml_win_probability or 50)
+        health = float(row.health_score or 50)
+        deal_list.append({
+            "id": str(row.id),
+            "title": str(row.title or ""),
+            "stage": str(row.stage or ""),
+            "value": round(val, 2),
+            "win_probability": round(prob, 1),
+            "health_score": round(health, 1),
+        })
+
+    total_active = len(deal_list)
+    if total_active == 0:
+        empty_quadrants = [
+            {"quadrant": "close_now", "label": "Close Now", "deal_count": 0, "total_value": 0.0, "avg_win_prob": 0.0, "top_deals": []},
+            {"quadrant": "invest", "label": "Invest", "deal_count": 0, "total_value": 0.0, "avg_win_prob": 0.0, "top_deals": []},
+            {"quadrant": "quick_win", "label": "Quick Win", "deal_count": 0, "total_value": 0.0, "avg_win_prob": 0.0, "top_deals": []},
+            {"quadrant": "deprioritize", "label": "Deprioritize", "deal_count": 0, "total_value": 0.0, "avg_win_prob": 0.0, "top_deals": []},
+        ]
+        return {
+            "quadrants": empty_quadrants,
+            "avg_deal_value": 0.0,
+            "total_active": 0,
+            "matrix_narrative": "No active deals found in the pipeline.",
+            "recommendations": [
+                "Add deals to the pipeline to begin priority matrix analysis.",
+                "Ensure deals have ML win probability scores for accurate classification.",
+                "Set deal values to enable value-based prioritisation.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    avg_value = sum(d["value"] for d in deal_list) / total_active
+    WIN_PROB_THRESHOLD = 60.0
+
+    buckets: dict[str, list] = {"close_now": [], "invest": [], "quick_win": [], "deprioritize": []}
+    for d in deal_list:
+        high_value = d["value"] >= avg_value
+        high_prob = d["win_probability"] >= WIN_PROB_THRESHOLD
+        if high_value and high_prob:
+            q = "close_now"
+        elif high_value and not high_prob:
+            q = "invest"
+        elif not high_value and high_prob:
+            q = "quick_win"
+        else:
+            q = "deprioritize"
+        buckets[q].append(d)
+
+    quadrant_meta = [
+        ("close_now", "Close Now"),
+        ("invest", "Invest"),
+        ("quick_win", "Quick Win"),
+        ("deprioritize", "Deprioritize"),
+    ]
+    quadrants = []
+    for key, label in quadrant_meta:
+        deals = buckets[key]
+        count = len(deals)
+        total_val = round(sum(d["value"] for d in deals), 2)
+        avg_prob = round(sum(d["win_probability"] for d in deals) / count, 1) if count else 0.0
+        top = sorted(deals, key=lambda d: d["value"], reverse=True)[:3]
+        quadrants.append({
+            "quadrant": key,
+            "label": label,
+            "deal_count": count,
+            "total_value": total_val,
+            "avg_win_prob": avg_prob,
+            "top_deals": top,
+        })
+
+    context = (
+        f"Active deals: {total_active}. Avg deal value threshold: ${avg_value:,.0f}. Win prob threshold: 60%. "
+        + " | ".join(
+            f"{q['label']}: {q['deal_count']} deals, ${q['total_value']:,.0f} value, avg {q['avg_win_prob']}% win prob"
+            for q in quadrants
+        )
+        + "."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_PRIORITY_MATRIX_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    matrix_narrative = str(data.get("matrix_narrative", "")).strip()
+    if not matrix_narrative:
+        close_now_q = next((q for q in quadrants if q["quadrant"] == "close_now"), None)
+        matrix_narrative = (
+            f"{close_now_q['deal_count'] if close_now_q else 0} deals are in the Close Now quadrant — "
+            "highest value and highest probability, requiring immediate focus."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Dedicate 60% of weekly selling time to Close Now deals to maximise near-term revenue.",
+        "Assign senior reps to Invest deals with a clear 30-day action plan to improve win probability.",
+        "Use Quick Win deals to build momentum and free pipeline capacity for higher-value pursuits.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "quadrants": quadrants,
+        "avg_deal_value": round(avg_value, 2),
+        "total_active": total_active,
+        "matrix_narrative": matrix_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }

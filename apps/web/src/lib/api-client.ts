@@ -6964,5 +6964,52 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/stall-analysis`, {}, token)
   },
+
+  async getAIDealPriorityMatrix(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        quadrants: [
+          {
+            quadrant: 'close_now', label: 'Close Now', deal_count: 5, total_value: 385000, avg_win_prob: 72.4,
+            top_deals: [
+              { id: 'p1', title: 'Apex Corp Enterprise', stage: 'negotiation', value: 95000, win_probability: 78.0, health_score: 82.0 },
+              { id: 'p2', title: 'BlueSky SaaS Platform', stage: 'proposal', value: 82000, win_probability: 74.0, health_score: 76.0 },
+              { id: 'p3', title: 'CloudVault Security', stage: 'negotiation', value: 75000, win_probability: 71.0, health_score: 79.0 },
+            ],
+          },
+          {
+            quadrant: 'invest', label: 'Invest', deal_count: 4, total_value: 298000, avg_win_prob: 38.5,
+            top_deals: [
+              { id: 'p4', title: 'NovaTech AI Suite', stage: 'qualified', value: 88000, win_probability: 42.0, health_score: 55.0 },
+              { id: 'p5', title: 'Pinnacle Analytics', stage: 'proposal', value: 72000, win_probability: 35.0, health_score: 48.0 },
+            ],
+          },
+          {
+            quadrant: 'quick_win', label: 'Quick Win', deal_count: 6, total_value: 128000, avg_win_prob: 68.3,
+            top_deals: [
+              { id: 'p6', title: 'Meridian Starter Pack', stage: 'proposal', value: 25000, win_probability: 72.0, health_score: 74.0 },
+              { id: 'p7', title: 'Summit SMB Bundle', stage: 'qualified', value: 22000, win_probability: 68.0, health_score: 71.0 },
+            ],
+          },
+          {
+            quadrant: 'deprioritize', label: 'Deprioritize', deal_count: 7, total_value: 95000, avg_win_prob: 28.1,
+            top_deals: [
+              { id: 'p8', title: 'Legacy Migration', stage: 'discovery', value: 18000, win_probability: 30.0, health_score: 38.0 },
+            ],
+          },
+        ],
+        avg_deal_value: 54545,
+        total_active: 22,
+        matrix_narrative: 'The Close Now quadrant holds 5 high-value, high-probability deals worth $385K that deserve immediate sales focus this week. The Invest quadrant has 4 large-value deals with low win probability — these need targeted intervention to shift the odds before they stall.',
+        recommendations: [
+          'Dedicate 60% of this week\'s selling time to the 5 Close Now deals — schedule executive check-ins and accelerate contract reviews.',
+          'Assign your best solution engineer to the Invest quadrant to run targeted demos that address the specific objections keeping win probability low.',
+          'Use the 6 Quick Win deals to build momentum and hit monthly numbers — close these first to free capacity for Invest work.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/priority-matrix`, {}, token)
+  },
 }
 
