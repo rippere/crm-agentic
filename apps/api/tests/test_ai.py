@@ -7737,3 +7737,61 @@ async def test_revenue_forecast_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/revenue-forecast")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 18f — Deal Value Leak Analysis
+# ---------------------------------------------------------------------------
+
+class FakeValueLeakRow:
+    def __init__(self, stage, value, title="Deal"):
+        self.stage = stage
+        self.value = value
+        self.title = title
+
+
+@pytest.mark.asyncio
+async def test_value_leak_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = datetime.datetime.utcnow()
+
+    rows = [
+        # 2 proposal losses: $40k + $30k = $70k
+        FakeValueLeakRow("closed_lost", 40000, "Alpha"),
+        FakeValueLeakRow("closed_lost", 30000, "Beta"),
+        # 1 negotiation loss: $50k
+        FakeValueLeakRow("closed_lost", 50000, "Gamma"),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"leak_narrative": "Significant losses at closed_lost stage.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/value-leak")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "stage_leaks" in body
+    assert "total_leaked" in body
+    assert body["total_leaked"] == pytest.approx(120000.0)
+    assert isinstance(body["stage_leaks"], list)
+    assert len(body["stage_leaks"]) == 1  # all stage = closed_lost
+    leak = body["stage_leaks"][0]
+    assert leak["stage"] == "closed_lost"
+    assert leak["deal_count"] == 3
+    assert leak["pct_of_total_leaked"] == pytest.approx(100.0)
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_value_leak_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/value-leak")
+    assert resp.status_code == 403

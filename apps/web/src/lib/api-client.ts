@@ -6793,5 +6793,27 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/revenue-forecast`, {}, token)
   },
+
+  async getAIDealValueLeak(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stage_leaks: [
+          { stage: 'proposal', deal_count: 5, leaked_value: 285000, avg_value: 57000, pct_of_total_leaked: 52.3 },
+          { stage: 'negotiation', deal_count: 3, leaked_value: 175000, avg_value: 58333, pct_of_total_leaked: 32.1 },
+          { stage: 'qualified', deal_count: 4, leaked_value: 84500, avg_value: 21125, pct_of_total_leaked: 15.6 },
+        ],
+        total_leaked: 544500,
+        biggest_leak_stage: 'proposal',
+        leak_narrative: '$544.5k in pipeline value was lost across 12 deals in the last 180 days. The proposal stage accounts for over half of all losses, suggesting deals are being pushed to proposal before they are fully qualified. Tighter stage-entry criteria and a structured discovery process would materially reduce leakage at this point in the funnel.',
+        recommendations: [
+          'Introduce a mandatory discovery checklist before advancing any deal to proposal — unqualified proposals drive the majority of leakage.',
+          'Schedule a win/loss debrief for every deal lost at negotiation stage to identify the most common objection patterns and build counter-scripts.',
+          'Flag any deal stalled in proposal for more than 14 days for an executive review — early stalls in this stage rarely self-resolve.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-leak`, {}, token)
+  },
 }
 

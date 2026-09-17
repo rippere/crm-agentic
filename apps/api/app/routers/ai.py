@@ -15975,3 +15975,136 @@ async def get_ai_deal_revenue_forecast(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 18f — Deal Value Leak Analysis
+# ---------------------------------------------------------------------------
+
+_VALUE_LEAK_SYSTEM = (
+    "You are a sales analytics AI. Analyse where pipeline value is being lost "
+    "in a CRM. Given data about closed-lost deals grouped by stage, identify "
+    "patterns, root causes, and actionable ways to reduce value leakage. "
+    "Respond ONLY with valid JSON: {\"leak_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/value-leak")
+@limiter.limit("5/minute")
+async def get_ai_deal_value_leak(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=180)
+
+    result = await db.execute(
+        select(
+            Deal.stage,
+            Deal.value,
+            Deal.title,
+        ).join(Contact, Deal.contact_id == Contact.id).where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff,
+        )
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "stage_leaks": [],
+            "total_leaked": 0.0,
+            "biggest_leak_stage": None,
+            "leak_narrative": "No closed-lost deals found in the last 180 days. Keep building pipeline.",
+            "recommendations": [
+                "Track win/loss reasons on every deal to identify patterns early.",
+                "Set up automated health-score alerts for deals below 40.",
+                "Review competitor mentions on lost deals to refine positioning.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    stage_buckets: dict = {}
+    for row in rows:
+        s = row.stage
+        v = float(row.value or 0)
+        if s not in stage_buckets:
+            stage_buckets[s] = {"deal_count": 0, "leaked_value": 0.0}
+        stage_buckets[s]["deal_count"] += 1
+        stage_buckets[s]["leaked_value"] += v
+
+    total_leaked = sum(b["leaked_value"] for b in stage_buckets.values())
+
+    stage_leaks = sorted(
+        [
+            {
+                "stage": s,
+                "deal_count": b["deal_count"],
+                "leaked_value": round(b["leaked_value"], 2),
+                "avg_value": round(b["leaked_value"] / b["deal_count"], 2) if b["deal_count"] else 0.0,
+                "pct_of_total_leaked": round(b["leaked_value"] / total_leaked * 100, 1) if total_leaked else 0.0,
+            }
+            for s, b in stage_buckets.items()
+        ],
+        key=lambda x: x["leaked_value"],
+        reverse=True,
+    )
+
+    biggest_leak_stage = stage_leaks[0]["stage"] if stage_leaks else None
+
+    default_narrative = (
+        f"${total_leaked:,.0f} in pipeline value was lost across {len(rows)} deals in the last 180 days. "
+        f"The highest loss occurred at the {biggest_leak_stage} stage."
+    )
+    default_recs = [
+        f"Prioritise win/loss debriefs for deals lost at {biggest_leak_stage} — this stage drives the most value leakage.",
+        "Introduce stage-exit criteria to ensure deals advance only when truly qualified.",
+        "Assign a risk-review cadence for deals that have been in any stage longer than twice the average.",
+    ]
+
+    context = (
+        f"Deal value leak analysis. {len(rows)} closed-lost deals in last 180 days. "
+        f"Total leaked: ${total_leaked:,.0f}. "
+        "Stage breakdown: " + "; ".join(
+            sl["stage"] + " " + str(sl["deal_count"]) + " deals $" + f"{sl['leaked_value']:,.0f}" + " (" + str(sl["pct_of_total_leaked"]) + "%)"
+            for sl in stage_leaks
+        ) + ". "
+        "Provide leak_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_VALUE_LEAK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    leak_narrative = str(data.get("leak_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_leaks": stage_leaks,
+        "total_leaked": round(total_leaked, 2),
+        "biggest_leak_stage": biggest_leak_stage,
+        "leak_narrative": leak_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
