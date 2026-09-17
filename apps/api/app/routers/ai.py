@@ -11004,3 +11004,204 @@ async def get_next_best_actions(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ── Phase 17a: Weekly Coaching Digest ────────────────────────────────────────
+
+_COACHING_DIGEST_SYSTEM = """\
+You are an expert sales coach. Given a list of deals (stage, health score, value, \
+days in stage, competitors), produce a coaching digest for the 3 most actionable deals.
+
+Output a JSON object with:
+- "coached_deals": array of exactly 3 objects (or fewer if fewer than 3 deals):
+    - "deal_id": string
+    - "title": string
+    - "stage": string
+    - "value": number
+    - "what_to_do": string (2-3 sentences: specific actions for this week)
+    - "what_to_avoid": string (1-2 sentences: common mistakes at this stage)
+    - "talking_points": array of 3 strings (key points to raise in next conversation)
+- "weekly_theme": string (1 sentence identifying the week's biggest opportunity or risk)
+- "recommendations": array of 3 strings (process-level recommendations)
+
+Be specific, actionable, and coach-like. No generic platitudes.
+Return valid JSON only.\
+"""
+
+_COACHING_STAGE_THRESHOLDS: dict[str, int] = {
+    "discovery": 14,
+    "qualified": 21,
+    "proposal": 30,
+    "negotiation": 45,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/coaching-digest")
+@limiter.limit("5/minute")
+async def get_coaching_digest(
+    request: Request,
+    workspace_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if str(current_user.workspace_id) != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.company,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.created_at,
+            Deal.stage_changed_at,
+            Deal.competitors,
+        )
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.not_in(["closed_won", "closed_lost"]))
+        .order_by(Deal.value.desc())
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "coached_deals": [],
+            "weekly_theme": "No open deals this week — focus on prospecting to build pipeline.",
+            "recommendations": [
+                "Add your first deals to the Pipeline to unlock weekly coaching insights.",
+                "Connect your email to auto-capture new deal opportunities.",
+                "Set a goal of 3 qualified deals in pipeline by end of next week.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    deals_info: list[dict] = []
+    for row in rows:
+        deal_id, title, company, stage, value, health_score, created_at, stage_changed_at, competitors = row
+        ref = stage_changed_at or created_at
+        days_in_stage = (now - ref.replace(tzinfo=datetime.timezone.utc)).days if ref else 0
+        threshold = _COACHING_STAGE_THRESHOLDS.get(stage, 30)
+        overdue = days_in_stage > threshold
+        score = float(value or 0) / 1000 + (100 - int(health_score or 50)) + (30 if overdue else 0)
+        deals_info.append({
+            "deal_id": str(deal_id),
+            "title": title or "Untitled",
+            "company": company or "",
+            "stage": stage,
+            "value": float(value or 0),
+            "health_score": int(health_score or 0),
+            "days_in_stage": days_in_stage,
+            "threshold": threshold,
+            "competitors": competitors if isinstance(competitors, list) else [],
+            "_score": score,
+        })
+
+    top3 = sorted(deals_info, key=lambda d: d["_score"], reverse=True)[:3]
+
+    context_lines = ["Weekly sales coaching digest — top deals needing attention:\n"]
+    for d in top3:
+        comp_str = f", competitors: {', '.join(d['competitors'])}" if d["competitors"] else ""
+        context_lines.append(
+            f"  deal_id={d['deal_id']} title={d['title']!r} company={d['company']!r} "
+            f"stage={d['stage']} value=${d['value']:,.0f} health={d['health_score']} "
+            f"days_in_stage={d['days_in_stage']} (threshold {d['threshold']}d){comp_str}"
+        )
+    context = "\n".join(context_lines)
+
+    def _default_coached_deal(d: dict) -> dict:
+        stage = d["stage"]
+        if stage == "discovery":
+            wtd = "Run a structured discovery call to uncover budget, authority, and timeline. Document findings in the deal notes."
+            wta = "Avoid pitching product features before understanding the buyer's pain points."
+            points = ["What is your biggest operational challenge right now?", "Who else is involved in this decision?", "What does success look like in 6 months?"]
+        elif stage == "qualified":
+            wtd = "Send a tailored proposal within 48 hours. Follow up with a call to walk through it together."
+            wta = "Do not send a generic proposal — personalise it to the buyer's stated priorities."
+            points = ["How does this align with your Q4 priorities?", "Are there any internal approvals needed before we proceed?", "What would make this an easy yes for your team?"]
+        elif stage == "proposal":
+            wtd = "Follow up within 3 business days if no response. Offer a 30-minute call to address objections."
+            wta = "Avoid discounting too early — understand the objection before adjusting price."
+            points = ["What questions came up after reviewing the proposal?", "Is the timeline still realistic for your team?", "Can we schedule a technical review call?"]
+        else:
+            wtd = "Request a verbal commitment and agree on the final contract timeline. Involve legal on both sides."
+            wta = "Do not let the deal sit — each week of delay increases the risk of stakeholder change."
+            points = ["What is left before you can sign?", "Are there any procurement steps we should be aware of?", "Can we agree on a signature date today?"]
+        return {
+            "deal_id": d["deal_id"],
+            "title": d["title"],
+            "stage": stage,
+            "value": d["value"],
+            "what_to_do": wtd,
+            "what_to_avoid": wta,
+            "talking_points": points,
+        }
+
+    default_coached = [_default_coached_deal(d) for d in top3]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            system=_COACHING_DIGEST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    coached_deals = data.get("coached_deals", default_coached)
+    if not isinstance(coached_deals, list):
+        coached_deals = default_coached
+    valid_deal_ids = {d["deal_id"] for d in top3}
+    cleaned_deals = []
+    for cd in coached_deals:
+        if not isinstance(cd, dict):
+            continue
+        if str(cd.get("deal_id", "")) not in valid_deal_ids:
+            continue
+        tps = cd.get("talking_points", [])
+        talking_points = [str(t) for t in (tps if isinstance(tps, list) else [])[:3]]
+        while len(talking_points) < 3:
+            talking_points.append("What would make this deal move forward this week?")
+        cleaned_deals.append({
+            "deal_id": str(cd.get("deal_id", "")),
+            "title": str(cd.get("title", ""))[:80],
+            "stage": str(cd.get("stage", "")),
+            "value": float(cd.get("value", 0)),
+            "what_to_do": str(cd.get("what_to_do", ""))[:400],
+            "what_to_avoid": str(cd.get("what_to_avoid", ""))[:200],
+            "talking_points": talking_points,
+        })
+    if not cleaned_deals:
+        cleaned_deals = default_coached
+
+    default_theme = f"This week focus on {top3[0]['title']!r} — your highest-priority deal at ${top3[0]['value']:,.0f}."
+    weekly_theme = data.get("weekly_theme", default_theme)
+    if not isinstance(weekly_theme, str) or not weekly_theme.strip():
+        weekly_theme = default_theme
+
+    default_recs = [
+        "Block 30 minutes each morning this week for deal follow-ups — consistency beats intensity.",
+        "Update deal health scores after every customer interaction to keep your pipeline accurate.",
+        "Schedule a pipeline review meeting with your team to align on priorities and remove blockers.",
+    ]
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "coached_deals": cleaned_deals,
+        "weekly_theme": weekly_theme,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

@@ -5789,5 +5789,58 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/next-best-actions`, {}, token)
   },
+
+  async getDealCoachingDigest(workspaceId: string, token: string): Promise<{
+    coached_deals: Array<{
+      deal_id: string; title: string; stage: string; value: number;
+      what_to_do: string; what_to_avoid: string; talking_points: string[];
+    }>
+    weekly_theme: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 900))
+      return Promise.resolve({
+        coached_deals: [
+          {
+            deal_id: 'd-001',
+            title: 'TechCorp Platform Expansion',
+            stage: 'negotiation',
+            value: 145000,
+            what_to_do: 'Request an executive sponsor call this week to unblock the stalled negotiation. Prepare a concise one-page summary of remaining open items and proposed resolutions to make the meeting outcome-driven.',
+            what_to_avoid: 'Do not send another email follow-up without a specific call-to-action — vague check-ins at this stage signal lack of urgency and reduce buyer confidence.',
+            talking_points: ['Which open items are blocking sign-off this week?', 'Can we align on a signature date if we resolve the SLA clause?', 'Would an executive-to-executive call help accelerate final approval?'],
+          },
+          {
+            deal_id: 'd-002',
+            title: 'HealthPlus EHR Integration',
+            stage: 'proposal',
+            value: 22000,
+            what_to_do: 'Send a personalised follow-up email addressing the integration timeline concern raised in the last call. Offer a 30-minute technical review session with your solutions engineer.',
+            what_to_avoid: 'Avoid re-sending the original proposal without changes — it signals you did not listen to their feedback and will likely be ignored again.',
+            talking_points: ['What specific concerns do you have about the 90-day integration timeline?', 'Would a phased rollout help reduce risk for your team?', 'Who else needs to be involved before you can approve the proposal?'],
+          },
+          {
+            deal_id: 'd-003',
+            title: 'RetailX Omnichannel Suite',
+            stage: 'discovery',
+            value: 16000,
+            what_to_do: 'Run a structured discovery call using the MEDDIC framework. Document budget, decision authority, and a clear success definition before moving forward.',
+            what_to_avoid: 'Do not pitch product features until you have confirmed the buyer has budget authority and a clear timeline — you risk wasting both parties\' time.',
+            talking_points: ['What problem are you trying to solve in the next 90 days?', 'Who owns the budget for this initiative?', 'What does a successful outcome look like for your team by end of year?'],
+          },
+        ],
+        weekly_theme: 'This week\'s priority is re-engaging the TechCorp negotiation — $145K is within reach if you can unblock the SLA clause before month end.',
+        recommendations: [
+          'Block 30 minutes each morning for deal follow-ups — consistency at this stage beats sporadic intense effort.',
+          'Update deal health scores after every customer interaction so your pipeline reflects current reality.',
+          'Schedule a Friday pipeline review to validate close-date accuracy and reassign stalled deals.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/coaching-digest`, {}, token)
+  },
 }
 

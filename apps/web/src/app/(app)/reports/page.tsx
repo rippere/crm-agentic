@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -444,6 +444,21 @@ export default function ReportsPage() {
   const [nextBestActionsLoading, setNextBestActionsLoading] = useState(false);
   const [nextBestActionsOpen, setNextBestActionsOpen] = useState(true);
 
+  type CoachedDeal = {
+    deal_id: string; title: string; stage: string; value: number;
+    what_to_do: string; what_to_avoid: string; talking_points: string[];
+  };
+  type CoachingDigest = {
+    coached_deals: CoachedDeal[];
+    weekly_theme: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [coachingDigest, setCoachingDigest] = useState<CoachingDigest | null>(null);
+  const [coachingDigestLoading, setCoachingDigestLoading] = useState(false);
+  const [coachingDigestOpen, setCoachingDigestOpen] = useState(true);
+  const [coachingExpandedDeal, setCoachingExpandedDeal] = useState<string | null>(null);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -522,6 +537,8 @@ export default function ReportsPage() {
       apiClient.getDealValueAtRisk("demo-workspace-1", "demo-token").then(setValueAtRisk).catch(() => {}).finally(() => setValueAtRiskLoading(false));
       setNextBestActionsLoading(true);
       apiClient.getDealNextBestActions("demo-workspace-1", "demo-token").then(setNextBestActions).catch(() => {}).finally(() => setNextBestActionsLoading(false));
+      setCoachingDigestLoading(true);
+      apiClient.getDealCoachingDigest("demo-workspace-1", "demo-token").then(setCoachingDigest).catch(() => {}).finally(() => setCoachingDigestLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -605,6 +622,8 @@ export default function ReportsPage() {
       apiClient.getDealValueAtRisk(workspaceId, session.access_token).then(setValueAtRisk).catch(() => {}).finally(() => setValueAtRiskLoading(false));
       setNextBestActionsLoading(true);
       apiClient.getDealNextBestActions(workspaceId, session.access_token).then(setNextBestActions).catch(() => {}).finally(() => setNextBestActionsLoading(false));
+      setCoachingDigestLoading(true);
+      apiClient.getDealCoachingDigest(workspaceId, session.access_token).then(setCoachingDigest).catch(() => {}).finally(() => setCoachingDigestLoading(false));
     });
   }, []);
 
@@ -1139,6 +1158,27 @@ export default function ReportsPage() {
         if (!session) { setValueAtRiskLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setValueAtRiskLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateCoachingDigest = () => {
+    setCoachingDigestLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealCoachingDigest(wid, tok)
+        .then(setCoachingDigest)
+        .catch(() => {})
+        .finally(() => setCoachingDigestLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCoachingDigestLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCoachingDigestLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -4790,6 +4830,113 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No next best actions data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Weekly Coaching Digest */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <BookOpen className="h-4 w-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-zinc-200">Weekly Coaching Digest</span>
+            {coachingDigest && (
+              <span className="text-xs font-medium text-indigo-400">
+                {coachingDigest.coached_deals.length} deal{coachingDigest.coached_deals.length !== 1 ? "s" : ""} coached
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateCoachingDigest}
+              disabled={coachingDigestLoading}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", coachingDigestLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setCoachingDigestOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {coachingDigestOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {coachingDigestOpen && (
+          coachingDigestLoading && !coachingDigest ? (
+            <div className="h-24 animate-pulse bg-zinc-800/40 m-4 rounded" />
+          ) : coachingDigest && coachingDigest.coached_deals.length > 0 ? (
+            <div className={cn("space-y-4 p-4", coachingDigestLoading && "opacity-40")}>
+              {/* Weekly theme banner */}
+              <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/10 px-3 py-2">
+                <p className="text-xs text-indigo-300 font-medium">{coachingDigest.weekly_theme}</p>
+              </div>
+              {/* Coached deals */}
+              <ul className="space-y-2">
+                {coachingDigest.coached_deals.map((d) => (
+                  <li key={d.deal_id} className="rounded border border-zinc-700/50 bg-zinc-800/30 overflow-hidden">
+                    <button
+                      onClick={() => setCoachingExpandedDeal((prev) => prev === d.deal_id ? null : d.deal_id)}
+                      className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-zinc-800/60"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-zinc-200 font-medium">{d.title}</span>
+                        <span className="text-xs text-zinc-500 capitalize">{d.stage.replace("_", " ")}</span>
+                        <span className="rounded bg-zinc-700 px-1.5 py-0.5 text-xs font-mono text-zinc-300">${(d.value / 1000).toFixed(0)}K</span>
+                      </div>
+                      {coachingExpandedDeal === d.deal_id ? <ChevronUp className="h-3 w-3 text-zinc-400 flex-shrink-0" /> : <ChevronDown className="h-3 w-3 text-zinc-400 flex-shrink-0" />}
+                    </button>
+                    {coachingExpandedDeal === d.deal_id && (
+                      <div className="px-3 pb-3 space-y-3 border-t border-zinc-700/50 pt-2">
+                        <div>
+                          <p className="text-xs font-semibold text-emerald-400 mb-1">What to do this week</p>
+                          <p className="text-xs text-zinc-300">{d.what_to_do}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-rose-400 mb-1">What to avoid</p>
+                          <p className="text-xs text-zinc-300">{d.what_to_avoid}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-amber-400 mb-1">Talking points</p>
+                          <ul className="space-y-1">
+                            {d.talking_points.map((tp, i) => (
+                              <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                                <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                                {tp}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-400 italic">{coachingDigest.weekly_theme}</p>
+              <ul className="space-y-1">
+                {coachingDigest.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(coachingDigest.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : coachingDigest && coachingDigest.coached_deals.length === 0 ? (
+            <div className={cn("p-4 space-y-3", coachingDigestLoading && "opacity-40")}>
+              <p className="text-xs text-zinc-400 italic">{coachingDigest.weekly_theme}</p>
+              <ul className="space-y-1">
+                {coachingDigest.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No coaching digest data available.</p>
           )
         )}
       </Card>
