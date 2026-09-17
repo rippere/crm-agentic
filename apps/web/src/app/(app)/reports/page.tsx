@@ -732,6 +732,12 @@ export default function ReportsPage() {
   const [srHeatmapLoading, setSRHeatmapLoading] = useState(false);
   const [srHeatmapOpen, setSRHeatmapOpen] = useState(true);
 
+  type VelocityAnomaly = { deal_id: string; title: string; stage: string; value: number; win_probability: number; days_in_stage: number; stage_avg_days: number; stall_ratio: number };
+  type AIVelocityAnomalyData = { anomalies: VelocityAnomaly[]; total_stalled: number; anomaly_narrative: string; recommendations: string[]; generated_at: string };
+  const [velocityAnomalies, setVelocityAnomalies] = useState<AIVelocityAnomalyData | null>(null);
+  const [velocityAnomaliesLoading, setVelocityAnomaliesLoading] = useState(false);
+  const [velocityAnomaliesOpen, setVelocityAnomaliesOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -866,6 +872,8 @@ export default function ReportsPage() {
       apiClient.getAIClosureProbabilityHeatmap("demo-workspace-1", "demo-token").then(setHeatmapData).catch(() => {}).finally(() => setHeatmapLoading(false));
       setSRHeatmapLoading(true);
       apiClient.getAIContactScoreRecencyHeatmap("demo-workspace-1", "demo-token").then(setSRHeatmap).catch(() => {}).finally(() => setSRHeatmapLoading(false));
+      setVelocityAnomaliesLoading(true);
+      apiClient.getAIDealVelocityAnomalies("demo-workspace-1", "demo-token").then(setVelocityAnomalies).catch(() => {}).finally(() => setVelocityAnomaliesLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1005,6 +1013,8 @@ export default function ReportsPage() {
       apiClient.getAIClosureProbabilityHeatmap(workspaceId, session.access_token).then(setHeatmapData).catch(() => {}).finally(() => setHeatmapLoading(false));
       setSRHeatmapLoading(true);
       apiClient.getAIContactScoreRecencyHeatmap(workspaceId, session.access_token).then(setSRHeatmap).catch(() => {}).finally(() => setSRHeatmapLoading(false));
+      setVelocityAnomaliesLoading(true);
+      apiClient.getAIDealVelocityAnomalies(workspaceId, session.access_token).then(setVelocityAnomalies).catch(() => {}).finally(() => setVelocityAnomaliesLoading(false));
     });
   }, []);
 
@@ -1875,6 +1885,27 @@ export default function ReportsPage() {
         if (!session) { setSRHeatmapLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setSRHeatmapLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateVelocityAnomalies = () => {
+    setVelocityAnomaliesLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealVelocityAnomalies(wid, tok)
+        .then(setVelocityAnomalies)
+        .catch(() => {})
+        .finally(() => setVelocityAnomaliesLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setVelocityAnomaliesLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setVelocityAnomaliesLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -8244,6 +8275,85 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No heatmap data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Velocity Anomalies */}
+      <Card className="border-orange-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-orange-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Velocity Anomalies</h3>
+            {velocityAnomalies && velocityAnomalies.total_stalled > 0 && (
+              <span className="text-xs bg-orange-900/40 text-orange-300 px-2 py-0.5 rounded-full border border-orange-700/30">
+                {velocityAnomalies.total_stalled} stalled
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateVelocityAnomalies}
+              disabled={velocityAnomaliesLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", velocityAnomaliesLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setVelocityAnomaliesOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {velocityAnomaliesOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {velocityAnomaliesOpen && (
+          velocityAnomaliesLoading ? (
+            <p className="text-xs text-zinc-500 p-4 animate-pulse">Analysing deal velocity…</p>
+          ) : velocityAnomalies ? (
+            <div className="p-4 space-y-4">
+              {velocityAnomalies.anomalies.length === 0 ? (
+                <p className="text-xs text-zinc-400 italic">{velocityAnomalies.anomaly_narrative}</p>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    {velocityAnomalies.anomalies.map((a) => (
+                      <div key={a.deal_id} className="bg-zinc-900/50 rounded-lg p-3 border border-zinc-800 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-zinc-100 truncate">{a.title}</span>
+                          <span className="text-xs bg-orange-900/40 text-orange-300 px-2 py-0.5 rounded-full border border-orange-700/30 shrink-0">
+                            {a.stall_ratio}×
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-zinc-500">
+                          <span className="capitalize">{a.stage}</span>
+                          <span className="text-zinc-700">·</span>
+                          <span>{a.days_in_stage}d in stage <span className="text-zinc-600">(avg {a.stage_avg_days}d)</span></span>
+                          <span className="text-zinc-700">·</span>
+                          <span className="text-emerald-400">${a.value.toLocaleString()}</span>
+                        </div>
+                        <div className="w-full bg-zinc-800 rounded-full h-1.5">
+                          <div
+                            className="bg-orange-500 h-1.5 rounded-full"
+                            style={{ width: `${Math.min(100, (a.stall_ratio / 5) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-zinc-400 italic">{velocityAnomalies.anomaly_narrative}</p>
+                  <ul className="space-y-1.5">
+                    {velocityAnomalies.recommendations.map((r, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                        <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-orange-400 shrink-0" />
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-xs text-zinc-600">Generated {new Date(velocityAnomalies.generated_at).toLocaleString()} · Claude Haiku</p>
+                </>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No velocity data available.</p>
           )
         )}
       </Card>

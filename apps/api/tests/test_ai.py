@@ -7546,3 +7546,67 @@ async def test_contact_score_recency_heatmap_wrong_workspace_returns_403(app_cli
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/score-recency-heatmap")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 18c: deal velocity anomalies
+# ---------------------------------------------------------------------------
+
+class FakeVelocityRow:
+    def __init__(self, title, stage, value, ml_win_probability, stage_changed_at, created_at=None):
+        self.id = uuid.uuid4()
+        self.title = title
+        self.stage = stage
+        self.value = value
+        self.ml_win_probability = ml_win_probability
+        self.stage_changed_at = stage_changed_at
+        self.created_at = created_at or stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_velocity_anomalies_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    rows = [
+        # discovery avg=7d; 30 days = ratio 4.28 → anomaly
+        FakeVelocityRow("Alpha Deal", "discovery", 50000, 0.6, now - datetime.timedelta(days=30)),
+        # qualified avg=14d; 40 days = ratio 2.85 → anomaly
+        FakeVelocityRow("Beta Deal", "qualified", 80000, 0.5, now - datetime.timedelta(days=40)),
+        # proposal avg=10d; 5 days = ratio 0.5 → NOT an anomaly
+        FakeVelocityRow("Gamma Deal", "proposal", 30000, 0.7, now - datetime.timedelta(days=5)),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"anomaly_narrative": "2 deals are stalled.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/velocity-anomalies")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["anomalies"], list)
+    assert len(body["anomalies"]) >= 2
+    assert body["total_stalled"] >= 2
+    first = body["anomalies"][0]
+    assert "deal_id" in first
+    assert "title" in first
+    assert "stage" in first
+    assert "days_in_stage" in first
+    assert "stall_ratio" in first
+    assert first["stall_ratio"] >= 2.0
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_velocity_anomalies_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/velocity-anomalies")
+    assert resp.status_code == 403
