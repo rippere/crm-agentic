@@ -5654,5 +5654,46 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-loss-patterns`, {}, token)
   },
+
+  async getAvgDealSizeTrend(workspaceId: string, token: string): Promise<{
+    months: Array<{ month: string; avg_value: number; deal_count: number }>
+    trend_direction: string
+    best_month: string | null
+    pct_change: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        months: [
+          { month: '2025-10', avg_value: 28000, deal_count: 4 },
+          { month: '2025-11', avg_value: 31500, deal_count: 5 },
+          { month: '2025-12', avg_value: 29800, deal_count: 3 },
+          { month: '2026-01', avg_value: 34200, deal_count: 6 },
+          { month: '2026-02', avg_value: 38000, deal_count: 5 },
+          { month: '2026-03', avg_value: 36500, deal_count: 4 },
+          { month: '2026-04', avg_value: 41000, deal_count: 7 },
+          { month: '2026-05', avg_value: 39800, deal_count: 5 },
+          { month: '2026-06', avg_value: 44500, deal_count: 6 },
+          { month: '2026-07', avg_value: 47200, deal_count: 8 },
+          { month: '2026-08', avg_value: 45600, deal_count: 6 },
+          { month: '2026-09', avg_value: 51000, deal_count: 5 },
+        ],
+        trend_direction: 'growing',
+        best_month: '2026-09',
+        pct_change: 45.2,
+        insight: 'Average deal size has grown 45% over the past year — from $28K to $51K — driven by larger enterprise deals entering the pipeline in Q2.',
+        recommendations: [
+          'Double down on enterprise outreach, which is clearly driving the avg deal size growth observed since Q1.',
+          'Set a minimum deal value threshold of $35K to keep the pipeline quality high and protect the upward trend.',
+          'Develop expansion playbooks for existing customers to further increase average deal values without incremental CAC.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/avg-deal-size-trend`, {}, token)
+  },
 }
 

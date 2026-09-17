@@ -391,6 +391,20 @@ export default function ReportsPage() {
   const [winLossPatternsLoading, setWinLossPatternsLoading] = useState(false);
   const [winLossPatternsOpen, setWinLossPatternsOpen] = useState(true);
 
+  type AvgDealSizeMonth = { month: string; avg_value: number; deal_count: number };
+  type AvgDealSizeTrend = {
+    months: AvgDealSizeMonth[];
+    trend_direction: string;
+    best_month: string | null;
+    pct_change: number;
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [avgDealSizeTrend, setAvgDealSizeTrend] = useState<AvgDealSizeTrend | null>(null);
+  const [avgDealSizeTrendLoading, setAvgDealSizeTrendLoading] = useState(false);
+  const [avgDealSizeTrendOpen, setAvgDealSizeTrendOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -461,6 +475,8 @@ export default function ReportsPage() {
       apiClient.getDealConversionQuality("demo-workspace-1", "demo-token").then(setConversionQuality).catch(() => {}).finally(() => setConversionQualityLoading(false));
       setWinLossPatternsLoading(true);
       apiClient.getDealWinLossPatterns("demo-workspace-1", "demo-token").then(setWinLossPatterns).catch(() => {}).finally(() => setWinLossPatternsLoading(false));
+      setAvgDealSizeTrendLoading(true);
+      apiClient.getAvgDealSizeTrend("demo-workspace-1", "demo-token").then(setAvgDealSizeTrend).catch(() => {}).finally(() => setAvgDealSizeTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -536,6 +552,8 @@ export default function ReportsPage() {
       apiClient.getDealConversionQuality(workspaceId, session.access_token).then(setConversionQuality).catch(() => {}).finally(() => setConversionQualityLoading(false));
       setWinLossPatternsLoading(true);
       apiClient.getDealWinLossPatterns(workspaceId, session.access_token).then(setWinLossPatterns).catch(() => {}).finally(() => setWinLossPatternsLoading(false));
+      setAvgDealSizeTrendLoading(true);
+      apiClient.getAvgDealSizeTrend(workspaceId, session.access_token).then(setAvgDealSizeTrend).catch(() => {}).finally(() => setAvgDealSizeTrendLoading(false));
     });
   }, []);
 
@@ -1007,6 +1025,27 @@ export default function ReportsPage() {
         if (!session) { setWinLossPatternsLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setWinLossPatternsLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAvgDealSizeTrend = () => {
+    setAvgDealSizeTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAvgDealSizeTrend(wid, tok)
+        .then(setAvgDealSizeTrend)
+        .catch(() => {})
+        .finally(() => setAvgDealSizeTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAvgDealSizeTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAvgDealSizeTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -4262,6 +4301,105 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No win/loss pattern data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Avg Deal Size Trend */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <DollarSign className="h-4 w-4 text-emerald-400" />
+            <span className="text-sm font-semibold text-zinc-200">Avg Deal Size Trend</span>
+            {avgDealSizeTrend && (() => {
+              const TREND_CFG: Record<string, { label: string; color: string }> = {
+                accelerating: { label: "Accelerating", color: "text-emerald-400" },
+                growing:      { label: "Growing",      color: "text-indigo-400"  },
+                stable:       { label: "Stable",       color: "text-zinc-400"    },
+                declining:    { label: "Declining",    color: "text-rose-400"    },
+              };
+              const cfg = TREND_CFG[avgDealSizeTrend.trend_direction] ?? { label: avgDealSizeTrend.trend_direction, color: "text-zinc-400" };
+              return (
+                <span className={cn("text-xs font-medium", cfg.color)}>
+                  {cfg.label} ({avgDealSizeTrend.pct_change > 0 ? "+" : ""}{avgDealSizeTrend.pct_change}%)
+                </span>
+              );
+            })()}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateAvgDealSizeTrend}
+              disabled={avgDealSizeTrendLoading}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", avgDealSizeTrendLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setAvgDealSizeTrendOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {avgDealSizeTrendOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {avgDealSizeTrendOpen && (
+          avgDealSizeTrendLoading && !avgDealSizeTrend ? (
+            <div className="h-24 animate-pulse bg-zinc-800/40 m-4 rounded" />
+          ) : avgDealSizeTrend && avgDealSizeTrend.months.length > 0 ? (
+            <div className={cn("space-y-4 p-4", avgDealSizeTrendLoading && "opacity-40")}>
+              <ResponsiveContainer width="100%" height={180}>
+                <LineChart data={avgDealSizeTrend.months} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                  <XAxis dataKey="month" tick={{ fill: "#a1a1aa", fontSize: 10 }} />
+                  <YAxis tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} tick={{ fill: "#a1a1aa", fontSize: 10 }} width={44} />
+                  <Tooltip
+                    formatter={(v: number) => [`$${v.toLocaleString()}`, "Avg Deal Size"]}
+                    contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8, fontSize: 11 }}
+                    labelStyle={{ color: "#a1a1aa" }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="avg_value"
+                    stroke="#10b981"
+                    strokeWidth={2}
+                    dot={(props) => {
+                      const { cx, cy, payload } = props as { cx: number; cy: number; payload: AvgDealSizeMonth };
+                      const isBest = payload.month === avgDealSizeTrend.best_month;
+                      return <circle key={payload.month} cx={cx} cy={cy} r={isBest ? 5 : 3} fill={isBest ? "#f59e0b" : "#10b981"} stroke="none" />;
+                    }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+              {avgDealSizeTrend.best_month && (
+                <p className="text-xs text-amber-400">
+                  Best month: <span className="font-semibold">{avgDealSizeTrend.best_month}</span> · ${avgDealSizeTrend.months.find((m) => m.month === avgDealSizeTrend.best_month)?.avg_value.toLocaleString()} avg
+                </p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{avgDealSizeTrend.insight}</p>
+              <ul className="space-y-1">
+                {avgDealSizeTrend.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(avgDealSizeTrend.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : avgDealSizeTrend && avgDealSizeTrend.months.length === 0 ? (
+            <div className={cn("p-4 space-y-3", avgDealSizeTrendLoading && "opacity-40")}>
+              <p className="text-xs text-zinc-400 italic">{avgDealSizeTrend.insight}</p>
+              <ul className="space-y-1">
+                {avgDealSizeTrend.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No avg deal size trend data available.</p>
           )
         )}
       </Card>
