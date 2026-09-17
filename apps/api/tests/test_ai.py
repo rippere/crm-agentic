@@ -6329,3 +6329,66 @@ async def test_momentum_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/momentum")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 17h — Pipeline Velocity Heatmap
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_velocity_heatmap_returns_structured_response(app_client):
+    import datetime as _dt
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    activity_rows = [
+        ("Deal 'Acme' moved from discovery to qualified", _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=60)),
+        ("Deal 'Acme' moved from qualified to proposal", _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=45)),
+        ("Deal 'Beta' moved from discovery to qualified", _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=30)),
+        ("Deal 'Beta' moved from qualified to proposal", _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=10)),
+    ]
+
+    ai_response = {
+        "bottleneck_stage": "qualified",
+        "fastest_transition": "discovery -> qualified",
+        "slowest_transition": "qualified -> proposal",
+        "insight": "The qualified stage is the primary bottleneck in your pipeline.",
+        "recommendations": [
+            "Reduce time in qualified by setting clear exit criteria.",
+            "Review stalled qualified deals weekly.",
+            "Add a stage checklist to accelerate proposal creation.",
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(activity_rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/pipeline/velocity-heatmap")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["transitions"], list)
+    assert isinstance(body["bottleneck_stage"], str) and body["bottleneck_stage"]
+    assert isinstance(body["fastest_transition"], str)
+    assert isinstance(body["slowest_transition"], str)
+    assert isinstance(body["insight"], str) and body["insight"]
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_velocity_heatmap_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/pipeline/velocity-heatmap")
+    assert resp.status_code == 403

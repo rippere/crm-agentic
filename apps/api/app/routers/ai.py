@@ -12488,3 +12488,170 @@ async def get_deal_momentum(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_VELOCITY_HEATMAP_SYSTEM = """\
+You are a senior sales operations AI analysing pipeline stage transition velocity.
+Given a list of stage transitions with median days and deal counts, identify bottlenecks and generate actionable insights.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "bottleneck_stage": "the stage name that causes the most delay",
+  "fastest_transition": "from_stage -> to_stage",
+  "slowest_transition": "from_stage -> to_stage",
+  "insight": "one paragraph insight about the pipeline velocity patterns",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/pipeline/velocity-heatmap")
+@limiter.limit("5/minute")
+async def get_pipeline_velocity_heatmap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=180)
+
+    result = await db.execute(
+        select(
+            ActivityEvent.description,
+            ActivityEvent.created_at,
+        )
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "deal_moved",
+            ActivityEvent.created_at >= cutoff,
+        )
+        .order_by(ActivityEvent.created_at.asc())
+    )
+    events = result.all()
+
+    # Parse "Deal X moved from A to B" patterns and group by (from_stage, to_stage)
+    import re as _re
+    _stage_pat = _re.compile(r"moved from (\w+) to (\w+)", _re.IGNORECASE)
+
+    transition_days: dict[tuple[str, str], list[int]] = {}
+    prev_by_deal: dict[str, tuple[str, datetime.datetime]] = {}
+
+    for desc, created_at in events:
+        if not desc:
+            continue
+        m = _stage_pat.search(str(desc))
+        if not m:
+            continue
+        from_stage = m.group(1).lower()
+        to_stage = m.group(2).lower()
+        key = (from_stage, to_stage)
+        if created_at and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+        # Use a synthetic deal key based on description prefix
+        deal_key = str(desc).split(" moved")[0].strip()
+        if deal_key in prev_by_deal and prev_by_deal[deal_key][0] == from_stage:
+            days_taken = max(0, (created_at - prev_by_deal[deal_key][1]).days) if created_at and prev_by_deal[deal_key][1] else 7
+            transition_days.setdefault(key, []).append(days_taken)
+        prev_by_deal[deal_key] = (to_stage, created_at)
+        transition_days.setdefault(key, [])
+
+    # Build transitions list with median days
+    transitions = []
+    for (from_s, to_s), days_list in transition_days.items():
+        if not days_list:
+            continue
+        sorted_days = sorted(days_list)
+        mid = len(sorted_days) // 2
+        median_days = sorted_days[mid] if len(sorted_days) % 2 else (sorted_days[mid - 1] + sorted_days[mid]) // 2
+        transitions.append({
+            "from_stage": from_s,
+            "to_stage": to_s,
+            "median_days": median_days,
+            "deal_count": len(days_list),
+        })
+
+    transitions.sort(key=lambda t: -t["median_days"])
+
+    default_bottleneck = transitions[0]["from_stage"] if transitions else "proposal"
+    default_fastest = f"{transitions[-1]['from_stage']} -> {transitions[-1]['to_stage']}" if len(transitions) > 1 else "discovery -> qualified"
+    default_slowest = f"{transitions[0]['from_stage']} -> {transitions[0]['to_stage']}" if transitions else "proposal -> negotiation"
+    default_insight = (
+        f"Analysed {len(transitions)} stage transitions over the last 180 days. "
+        f"The biggest bottleneck is '{default_bottleneck}' with a median of "
+        f"{transitions[0]['median_days'] if transitions else 0} days."
+    )
+    default_recs = [
+        f"Focus on reducing time in '{default_bottleneck}' — identify the common blockers and create a stage-exit checklist.",
+        "Review deals that took more than 2× the median days in any stage — these outliers hide systemic issues.",
+        "Set stage-entry and stage-exit criteria for each stage to ensure consistent deal qualification.",
+    ]
+
+    if not transitions:
+        return {
+            "transitions": [],
+            "bottleneck_stage": "unknown",
+            "fastest_transition": "n/a",
+            "slowest_transition": "n/a",
+            "insight": "No stage transition data found for the last 180 days.",
+            "recommendations": default_recs,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context_lines = [
+        f"Analysed {len(transitions)} stage transitions (last 180 days):",
+    ]
+    for t in transitions[:10]:
+        context_lines.append(
+            f"  {t['from_stage']} -> {t['to_stage']}: median {t['median_days']}d, {t['deal_count']} deals"
+        )
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_VELOCITY_HEATMAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    bottleneck_stage = data.get("bottleneck_stage", default_bottleneck)
+    if not isinstance(bottleneck_stage, str) or not bottleneck_stage.strip():
+        bottleneck_stage = default_bottleneck
+
+    fastest_transition = data.get("fastest_transition", default_fastest)
+    if not isinstance(fastest_transition, str) or not fastest_transition.strip():
+        fastest_transition = default_fastest
+
+    slowest_transition = data.get("slowest_transition", default_slowest)
+    if not isinstance(slowest_transition, str) or not slowest_transition.strip():
+        slowest_transition = default_slowest
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "transitions": transitions,
+        "bottleneck_stage": bottleneck_stage,
+        "fastest_transition": fastest_transition,
+        "slowest_transition": slowest_transition,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
