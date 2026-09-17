@@ -5668,3 +5668,62 @@ async def test_followup_gaps_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/followup-gaps")
     assert resp.status_code == 403
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/value-at-risk
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_value_at_risk_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    old = now - _dt.timedelta(days=40)  # stuck in stage
+    recent = now - _dt.timedelta(days=5)
+
+    deal_id1 = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    deal_id2 = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
+    mock_db.execute = AsyncMock(return_value=_make_execute_result([
+        # id, title, company, stage, value, health_score, created_at, stage_changed_at
+        (deal_id1, "At Risk Deal", "Acme", "proposal", 50000.0, 35, old, old),
+        (deal_id2, "Healthy Deal", "Beta", "qualified", 30000.0, 85, recent, recent),
+    ]))
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "50K at risk — address the stalled proposal deal.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/value-at-risk")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["total_pipeline_value"], (int, float))
+    assert isinstance(data["at_risk_value"], (int, float))
+    assert isinstance(data["at_risk_pct"], (int, float))
+    assert isinstance(data["at_risk_deals"], list)
+    assert len(data["at_risk_deals"]) >= 1
+    deal = data["at_risk_deals"][0]
+    assert "deal_id" in deal and "title" in deal and "value" in deal and "risk_reason" in deal
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_value_at_risk_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/value-at-risk")
+    assert resp.status_code == 403

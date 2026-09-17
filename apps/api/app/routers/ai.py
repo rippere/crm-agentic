@@ -10672,3 +10672,147 @@ async def get_followup_gaps(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{workspace_id}/ai/deals/value-at-risk
+# ---------------------------------------------------------------------------
+
+_VALUE_AT_RISK_SYSTEM = """You are a sales risk analyst. Given data on pipeline deals at risk of being lost,
+write a one-sentence insight about the value at risk and three actionable recommendations.
+Respond ONLY with valid JSON: {"insight": "...", "recommendations": ["...", "...", "..."]}"""
+
+_STAGE_THRESHOLDS = {"discovery": 14, "qualified": 21, "proposal": 30, "negotiation": 45}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/value-at-risk")
+@limiter.limit("5/minute")
+async def get_value_at_risk(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.company, Deal.stage, Deal.value, Deal.health_score, Deal.created_at, Deal.stage_changed_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.not_in(["closed_won", "closed_lost"]))
+        .order_by(Deal.value.desc())
+    )
+    rows = result.all()
+
+    total_pipeline = 0.0
+    at_risk_deals = []
+
+    for deal_id, title, company, stage, value, health_score, created_at, stage_changed_at in rows:
+        val = float(value or 0)
+        total_pipeline += val
+
+        # Compute days in current stage
+        ref = stage_changed_at or created_at
+        if ref is not None:
+            if hasattr(ref, "tzinfo") and ref.tzinfo is None:
+                ref = ref.replace(tzinfo=datetime.timezone.utc)
+            days_in_stage = (now - ref).days
+        else:
+            days_in_stage = 0
+
+        threshold = _STAGE_THRESHOLDS.get(stage, 30)
+        stuck = days_in_stage > threshold
+
+        risk_reasons = []
+        if health_score < 50:
+            risk_reasons.append(f"health score {health_score}")
+        if stuck:
+            risk_reasons.append(f"stuck in {stage} for {days_in_stage}d (threshold {threshold}d)")
+
+        if risk_reasons:
+            at_risk_deals.append({
+                "deal_id": str(deal_id),
+                "title": title or "Untitled",
+                "company": company or "",
+                "stage": stage,
+                "value": round(val, 2),
+                "health_score": health_score,
+                "risk_reason": "; ".join(risk_reasons),
+            })
+
+    at_risk_value = sum(d["value"] for d in at_risk_deals)
+    at_risk_pct = round((at_risk_value / total_pipeline) * 100, 1) if total_pipeline > 0 else 0.0
+
+    # Graceful empty default
+    if not rows:
+        return {
+            "total_pipeline_value": 0.0,
+            "at_risk_value": 0.0,
+            "at_risk_pct": 0.0,
+            "at_risk_deals": [],
+            "insight": "No open deals in the pipeline — add deals to start tracking value at risk.",
+            "recommendations": [
+                "Build your pipeline by prospecting and adding new deals to the system.",
+                "Once deals are added, use this report to monitor at-risk value before it's lost.",
+                "Set deal health thresholds and stage SLAs to keep the pipeline moving.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_insight = (
+        f"${at_risk_value:,.0f} ({at_risk_pct}% of pipeline) is at risk across {len(at_risk_deals)} deal{'' if len(at_risk_deals) == 1 else 's'} "
+        f"— act now to prevent these from slipping."
+    )
+    default_recs = [
+        f"Focus immediate attention on the {len(at_risk_deals)} at-risk deal{'' if len(at_risk_deals) == 1 else 's'} to recover ${at_risk_value:,.0f} in pipeline value.",
+        "Improve health scores on stalled deals by scheduling discovery calls and addressing known objections.",
+        "Review stage SLAs quarterly and set automated alerts when deals exceed them.",
+    ]
+
+    context = (
+        f"Pipeline value at risk:\n"
+        f"  Total pipeline: ${total_pipeline:,.0f}\n"
+        f"  At-risk value: ${at_risk_value:,.0f} ({at_risk_pct}% of pipeline)\n"
+        f"  At-risk deals: {len(at_risk_deals)}\n"
+    )
+    if at_risk_deals:
+        context += "Top at-risk deals:\n" + "\n".join(
+            f"  {d['title']} ({d['company']}) — ${d['value']:,.0f}, {d['stage']}, risk: {d['risk_reason']}"
+            for d in at_risk_deals[:5]
+        ) + "\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_VALUE_AT_RISK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "total_pipeline_value": round(total_pipeline, 2),
+        "at_risk_value": round(at_risk_value, 2),
+        "at_risk_pct": at_risk_pct,
+        "at_risk_deals": at_risk_deals,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
