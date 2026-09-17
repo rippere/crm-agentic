@@ -6714,5 +6714,28 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/score-recency-heatmap`, {}, token)
   },
+
+  async getAIDealVelocityAnomalies(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        anomalies: [
+          { deal_id: 'd1', title: 'Acme Enterprise Expansion', stage: 'negotiation', value: 180000, win_probability: 0.72, days_in_stage: 38, stage_avg_days: 12, stall_ratio: 3.17 },
+          { deal_id: 'd2', title: 'Globex Platform License', stage: 'proposal', value: 95000, win_probability: 0.55, days_in_stage: 28, stage_avg_days: 10, stall_ratio: 2.80 },
+          { deal_id: 'd3', title: 'Initech Q4 Renewal', stage: 'qualified', value: 60000, win_probability: 0.48, days_in_stage: 36, stage_avg_days: 14, stall_ratio: 2.57 },
+          { deal_id: 'd4', title: 'Umbrella Corp Pilot', stage: 'discovery', value: 25000, win_probability: 0.35, days_in_stage: 16, stage_avg_days: 7, stall_ratio: 2.29 },
+          { deal_id: 'd5', title: 'Cyberdyne Integration', stage: 'proposal', value: 42000, win_probability: 0.41, days_in_stage: 22, stage_avg_days: 10, stall_ratio: 2.20 },
+        ],
+        total_stalled: 5,
+        anomaly_narrative: '5 deals are stalled beyond 2× their stage average, putting $402k in pipeline at risk. The most critical is Acme Enterprise Expansion — stuck in negotiation for 38 days against a 12-day average. Stalled high-value deals decay in win probability at roughly 5% per week; immediate outreach and blocker removal is essential.',
+        recommendations: [
+          'Schedule a decision-maker call for Acme Enterprise Expansion today — at 38 days in negotiation, the deal needs an executive champion to break the impasse, not another follow-up email.',
+          'For each stalled deal, ask the contact to name the single thing blocking progress and set a deadline. Converting an open-ended stall into a specific blocker doubles unblock rates.',
+          'Review your proposal template — 3 of 5 stalls are in proposal/negotiation, suggesting pricing or scope clarity issues that a revised template or a deal desk review could fix.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/velocity-anomalies`, {}, token)
+  },
 }
 

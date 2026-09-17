@@ -15518,3 +15518,136 @@ async def get_ai_contact_score_recency_heatmap(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_VELOCITY_ANOMALY_SYSTEM = """\
+You are a senior sales operations AI specialising in pipeline velocity and deal progression.
+Given a list of deals that are significantly stalled relative to their stage average,
+identify root causes and prioritised coaching actions to unblock them.
+Return ONLY valid JSON with keys: anomaly_narrative (string, 2-3 sentences) and
+recommendations (list of exactly 3 strings). No markdown, no prose outside the JSON.
+"""
+
+_STAGE_AVG_DAYS = {
+    "discovery": 7,
+    "qualified": 14,
+    "proposal": 10,
+    "negotiation": 12,
+}
+_ANOMALY_THRESHOLD = 2.0
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/velocity-anomalies")
+@limiter.limit("5/minute")
+async def get_ai_deal_velocity_anomalies(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    active_stages = list(_STAGE_AVG_DAYS.keys())
+    stmt = (
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability, Deal.stage_changed_at, Deal.created_at)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(active_stages),
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+
+    anomalies = []
+    for row in rows:
+        stage = row.stage
+        avg = _STAGE_AVG_DAYS.get(stage, 10)
+        ref = row.stage_changed_at or row.created_at
+        if ref is None:
+            continue
+        if hasattr(ref, "tzinfo") and ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        days_in_stage = (now - ref).days
+        ratio = days_in_stage / avg if avg > 0 else 0
+        if ratio >= _ANOMALY_THRESHOLD:
+            anomalies.append({
+                "deal_id": str(row.id),
+                "title": row.title or "Untitled",
+                "stage": stage,
+                "value": float(row.value or 0),
+                "win_probability": float(row.ml_win_probability or 0),
+                "days_in_stage": days_in_stage,
+                "stage_avg_days": avg,
+                "stall_ratio": round(ratio, 2),
+            })
+
+    anomalies.sort(key=lambda x: x["stall_ratio"], reverse=True)
+    top_anomalies = anomalies[:5]
+
+    if not top_anomalies:
+        return {
+            "anomalies": [],
+            "total_stalled": 0,
+            "anomaly_narrative": "No stalled deals detected. All active deals are progressing within expected stage timelines — pipeline velocity is healthy.",
+            "recommendations": [
+                "Maintain current cadence; schedule weekly pipeline reviews to catch stalls early.",
+                "Set stage-level SLA alerts in your CRM so reps are notified when a deal exceeds its target days.",
+                "Continue monitoring — new deals entering the pipeline will be tracked automatically.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    worst = top_anomalies[0]
+    default_narrative = (
+        f"{len(anomalies)} deal(s) are stalled at more than {int(_ANOMALY_THRESHOLD)}× their stage average. "
+        f"The most stalled is '{worst['title']}' in '{worst['stage']}' — {worst['days_in_stage']} days vs the {worst['stage_avg_days']}-day average ({worst['stall_ratio']}× normal). "
+        "Stalled high-value deals represent at-risk revenue that compounds if not unblocked immediately."
+    )
+    default_recs = [
+        f"Call '{worst['title']}' contact today — after {worst['days_in_stage']} days in {worst['stage']}, a brief check-in call has a much higher unblock rate than email.",
+        "For each stalled deal, identify the single blocker (budget, legal, champion) and assign an owner and deadline to resolve it by EOW.",
+        "Review stall patterns across stages — if proposals consistently stall, the proposal template or pricing structure may need revision.",
+    ]
+
+    context = (
+        f"Deal velocity anomalies for workspace. {len(anomalies)} total stalled deals (showing top 5).\n"
+        "Stalled deals (stall_ratio = days_in_stage / stage_avg_days):\n"
+        + "\n".join(
+            f"  '{a['title']}' ({a['stage']}): {a['days_in_stage']}d in stage, avg={a['stage_avg_days']}d, ratio={a['stall_ratio']}×, value=${a['value']:,.0f}"
+            for a in top_anomalies
+        )
+        + "\nProvide anomaly_narrative and 3 recommendations for unblocking these deals."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_VELOCITY_ANOMALY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    anomaly_narrative = str(data.get("anomaly_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "anomalies": top_anomalies,
+        "total_stalled": len(anomalies),
+        "anomaly_narrative": anomaly_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
