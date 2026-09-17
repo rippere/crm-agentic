@@ -7212,3 +7212,55 @@ async def test_deal_velocity_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/velocity")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_top_contact_opportunities_returns_structured_response(app_client, monkeypatch):
+    import uuid as _uuid
+    contact_id_1 = _uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    contact_id_2 = _uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    deal_rows = [
+        (contact_id_1, 50000.0, 80.0, 75.0, "proposal"),
+        (contact_id_1, 30000.0, 72.0, 68.0, "negotiation"),
+        (contact_id_2, 20000.0, 55.0, 50.0, "qualified"),
+    ]
+
+    class FakeContactRow:
+        def __init__(self, id_, name):
+            self.id = id_
+            self.name = name
+
+    contact_rows = [FakeContactRow(contact_id_1, "Alice"), FakeContactRow(contact_id_2, "Bob")]
+
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result(deal_rows),
+        _make_execute_result(contact_rows),
+    ])
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"opportunities_narrative": "Alice leads.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_msg
+
+    with patch("app.routers.ai._anthropic.Anthropic", return_value=mock_client):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/top-opportunities")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["top_contacts"]) == 2
+    assert body["top_contacts"][0]["name"] in ("Alice", "Bob")
+    assert isinstance(body["top_contacts"][0]["opportunity_score"], float)
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_top_contact_opportunities_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/top-opportunities")
+    assert resp.status_code == 403
