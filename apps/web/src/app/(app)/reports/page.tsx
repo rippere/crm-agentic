@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -748,6 +748,11 @@ export default function ReportsPage() {
   const [aiForecast, setAIForecast] = useState<AIForecastData | null>(null);
   const [aiForecastLoading, setAIForecastLoading] = useState(false);
   const [aiForecastOpen, setAIForecastOpen] = useState(true);
+  type ValueLeakStage = { stage: string; deal_count: number; leaked_value: number; avg_value: number; pct_of_total_leaked: number };
+  type AIValueLeakData = { stage_leaks: ValueLeakStage[]; total_leaked: number; biggest_leak_stage: string | null; leak_narrative: string; recommendations: string[]; generated_at: string };
+  const [valueLeak, setValueLeak] = useState<AIValueLeakData | null>(null);
+  const [valueLeakLoading, setValueLeakLoading] = useState(false);
+  const [valueLeakOpen, setValueLeakOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -889,6 +894,8 @@ export default function ReportsPage() {
       apiClient.getAIDealOutcomeFactors("demo-workspace-1", "demo-token").then(setOutcomeFactors).catch(() => {}).finally(() => setOutcomeFactorsLoading(false));
       setAIForecastLoading(true);
       apiClient.getAIDealRevenueForecast("demo-workspace-1", "demo-token").then(setAIForecast).catch(() => {}).finally(() => setAIForecastLoading(false));
+      setValueLeakLoading(true);
+      apiClient.getAIDealValueLeak("demo-workspace-1", "demo-token").then(setValueLeak).catch(() => {}).finally(() => setValueLeakLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1034,6 +1041,8 @@ export default function ReportsPage() {
       apiClient.getAIDealOutcomeFactors(workspaceId, session.access_token).then(setOutcomeFactors).catch(() => {}).finally(() => setOutcomeFactorsLoading(false));
       setAIForecastLoading(true);
       apiClient.getAIDealRevenueForecast(workspaceId, session.access_token).then(setAIForecast).catch(() => {}).finally(() => setAIForecastLoading(false));
+      setValueLeakLoading(true);
+      apiClient.getAIDealValueLeak(workspaceId, session.access_token).then(setValueLeak).catch(() => {}).finally(() => setValueLeakLoading(false));
     });
   }, []);
 
@@ -1967,6 +1976,27 @@ export default function ReportsPage() {
         if (!session) { setAIForecastLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAIForecastLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateValueLeak = () => {
+    setValueLeakLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealValueLeak(wid, tok)
+        .then(setValueLeak)
+        .catch(() => {})
+        .finally(() => setValueLeakLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setValueLeakLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setValueLeakLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -8564,6 +8594,75 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No forecast data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Value Leak Analysis */}
+      <Card className="border-rose-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Droplets className="h-4 w-4 text-rose-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Value Leak Analysis</h3>
+            {valueLeak && (
+              <span className="text-xs bg-rose-900/40 text-rose-300 px-2 py-0.5 rounded-full border border-rose-700/30">
+                ${valueLeak.total_leaked.toLocaleString()} lost
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateValueLeak}
+              disabled={valueLeakLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", valueLeakLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setValueLeakOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {valueLeakOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {valueLeakOpen && (
+          valueLeakLoading ? (
+            <p className="text-xs text-zinc-500 p-4 animate-pulse">Analysing value leak…</p>
+          ) : valueLeak ? (
+            <div className="p-4 space-y-4">
+              {valueLeak.stage_leaks.length > 0 ? (
+                <div className="space-y-2">
+                  {valueLeak.stage_leaks.map((sl) => (
+                    <div key={sl.stage} className="space-y-0.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300 capitalize">{sl.stage.replace('_', ' ')}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-zinc-500">{sl.deal_count} deal{sl.deal_count !== 1 ? 's' : ''}</span>
+                          <span className="text-rose-400 font-medium">${sl.leaked_value.toLocaleString()}</span>
+                          <span className="text-zinc-600 text-[10px]">{sl.pct_of_total_leaked}%</span>
+                        </div>
+                      </div>
+                      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-rose-500/70 rounded-full" style={{ width: `${sl.pct_of_total_leaked}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500">No closed-lost deals in the last 180 days.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{valueLeak.leak_narrative}</p>
+              <ul className="space-y-1.5">
+                {valueLeak.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(valueLeak.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No value leak data available.</p>
           )
         )}
       </Card>
