@@ -573,6 +573,18 @@ export default function ReportsPage() {
   const [velocityHeatmapLoading, setVelocityHeatmapLoading] = useState(false);
   const [velocityHeatmapOpen, setVelocityHeatmapOpen] = useState(true);
 
+  type WinLossPattern = { pattern_type: 'won' | 'lost'; description: string };
+  type WinLossDeal = { title: string; value: number };
+  type WinLossSummaryData = {
+    win_rate: number; avg_won_value: number; avg_lost_value: number;
+    won_count: number; lost_count: number; avg_won_health: number; avg_lost_health: number;
+    top_wins: WinLossDeal[]; top_losses: WinLossDeal[];
+    patterns: WinLossPattern[]; recommendations: string[]; generated_at: string;
+  };
+  const [winLossSummary, setWinLossSummary] = useState<WinLossSummaryData | null>(null);
+  const [winLossSummaryLoading, setWinLossSummaryLoading] = useState(false);
+  const [winLossSummaryOpen, setWinLossSummaryOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -667,6 +679,8 @@ export default function ReportsPage() {
       apiClient.getWorkspaceMomentum("demo-workspace-1", "demo-token").then(setMomentum).catch(() => {}).finally(() => setMomentumLoading(false));
       setVelocityHeatmapLoading(true);
       apiClient.getVelocityHeatmap("demo-workspace-1", "demo-token").then(setVelocityHeatmap).catch(() => {}).finally(() => setVelocityHeatmapLoading(false));
+      setWinLossSummaryLoading(true);
+      apiClient.getWinLossSummary("demo-workspace-1", "demo-token").then(setWinLossSummary).catch(() => {}).finally(() => setWinLossSummaryLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -766,6 +780,8 @@ export default function ReportsPage() {
       apiClient.getWorkspaceMomentum(workspaceId, session.access_token).then(setMomentum).catch(() => {}).finally(() => setMomentumLoading(false));
       setVelocityHeatmapLoading(true);
       apiClient.getVelocityHeatmap(workspaceId, session.access_token).then(setVelocityHeatmap).catch(() => {}).finally(() => setVelocityHeatmapLoading(false));
+      setWinLossSummaryLoading(true);
+      apiClient.getWinLossSummary(workspaceId, session.access_token).then(setWinLossSummary).catch(() => {}).finally(() => setWinLossSummaryLoading(false));
     });
   }, []);
 
@@ -1342,6 +1358,27 @@ export default function ReportsPage() {
         if (!session) { setVelocityHeatmapLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setVelocityHeatmapLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateWinLossSummary = () => {
+    setWinLossSummaryLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getWinLossSummary(wid, tok)
+        .then(setWinLossSummary)
+        .catch(() => {})
+        .finally(() => setWinLossSummaryLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setWinLossSummaryLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setWinLossSummaryLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5325,6 +5362,125 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No velocity data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Win/Loss Summary */}
+      <Card className="border-emerald-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Trophy className="h-4 w-4 text-emerald-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Win/Loss Summary</h3>
+            {winLossSummary && (
+              <span className="text-xs bg-emerald-900/40 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-700/30">
+                {winLossSummary.win_rate}% win rate
+              </span>
+            )}
+            {winLossSummary && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                {winLossSummary.won_count}W / {winLossSummary.lost_count}L
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateWinLossSummary}
+              disabled={winLossSummaryLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", winLossSummaryLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setWinLossSummaryOpen(!winLossSummaryOpen)}>
+              {winLossSummaryOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {winLossSummaryOpen && (
+          winLossSummaryLoading && !winLossSummary ? (
+            <div className="p-6 text-center text-xs text-zinc-500 animate-pulse">Analysing win/loss patterns…</div>
+          ) : winLossSummary ? (
+            <div className={cn("p-4 space-y-4", winLossSummaryLoading && "opacity-40")}>
+              {/* Avg value grid */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-md bg-emerald-950/30 border border-emerald-800/20 p-3">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Won Value</p>
+                  <p className="text-sm font-semibold text-emerald-300">${winLossSummary.avg_won_value.toLocaleString()}</p>
+                  <p className="text-xs text-zinc-500">Health: {winLossSummary.avg_won_health}</p>
+                </div>
+                <div className="rounded-md bg-rose-950/30 border border-rose-800/20 p-3">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Lost Value</p>
+                  <p className="text-sm font-semibold text-rose-300">${winLossSummary.avg_lost_value.toLocaleString()}</p>
+                  <p className="text-xs text-zinc-500">Health: {winLossSummary.avg_lost_health}</p>
+                </div>
+              </div>
+              {/* Patterns */}
+              {winLossSummary.patterns.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-zinc-400 mb-2">Patterns</p>
+                  <div className="space-y-1.5">
+                    {winLossSummary.patterns.map((p, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <span className={cn(
+                          "mt-0.5 text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0",
+                          p.pattern_type === 'won'
+                            ? "bg-emerald-900/50 text-emerald-300 border border-emerald-700/30"
+                            : "bg-rose-900/50 text-rose-300 border border-rose-700/30"
+                        )}>
+                          {p.pattern_type === 'won' ? 'Won' : 'Lost'}
+                        </span>
+                        <p className="text-xs text-zinc-300">{p.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Top wins / losses */}
+              <div className="grid grid-cols-2 gap-3">
+                {winLossSummary.top_wins.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-emerald-400 mb-1">Top Wins</p>
+                    <div className="space-y-1">
+                      {winLossSummary.top_wins.map((w, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs">
+                          <span className="text-zinc-300 truncate mr-2">{w.title}</span>
+                          <span className="text-emerald-300 font-mono flex-shrink-0">${w.value.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {winLossSummary.top_losses.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-rose-400 mb-1">Top Losses</p>
+                    <div className="space-y-1">
+                      {winLossSummary.top_losses.map((l, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs">
+                          <span className="text-zinc-300 truncate mr-2">{l.title}</span>
+                          <span className="text-rose-300 font-mono flex-shrink-0">${l.value.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* Recommendations */}
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1.5">Recommendations</p>
+                <ul className="space-y-1">
+                  {winLossSummary.recommendations.map((rec, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {rec}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(winLossSummary.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No win/loss data available. Click Regenerate to generate.</p>
           )
         )}
       </Card>

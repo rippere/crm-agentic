@@ -12655,3 +12655,161 @@ async def get_pipeline_velocity_heatmap(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_WIN_LOSS_SYSTEM = """\
+You are a senior sales operations AI analysing win/loss patterns in a CRM pipeline.
+Given aggregated win/loss deal data including stage win rates, value comparisons, and deal characteristics, generate actionable pattern insights.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "patterns": [
+    {"pattern_type": "won", "description": "one insight about winning deals"},
+    {"pattern_type": "won", "description": "another winning pattern"},
+    {"pattern_type": "lost", "description": "one insight about losing deals"},
+    {"pattern_type": "lost", "description": "another loss pattern"}
+  ],
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 2 won patterns and 2 lost patterns.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-loss-summary")
+@limiter.limit("5/minute")
+async def get_win_loss_summary(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=90)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+            Deal.created_at,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.created_at >= cutoff,
+        )
+        .order_by(Deal.created_at.desc())
+    )
+    rows = result.all()
+
+    won_rows = [r for r in rows if str(r[2]) == "closed_won"]
+    lost_rows = [r for r in rows if str(r[2]) == "closed_lost"]
+
+    won_count = len(won_rows)
+    lost_count = len(lost_rows)
+    total = won_count + lost_count
+    win_rate = round(won_count / total * 100) if total else 0
+
+    won_values = [float(r[3] or 0) for r in won_rows]
+    lost_values = [float(r[3] or 0) for r in lost_rows]
+    avg_won_value = round(sum(won_values) / len(won_values)) if won_values else 0
+    avg_lost_value = round(sum(lost_values) / len(lost_values)) if lost_values else 0
+
+    won_healths = [int(r[4] or 50) for r in won_rows]
+    lost_healths = [int(r[4] or 50) for r in lost_rows]
+    avg_won_health = round(sum(won_healths) / len(won_healths)) if won_healths else 0
+    avg_lost_health = round(sum(lost_healths) / len(lost_healths)) if lost_healths else 0
+
+    top_wins = [{"title": r[1], "value": float(r[3] or 0)} for r in sorted(won_rows, key=lambda x: float(x[3] or 0), reverse=True)[:3]]
+    top_losses = [{"title": r[1], "value": float(r[3] or 0)} for r in sorted(lost_rows, key=lambda x: float(x[3] or 0), reverse=True)[:3]]
+
+    default_patterns = [
+        {"pattern_type": "won", "description": f"Won deals average {avg_won_health} health score vs {avg_lost_health} for losses — health is a strong win predictor."},
+        {"pattern_type": "won", "description": f"Average won deal value is ${avg_won_value:,.0f}, suggesting deals in this range are well-qualified."},
+        {"pattern_type": "lost", "description": f"Lost deals average ${avg_lost_value:,.0f} in value — review if pricing or scope is misaligned for this segment."},
+        {"pattern_type": "lost", "description": f"Lost deals show lower engagement scores — earlier health monitoring could flag at-risk deals sooner."},
+    ]
+    default_recs = [
+        f"Focus on replicating the behaviours of the top {min(3, won_count)} won deals — debrief with the winning reps this week.",
+        "Implement a deal health review at every stage gate to catch declining deals before they reach proposal.",
+        f"Analyse the top {min(3, lost_count)} lost deals for common objection patterns and build battlecard responses.",
+    ]
+
+    if total == 0:
+        return {
+            "win_rate": 0,
+            "avg_won_value": 0,
+            "avg_lost_value": 0,
+            "won_count": 0,
+            "lost_count": 0,
+            "avg_won_health": 0,
+            "avg_lost_health": 0,
+            "top_wins": [],
+            "top_losses": [],
+            "patterns": [],
+            "recommendations": default_recs,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context_lines = [
+        f"Last 90 days — Won: {won_count} deals, Lost: {lost_count} deals, Win Rate: {win_rate}%",
+        f"Avg Won Value: ${avg_won_value:,.0f}, Avg Lost Value: ${avg_lost_value:,.0f}",
+        f"Avg Won Health: {avg_won_health}, Avg Lost Health: {avg_lost_health}",
+    ]
+    if top_wins:
+        context_lines.append("Top Wins: " + ", ".join(f"{w['title']} (${w['value']:,.0f})" for w in top_wins))
+    if top_losses:
+        context_lines.append("Top Losses: " + ", ".join(f"{l['title']} (${l['value']:,.0f})" for l in top_losses))
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_WIN_LOSS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    raw_patterns = data.get("patterns", [])
+    patterns = []
+    for p in (raw_patterns if isinstance(raw_patterns, list) else [])[:4]:
+        if isinstance(p, dict):
+            pt = str(p.get("pattern_type", "won"))
+            desc = str(p.get("description", ""))
+            if pt in ("won", "lost") and desc:
+                patterns.append({"pattern_type": pt, "description": desc})
+    if not patterns:
+        patterns = default_patterns
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "win_rate": win_rate,
+        "avg_won_value": avg_won_value,
+        "avg_lost_value": avg_lost_value,
+        "won_count": won_count,
+        "lost_count": lost_count,
+        "avg_won_health": avg_won_health,
+        "avg_lost_health": avg_lost_health,
+        "top_wins": top_wins,
+        "top_losses": top_losses,
+        "patterns": patterns,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
