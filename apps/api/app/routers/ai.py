@@ -16622,3 +16622,153 @@ async def get_ai_deal_tier_segmentation(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+_SEASONAL_PATTERNS_SYSTEM = (
+    "You are a sales analytics AI. Analyse seasonal deal-closing patterns for a CRM. "
+    "Given monthly closed-won revenue totals and quarterly breakdowns, write a 2-sentence narrative "
+    "and 3 actionable recommendations to help the sales team capitalise on seasonal patterns. "
+    "Respond ONLY with valid JSON: "
+    "{\"seasonal_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/seasonal-patterns")
+@limiter.limit("5/minute")
+async def get_ai_deal_seasonal_patterns(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=730)
+    rows = (
+        await db.execute(
+            select(Deal.value, Deal.stage_changed_at)
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage == "closed_won")
+            .where(Deal.stage_changed_at >= cutoff)
+        )
+    ).all()
+
+    monthly: dict[int, dict] = {m: {"deal_count": 0, "revenue": 0.0} for m in range(1, 13)}
+    for row in rows:
+        ts = row.stage_changed_at
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        m = ts.month
+        monthly[m]["deal_count"] += 1
+        monthly[m]["revenue"] += float(row.value or 0)
+
+    total_annual = sum(d["revenue"] for d in monthly.values())
+    monthly_patterns = []
+    for m in range(1, 13):
+        d = monthly[m]
+        rev = round(d["revenue"], 2)
+        pct = round(rev / total_annual * 100, 1) if total_annual else 0.0
+        monthly_patterns.append({
+            "month": _MONTH_NAMES[m - 1],
+            "month_number": m,
+            "deal_count": d["deal_count"],
+            "revenue": rev,
+            "pct_of_annual": pct,
+        })
+
+    quarters = [
+        {"quarter": "Q1", "months": [1, 2, 3]},
+        {"quarter": "Q2", "months": [4, 5, 6]},
+        {"quarter": "Q3", "months": [7, 8, 9]},
+        {"quarter": "Q4", "months": [10, 11, 12]},
+    ]
+    quarterly_breakdown = []
+    for q in quarters:
+        q_deals = sum(monthly[m]["deal_count"] for m in q["months"])
+        q_rev = sum(monthly[m]["revenue"] for m in q["months"])
+        q_pct = round(q_rev / total_annual * 100, 1) if total_annual else 0.0
+        quarterly_breakdown.append({
+            "quarter": q["quarter"],
+            "deal_count": q_deals,
+            "revenue": round(q_rev, 2),
+            "pct_of_annual": q_pct,
+        })
+
+    months_with_data = [mp for mp in monthly_patterns if mp["deal_count"] > 0]
+    if months_with_data:
+        peak_month = max(months_with_data, key=lambda x: x["revenue"])["month"]
+        slowest_month = min(months_with_data, key=lambda x: x["revenue"])["month"]
+    else:
+        peak_month = None
+        slowest_month = None
+
+    if not months_with_data:
+        return {
+            "monthly_patterns": monthly_patterns,
+            "quarterly_breakdown": quarterly_breakdown,
+            "peak_month": peak_month,
+            "slowest_month": slowest_month,
+            "total_annual_revenue": 0.0,
+            "seasonal_narrative": "No closed-won deals found in the last two years.",
+            "recommendations": [
+                "Focus on closing your first deals to establish a seasonal baseline.",
+                "Track deal stage transitions to identify where prospects stall.",
+                "Set quarterly revenue targets to build forecast discipline.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Monthly revenue (last 2 years): "
+        + ", ".join(f"{mp['month']} ${mp['revenue']:,.0f}" for mp in monthly_patterns if mp["deal_count"] > 0)
+        + f". Peak month: {peak_month}. Slowest month: {slowest_month}. "
+        + "Quarterly: "
+        + ", ".join(f"{q['quarter']} ${q['revenue']:,.0f} ({q['pct_of_annual']}%)" for q in quarterly_breakdown)
+        + "."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_SEASONAL_PATTERNS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    seasonal_narrative = str(data.get("seasonal_narrative", "")).strip()
+    if not seasonal_narrative:
+        seasonal_narrative = f"Deal closings peak in {peak_month} and slow in {slowest_month} based on historical patterns."
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recs) < 3:
+        defaults = [
+            f"Ramp up prospecting 60 days before {peak_month} to maximise pipeline heading into the peak month.",
+            f"Use {slowest_month} for pipeline building and training, not closing targets.",
+            "Align quota periods with seasonal patterns to set realistic monthly targets.",
+        ]
+        recs.append(defaults[len(recs) % 3])
+
+    return {
+        "monthly_patterns": monthly_patterns,
+        "quarterly_breakdown": quarterly_breakdown,
+        "peak_month": peak_month,
+        "slowest_month": slowest_month,
+        "total_annual_revenue": round(total_annual, 2),
+        "seasonal_narrative": seasonal_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }

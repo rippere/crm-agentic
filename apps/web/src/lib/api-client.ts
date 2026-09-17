@@ -6893,5 +6893,43 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/tier-segmentation`, {}, token)
   },
+
+  async getAIDealSeasonalPatterns(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        monthly_patterns: [
+          { month: 'Jan', month_number: 1, deal_count: 2, revenue: 45000, pct_of_annual: 4.2 },
+          { month: 'Feb', month_number: 2, deal_count: 3, revenue: 62000, pct_of_annual: 5.8 },
+          { month: 'Mar', month_number: 3, deal_count: 5, revenue: 98000, pct_of_annual: 9.2 },
+          { month: 'Apr', month_number: 4, deal_count: 3, revenue: 55000, pct_of_annual: 5.1 },
+          { month: 'May', month_number: 5, deal_count: 4, revenue: 72000, pct_of_annual: 6.7 },
+          { month: 'Jun', month_number: 6, deal_count: 6, revenue: 115000, pct_of_annual: 10.7 },
+          { month: 'Jul', month_number: 7, deal_count: 2, revenue: 38000, pct_of_annual: 3.5 },
+          { month: 'Aug', month_number: 8, deal_count: 2, revenue: 41000, pct_of_annual: 3.8 },
+          { month: 'Sep', month_number: 9, deal_count: 4, revenue: 88000, pct_of_annual: 8.2 },
+          { month: 'Oct', month_number: 10, deal_count: 5, revenue: 102000, pct_of_annual: 9.5 },
+          { month: 'Nov', month_number: 11, deal_count: 7, revenue: 145000, pct_of_annual: 13.5 },
+          { month: 'Dec', month_number: 12, deal_count: 8, revenue: 212000, pct_of_annual: 19.8 },
+        ],
+        quarterly_breakdown: [
+          { quarter: 'Q1', deal_count: 10, revenue: 205000, pct_of_annual: 19.2 },
+          { quarter: 'Q2', deal_count: 13, revenue: 242000, pct_of_annual: 22.6 },
+          { quarter: 'Q3', deal_count: 8, revenue: 167000, pct_of_annual: 15.6 },
+          { quarter: 'Q4', deal_count: 20, revenue: 459000, pct_of_annual: 42.9 },
+        ],
+        peak_month: 'Dec',
+        slowest_month: 'Jul',
+        total_annual_revenue: 1073000,
+        seasonal_narrative: 'Q4 dominates with 43% of annual revenue, driven by budget-flush closings in November and December. Q3 is the softest quarter with only 16% of annual closed revenue, presenting an opportunity for proactive pipeline acceleration.',
+        recommendations: [
+          'Accelerate Q3 pipeline by pulling 90-day closings forward — offer early-bird incentives in July and August.',
+          'Pre-load December with qualified proposals in October to avoid last-minute deal slippage.',
+          'Use the Q1 and Q2 momentum (42% combined) to build executive relationships that convert in Q4.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/seasonal-patterns`, {}, token)
+  },
 }
 
