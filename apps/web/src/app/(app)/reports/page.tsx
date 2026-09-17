@@ -606,6 +606,17 @@ export default function ReportsPage() {
   const [dealAgeLoading, setDealAgeLoading] = useState(false);
   const [dealAgeOpen, setDealAgeOpen] = useState(true);
 
+  type StageHealth = { stage: string; avg_health: number; count: number };
+  type DealHealthTrendData = {
+    stage_health: StageHealth[]; overall_avg_health: number;
+    trend_direction: 'improving' | 'stable' | 'declining';
+    at_risk_count: number; health_narrative: string;
+    recommendations: string[]; generated_at: string;
+  };
+  const [dealHealthTrend, setDealHealthTrend] = useState<DealHealthTrendData | null>(null);
+  const [dealHealthTrendLoading, setDealHealthTrendLoading] = useState(false);
+  const [dealHealthTrendOpen, setDealHealthTrendOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -706,6 +717,8 @@ export default function ReportsPage() {
       apiClient.getSalesForecast("demo-workspace-1", "demo-token").then(setSalesForecast).catch(() => {}).finally(() => setSalesForecastLoading(false));
       setDealAgeLoading(true);
       apiClient.getDealAgeDistribution("demo-workspace-1", "demo-token").then(setDealAgeDistribution).catch(() => {}).finally(() => setDealAgeLoading(false));
+      setDealHealthTrendLoading(true);
+      apiClient.getDealHealthTrend("demo-workspace-1", "demo-token").then(setDealHealthTrend).catch(() => {}).finally(() => setDealHealthTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -811,6 +824,8 @@ export default function ReportsPage() {
       apiClient.getSalesForecast(workspaceId, session.access_token).then(setSalesForecast).catch(() => {}).finally(() => setSalesForecastLoading(false));
       setDealAgeLoading(true);
       apiClient.getDealAgeDistribution(workspaceId, session.access_token).then(setDealAgeDistribution).catch(() => {}).finally(() => setDealAgeLoading(false));
+      setDealHealthTrendLoading(true);
+      apiClient.getDealHealthTrend(workspaceId, session.access_token).then(setDealHealthTrend).catch(() => {}).finally(() => setDealHealthTrendLoading(false));
     });
   }, []);
 
@@ -1450,6 +1465,27 @@ export default function ReportsPage() {
         if (!session) { setDealAgeLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealAgeLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealHealthTrend = () => {
+    setDealHealthTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealHealthTrend(wid, tok)
+        .then(setDealHealthTrend)
+        .catch(() => {})
+        .finally(() => setDealHealthTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealHealthTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealHealthTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5770,6 +5806,92 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No age data available. Click Regenerate to generate.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Health Trend */}
+      <Card className="border-rose-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-rose-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Health Trend</h3>
+            {dealHealthTrend && (
+              <span className="text-xs bg-rose-900/40 text-rose-300 px-2 py-0.5 rounded-full border border-rose-700/30">
+                avg {dealHealthTrend.overall_avg_health}
+              </span>
+            )}
+            {dealHealthTrend && (
+              <span className={cn(
+                "text-xs px-2 py-0.5 rounded-full border",
+                dealHealthTrend.trend_direction === 'improving' ? "bg-emerald-900/40 text-emerald-300 border-emerald-700/30" :
+                dealHealthTrend.trend_direction === 'declining' ? "bg-rose-900/40 text-rose-300 border-rose-700/30" :
+                "bg-zinc-800 text-zinc-400 border-zinc-700"
+              )}>
+                {dealHealthTrend.trend_direction === 'improving' ? '↑' : dealHealthTrend.trend_direction === 'declining' ? '↓' : '→'} {dealHealthTrend.trend_direction}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealHealthTrend}
+              disabled={dealHealthTrendLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealHealthTrendLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setDealHealthTrendOpen(!dealHealthTrendOpen)}>
+              {dealHealthTrendOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealHealthTrendOpen && (
+          dealHealthTrendLoading && !dealHealthTrend ? (
+            <div className="p-4 text-xs text-zinc-500 animate-pulse">Analysing pipeline health…</div>
+          ) : dealHealthTrend ? (
+            <div className={cn("p-4 space-y-4", dealHealthTrendLoading && "opacity-40")}>
+              <div className="space-y-2">
+                {dealHealthTrend.stage_health.map((s) => {
+                  const pct = Math.min(100, Math.max(0, s.avg_health));
+                  const barColor = s.avg_health >= 70 ? "bg-emerald-500" : s.avg_health >= 50 ? "bg-amber-500" : "bg-rose-500";
+                  return (
+                    <div key={s.stage} className="flex items-center gap-2">
+                      <span className="text-xs text-zinc-400 w-24 truncate capitalize">{s.stage}</span>
+                      <div className="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
+                        <div className={cn("h-full rounded-full", barColor)} style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className={cn("text-xs w-8 text-right", s.avg_health >= 70 ? "text-emerald-400" : s.avg_health >= 50 ? "text-amber-400" : "text-rose-400")}>
+                        {s.avg_health}
+                      </span>
+                      <span className="text-xs text-zinc-600 w-12 text-right">{s.count} deal{s.count !== 1 ? 's' : ''}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {dealHealthTrend.at_risk_count > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs bg-rose-900/40 text-rose-300 px-2 py-0.5 rounded-full border border-rose-700/30">
+                    {dealHealthTrend.at_risk_count} at-risk deal{dealHealthTrend.at_risk_count !== 1 ? 's' : ''} (health &lt; 40)
+                  </span>
+                </div>
+              )}
+              <p className="text-xs text-zinc-300 italic">{dealHealthTrend.health_narrative}</p>
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1">Recommendations</p>
+                <ul className="space-y-1">
+                  {dealHealthTrend.recommendations.map((rec, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {rec}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealHealthTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No health data available. Click Regenerate to generate.</p>
           )
         )}
       </Card>
