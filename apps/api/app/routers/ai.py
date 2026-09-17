@@ -13278,3 +13278,159 @@ async def get_deal_health_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 17m: Deal stagnation detector
+# ---------------------------------------------------------------------------
+
+_DEAL_STAGNATION_SYSTEM = """\
+You are a senior sales operations AI analysing deal stagnation across a CRM pipeline.
+Given information about deals that have been stuck in their current stage beyond the threshold, stage average days, and the most stagnant deal, generate a stagnation narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "stagnation_narrative": "2-3 sentence narrative about pipeline stagnation",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/stagnation")
+@limiter.limit("5/minute")
+async def get_deal_stagnation(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    STAGNANT_THRESHOLD_DAYS = 14
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.health_score, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "stagnant_deals": [],
+            "stage_avg_days": [],
+            "total_stagnant_count": 0,
+            "most_stagnant": None,
+            "stagnation_narrative": "No open deals found in the pipeline.",
+            "recommendations": [
+                "Add deals to the pipeline to start tracking stagnation.",
+                "Set up automated reminders for deals approaching the stagnation threshold.",
+                "Define stagnation policies per stage to catch slow deals early.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Compute days in stage for each deal
+    stage_days_buckets: dict[str, list[float]] = {}
+    deal_infos = []
+    for row in rows:
+        deal_id, title, stage, health_score, stage_changed_at = row
+        if stage_changed_at is None:
+            days_in_stage = 0.0
+        else:
+            if stage_changed_at.tzinfo is None:
+                stage_changed_at = stage_changed_at.replace(tzinfo=datetime.timezone.utc)
+            days_in_stage = max(0.0, (now - stage_changed_at).total_seconds() / 86400)
+
+        deal_infos.append({
+            "id": str(deal_id),
+            "title": str(title),
+            "stage": str(stage),
+            "health_score": int(health_score or 50),
+            "days_in_stage": round(days_in_stage),
+        })
+        stage_days_buckets.setdefault(str(stage), []).append(days_in_stage)
+
+    # Stage average days
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closing"]
+    stage_avg_days = []
+    for stage in stage_order:
+        if stage in stage_days_buckets:
+            days_list = stage_days_buckets[stage]
+            stage_avg_days.append({
+                "stage": stage,
+                "avg_days": round(sum(days_list) / len(days_list)),
+                "count": len(days_list),
+            })
+    for stage, days_list in stage_days_buckets.items():
+        if stage not in stage_order:
+            stage_avg_days.append({
+                "stage": stage,
+                "avg_days": round(sum(days_list) / len(days_list)),
+                "count": len(days_list),
+            })
+
+    # Stagnant deals
+    stagnant_deals = [d for d in deal_infos if d["days_in_stage"] > STAGNANT_THRESHOLD_DAYS]
+    stagnant_deals.sort(key=lambda d: d["days_in_stage"], reverse=True)
+    total_stagnant_count = len(stagnant_deals)
+
+    most_stagnant = (
+        {"title": stagnant_deals[0]["title"], "days": stagnant_deals[0]["days_in_stage"]}
+        if stagnant_deals else None
+    )
+
+    default_narrative = (
+        f"{total_stagnant_count} deal{'s are' if total_stagnant_count != 1 else ' is'} stagnant "
+        f"(stuck for more than {STAGNANT_THRESHOLD_DAYS} days in the current stage). "
+        f"Pipeline has {len(rows)} open deals total."
+    )
+    default_recs = [
+        f"Schedule deal reviews for all {total_stagnant_count} stagnant deals this week — each one needs an action plan or should be disqualified.",
+        "Set automated 14-day stage-age alerts so reps receive a nudge before a deal becomes fully stagnant.",
+        "Review the stage with the highest average days and adjust qualification criteria to prevent deals from entering unprepared.",
+    ]
+
+    context_lines = [
+        f"Open deals: {len(rows)}, stagnant (>{STAGNANT_THRESHOLD_DAYS}d in stage): {total_stagnant_count}",
+    ]
+    if most_stagnant:
+        context_lines.append(f"Most stagnant: {most_stagnant['title']} ({most_stagnant['days']} days)")
+    for s in stage_avg_days:
+        context_lines.append(f"{s['stage']}: avg {s['avg_days']}d, {s['count']} deals")
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_DEAL_STAGNATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    stagnation_narrative = str(data.get("stagnation_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stagnant_deals": stagnant_deals,
+        "stage_avg_days": stage_avg_days,
+        "total_stagnant_count": total_stagnant_count,
+        "most_stagnant": most_stagnant,
+        "stagnation_narrative": stagnation_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

@@ -617,6 +617,17 @@ export default function ReportsPage() {
   const [dealHealthTrendLoading, setDealHealthTrendLoading] = useState(false);
   const [dealHealthTrendOpen, setDealHealthTrendOpen] = useState(true);
 
+  type StagnantDeal = { id: string; title: string; stage: string; health_score: number; days_in_stage: number };
+  type StageAvgDays = { stage: string; avg_days: number; count: number };
+  type DealStagnationData = {
+    stagnant_deals: StagnantDeal[]; stage_avg_days: StageAvgDays[];
+    total_stagnant_count: number; most_stagnant: { title: string; days: number } | null;
+    stagnation_narrative: string; recommendations: string[]; generated_at: string;
+  };
+  const [dealStagnation, setDealStagnation] = useState<DealStagnationData | null>(null);
+  const [dealStagnationLoading, setDealStagnationLoading] = useState(false);
+  const [dealStagnationOpen, setDealStagnationOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -719,6 +730,8 @@ export default function ReportsPage() {
       apiClient.getDealAgeDistribution("demo-workspace-1", "demo-token").then(setDealAgeDistribution).catch(() => {}).finally(() => setDealAgeLoading(false));
       setDealHealthTrendLoading(true);
       apiClient.getDealHealthTrend("demo-workspace-1", "demo-token").then(setDealHealthTrend).catch(() => {}).finally(() => setDealHealthTrendLoading(false));
+      setDealStagnationLoading(true);
+      apiClient.getDealStagnation("demo-workspace-1", "demo-token").then(setDealStagnation).catch(() => {}).finally(() => setDealStagnationLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -826,6 +839,8 @@ export default function ReportsPage() {
       apiClient.getDealAgeDistribution(workspaceId, session.access_token).then(setDealAgeDistribution).catch(() => {}).finally(() => setDealAgeLoading(false));
       setDealHealthTrendLoading(true);
       apiClient.getDealHealthTrend(workspaceId, session.access_token).then(setDealHealthTrend).catch(() => {}).finally(() => setDealHealthTrendLoading(false));
+      setDealStagnationLoading(true);
+      apiClient.getDealStagnation(workspaceId, session.access_token).then(setDealStagnation).catch(() => {}).finally(() => setDealStagnationLoading(false));
     });
   }, []);
 
@@ -1465,6 +1480,27 @@ export default function ReportsPage() {
         if (!session) { setDealAgeLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealAgeLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealStagnation = () => {
+    setDealStagnationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealStagnation(wid, tok)
+        .then(setDealStagnation)
+        .catch(() => {})
+        .finally(() => setDealStagnationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealStagnationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealStagnationLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5892,6 +5928,100 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No health data available. Click Regenerate to generate.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Stagnation */}
+      <Card className="border-orange-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Timer className="h-4 w-4 text-orange-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Stagnation</h3>
+            {dealStagnation && (
+              <span className="text-xs bg-orange-900/40 text-orange-300 px-2 py-0.5 rounded-full border border-orange-700/30">
+                {dealStagnation.total_stagnant_count} stagnant
+              </span>
+            )}
+            {dealStagnation?.most_stagnant && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                worst: {dealStagnation.most_stagnant.days}d
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealStagnation}
+              disabled={dealStagnationLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealStagnationLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setDealStagnationOpen(!dealStagnationOpen)}>
+              {dealStagnationOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealStagnationOpen && (
+          dealStagnationLoading && !dealStagnation ? (
+            <div className="p-4 text-xs text-zinc-500 animate-pulse">Detecting stagnant deals…</div>
+          ) : dealStagnation ? (
+            <div className={cn("p-4 space-y-4", dealStagnationLoading && "opacity-40")}>
+              {dealStagnation.stagnant_deals.length > 0 ? (
+                <div className="space-y-2">
+                  {dealStagnation.stagnant_deals.map((d) => {
+                    const urgency = d.days_in_stage > 30 ? "rose" : d.days_in_stage > 21 ? "orange" : "amber";
+                    return (
+                      <div key={d.id} className="flex items-center justify-between gap-2 py-1 border-b border-zinc-800/50 last:border-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs text-zinc-100 truncate">{d.title}</span>
+                          <span className="text-xs bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded capitalize flex-shrink-0">{d.stage}</span>
+                        </div>
+                        <span className={cn(
+                          "text-xs px-2 py-0.5 rounded-full border flex-shrink-0",
+                          urgency === "rose" ? "bg-rose-900/40 text-rose-300 border-rose-700/30" :
+                          urgency === "orange" ? "bg-orange-900/40 text-orange-300 border-orange-700/30" :
+                          "bg-amber-900/40 text-amber-300 border-amber-700/30"
+                        )}>
+                          {d.days_in_stage}d
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-emerald-400">No stagnant deals — all deals are moving through the pipeline.</p>
+              )}
+              {dealStagnation.stage_avg_days.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-zinc-400 mb-1">Avg days per stage</p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                    {dealStagnation.stage_avg_days.map((s) => (
+                      <div key={s.stage} className="flex items-center justify-between">
+                        <span className="text-xs text-zinc-400 capitalize">{s.stage}</span>
+                        <span className={cn("text-xs", s.avg_days > 14 ? "text-orange-400" : "text-zinc-400")}>{s.avg_days}d</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-zinc-300 italic">{dealStagnation.stagnation_narrative}</p>
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1">Recommendations</p>
+                <ul className="space-y-1">
+                  {dealStagnation.recommendations.map((rec, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {rec}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealStagnation.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No stagnation data available. Click Regenerate to generate.</p>
           )
         )}
       </Card>
