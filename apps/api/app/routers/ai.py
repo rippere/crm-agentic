@@ -9869,11 +9869,10 @@ async def get_pipeline_churn(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     import re as _re
-    from datetime import timezone as _tz
-    now = datetime.now(_tz.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
 
     # Query all deal_moved activity events in last 90 days
-    cutoff = now - timedelta(days=90)
+    cutoff = now - datetime.timedelta(days=90)
     events_result = await db.execute(
         select(ActivityEvent.description, ActivityEvent.created_at)
         .where(ActivityEvent.workspace_id == workspace_id)
