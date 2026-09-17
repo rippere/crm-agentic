@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -512,6 +512,48 @@ export default function ReportsPage() {
   const [playbookOpen, setPlaybookOpen] = useState(true);
   const [playbookExpandedStage, setPlaybookExpandedStage] = useState<string | null>(null);
 
+  type BattleCard = {
+    competitor: string;
+    encounter_count: number;
+    win_rate: number | null;
+    key_differentiators: string[];
+    objection_responses: string[];
+    positioning: string;
+  };
+  type BattleCardData = {
+    battle_cards: BattleCard[];
+    top_competitor: string | null;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [battleCard, setBattleCard] = useState<BattleCardData | null>(null);
+  const [battleCardLoading, setBattleCardLoading] = useState(false);
+  const [battleCardOpen, setBattleCardOpen] = useState(true);
+  const [battleCardExpanded, setBattleCardExpanded] = useState<string | null>(null);
+
+  type RiskEscalation = {
+    deal_id: string;
+    title: string;
+    company: string;
+    stage: string;
+    value: number;
+    health_score: number;
+    win_probability: number;
+    days_stale: number;
+    risk_factors: string[];
+    suggested_action: string;
+  };
+  type RiskEscalationData = {
+    escalations: RiskEscalation[];
+    total_at_risk_value: number;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [riskEscalation, setRiskEscalation] = useState<RiskEscalationData | null>(null);
+  const [riskEscalationLoading, setRiskEscalationLoading] = useState(false);
+  const [riskEscalationOpen, setRiskEscalationOpen] = useState(true);
+  const [riskEscalationExpanded, setRiskEscalationExpanded] = useState<string | null>(null);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -598,6 +640,10 @@ export default function ReportsPage() {
       apiClient.getDealConversionPaths("demo-workspace-1", "demo-token").then(setConversionPaths).catch(() => {}).finally(() => setConversionPathsLoading(false));
       setPlaybookLoading(true);
       apiClient.getDealPlaybook("demo-workspace-1", "demo-token").then(setPlaybook).catch(() => {}).finally(() => setPlaybookLoading(false));
+      setBattleCardLoading(true);
+      apiClient.getDealBattleCard("demo-workspace-1", "demo-token").then(setBattleCard).catch(() => {}).finally(() => setBattleCardLoading(false));
+      setRiskEscalationLoading(true);
+      apiClient.getDealRiskEscalation("demo-workspace-1", "demo-token").then(setRiskEscalation).catch(() => {}).finally(() => setRiskEscalationLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -689,6 +735,10 @@ export default function ReportsPage() {
       apiClient.getDealConversionPaths(workspaceId, session.access_token).then(setConversionPaths).catch(() => {}).finally(() => setConversionPathsLoading(false));
       setPlaybookLoading(true);
       apiClient.getDealPlaybook(workspaceId, session.access_token).then(setPlaybook).catch(() => {}).finally(() => setPlaybookLoading(false));
+      setBattleCardLoading(true);
+      apiClient.getDealBattleCard(workspaceId, session.access_token).then(setBattleCard).catch(() => {}).finally(() => setBattleCardLoading(false));
+      setRiskEscalationLoading(true);
+      apiClient.getDealRiskEscalation(workspaceId, session.access_token).then(setRiskEscalation).catch(() => {}).finally(() => setRiskEscalationLoading(false));
     });
   }, []);
 
@@ -1244,6 +1294,48 @@ export default function ReportsPage() {
         if (!session) { setCoachingDigestLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCoachingDigestLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateRiskEscalation = () => {
+    setRiskEscalationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealRiskEscalation(wid, tok)
+        .then(setRiskEscalation)
+        .catch(() => {})
+        .finally(() => setRiskEscalationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setRiskEscalationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setRiskEscalationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateBattleCard = () => {
+    setBattleCardLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealBattleCard(wid, tok)
+        .then(setBattleCard)
+        .catch(() => {})
+        .finally(() => setBattleCardLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setBattleCardLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setBattleCardLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5065,6 +5157,229 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No coaching digest data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Risk Escalation Digest */}
+      <Card className="border-rose-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-rose-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Risk Escalation Digest</h3>
+            {riskEscalation && (
+              <span className="text-xs bg-rose-900/40 text-rose-300 px-2 py-0.5 rounded-full border border-rose-700/30">
+                {riskEscalation.escalations.length} at-risk deal{riskEscalation.escalations.length !== 1 ? "s" : ""}
+              </span>
+            )}
+            {riskEscalation && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                ${riskEscalation.total_at_risk_value.toLocaleString()} at risk
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateRiskEscalation}
+              disabled={riskEscalationLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", riskEscalationLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setRiskEscalationOpen(!riskEscalationOpen)}>
+              {riskEscalationOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {riskEscalationOpen && (
+          riskEscalationLoading && !riskEscalation ? (
+            <div className="p-6 text-center text-xs text-zinc-500 animate-pulse">Generating risk escalation digest…</div>
+          ) : riskEscalation && riskEscalation.escalations.length > 0 ? (
+            <div className={cn("p-4 space-y-4", riskEscalationLoading && "opacity-40")}>
+              <div className="space-y-2">
+                {riskEscalation.escalations.map((deal) => (
+                  <div key={deal.deal_id} className="rounded-lg border border-zinc-800 bg-zinc-900/50">
+                    <button
+                      className="w-full flex items-center justify-between p-3 text-left"
+                      onClick={() => setRiskEscalationExpanded(riskEscalationExpanded === deal.deal_id ? null : deal.deal_id)}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className={cn("inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold flex-shrink-0",
+                          deal.health_score < 40 ? "bg-rose-900/60 text-rose-300" : "bg-amber-900/60 text-amber-300"
+                        )}>{deal.health_score}</span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-zinc-100 truncate">{deal.title}</p>
+                          <p className="text-xs text-zinc-500">{deal.company} · {deal.stage} · ${deal.value.toLocaleString()} · {deal.days_stale}d stale</p>
+                        </div>
+                      </div>
+                      {riskEscalationExpanded === deal.deal_id ? <ChevronUp className="h-3 w-3 text-zinc-500" /> : <ChevronDown className="h-3 w-3 text-zinc-500" />}
+                    </button>
+                    {riskEscalationExpanded === deal.deal_id && (
+                      <div className="px-3 pb-3 space-y-3 border-t border-zinc-800 pt-3">
+                        <div>
+                          <p className="text-xs font-medium text-zinc-400 mb-1">Risk Factors</p>
+                          <ul className="space-y-1">
+                            {deal.risk_factors.map((rf, i) => (
+                              <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                                <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0" />
+                                {rf}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div className="rounded-md bg-zinc-800/60 p-2">
+                          <p className="text-xs font-medium text-zinc-400 mb-1">Suggested Action</p>
+                          <p className="text-xs text-zinc-200">{deal.suggested_action}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-lg bg-rose-950/30 border border-rose-800/30 p-3">
+                <p className="text-xs font-semibold text-rose-300 mb-2">Total Value at Risk: ${riskEscalation.total_at_risk_value.toLocaleString()}</p>
+                <ul className="space-y-1">
+                  {riskEscalation.recommendations.map((r, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(riskEscalation.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : riskEscalation && riskEscalation.escalations.length === 0 ? (
+            <div className="p-4">
+              <p className="text-xs text-zinc-400 italic">No at-risk deals found. Your pipeline looks healthy!</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No risk escalation data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Competitor Battle Cards */}
+      <Card className="border-orange-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-orange-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Competitor Battle Cards</h3>
+            {battleCard && battleCard.top_competitor && (
+              <span className="text-xs bg-orange-900/40 text-orange-300 px-2 py-0.5 rounded-full border border-orange-700/30">
+                Top: {battleCard.top_competitor}
+              </span>
+            )}
+            {battleCard && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                {battleCard.battle_cards.length} competitor{battleCard.battle_cards.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateBattleCard}
+              disabled={battleCardLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", battleCardLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setBattleCardOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {battleCardOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {battleCardOpen && (
+          battleCardLoading && !battleCard ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-12 bg-zinc-800 rounded" />)}
+            </div>
+          ) : battleCard && battleCard.battle_cards.length > 0 ? (
+            <div className={cn("p-4 space-y-4", battleCardLoading && "opacity-40")}>
+              <div className="space-y-1">
+                {battleCard.battle_cards.map((card) => (
+                  <div key={card.competitor} className="rounded-lg border border-zinc-800 overflow-hidden">
+                    <button
+                      onClick={() => setBattleCardExpanded(battleCardExpanded === card.competitor ? null : card.competitor)}
+                      className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-zinc-800/50 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-semibold text-zinc-200">{card.competitor}</span>
+                        <span className="text-xs text-zinc-500">{card.encounter_count} encounter{card.encounter_count !== 1 ? "s" : ""}</span>
+                        {card.win_rate !== null && (
+                          <span className={cn(
+                            "text-xs px-1.5 py-0.5 rounded font-mono",
+                            card.win_rate >= 60 ? "bg-emerald-900/40 text-emerald-300 border border-emerald-700/30" :
+                            card.win_rate >= 40 ? "bg-amber-900/40 text-amber-300 border border-amber-700/30" :
+                            "bg-rose-900/40 text-rose-300 border border-rose-700/30"
+                          )}>
+                            {card.win_rate}% win rate
+                          </span>
+                        )}
+                      </div>
+                      {battleCardExpanded === card.competitor ? <ChevronUp className="h-3 w-3 text-zinc-500" /> : <ChevronDown className="h-3 w-3 text-zinc-500" />}
+                    </button>
+                    {battleCardExpanded === card.competitor && (
+                      <div className="px-3 pb-3 space-y-3 border-t border-zinc-800">
+                        {card.positioning && (
+                          <div className="pt-2">
+                            <p className="text-xs text-zinc-400 italic">{card.positioning}</p>
+                          </div>
+                        )}
+                        <div>
+                          <p className="text-xs font-semibold text-emerald-400 mb-1">Key Differentiators</p>
+                          <ul className="space-y-0.5">
+                            {card.key_differentiators.map((d, i) => (
+                              <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
+                                <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />{d}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-amber-400 mb-1">Objection Responses</p>
+                          <ul className="space-y-0.5">
+                            {card.objection_responses.map((r, i) => (
+                              <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
+                                <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />{r}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1.5">Strategic Recommendations</p>
+                <ul className="space-y-1">
+                  {battleCard.recommendations.map((r, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(battleCard.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : battleCard && battleCard.battle_cards.length === 0 ? (
+            <div className="p-4 space-y-2">
+              <p className="text-xs text-zinc-400 italic">No competitor data found in your deals. Start tracking competitors to enable battle-card generation.</p>
+              <ul className="space-y-1">
+                {battleCard.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No battle card data available. Click Regenerate to generate.</p>
           )
         )}
       </Card>
