@@ -7857,4 +7857,66 @@ async def test_pipeline_coverage_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-coverage")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 18h: quarter readiness
+# ---------------------------------------------------------------------------
+
+class FakeQuarterRow:
+    def __init__(self, stage, value, ml_win_probability=50.0, health_score=70.0):
+        self.stage = stage
+        self.value = value
+        self.ml_win_probability = ml_win_probability
+        self.health_score = health_score
+
+
+@pytest.mark.asyncio
+async def test_quarter_readiness_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    won_rows = [FakeQuarterRow("closed_won", 60000), FakeQuarterRow("closed_won", 40000)]
+    open_rows = [
+        FakeQuarterRow("proposal", 90000, 65.0, 75.0),
+        FakeQuarterRow("negotiation", 70000, 80.0, 85.0),
+        FakeQuarterRow("qualified", 50000, 35.0, 60.0),
+    ]
+
+    call_count = 0
+
+    async def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_execute_result(won_rows)
+        return _make_execute_result(open_rows)
+
+    mock_db.execute = fake_execute
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"readiness_narrative": "Pipeline looks good.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/quarter-readiness")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "next_quarter" in body
+    assert body["quarterly_target"] == pytest.approx(100000.0)  # 60000+40000
+    assert body["open_deal_count"] == 3
+    assert body["readiness_status"] in ("on_track", "at_risk", "behind", "critical")
+    assert len(body["stage_mix"]) == 3
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_quarter_readiness_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/quarter-readiness")
     assert resp.status_code == 403

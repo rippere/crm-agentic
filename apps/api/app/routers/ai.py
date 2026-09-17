@@ -16278,3 +16278,203 @@ async def get_ai_pipeline_coverage(
         "recommendations": recommendations_list,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_QUARTER_READINESS_SYSTEM = (
+    "You are a sales analytics AI. Evaluate whether a company's pipeline is ready "
+    "to hit its next-quarter revenue target based on deal volume, quality, and stage mix. "
+    "Respond ONLY with valid JSON: "
+    "{\"readiness_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_QUARTER_STAGE_CLOSE_PROB = {
+    "discovery": 0.08,
+    "qualified": 0.20,
+    "proposal": 0.45,
+    "negotiation": 0.72,
+}
+
+
+def _next_quarter_label(now: "datetime.datetime") -> str:
+    """Return a label like 'Q4 2026' for the next calendar quarter."""
+    q = (now.month - 1) // 3 + 1
+    next_q = q % 4 + 1
+    year = now.year + (1 if q == 4 else 0)
+    return f"Q{next_q} {year}"
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/quarter-readiness")
+@limiter.limit("5/minute")
+async def get_ai_quarter_readiness(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    ninety_days_ago = now - datetime.timedelta(days=90)
+    next_quarter = _next_quarter_label(now)
+
+    # Last-90d closed-won avg as quarterly target proxy
+    won_result = await db.execute(
+        select(Deal.value)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= ninety_days_ago,
+        )
+    )
+    won_rows = won_result.all()
+    closed_won_90d = sum(float(r.value or 0) for r in won_rows)
+    quarterly_target = closed_won_90d  # treat last quarter as the new target
+
+    # Open deals weighted by stage close probability
+    open_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability, Deal.health_score)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(list(_QUARTER_STAGE_CLOSE_PROB.keys())),
+        )
+    )
+    open_rows = open_result.all()
+
+    if not open_rows and not won_rows:
+        return {
+            "next_quarter": next_quarter,
+            "quarterly_target": 0.0,
+            "expected_revenue": 0.0,
+            "readiness_score": 0,
+            "readiness_status": "critical",
+            "gap": 0.0,
+            "open_deal_count": 0,
+            "avg_health_score": 0.0,
+            "high_confidence_count": 0,
+            "stage_mix": [],
+            "readiness_narrative": "No pipeline data available. Build pipeline across all stages to assess readiness.",
+            "recommendations": [
+                "Start prospecting immediately to build a discovery-stage pipeline for next quarter.",
+                "Set revenue targets in the CRM so coverage can be tracked accurately.",
+                "Review closed-won history to calibrate the quarterly revenue baseline.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Compute expected revenue and stage mix
+    stage_mix: dict = {}
+    total_expected = 0.0
+    health_scores = []
+    high_confidence = 0
+
+    for row in open_rows:
+        s = row.stage
+        v = float(row.value or 0)
+        ml_prob = float(row.ml_win_probability or 0) / 100.0
+        stage_prob = _QUARTER_STAGE_CLOSE_PROB.get(s, 0.1)
+        effective_prob = max(ml_prob, stage_prob)
+        expected = v * effective_prob
+        total_expected += expected
+        if ml_prob >= 0.7:
+            high_confidence += 1
+        h = float(row.health_score or 50)
+        health_scores.append(h)
+        if s not in stage_mix:
+            stage_mix[s] = {"deal_count": 0, "total_value": 0.0, "expected_value": 0.0}
+        stage_mix[s]["deal_count"] += 1
+        stage_mix[s]["total_value"] += v
+        stage_mix[s]["expected_value"] += expected
+
+    avg_health = round(sum(health_scores) / len(health_scores), 1) if health_scores else 0.0
+    gap = round(total_expected - quarterly_target, 2)
+
+    if quarterly_target > 0:
+        ratio = total_expected / quarterly_target
+    else:
+        ratio = 1.0 if total_expected > 0 else 0.0
+
+    if ratio >= 1.2:
+        readiness_score = 90
+        readiness_status = "on_track"
+    elif ratio >= 0.9:
+        readiness_score = 70
+        readiness_status = "at_risk"
+    elif ratio >= 0.6:
+        readiness_score = 45
+        readiness_status = "behind"
+    else:
+        readiness_score = 20
+        readiness_status = "critical"
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation"]
+    stage_mix_list = [
+        {
+            "stage": s,
+            "deal_count": stage_mix[s]["deal_count"],
+            "total_value": round(stage_mix[s]["total_value"], 2),
+            "expected_value": round(stage_mix[s]["expected_value"], 2),
+        }
+        for s in stage_order
+        if s in stage_mix
+    ]
+
+    default_narrative = (
+        f"Expected revenue of ${total_expected:,.0f} vs a ${quarterly_target:,.0f} target for {next_quarter}. "
+        f"Readiness status: {readiness_status} (score {readiness_score}/100)."
+    )
+    default_recs = [
+        f"Focus on advancing qualified and proposal-stage deals to close in {next_quarter}.",
+        "Add 2–3 new high-value opportunities to the pipeline to close the revenue gap.",
+        "Prioritise deals with health score above 70 and win probability above 60% for this quarter.",
+    ]
+
+    context = (
+        f"Quarter readiness for {next_quarter}. Target: ${quarterly_target:,.0f}. "
+        f"Expected revenue: ${total_expected:,.0f}. Gap: ${gap:,.0f}. "
+        f"Status: {readiness_status}. Avg health: {avg_health}. High-confidence deals: {high_confidence}. "
+        "Stage mix: " + "; ".join(
+            f"{sm['stage']} {sm['deal_count']} deals ${sm['total_value']:,.0f}"
+            for sm in stage_mix_list
+        ) + ". Provide readiness_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_QUARTER_READINESS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    readiness_narrative = str(data.get("readiness_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "next_quarter": next_quarter,
+        "quarterly_target": round(quarterly_target, 2),
+        "expected_revenue": round(total_expected, 2),
+        "readiness_score": readiness_score,
+        "readiness_status": readiness_status,
+        "gap": gap,
+        "open_deal_count": len(open_rows),
+        "avg_health_score": avg_health,
+        "high_confidence_count": high_confidence,
+        "stage_mix": stage_mix_list,
+        "readiness_narrative": readiness_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
