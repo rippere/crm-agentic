@@ -6380,5 +6380,26 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-concentration`, {}, token)
   },
+
+  async getDealCloseDateAccuracy(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        total_closed: 18,
+        accuracy_pct: 61.1,
+        avg_slip_days: 14.3,
+        on_time_count: 11,
+        late_count: 5,
+        early_count: 2,
+        accuracy_narrative: '18 deals closed in the last 90 days with a close date accuracy of 61%. 11 deals closed on time, 5 slipped by an average of 14 days, and 2 closed ahead of schedule. Improving forecast discipline in the negotiation stage would bring accuracy above the 70% benchmark.',
+        recommendations: [
+          'Review the 5 late-closing deals to identify whether slippage stems from buyer delays, internal bottlenecks, or poor initial qualification.',
+          'Set a bi-weekly close-date audit cadence so reps update expected dates before they become stale and mislead the forecast.',
+          'Celebrate on-time closes in team standups and share what made those deals predictable to reinforce accurate forecasting habits.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/close-date-accuracy`, {}, token)
+  },
 }
 

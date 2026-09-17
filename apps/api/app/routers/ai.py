@@ -13730,3 +13730,133 @@ async def get_deal_value_concentration(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_DEAL_CLOSE_DATE_ACCURACY_SYSTEM = """\
+You are a senior sales operations AI analysing close date accuracy for deals.
+Given data about closed deals and their expected vs actual close dates, generate an accuracy narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "accuracy_narrative": "2-3 sentence narrative about close date prediction accuracy and its business impact",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/close-date-accuracy")
+@limiter.limit("5/minute")
+async def get_deal_close_date_accuracy(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=90)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.stage,
+            Deal.expected_close,
+            Deal.stage_changed_at,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= cutoff,
+        )
+        .order_by(Deal.stage_changed_at.desc())
+    )
+    rows = result.all()
+
+    on_time_count = 0
+    late_count = 0
+    early_count = 0
+    slip_days_list: list[int] = []
+
+    for r in rows:
+        expected_close_str = r[3]
+        stage_changed_at = r[4]
+        if not expected_close_str:
+            continue
+        try:
+            expected_date = datetime.date.fromisoformat(str(expected_close_str))
+            if stage_changed_at is None:
+                continue
+            sc = stage_changed_at
+            if sc.tzinfo is None:
+                sc = sc.replace(tzinfo=datetime.timezone.utc)
+            actual_date = sc.date()
+            slip = (actual_date - expected_date).days
+            if slip > 7:
+                late_count += 1
+                slip_days_list.append(slip)
+            elif slip < -7:
+                early_count += 1
+            else:
+                on_time_count += 1
+        except (ValueError, AttributeError):
+            continue
+
+    total_with_expected = on_time_count + late_count + early_count
+    accuracy_pct = round(on_time_count / total_with_expected * 100, 1) if total_with_expected > 0 else 100.0
+    avg_slip_days = round(sum(slip_days_list) / len(slip_days_list), 1) if slip_days_list else 0.0
+    total_closed = len(rows)
+
+    default_narrative = (
+        f"{total_closed} deals closed in the last 90 days with a close date accuracy of {accuracy_pct}%. "
+        f"{on_time_count} were on time, {late_count} were late (avg {avg_slip_days:.0f}d slip), and {early_count} closed early. "
+        f"{'Accuracy is strong — keep up the disciplined forecasting.' if accuracy_pct >= 70 else 'Improving forecast accuracy will help revenue planning and pipeline reliability.'}"
+    )
+    default_recs = [
+        f"Review the {late_count} late-closing deals to identify common causes of slippage — process gaps, buyer delays, or poor qualification.",
+        "Set a bi-weekly close-date audit so reps update expected dates before they become stale — stale dates erode forecast trust.",
+        f"Celebrate the {on_time_count} on-time closes and share what made them predictable to reinforce accurate forecasting habits.",
+    ]
+
+    context_lines = [
+        f"Total closed (90d): {total_closed}, with expected close date: {total_with_expected}",
+        f"On-time: {on_time_count}, Late: {late_count}, Early: {early_count}",
+        f"Accuracy: {accuracy_pct}%, Avg slip for late deals: {avg_slip_days}d",
+    ]
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_DEAL_CLOSE_DATE_ACCURACY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    accuracy_narrative = str(data.get("accuracy_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "total_closed": total_closed,
+        "accuracy_pct": accuracy_pct,
+        "avg_slip_days": avg_slip_days,
+        "on_time_count": on_time_count,
+        "late_count": late_count,
+        "early_count": early_count,
+        "accuracy_narrative": accuracy_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

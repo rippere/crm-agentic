@@ -650,6 +650,15 @@ export default function ReportsPage() {
   const [dealValueConcentrationLoading, setDealValueConcentrationLoading] = useState(false);
   const [dealValueConcentrationOpen, setDealValueConcentrationOpen] = useState(true);
 
+  type DealCloseDateAccuracyData = {
+    total_closed: number; accuracy_pct: number; avg_slip_days: number;
+    on_time_count: number; late_count: number; early_count: number;
+    accuracy_narrative: string; recommendations: string[]; generated_at: string;
+  };
+  const [dealCloseDateAccuracy, setDealCloseDateAccuracy] = useState<DealCloseDateAccuracyData | null>(null);
+  const [dealCloseDateAccuracyLoading, setDealCloseDateAccuracyLoading] = useState(false);
+  const [dealCloseDateAccuracyOpen, setDealCloseDateAccuracyOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -758,6 +767,8 @@ export default function ReportsPage() {
       apiClient.getDealEngagementGap("demo-workspace-1", "demo-token").then(setDealEngagementGap).catch(() => {}).finally(() => setDealEngagementGapLoading(false));
       setDealValueConcentrationLoading(true);
       apiClient.getDealValueConcentration("demo-workspace-1", "demo-token").then(setDealValueConcentration).catch(() => {}).finally(() => setDealValueConcentrationLoading(false));
+      setDealCloseDateAccuracyLoading(true);
+      apiClient.getDealCloseDateAccuracy("demo-workspace-1", "demo-token").then(setDealCloseDateAccuracy).catch(() => {}).finally(() => setDealCloseDateAccuracyLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -871,6 +882,8 @@ export default function ReportsPage() {
       apiClient.getDealEngagementGap(workspaceId, session.access_token).then(setDealEngagementGap).catch(() => {}).finally(() => setDealEngagementGapLoading(false));
       setDealValueConcentrationLoading(true);
       apiClient.getDealValueConcentration(workspaceId, session.access_token).then(setDealValueConcentration).catch(() => {}).finally(() => setDealValueConcentrationLoading(false));
+      setDealCloseDateAccuracyLoading(true);
+      apiClient.getDealCloseDateAccuracy(workspaceId, session.access_token).then(setDealCloseDateAccuracy).catch(() => {}).finally(() => setDealCloseDateAccuracyLoading(false));
     });
   }, []);
 
@@ -1531,6 +1544,27 @@ export default function ReportsPage() {
         if (!session) { setDealValueConcentrationLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealValueConcentrationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealCloseDateAccuracy = () => {
+    setDealCloseDateAccuracyLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealCloseDateAccuracy(wid, tok)
+        .then(setDealCloseDateAccuracy)
+        .catch(() => {})
+        .finally(() => setDealCloseDateAccuracyLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealCloseDateAccuracyLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealCloseDateAccuracyLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -6914,6 +6948,87 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No QBR data available. Click Regenerate to generate.</p>
+          )
+        )}
+      </Card>
+
+      {/* Close Date Accuracy */}
+      <Card className="border-cyan-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Target className="h-4 w-4 text-cyan-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Close Date Accuracy</h3>
+            {dealCloseDateAccuracy && (
+              <span className={cn(
+                "text-xs px-2 py-0.5 rounded-full border",
+                dealCloseDateAccuracy.accuracy_pct >= 70
+                  ? "bg-emerald-900/40 text-emerald-300 border-emerald-700/30"
+                  : dealCloseDateAccuracy.accuracy_pct >= 50
+                  ? "bg-amber-900/40 text-amber-300 border-amber-700/30"
+                  : "bg-rose-900/40 text-rose-300 border-rose-700/30"
+              )}>
+                {dealCloseDateAccuracy.accuracy_pct}% accurate
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealCloseDateAccuracy}
+              disabled={dealCloseDateAccuracyLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealCloseDateAccuracyLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setDealCloseDateAccuracyOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {dealCloseDateAccuracyOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealCloseDateAccuracyOpen && (
+          dealCloseDateAccuracyLoading && !dealCloseDateAccuracy ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : dealCloseDateAccuracy ? (
+            <div className={cn("p-4 space-y-4", dealCloseDateAccuracyLoading && "opacity-40")}>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-emerald-500/8 border border-emerald-500/15 p-3 text-center">
+                  <p className="text-lg font-bold font-mono text-emerald-400">{dealCloseDateAccuracy.on_time_count}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">On Time</p>
+                </div>
+                <div className="rounded-lg bg-rose-500/8 border border-rose-500/15 p-3 text-center">
+                  <p className="text-lg font-bold font-mono text-rose-400">{dealCloseDateAccuracy.late_count}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Late</p>
+                </div>
+                <div className="rounded-lg bg-sky-500/8 border border-sky-500/15 p-3 text-center">
+                  <p className="text-lg font-bold font-mono text-sky-400">{dealCloseDateAccuracy.early_count}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Early</p>
+                </div>
+              </div>
+              {dealCloseDateAccuracy.avg_slip_days > 0 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-zinc-500">Avg slip for late deals:</span>
+                  <span className="text-xs font-mono bg-rose-900/40 text-rose-300 px-2 py-0.5 rounded border border-rose-700/30">
+                    +{dealCloseDateAccuracy.avg_slip_days}d
+                  </span>
+                  <span className="text-xs text-zinc-500">·</span>
+                  <span className="text-xs text-zinc-500">{dealCloseDateAccuracy.total_closed} closed in 90d</span>
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{dealCloseDateAccuracy.accuracy_narrative}</p>
+              <ul className="space-y-1">
+                {dealCloseDateAccuracy.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealCloseDateAccuracy.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No close date data available.</p>
           )
         )}
       </Card>
