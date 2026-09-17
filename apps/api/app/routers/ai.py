@@ -15088,3 +15088,135 @@ async def get_ai_deal_reactivation_candidates(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+_PIPELINE_GAP_SYSTEM = """\
+You are a senior sales operations AI specialising in pipeline health and capacity planning.
+You will receive a pipeline gap analysis comparing actual deal counts against targets per stage.
+Return ONLY a valid JSON object with keys:
+  "pipeline_gap_narrative": string — 2-3 sentence insight about the pipeline gaps and their revenue impact
+  "recommendations": list of exactly 3 actionable strings for filling critical pipeline gaps
+No markdown, no extra keys.
+"""
+
+_STAGE_TARGETS = {
+    "discovery": 10,
+    "qualified": 7,
+    "proposal": 5,
+    "negotiation": 3,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-gap")
+@limiter.limit("5/minute")
+async def get_ai_deal_pipeline_gap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    rows = (await db.execute(
+        select(Deal.stage, func.count(Deal.id).label("cnt"))
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(list(_STAGE_TARGETS.keys())),
+        )
+        .group_by(Deal.stage)
+    )).all()
+
+    actual_counts = {row.stage: row.cnt for row in rows}
+
+    stage_gaps = []
+    total_gap_count = 0
+    most_understocked_stage = None
+    worst_gap = -1
+
+    for stage, target in _STAGE_TARGETS.items():
+        actual = actual_counts.get(stage, 0)
+        gap = target - actual
+        gap_pct = round(gap / target * 100, 1) if target else 0.0
+        total_gap_count += max(gap, 0)
+        if gap > worst_gap:
+            worst_gap = gap
+            most_understocked_stage = stage
+        stage_gaps.append({
+            "stage": stage,
+            "actual_count": actual,
+            "expected_count": target,
+            "gap": gap,
+            "gap_pct": gap_pct,
+        })
+
+    if not any(s["actual_count"] > 0 for s in stage_gaps):
+        return {
+            "stage_gaps": stage_gaps,
+            "most_understocked_stage": most_understocked_stage or "discovery",
+            "total_gap_count": total_gap_count,
+            "pipeline_gap_narrative": "No active deals found in the pipeline. Immediate top-of-funnel activity is required to build pipeline across all stages.",
+            "recommendations": [
+                "Launch an outbound prospecting campaign to fill the discovery stage immediately.",
+                "Schedule discovery calls with at least 10 new prospects this week.",
+                "Review and reactivate any closed-lost deals from the last 90 days for pipeline recovery.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_narrative = (
+        f"The pipeline has a total gap of {total_gap_count} deals across all stages, with "
+        f"'{most_understocked_stage}' being the most understocked "
+        f"({actual_counts.get(most_understocked_stage, 0)} actual vs {_STAGE_TARGETS.get(most_understocked_stage, 0)} target). "
+        "Understocking in early stages will compound into revenue shortfalls 30–90 days from now. "
+        "Focus new business activity on filling the top-of-funnel gaps first."
+    )
+    default_recs = [
+        f"Immediately increase prospecting activity to fill the '{most_understocked_stage}' stage gap — this is your critical bottleneck.",
+        "Set weekly stage-fill targets for each rep and review progress in Monday pipeline meetings.",
+        "Re-evaluate deal qualification criteria — if late-stage gaps are larger, the qualification bar may be too high.",
+    ]
+
+    context = (
+        f"Pipeline gap analysis for workspace.\n"
+        f"Total deal gap: {total_gap_count} deals. Most understocked: '{most_understocked_stage}'.\n"
+        f"Stage breakdown:\n"
+        + "\n".join(
+            f"  {s['stage']}: actual={s['actual_count']}, target={s['expected_count']}, "
+            f"gap={s['gap']} ({s['gap_pct']}%)"
+            for s in stage_gaps
+        )
+        + "\nProvide a pipeline_gap_narrative and 3 recommendations for filling gaps."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_PIPELINE_GAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    pipeline_gap_narrative = str(data.get("pipeline_gap_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_gaps": stage_gaps,
+        "most_understocked_stage": most_understocked_stage,
+        "total_gap_count": total_gap_count,
+        "pipeline_gap_narrative": pipeline_gap_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

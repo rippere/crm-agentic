@@ -7382,3 +7382,52 @@ async def test_deal_reactivation_candidates_wrong_workspace_returns_403(app_clie
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/reactivation-candidates")
     assert resp.status_code == 403
+
+# ── Phase 17z: pipeline gap analysis ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_pipeline_gap_returns_structured_response(app_client, monkeypatch):
+    class FakeRow:
+        def __init__(self, stage, cnt):
+            self.stage = stage
+            self.cnt = cnt
+
+    rows = [
+        FakeRow("discovery", 3),
+        FakeRow("qualified", 5),
+        FakeRow("proposal", 2),
+        FakeRow("negotiation", 1),
+    ]
+
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"pipeline_gap_narrative": "Discovery is understocked.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/pipeline-gap")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["stage_gaps"], list)
+    assert len(body["stage_gaps"]) == 4
+    discovery = next(s for s in body["stage_gaps"] if s["stage"] == "discovery")
+    assert discovery["actual_count"] == 3
+    assert discovery["expected_count"] == 10
+    assert discovery["gap"] == 7
+    assert isinstance(body["total_gap_count"], int)
+    assert body["most_understocked_stage"] == "discovery"
+    assert len(body["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_pipeline_gap_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-gap")
+    assert resp.status_code == 403
