@@ -6251,5 +6251,29 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/sales-forecast`, {}, token)
   },
+
+  async getDealAgeDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        buckets: [
+          { label: '<30d', count: 4, total_value: 128000, pct_of_pipeline: 26 },
+          { label: '30-60d', count: 5, total_value: 185000, pct_of_pipeline: 37 },
+          { label: '60-90d', count: 3, total_value: 92000, pct_of_pipeline: 19 },
+          { label: '>90d', count: 2, total_value: 88000, pct_of_pipeline: 18 },
+        ],
+        oldest_deal: { title: 'Legacy Enterprise Upgrade', days: 112 },
+        newest_deal: { title: 'Inbound Trial - Q3', days: 4 },
+        avg_age_days: 48,
+        aging_insight: 'Your pipeline averages 48 days old with 2 deals exceeding 90 days. The >90d segment holds $88K in value — a targeted review this week could recover or close these deals before quarter end.',
+        recommendations: [
+          'Review the 2 deals older than 90 days and decide whether to close, disqualify, or escalate each one.',
+          'Set a 120-day max pipeline age policy and add an automated health-score alert at 90 days.',
+          'Run a weekly aging report on Monday mornings to catch deals drifting toward the 60-day mark.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/age-distribution`, {}, token)
+  },
 }
 
