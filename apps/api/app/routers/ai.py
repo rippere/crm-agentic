@@ -11590,3 +11590,282 @@ async def get_deal_conversion_paths(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 17d — AI workspace deal playbook generator
+# ---------------------------------------------------------------------------
+
+_PLAYBOOK_SYSTEM = """\
+You are a senior sales coaching AI analysing patterns from closed deals.
+
+Given metrics about top-performing deals and stage-level stats, generate a practical deal playbook.
+
+Respond with valid JSON only, no prose outside JSON:
+{
+  "playbook_title": "short punchy title for this workspace's winning playbook",
+  "key_behaviors": ["3 highest-impact behavior from top-performing deals"],
+  "stage_playbook": [
+    {
+      "stage": "discovery",
+      "key_actions": ["3 key actions for this stage"],
+      "success_signals": ["2 signals a deal is progressing well"],
+      "common_mistakes": ["2 common mistakes to avoid"]
+    }
+  ],
+  "recommendations": ["3 actionable recommendations for the sales team"]
+}
+Provide stage_playbook for stages: discovery, qualified, proposal, negotiation.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/playbook")
+@limiter.limit("5/minute")
+async def get_deal_playbook(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_90 = now - datetime.timedelta(days=90)
+    cutoff_180 = now - datetime.timedelta(days=180)
+
+    # Query 1: top-performing closed_won deals (high health, last 90d)
+    won_result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.value,
+            Deal.health_score,
+            Deal.stage_changed_at,
+            Deal.created_at,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+        .order_by(Deal.health_score.desc())
+    )
+    won_rows = won_result.all()
+
+    # Query 2: closed_lost deals (last 90d) for comparison
+    lost_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.health_score, Deal.stage_changed_at, Deal.created_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+    )
+    lost_rows = lost_result.all()
+
+    # Query 3: deal_moved events to understand stage sequences
+    events_result = await db.execute(
+        select(ActivityEvent.description, ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "deal_moved",
+            ActivityEvent.created_at >= cutoff_180,
+        )
+        .order_by(ActivityEvent.created_at.asc())
+    )
+    event_rows = events_result.all()
+
+    won_count = len(won_rows)
+    lost_count = len(lost_rows)
+
+    default_playbook_title = "Standard Sales Playbook"
+    default_key_behaviors = [
+        "Qualify deeply before moving to proposal — deals with high health scores spend more time in qualified.",
+        "Maintain regular follow-up cadence — top deals average touch every 3-5 days.",
+        "Align on success criteria early — winning deals define what success looks like in discovery.",
+    ]
+    default_stage_playbook = [
+        {
+            "stage": "discovery",
+            "key_actions": [
+                "Map the full buying committee and identify the economic buyer.",
+                "Document the customer's current pain and quantify the cost of inaction.",
+                "Set a clear mutual action plan with agreed next steps.",
+            ],
+            "success_signals": [
+                "Customer shares internal docs or invites additional stakeholders.",
+                "Economic buyer is engaged and confirms budget authority.",
+            ],
+            "common_mistakes": [
+                "Rushing to demo before understanding the problem.",
+                "Failing to identify blockers or competing priorities.",
+            ],
+        },
+        {
+            "stage": "qualified",
+            "key_actions": [
+                "Confirm BANT: Budget, Authority, Need, Timeline.",
+                "Run a tailored demo focused on the customer's top 3 pain points.",
+                "Agree on evaluation criteria and decision-making process.",
+            ],
+            "success_signals": [
+                "Customer requests a proposal or pricing discussion.",
+                "Champion advocates internally and introduces you to decision maker.",
+            ],
+            "common_mistakes": [
+                "Sending a generic proposal without customisation.",
+                "Assuming one stakeholder speaks for the entire buying group.",
+            ],
+        },
+        {
+            "stage": "proposal",
+            "key_actions": [
+                "Present ROI analysis tailored to their stated metrics.",
+                "Address top objections proactively in the proposal document.",
+                "Set a clear decision date and follow-up schedule.",
+            ],
+            "success_signals": [
+                "Customer shares proposal internally and reports positive feedback.",
+                "Legal or procurement team is introduced.",
+            ],
+            "common_mistakes": [
+                "Ignoring competitor mentions instead of directly addressing them.",
+                "Failing to create urgency or a compelling event.",
+            ],
+        },
+        {
+            "stage": "negotiation",
+            "key_actions": [
+                "Anchor on value rather than discounting on price.",
+                "Understand their constraints before making concessions.",
+                "Get verbal commit before sending revised commercial terms.",
+            ],
+            "success_signals": [
+                "Customer requests contract redlines or legal review.",
+                "Champion sets an internal signing deadline.",
+            ],
+            "common_mistakes": [
+                "Caving on price without asking for something in return.",
+                "Allowing negotiations to stall without a follow-up plan.",
+            ],
+        },
+    ]
+    default_recs = [
+        f"Review the {won_count} recently closed wins and document the specific objections overcome in each.",
+        "Run a monthly pipeline review focused on deal health scores — deals below 50 need immediate attention.",
+        "Implement a structured handoff checklist from sales to customer success for every closed deal.",
+    ]
+
+    if won_count == 0:
+        return {
+            "playbook_title": default_playbook_title,
+            "winning_profile": {
+                "avg_health": 0,
+                "avg_cycle_days": 0,
+                "won_count": 0,
+                "lost_count": lost_count,
+                "win_rate": 0,
+            },
+            "key_behaviors": default_key_behaviors,
+            "stage_playbook": default_stage_playbook,
+            "recommendations": default_recs,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Compute winning profile metrics
+    health_scores = [float(r[3] or 0) for r in won_rows]
+    avg_health = round(sum(health_scores) / len(health_scores)) if health_scores else 0
+
+    cycle_days_list = []
+    for row in won_rows:
+        closed_at = row[4]
+        created_at = row[5]
+        if closed_at and created_at:
+            ca = closed_at.replace(tzinfo=datetime.timezone.utc) if not closed_at.tzinfo else closed_at
+            cr = created_at.replace(tzinfo=datetime.timezone.utc) if not created_at.tzinfo else created_at
+            delta = (ca - cr).total_seconds() / 86400.0
+            if delta >= 0:
+                cycle_days_list.append(delta)
+    avg_cycle_days = round(sum(cycle_days_list) / len(cycle_days_list), 1) if cycle_days_list else 0.0
+
+    total_closed = won_count + lost_count
+    win_rate = round(won_count / total_closed * 100) if total_closed > 0 else 0
+
+    # Parse stage sequences from activity events for won deals
+    import re as _re
+    won_titles = {row[1] for row in won_rows if row[1]}
+    _stage_re = _re.compile(r"→\s*([a-z_]+)")
+    _title_re = _re.compile(r"Deal '([^']+)'")
+
+    deal_stages: dict[str, list[str]] = defaultdict(list)
+    for desc, ts in event_rows:
+        if not desc:
+            continue
+        tm = _title_re.search(desc)
+        sm = _stage_re.search(desc)
+        if tm and sm:
+            deal_stages[tm.group(1)].append(sm.group(1))
+
+    stage_counts: dict[str, int] = defaultdict(int)
+    for title in won_titles:
+        for stage in deal_stages.get(title, []):
+            stage_counts[stage] += 1
+
+    top_stages = sorted(stage_counts.keys(), key=lambda s: -stage_counts[s])[:4]
+
+    context_lines = [
+        f"Workspace closed {won_count} deals (won) and {lost_count} deals (lost) in the last 90 days.",
+        f"Win rate: {win_rate}%",
+        f"Average health score of won deals: {avg_health}",
+        f"Average cycle time (won): {avg_cycle_days} days",
+        f"Most visited stages in winning deals: {', '.join(top_stages) if top_stages else 'unknown'}",
+    ]
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            system=_PLAYBOOK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    playbook_title = data.get("playbook_title", default_playbook_title)
+    if not isinstance(playbook_title, str) or not playbook_title.strip():
+        playbook_title = default_playbook_title
+
+    raw_behaviors = data.get("key_behaviors", [])
+    key_behaviors = [str(b) for b in (raw_behaviors if isinstance(raw_behaviors, list) else [])[:3]]
+    while len(key_behaviors) < 3:
+        key_behaviors.append(default_key_behaviors[len(key_behaviors) % 3])
+
+    raw_stage_playbook = data.get("stage_playbook", [])
+    stage_playbook = raw_stage_playbook if isinstance(raw_stage_playbook, list) and len(raw_stage_playbook) > 0 else default_stage_playbook
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "playbook_title": playbook_title,
+        "winning_profile": {
+            "avg_health": avg_health,
+            "avg_cycle_days": avg_cycle_days,
+            "won_count": won_count,
+            "lost_count": lost_count,
+            "win_rate": win_rate,
+        },
+        "key_behaviors": key_behaviors,
+        "stage_playbook": stage_playbook,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

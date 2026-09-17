@@ -5915,5 +5915,98 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/conversion-path`, {}, token)
   },
+
+  async getDealPlaybook(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        playbook_title: 'Enterprise Velocity Playbook',
+        winning_profile: {
+          avg_health: 84,
+          avg_cycle_days: 32.5,
+          won_count: 5,
+          lost_count: 2,
+          win_rate: 71,
+        },
+        key_behaviors: [
+          'Top-performing deals spend at least 7 days in the qualified stage — rushing to proposal before confirming BANT is the single biggest predictor of loss.',
+          'All winning deals had a named champion who introduced the team to the economic buyer before the proposal was sent.',
+          'Winning deals average a touch every 4 days; deals that go silent for 10+ days have a 3× higher churn rate.',
+        ],
+        stage_playbook: [
+          {
+            stage: 'discovery',
+            key_actions: [
+              'Map the full buying committee in the first call — identify economic buyer, champion, and blockers.',
+              'Quantify the cost of the current problem in the customer\'s own language.',
+              'Set a Mutual Action Plan (MAP) with agreed milestones before leaving the meeting.',
+            ],
+            success_signals: [
+              'Customer shares internal documentation or introduces a second stakeholder.',
+              'Economic buyer confirms budget authority and timeline.',
+            ],
+            common_mistakes: [
+              'Moving to demo before the pain is fully documented and confirmed.',
+              'Single-threading through one stakeholder who lacks decision power.',
+            ],
+          },
+          {
+            stage: 'qualified',
+            key_actions: [
+              'Run a tailored demo that maps directly to the top 3 pain points discovered.',
+              'Confirm BANT and get the customer to rank their evaluation criteria.',
+              'Present a ROI model with the customer\'s own numbers.',
+            ],
+            success_signals: [
+              'Customer asks for pricing or requests a proposal.',
+              'Champion reports positive internal feedback and schedules a leadership review.',
+            ],
+            common_mistakes: [
+              'Sending a generic proposal deck without customisation.',
+              'Failing to identify and address the key competitor in the evaluation.',
+            ],
+          },
+          {
+            stage: 'proposal',
+            key_actions: [
+              'Walk through the proposal live — never send it cold.',
+              'Address the top 3 objections proactively before they are raised.',
+              'Set a clear next step: decision date, legal review, or negotiation kickoff.',
+            ],
+            success_signals: [
+              'Customer shares the proposal internally and reports back with questions.',
+              'Legal or procurement is introduced.',
+            ],
+            common_mistakes: [
+              'Ignoring competitor mentions rather than directly addressing the differentiation.',
+              'Failing to create urgency or a compelling event to drive a decision.',
+            ],
+          },
+          {
+            stage: 'negotiation',
+            key_actions: [
+              'Anchor on value and ROI before discussing price adjustments.',
+              'Understand their constraints fully before making any concessions.',
+              'Require a verbal commit before sending revised commercial terms.',
+            ],
+            success_signals: [
+              'Customer requests contract redlines or sets an internal signing deadline.',
+              'Legal review is initiated.',
+            ],
+            common_mistakes: [
+              'Caving on price without asking for something in return (faster close, expanded scope).',
+              'Letting the negotiation stall without a defined follow-up cadence.',
+            ],
+          },
+        ],
+        recommendations: [
+          'Implement a mandatory 7-day minimum in the qualified stage for deals over $30K to ensure BANT is fully confirmed.',
+          'Require every deal to have a named champion before it advances past discovery — track this in deal notes.',
+          'Set an automated alert for any deal with no activity for 8+ days — immediate outreach cuts stall rate by 40%.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/playbook`, {}, token)
+  },
 }
 
