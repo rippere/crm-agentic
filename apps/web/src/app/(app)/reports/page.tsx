@@ -628,6 +628,16 @@ export default function ReportsPage() {
   const [dealStagnationLoading, setDealStagnationLoading] = useState(false);
   const [dealStagnationOpen, setDealStagnationOpen] = useState(true);
 
+  type DisengagedDeal = { id: string; title: string; stage: string; health_score: number; days_since_activity: number };
+  type DealEngagementGapData = {
+    disengaged_deals: DisengagedDeal[]; avg_days_since_activity: number;
+    total_disengaged: number; top_disengaged: { title: string; days: number } | null;
+    engagement_narrative: string; recommendations: string[]; generated_at: string;
+  };
+  const [dealEngagementGap, setDealEngagementGap] = useState<DealEngagementGapData | null>(null);
+  const [dealEngagementGapLoading, setDealEngagementGapLoading] = useState(false);
+  const [dealEngagementGapOpen, setDealEngagementGapOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -732,6 +742,8 @@ export default function ReportsPage() {
       apiClient.getDealHealthTrend("demo-workspace-1", "demo-token").then(setDealHealthTrend).catch(() => {}).finally(() => setDealHealthTrendLoading(false));
       setDealStagnationLoading(true);
       apiClient.getDealStagnation("demo-workspace-1", "demo-token").then(setDealStagnation).catch(() => {}).finally(() => setDealStagnationLoading(false));
+      setDealEngagementGapLoading(true);
+      apiClient.getDealEngagementGap("demo-workspace-1", "demo-token").then(setDealEngagementGap).catch(() => {}).finally(() => setDealEngagementGapLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -841,6 +853,8 @@ export default function ReportsPage() {
       apiClient.getDealHealthTrend(workspaceId, session.access_token).then(setDealHealthTrend).catch(() => {}).finally(() => setDealHealthTrendLoading(false));
       setDealStagnationLoading(true);
       apiClient.getDealStagnation(workspaceId, session.access_token).then(setDealStagnation).catch(() => {}).finally(() => setDealStagnationLoading(false));
+      setDealEngagementGapLoading(true);
+      apiClient.getDealEngagementGap(workspaceId, session.access_token).then(setDealEngagementGap).catch(() => {}).finally(() => setDealEngagementGapLoading(false));
     });
   }, []);
 
@@ -1480,6 +1494,27 @@ export default function ReportsPage() {
         if (!session) { setDealAgeLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealAgeLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealEngagementGap = () => {
+    setDealEngagementGapLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealEngagementGap(wid, tok)
+        .then(setDealEngagementGap)
+        .catch(() => {})
+        .finally(() => setDealEngagementGapLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealEngagementGapLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealEngagementGapLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -6022,6 +6057,87 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No stagnation data available. Click Regenerate to generate.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Engagement Gap */}
+      <Card className="border-purple-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-purple-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Engagement Gap</h3>
+            {dealEngagementGap && (
+              <span className="text-xs bg-purple-900/40 text-purple-300 px-2 py-0.5 rounded-full border border-purple-700/30">
+                {dealEngagementGap.total_disengaged} disengaged
+              </span>
+            )}
+            {dealEngagementGap && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                avg {dealEngagementGap.avg_days_since_activity}d
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealEngagementGap}
+              disabled={dealEngagementGapLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealEngagementGapLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setDealEngagementGapOpen(!dealEngagementGapOpen)}>
+              {dealEngagementGapOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealEngagementGapOpen && (
+          dealEngagementGapLoading && !dealEngagementGap ? (
+            <div className="p-4 text-xs text-zinc-500 animate-pulse">Analysing engagement gaps…</div>
+          ) : dealEngagementGap ? (
+            <div className={cn("p-4 space-y-4", dealEngagementGapLoading && "opacity-40")}>
+              {dealEngagementGap.disengaged_deals.length > 0 ? (
+                <div className="space-y-2">
+                  {dealEngagementGap.disengaged_deals.map((d) => {
+                    const urgency = d.days_since_activity > 21 ? "rose" : d.days_since_activity > 14 ? "orange" : "amber";
+                    return (
+                      <div key={d.id} className="flex items-center justify-between gap-2 py-1 border-b border-zinc-800/50 last:border-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs text-zinc-100 truncate">{d.title}</span>
+                          <span className="text-xs bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded capitalize flex-shrink-0">{d.stage}</span>
+                        </div>
+                        <span className={cn(
+                          "text-xs px-2 py-0.5 rounded-full border flex-shrink-0",
+                          urgency === "rose" ? "bg-rose-900/40 text-rose-300 border-rose-700/30" :
+                          urgency === "orange" ? "bg-orange-900/40 text-orange-300 border-orange-700/30" :
+                          "bg-amber-900/40 text-amber-300 border-amber-700/30"
+                        )}>
+                          {d.days_since_activity}d silent
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-emerald-400">All deals have recent activity — great engagement across the pipeline.</p>
+              )}
+              <p className="text-xs text-zinc-300 italic">{dealEngagementGap.engagement_narrative}</p>
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1">Recommendations</p>
+                <ul className="space-y-1">
+                  {dealEngagementGap.recommendations.map((rec, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {rec}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealEngagementGap.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No engagement data available. Click Regenerate to generate.</p>
           )
         )}
       </Card>
