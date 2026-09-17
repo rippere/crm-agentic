@@ -6584,3 +6584,65 @@ async def test_deal_age_distribution_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/age-distribution")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 17l: GET /workspaces/{wid}/ai/deals/health-trend
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_health_trend_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    rows = [
+        ("discovery", 72),
+        ("qualified", 65),
+        ("proposal", 55),
+        ("proposal", 80),
+        ("negotiation", 40),
+    ]
+
+    ai_response = {
+        "health_narrative": "Pipeline health averages 62 overall. Late-stage deals show lower health, suggesting stall risk in proposal.",
+        "recommendations": [
+            "Schedule immediate review of the negotiation-stage deal with health 40.",
+            "Set automated alerts for deals dropping below 50 health score.",
+            "Share best practices from high-health discovery deals with the whole team.",
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/health-trend")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["stage_health"], list)
+    assert all("stage" in s and "avg_health" in s and "count" in s for s in body["stage_health"])
+    assert isinstance(body["overall_avg_health"], int)
+    assert body["trend_direction"] in ("improving", "stable", "declining")
+    assert isinstance(body["at_risk_count"], int)
+    assert isinstance(body["health_narrative"], str) and body["health_narrative"]
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_health_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/health-trend")
+    assert resp.status_code == 403

@@ -6275,5 +6275,30 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/age-distribution`, {}, token)
   },
+
+  async getDealHealthTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stage_health: [
+          { stage: 'discovery', avg_health: 74, count: 3 },
+          { stage: 'qualified', avg_health: 68, count: 4 },
+          { stage: 'proposal', avg_health: 55, count: 3 },
+          { stage: 'negotiation', avg_health: 48, count: 2 },
+          { stage: 'closing', avg_health: 62, count: 1 },
+        ],
+        overall_avg_health: 62,
+        trend_direction: 'declining',
+        at_risk_count: 3,
+        health_narrative: 'Pipeline health averages 62 overall, with a declining trend from early to late stages. Discovery and qualification stages show healthy scores above 65, but deals stall as they enter proposal and negotiation — 3 deals are at critical risk below 40.',
+        recommendations: [
+          'Schedule a deal health review for all 3 at-risk deals below 40 this week — these are at immediate risk of being lost.',
+          'Set automated alerts when any deal drops below 50 health score so reps can intervene before deals stall further.',
+          'Identify what keeps discovery-stage deals healthy (74 avg) and replicate those practices across the proposal stage.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/health-trend`, {}, token)
+  },
 }
 

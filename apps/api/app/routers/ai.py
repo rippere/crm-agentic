@@ -13129,3 +13129,152 @@ async def get_deal_age_distribution(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+_DEAL_HEALTH_TREND_SYSTEM = """\
+You are a senior sales operations AI analysing deal health trends across a CRM pipeline.
+Given average health per stage, overall health, trend direction, and at-risk deal count, generate a health narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "health_narrative": "2-3 sentence narrative about pipeline health trends",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/health-trend")
+@limiter.limit("5/minute")
+async def get_deal_health_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.stage, Deal.health_score)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "stage_health": [],
+            "overall_avg_health": 0,
+            "trend_direction": "stable",
+            "at_risk_count": 0,
+            "health_narrative": "No open deals found in the pipeline. Add deals to start tracking health trends.",
+            "recommendations": [
+                "Create your first deals to begin pipeline health tracking.",
+                "Configure deal health scoring to reflect your sales process.",
+                "Set up automated health score updates based on deal activity.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closing", "other"]
+    stage_buckets: dict[str, list[int]] = {}
+    at_risk_count = 0
+
+    for row in rows:
+        stage = str(row[0])
+        health = int(row[1] or 50)
+        if health < 40:
+            at_risk_count += 1
+        if stage not in stage_buckets:
+            stage_buckets[stage] = []
+        stage_buckets[stage].append(health)
+
+    stage_health = []
+    for stage in stage_order:
+        if stage in stage_buckets:
+            healths = stage_buckets[stage]
+            stage_health.append({
+                "stage": stage,
+                "avg_health": round(sum(healths) / len(healths)),
+                "count": len(healths),
+            })
+    # Add any stages not in the canonical order
+    for stage, healths in stage_buckets.items():
+        if stage not in stage_order:
+            stage_health.append({
+                "stage": stage,
+                "avg_health": round(sum(healths) / len(healths)),
+                "count": len(healths),
+            })
+
+    all_healths = [int(r[1] or 50) for r in rows]
+    overall_avg_health = round(sum(all_healths) / len(all_healths))
+
+    # Trend: compare early-pipeline (discovery+qualified) vs late-pipeline (proposal+negotiation)
+    early_stages = {"discovery", "qualified"}
+    late_stages = {"proposal", "negotiation", "closing"}
+    early_healths = [int(r[1] or 50) for r in rows if str(r[0]) in early_stages]
+    late_healths = [int(r[1] or 50) for r in rows if str(r[0]) in late_stages]
+
+    early_avg = sum(early_healths) / len(early_healths) if early_healths else None
+    late_avg = sum(late_healths) / len(late_healths) if late_healths else None
+
+    if early_avg is not None and late_avg is not None:
+        diff = late_avg - early_avg
+        trend_direction = "improving" if diff > 5 else "declining" if diff < -5 else "stable"
+    else:
+        trend_direction = "stable"
+
+    default_narrative = (
+        f"Your pipeline has an overall average health score of {overall_avg_health}. "
+        f"{at_risk_count} deal{'s are' if at_risk_count != 1 else ' is'} at risk with health below 40. "
+        f"Pipeline health is {trend_direction} from early to late stages."
+    )
+    default_recs = [
+        "Schedule a deal health review for all deals below 40 — these are at risk of being lost without immediate action.",
+        "Set automated alerts when deal health drops below 50 so reps can intervene before deals stall.",
+        "Review the healthiest deals for best practices that can be replicated across the team.",
+    ]
+
+    context_lines = [
+        f"Open deals: {len(rows)}, overall avg health: {overall_avg_health}, at-risk (<40): {at_risk_count}",
+        f"Trend direction (early vs late pipeline): {trend_direction}",
+    ]
+    for sh in stage_health:
+        context_lines.append(f"{sh['stage']}: avg health {sh['avg_health']}, {sh['count']} deals")
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_DEAL_HEALTH_TREND_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    health_narrative = str(data.get("health_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_health": stage_health,
+        "overall_avg_health": overall_avg_health,
+        "trend_direction": trend_direction,
+        "at_risk_count": at_risk_count,
+        "health_narrative": health_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
