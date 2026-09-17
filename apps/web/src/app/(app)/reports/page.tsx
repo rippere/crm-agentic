@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -763,6 +763,11 @@ export default function ReportsPage() {
   const [quarterReadiness, setQuarterReadiness] = useState<AIQuarterReadinessData | null>(null);
   const [quarterReadinessLoading, setQuarterReadinessLoading] = useState(false);
   const [quarterReadinessOpen, setQuarterReadinessOpen] = useState(true);
+  type AITierData = { tier: string; deal_count: number; total_value: number; avg_value: number; avg_health: number; avg_win_prob: number; pct_of_pipeline: number };
+  type AITierSegmentationData = { tiers: AITierData[]; priority_tier: string; total_pipeline: number; tier_narrative: string; recommendations: string[]; generated_at: string };
+  const [tierSegmentation, setTierSegmentation] = useState<AITierSegmentationData | null>(null);
+  const [tierSegmentationLoading, setTierSegmentationLoading] = useState(false);
+  const [tierSegmentationOpen, setTierSegmentationOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -910,6 +915,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPipelineCoverage("demo-workspace-1", "demo-token").then(setPipelineCoverage).catch(() => {}).finally(() => setPipelineCoverageLoading(false));
       setQuarterReadinessLoading(true);
       apiClient.getAIDealQuarterReadiness("demo-workspace-1", "demo-token").then(setQuarterReadiness).catch(() => {}).finally(() => setQuarterReadinessLoading(false));
+      setTierSegmentationLoading(true);
+      apiClient.getAIDealTierSegmentation("demo-workspace-1", "demo-token").then(setTierSegmentation).catch(() => {}).finally(() => setTierSegmentationLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1061,6 +1068,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPipelineCoverage(workspaceId, session.access_token).then(setPipelineCoverage).catch(() => {}).finally(() => setPipelineCoverageLoading(false));
       setQuarterReadinessLoading(true);
       apiClient.getAIDealQuarterReadiness(workspaceId, session.access_token).then(setQuarterReadiness).catch(() => {}).finally(() => setQuarterReadinessLoading(false));
+      setTierSegmentationLoading(true);
+      apiClient.getAIDealTierSegmentation(workspaceId, session.access_token).then(setTierSegmentation).catch(() => {}).finally(() => setTierSegmentationLoading(false));
     });
   }, []);
 
@@ -2015,6 +2024,27 @@ export default function ReportsPage() {
         if (!session) { setValueLeakLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setValueLeakLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateTierSegmentation = () => {
+    setTierSegmentationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealTierSegmentation(wid, tok)
+        .then(setTierSegmentation)
+        .catch(() => {})
+        .finally(() => setTierSegmentationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setTierSegmentationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setTierSegmentationLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -8898,6 +8928,93 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No quarter readiness data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Tier Segmentation */}
+      <Card className="border-orange-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Layers className="h-4 w-4 text-orange-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Tier Segmentation</h3>
+            {tierSegmentation && (
+              <span className="text-xs bg-orange-900/40 text-orange-300 px-2 py-0.5 rounded-full border border-orange-700/30">
+                🏷 {tierSegmentation.priority_tier.replace('_', ' ')} priority
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateTierSegmentation}
+              disabled={tierSegmentationLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", tierSegmentationLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setTierSegmentationOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {tierSegmentationOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {tierSegmentationOpen && (
+          tierSegmentationLoading && !tierSegmentation ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-12 bg-zinc-800 rounded" />)}
+            </div>
+          ) : tierSegmentation && tierSegmentation.tiers.length > 0 ? (
+            <div className={cn("p-4 space-y-4", tierSegmentationLoading && "opacity-40")}>
+              <ul className="space-y-3">
+                {tierSegmentation.tiers.map((tier) => {
+                  const tierColor = tier.tier === 'enterprise'
+                    ? { bar: 'bg-emerald-500/60', label: 'text-emerald-400', bg: 'bg-emerald-500/8 border-emerald-500/15' }
+                    : tier.tier === 'mid_market'
+                    ? { bar: 'bg-sky-500/60', label: 'text-sky-400', bg: 'bg-sky-500/8 border-sky-500/15' }
+                    : { bar: 'bg-zinc-500/60', label: 'text-zinc-400', bg: 'bg-zinc-500/8 border-zinc-600/15' };
+                  const tierLabel = tier.tier === 'enterprise' ? 'Enterprise' : tier.tier === 'mid_market' ? 'Mid-Market' : 'SMB';
+                  return (
+                    <li key={tier.tier} className={cn("rounded-lg border p-3 space-y-2", tierColor.bg)}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className={cn("text-xs font-semibold", tierColor.label)}>{tierLabel}</span>
+                          {tier.tier === tierSegmentation.priority_tier && (
+                            <span className="text-xs bg-orange-900/40 text-orange-300 px-1.5 py-0.5 rounded border border-orange-700/30">priority</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-zinc-400 flex-shrink-0">
+                          <span className="font-mono text-zinc-300">${(tier.total_value / 1000).toFixed(0)}K</span>
+                          <span>{tier.deal_count} deal{tier.deal_count !== 1 ? 's' : ''}</span>
+                          <span>{tier.pct_of_pipeline}%</span>
+                        </div>
+                      </div>
+                      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                        <div className={cn("h-full rounded-full", tierColor.bar)} style={{ width: `${tier.pct_of_pipeline}%` }} />
+                      </div>
+                      <div className="flex items-center gap-4 text-xs text-zinc-500">
+                        <span>avg ${(tier.avg_value / 1000).toFixed(0)}K</span>
+                        <span>health {tier.avg_health}</span>
+                        <span>win prob {tier.avg_win_prob}%</span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-xs text-zinc-400 italic">{tierSegmentation.tier_narrative}</p>
+              <ul className="space-y-1">
+                {tierSegmentation.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(tierSegmentation.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : tierSegmentation ? (
+            <p className="text-xs text-zinc-500 p-4 italic">No open deals to segment into tiers.</p>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No tier segmentation data available.</p>
           )
         )}
       </Card>

@@ -16478,3 +16478,147 @@ async def get_ai_quarter_readiness(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 18i — AI deal tier segmentation report
+# ---------------------------------------------------------------------------
+
+_TIER_SEGMENTATION_SYSTEM = (
+    "You are a sales analytics AI. Analyse deal tier segmentation data for a CRM. "
+    "Given deal tiers (Enterprise >$50K / Mid-Market $20K–$50K / SMB <$20K) with counts, values, "
+    "health scores and win probabilities, write a 2-sentence narrative and 3 actionable recommendations. "
+    "Respond ONLY with valid JSON: "
+    "{\"tier_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/tier-segmentation")
+@limiter.limit("5/minute")
+async def get_ai_deal_tier_segmentation(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    active_stages = ["discovery", "qualified", "proposal", "negotiation"]
+
+    rows = (
+        await db.execute(
+            select(Deal.value, Deal.health_score, Deal.ml_win_probability)
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage.in_(active_stages))
+        )
+    ).all()
+
+    tiers: dict[str, dict] = {
+        "enterprise": {"deal_count": 0, "total_value": 0.0, "health_scores": [], "win_probs": []},
+        "mid_market": {"deal_count": 0, "total_value": 0.0, "health_scores": [], "win_probs": []},
+        "smb": {"deal_count": 0, "total_value": 0.0, "health_scores": [], "win_probs": []},
+    }
+
+    for row in rows:
+        v = float(row.value or 0)
+        h = float(row.health_score or 50)
+        p = float(row.ml_win_probability or 50)
+        if v >= 50000:
+            t = "enterprise"
+        elif v >= 20000:
+            t = "mid_market"
+        else:
+            t = "smb"
+        tiers[t]["deal_count"] += 1
+        tiers[t]["total_value"] += v
+        tiers[t]["health_scores"].append(h)
+        tiers[t]["win_probs"].append(p)
+
+    total_pipeline = sum(d["total_value"] for d in tiers.values())
+
+    tier_list = []
+    for tier_name in ("enterprise", "mid_market", "smb"):
+        d = tiers[tier_name]
+        count = d["deal_count"]
+        total_val = d["total_value"]
+        avg_val = round(total_val / count, 2) if count else 0.0
+        avg_health = round(sum(d["health_scores"]) / count, 1) if count else 0.0
+        avg_prob = round(sum(d["win_probs"]) / count, 1) if count else 0.0
+        pct = round(total_val / total_pipeline * 100, 1) if total_pipeline else 0.0
+        tier_list.append({
+            "tier": tier_name,
+            "deal_count": count,
+            "total_value": round(total_val, 2),
+            "avg_value": avg_val,
+            "avg_health": avg_health,
+            "avg_win_prob": avg_prob,
+            "pct_of_pipeline": pct,
+        })
+
+    priority_tier = max(tier_list, key=lambda t: t["total_value"])["tier"] if tier_list else "enterprise"
+
+    default_narrative = (
+        f"Pipeline spans {len(rows)} open deals across Enterprise, Mid-Market and SMB tiers. "
+        f"The {priority_tier.replace('_', ' ').title()} tier holds the largest share of pipeline value."
+    )
+    default_recs = [
+        "Focus Enterprise deals with high health scores for immediate acceleration.",
+        "Nurture Mid-Market deals to close before quarter-end to build revenue consistency.",
+        "Review SMB deals for quick-win opportunities with short sales cycles.",
+    ]
+
+    if not rows:
+        return {
+            "tiers": tier_list,
+            "priority_tier": priority_tier,
+            "total_pipeline": 0.0,
+            "tier_narrative": default_narrative,
+            "recommendations": default_recs,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        "Deal tier segmentation: "
+        + "; ".join(
+            f"{t['tier']} {t['deal_count']} deals ${t['total_value']:,.0f} total "
+            f"avg health {t['avg_health']} avg win_prob {t['avg_win_prob']}%"
+            for t in tier_list
+            if t["deal_count"] > 0
+        )
+        + f". Total pipeline ${total_pipeline:,.0f}. Priority tier: {priority_tier}. "
+        "Provide tier_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_TIER_SEGMENTATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    tier_narrative = str(data.get("tier_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "tiers": tier_list,
+        "priority_tier": priority_tier,
+        "total_pipeline": round(total_pipeline, 2),
+        "tier_narrative": tier_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }

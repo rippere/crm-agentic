@@ -7920,3 +7920,57 @@ async def test_quarter_readiness_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/quarter-readiness")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 18i — AI deal tier segmentation
+# ---------------------------------------------------------------------------
+
+class FakeTierRow:
+    def __init__(self, value, health_score=70.0, ml_win_probability=50.0):
+        self.value = value
+        self.health_score = health_score
+        self.ml_win_probability = ml_win_probability
+
+
+@pytest.mark.asyncio
+async def test_tier_segmentation_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    rows = [
+        FakeTierRow(75000, 80.0, 65.0),   # enterprise
+        FakeTierRow(60000, 75.0, 70.0),   # enterprise
+        FakeTierRow(35000, 65.0, 45.0),   # mid_market
+        FakeTierRow(10000, 55.0, 30.0),   # smb
+    ]
+
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"tier_narrative": "Enterprise leads pipeline.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/tier-segmentation")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["tiers"]) == 3
+    enterprise = next(t for t in body["tiers"] if t["tier"] == "enterprise")
+    assert enterprise["deal_count"] == 2
+    assert enterprise["total_value"] == pytest.approx(135000.0)
+    assert body["priority_tier"] == "enterprise"
+    assert body["total_pipeline"] == pytest.approx(180000.0)
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_tier_segmentation_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/tier-segmentation")
+    assert resp.status_code == 403
