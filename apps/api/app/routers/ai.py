@@ -14258,3 +14258,155 @@ async def get_deal_score_distribution(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+
+_WIN_FACTORS_SYSTEM = """\
+You are a senior sales operations AI analysing what drives deal wins and losses.
+Given aggregate data about won vs lost deals, generate a win factors narrative and 3 actionable recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "win_factors_narrative": "2-3 sentence narrative about the key patterns differentiating won deals from lost ones",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-factors")
+@limiter.limit("5/minute")
+async def get_deal_win_factors(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=90)
+
+    rows_result = await db.execute(
+        select(Deal.stage, Deal.value, Deal.health_score, Deal.ml_win_probability).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= cutoff,
+        )
+    )
+    rows = rows_result.all()
+
+    won_values: list[float] = []
+    lost_values: list[float] = []
+    won_health: list[float] = []
+    lost_health: list[float] = []
+    won_prob: list[float] = []
+    lost_prob: list[float] = []
+
+    for stage, value, health, win_prob in rows:
+        v = float(value or 0)
+        h = float(health or 0)
+        p = float(win_prob or 0)
+        if stage == "closed_won":
+            won_values.append(v)
+            won_health.append(h)
+            won_prob.append(p)
+        else:
+            lost_values.append(v)
+            lost_health.append(h)
+            lost_prob.append(p)
+
+    def avg(lst: list[float]) -> float:
+        return round(sum(lst) / len(lst), 1) if lst else 0.0
+
+    won_count = len(won_values)
+    lost_count = len(lost_values)
+    total = won_count + lost_count
+    overall_win_rate = round(won_count / total * 100, 1) if total else 0.0
+
+    avg_won_value = avg(won_values)
+    avg_lost_value = avg(lost_values)
+    avg_won_health = avg(won_health)
+    avg_lost_health = avg(lost_health)
+    avg_won_prob = avg(won_prob)
+    avg_lost_prob = avg(lost_prob)
+
+    health_delta = round(avg_won_health - avg_lost_health, 1)
+    prob_delta = round(avg_won_prob - avg_lost_prob, 1)
+    value_delta = round(avg_won_value - avg_lost_value, 2)
+
+    context = (
+        f"Last 90 days: {won_count} won, {lost_count} lost, overall win rate {overall_win_rate}%\n"
+        f"Won deals — avg value ${avg_won_value:,.0f}, avg health {avg_won_health}, avg win_prob {avg_won_prob}%\n"
+        f"Lost deals — avg value ${avg_lost_value:,.0f}, avg health {avg_lost_health}, avg win_prob {avg_lost_prob}%\n"
+        f"Health delta (won − lost): {health_delta}, win_prob delta: {prob_delta}%, value delta: ${value_delta:,.0f}"
+    )
+
+    default_narrative = (
+        f"Over the last 90 days {won_count} deals were won and {lost_count} lost (win rate {overall_win_rate}%). "
+        f"Won deals had {'higher' if health_delta >= 0 else 'lower'} health scores by {abs(health_delta)} points "
+        f"and {'higher' if prob_delta >= 0 else 'lower'} win probability by {abs(prob_delta)}% compared to lost deals. "
+        + ("Improving deal health earlier in the cycle is the clearest lever for better outcomes." if health_delta > 10 else "")
+    )
+    default_recs = [
+        f"Focus on raising health scores early — won deals averaged {avg_won_health} vs {avg_lost_health} for lost deals, a {health_delta}-point gap." if health_delta > 0 else "Work on both health and engagement to build a clearer win profile.",
+        f"Target deals where win probability reaches ≥{int(avg_won_prob)}% before advancing to proposal stage — this matches your historical win profile.",
+        "Run a post-mortem on each lost deal within 1 week of close to capture fresh insight on what tipped the outcome.",
+    ]
+
+    if not rows:
+        return {
+            "won_count": 0,
+            "lost_count": 0,
+            "overall_win_rate": 0.0,
+            "avg_won_value": 0.0,
+            "avg_lost_value": 0.0,
+            "avg_won_health": 0.0,
+            "avg_lost_health": 0.0,
+            "avg_won_prob": 0.0,
+            "avg_lost_prob": 0.0,
+            "health_delta": 0.0,
+            "prob_delta": 0.0,
+            "win_factors_narrative": "No closed deals in the last 90 days to analyse.",
+            "recommendations": default_recs,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_WIN_FACTORS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    win_factors_narrative = str(data.get("win_factors_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "won_count": won_count,
+        "lost_count": lost_count,
+        "overall_win_rate": overall_win_rate,
+        "avg_won_value": avg_won_value,
+        "avg_lost_value": avg_lost_value,
+        "avg_won_health": avg_won_health,
+        "avg_lost_health": avg_lost_health,
+        "avg_won_prob": avg_won_prob,
+        "avg_lost_prob": avg_lost_prob,
+        "health_delta": health_delta,
+        "prob_delta": prob_delta,
+        "win_factors_narrative": win_factors_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
