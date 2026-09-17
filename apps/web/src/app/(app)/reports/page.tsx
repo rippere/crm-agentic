@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -720,6 +720,12 @@ export default function ReportsPage() {
   const [pipelineGapLoading, setPipelineGapLoading] = useState(false);
   const [pipelineGapOpen, setPipelineGapOpen] = useState(true);
 
+  type HeatmapCell = { stage: string; win_prob_tier: string; deal_count: number; avg_value: number; total_value: number };
+  type AIHeatmapData = { cells: HeatmapCell[]; hotspot_stage: string; hotspot_tier: string; heatmap_narrative: string; recommendations: string[]; generated_at: string };
+  const [heatmapData, setHeatmapData] = useState<AIHeatmapData | null>(null);
+  const [heatmapLoading, setHeatmapLoading] = useState(false);
+  const [heatmapOpen, setHeatmapOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -850,6 +856,8 @@ export default function ReportsPage() {
       apiClient.getAIDealReactivationCandidates("demo-workspace-1", "demo-token").then(setReactivationCandidates).catch(() => {}).finally(() => setReactivationLoading(false));
       setPipelineGapLoading(true);
       apiClient.getAIDealPipelineGap("demo-workspace-1", "demo-token").then(setPipelineGap).catch(() => {}).finally(() => setPipelineGapLoading(false));
+      setHeatmapLoading(true);
+      apiClient.getAIClosureProbabilityHeatmap("demo-workspace-1", "demo-token").then(setHeatmapData).catch(() => {}).finally(() => setHeatmapLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -985,6 +993,8 @@ export default function ReportsPage() {
       apiClient.getAIDealReactivationCandidates(workspaceId, session.access_token).then(setReactivationCandidates).catch(() => {}).finally(() => setReactivationLoading(false));
       setPipelineGapLoading(true);
       apiClient.getAIDealPipelineGap(workspaceId, session.access_token).then(setPipelineGap).catch(() => {}).finally(() => setPipelineGapLoading(false));
+      setHeatmapLoading(true);
+      apiClient.getAIClosureProbabilityHeatmap(workspaceId, session.access_token).then(setHeatmapData).catch(() => {}).finally(() => setHeatmapLoading(false));
     });
   }, []);
 
@@ -1813,6 +1823,27 @@ export default function ReportsPage() {
         if (!session) { setPipelineGapLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setPipelineGapLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateHeatmap = () => {
+    setHeatmapLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIClosureProbabilityHeatmap(wid, tok)
+        .then(setHeatmapData)
+        .catch(() => {})
+        .finally(() => setHeatmapLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setHeatmapLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setHeatmapLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -8007,6 +8038,93 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No pipeline data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Closure Probability Heatmap */}
+      <Card className="border-indigo-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Grid className="h-4 w-4 text-indigo-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Closure Probability Heatmap</h3>
+            {heatmapData && (
+              <span className="text-xs bg-indigo-900/40 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-700/30">
+                Hotspot: {heatmapData.hotspot_stage}/{heatmapData.hotspot_tier}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateHeatmap}
+              disabled={heatmapLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", heatmapLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setHeatmapOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {heatmapOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {heatmapOpen && (
+          heatmapLoading ? (
+            <div className="p-4 text-xs text-zinc-500 animate-pulse">Analysing closure probability distribution…</div>
+          ) : heatmapData ? (
+            <div className="p-4 space-y-4">
+              {/* 4×3 heatmap table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr>
+                      <th className="text-left text-zinc-500 pr-3 py-1 font-medium">Stage</th>
+                      {['low', 'mid', 'high'].map((tier) => (
+                        <th key={tier} className="text-center text-zinc-400 px-2 py-1 font-medium capitalize">{tier} Win %</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {['discovery', 'qualified', 'proposal', 'negotiation'].map((stage) => (
+                      <tr key={stage} className="border-t border-zinc-800/60">
+                        <td className="pr-3 py-2 text-zinc-300 capitalize font-medium">{stage}</td>
+                        {['low', 'mid', 'high'].map((tier) => {
+                          const cell = heatmapData.cells.find((c) => c.stage === stage && c.win_prob_tier === tier);
+                          const count = cell?.deal_count ?? 0;
+                          const avg = cell?.avg_value ?? 0;
+                          const isHotspot = stage === heatmapData.hotspot_stage && tier === heatmapData.hotspot_tier;
+                          const intensity = count === 0 ? 'bg-zinc-900 text-zinc-600' : tier === 'high' ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-700/30' : tier === 'mid' ? 'bg-amber-950/50 text-amber-300 border border-amber-700/20' : 'bg-zinc-800/60 text-zinc-400';
+                          return (
+                            <td key={tier} className={`px-2 py-2 text-center rounded ${intensity} ${isHotspot ? 'ring-1 ring-indigo-400' : ''}`}>
+                              {count > 0 ? (
+                                <div>
+                                  <div className="font-semibold">{count}</div>
+                                  <div className="text-[10px] opacity-70">${(avg / 1000).toFixed(0)}k avg</div>
+                                </div>
+                              ) : (
+                                <span>—</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-zinc-400 italic">{heatmapData.heatmap_narrative}</p>
+              <ul className="space-y-1.5">
+                {heatmapData.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(heatmapData.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No heatmap data available.</p>
           )
         )}
       </Card>
