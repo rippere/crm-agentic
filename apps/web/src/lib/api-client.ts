@@ -5730,5 +5730,37 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/followup-gaps`, {}, token)
   },
+
+  async getDealValueAtRisk(workspaceId: string, token: string): Promise<{
+    total_pipeline_value: number
+    at_risk_value: number
+    at_risk_pct: number
+    at_risk_deals: Array<{ deal_id: string; title: string; company: string; stage: string; value: number; health_score: number; risk_reason: string }>
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        total_pipeline_value: 487000,
+        at_risk_value: 183000,
+        at_risk_pct: 37.6,
+        at_risk_deals: [
+          { deal_id: 'd-001', title: 'TechCorp Platform Expansion', company: 'TechCorp', stage: 'negotiation', value: 145000, health_score: 38, risk_reason: 'health score 38; stuck in negotiation for 47d (threshold 45d)' },
+          { deal_id: 'd-002', title: 'HealthPlus EHR Integration', company: 'HealthPlus', stage: 'proposal', value: 22000, health_score: 45, risk_reason: 'health score 45' },
+          { deal_id: 'd-003', title: 'RetailX Omnichannel Suite', company: 'RetailX', stage: 'discovery', value: 16000, health_score: 72, risk_reason: 'stuck in discovery for 19d (threshold 14d)' },
+        ],
+        insight: '$183K (37.6%) of pipeline is at risk — the TechCorp deal alone accounts for 79% of the at-risk value and needs immediate executive engagement.',
+        recommendations: [
+          'Escalate the TechCorp deal to executive sponsorship — a stalled $145K negotiation is a high-priority save that needs fresh momentum.',
+          'Schedule health-check calls for HealthPlus and RetailX within 48 hours to understand blockers and agree next steps.',
+          'Implement a 30-day deal review cadence for all proposals to catch health score drops before they become lost deals.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-at-risk`, {}, token)
+  },
 }
 

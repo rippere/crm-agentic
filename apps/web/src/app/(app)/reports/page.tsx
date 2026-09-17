@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -419,6 +419,20 @@ export default function ReportsPage() {
   const [followupGapsLoading, setFollowupGapsLoading] = useState(false);
   const [followupGapsOpen, setFollowupGapsOpen] = useState(true);
 
+  type ValueAtRiskDeal = { deal_id: string; title: string; company: string; stage: string; value: number; health_score: number; risk_reason: string };
+  type ValueAtRisk = {
+    total_pipeline_value: number;
+    at_risk_value: number;
+    at_risk_pct: number;
+    at_risk_deals: ValueAtRiskDeal[];
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [valueAtRisk, setValueAtRisk] = useState<ValueAtRisk | null>(null);
+  const [valueAtRiskLoading, setValueAtRiskLoading] = useState(false);
+  const [valueAtRiskOpen, setValueAtRiskOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -493,6 +507,8 @@ export default function ReportsPage() {
       apiClient.getAvgDealSizeTrend("demo-workspace-1", "demo-token").then(setAvgDealSizeTrend).catch(() => {}).finally(() => setAvgDealSizeTrendLoading(false));
       setFollowupGapsLoading(true);
       apiClient.getDealFollowupGaps("demo-workspace-1", "demo-token").then(setFollowupGaps).catch(() => {}).finally(() => setFollowupGapsLoading(false));
+      setValueAtRiskLoading(true);
+      apiClient.getDealValueAtRisk("demo-workspace-1", "demo-token").then(setValueAtRisk).catch(() => {}).finally(() => setValueAtRiskLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -572,6 +588,8 @@ export default function ReportsPage() {
       apiClient.getAvgDealSizeTrend(workspaceId, session.access_token).then(setAvgDealSizeTrend).catch(() => {}).finally(() => setAvgDealSizeTrendLoading(false));
       setFollowupGapsLoading(true);
       apiClient.getDealFollowupGaps(workspaceId, session.access_token).then(setFollowupGaps).catch(() => {}).finally(() => setFollowupGapsLoading(false));
+      setValueAtRiskLoading(true);
+      apiClient.getDealValueAtRisk(workspaceId, session.access_token).then(setValueAtRisk).catch(() => {}).finally(() => setValueAtRiskLoading(false));
     });
   }, []);
 
@@ -1085,6 +1103,27 @@ export default function ReportsPage() {
         if (!session) { setFollowupGapsLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setFollowupGapsLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateValueAtRisk = () => {
+    setValueAtRiskLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealValueAtRisk(wid, tok)
+        .then(setValueAtRisk)
+        .catch(() => {})
+        .finally(() => setValueAtRiskLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setValueAtRiskLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setValueAtRiskLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -4547,6 +4586,94 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No follow-up gap data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Value at Risk */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 text-rose-400" />
+            <span className="text-sm font-semibold text-zinc-200">Value at Risk</span>
+            {valueAtRisk && (
+              <span className={cn("text-xs font-medium", valueAtRisk.at_risk_pct > 30 ? "text-rose-400" : valueAtRisk.at_risk_pct > 15 ? "text-amber-400" : "text-emerald-400")}>
+                {valueAtRisk.at_risk_pct.toFixed(1)}% at risk
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateValueAtRisk}
+              disabled={valueAtRiskLoading}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", valueAtRiskLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setValueAtRiskOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {valueAtRiskOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {valueAtRiskOpen && (
+          valueAtRiskLoading && !valueAtRisk ? (
+            <div className="h-24 animate-pulse bg-zinc-800/40 m-4 rounded" />
+          ) : valueAtRisk ? (
+            <div className={cn("space-y-4 p-4", valueAtRiskLoading && "opacity-40")}>
+              {/* Pipeline summary row */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-center">
+                  <p className="text-xl font-bold text-rose-400">{valueAtRisk.at_risk_pct.toFixed(1)}%</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">At Risk</p>
+                </div>
+                <div className="rounded-lg border border-zinc-700 bg-zinc-800/50 p-3 text-center">
+                  <p className="text-xl font-bold text-zinc-200">${(valueAtRisk.at_risk_value / 1000).toFixed(0)}K</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">At-Risk Value</p>
+                </div>
+                <div className="rounded-lg border border-zinc-700 bg-zinc-800/50 p-3 text-center">
+                  <p className="text-xl font-bold text-zinc-200">${(valueAtRisk.total_pipeline_value / 1000).toFixed(0)}K</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Total Pipeline</p>
+                </div>
+              </div>
+              {/* At-risk deal list */}
+              {valueAtRisk.at_risk_deals.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-rose-400 mb-1">At-Risk Deals</p>
+                  <ul className="space-y-1 max-h-48 overflow-y-auto">
+                    {valueAtRisk.at_risk_deals.map((d) => (
+                      <li key={d.deal_id} className="flex items-start justify-between rounded bg-zinc-800/50 px-3 py-2 gap-2">
+                        <div className="min-w-0">
+                          <span className="text-xs text-zinc-200 font-medium">{d.title}</span>
+                          {d.company && <span className="text-xs text-zinc-500 ml-1">· {d.company}</span>}
+                          <p className="text-xs text-zinc-500 mt-0.5 truncate">{d.risk_reason}</p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-xs font-mono text-rose-300">${(d.value / 1000).toFixed(0)}K</span>
+                          <span className={cn("rounded px-1.5 py-0.5 text-xs font-mono", d.health_score < 40 ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/20 text-amber-300")}>
+                            {d.health_score}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{valueAtRisk.insight}</p>
+              <ul className="space-y-1">
+                {valueAtRisk.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(valueAtRisk.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No value at risk data available.</p>
           )
         )}
       </Card>
