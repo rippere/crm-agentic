@@ -638,6 +638,18 @@ export default function ReportsPage() {
   const [dealEngagementGapLoading, setDealEngagementGapLoading] = useState(false);
   const [dealEngagementGapOpen, setDealEngagementGapOpen] = useState(true);
 
+  type ConcentratedDeal = { id: string; title: string; stage: string; value: number; pct_of_pipeline: number };
+  type DealValueConcentrationData = {
+    deals_ranked: ConcentratedDeal[]; total_pipeline: number;
+    top_deal_pct: number; top3_pct: number;
+    concentration_risk: 'low' | 'medium' | 'high';
+    herfindahl_index: number; concentration_narrative: string;
+    recommendations: string[]; generated_at: string;
+  };
+  const [dealValueConcentration, setDealValueConcentration] = useState<DealValueConcentrationData | null>(null);
+  const [dealValueConcentrationLoading, setDealValueConcentrationLoading] = useState(false);
+  const [dealValueConcentrationOpen, setDealValueConcentrationOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -744,6 +756,8 @@ export default function ReportsPage() {
       apiClient.getDealStagnation("demo-workspace-1", "demo-token").then(setDealStagnation).catch(() => {}).finally(() => setDealStagnationLoading(false));
       setDealEngagementGapLoading(true);
       apiClient.getDealEngagementGap("demo-workspace-1", "demo-token").then(setDealEngagementGap).catch(() => {}).finally(() => setDealEngagementGapLoading(false));
+      setDealValueConcentrationLoading(true);
+      apiClient.getDealValueConcentration("demo-workspace-1", "demo-token").then(setDealValueConcentration).catch(() => {}).finally(() => setDealValueConcentrationLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -855,6 +869,8 @@ export default function ReportsPage() {
       apiClient.getDealStagnation(workspaceId, session.access_token).then(setDealStagnation).catch(() => {}).finally(() => setDealStagnationLoading(false));
       setDealEngagementGapLoading(true);
       apiClient.getDealEngagementGap(workspaceId, session.access_token).then(setDealEngagementGap).catch(() => {}).finally(() => setDealEngagementGapLoading(false));
+      setDealValueConcentrationLoading(true);
+      apiClient.getDealValueConcentration(workspaceId, session.access_token).then(setDealValueConcentration).catch(() => {}).finally(() => setDealValueConcentrationLoading(false));
     });
   }, []);
 
@@ -1494,6 +1510,27 @@ export default function ReportsPage() {
         if (!session) { setDealAgeLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealAgeLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealValueConcentration = () => {
+    setDealValueConcentrationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealValueConcentration(wid, tok)
+        .then(setDealValueConcentration)
+        .catch(() => {})
+        .finally(() => setDealValueConcentrationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealValueConcentrationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealValueConcentrationLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5963,6 +6000,95 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No health data available. Click Regenerate to generate.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Value Concentration */}
+      <Card className="border-indigo-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-indigo-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Value Concentration</h3>
+            {dealValueConcentration && (
+              <span className={cn(
+                "text-xs px-2 py-0.5 rounded-full border",
+                dealValueConcentration.concentration_risk === 'high' ? "bg-rose-900/40 text-rose-300 border-rose-700/30" :
+                dealValueConcentration.concentration_risk === 'medium' ? "bg-amber-900/40 text-amber-300 border-amber-700/30" :
+                "bg-emerald-900/40 text-emerald-300 border-emerald-700/30"
+              )}>
+                {dealValueConcentration.concentration_risk} risk
+              </span>
+            )}
+            {dealValueConcentration && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                top deal: {dealValueConcentration.top_deal_pct}%
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealValueConcentration}
+              disabled={dealValueConcentrationLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealValueConcentrationLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setDealValueConcentrationOpen(!dealValueConcentrationOpen)}>
+              {dealValueConcentrationOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealValueConcentrationOpen && (
+          dealValueConcentrationLoading && !dealValueConcentration ? (
+            <div className="p-4 text-xs text-zinc-500 animate-pulse">Analysing value concentration…</div>
+          ) : dealValueConcentration ? (
+            <div className={cn("p-4 space-y-4", dealValueConcentrationLoading && "opacity-40")}>
+              <div className="space-y-2">
+                {dealValueConcentration.deals_ranked.map((d) => (
+                  <div key={d.id} className="flex items-center gap-2">
+                    <span className="text-xs text-zinc-300 truncate w-40">{d.title}</span>
+                    <div className="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
+                      <div
+                        className={cn("h-full rounded-full", d.pct_of_pipeline > 40 ? "bg-rose-500" : d.pct_of_pipeline > 25 ? "bg-amber-500" : "bg-indigo-500")}
+                        style={{ width: `${Math.min(100, d.pct_of_pipeline)}%` }}
+                      />
+                    </div>
+                    <span className={cn("text-xs w-10 text-right", d.pct_of_pipeline > 40 ? "text-rose-400" : d.pct_of_pipeline > 25 ? "text-amber-400" : "text-zinc-400")}>
+                      {d.pct_of_pipeline}%
+                    </span>
+                    <span className="text-xs text-zinc-500 w-16 text-right">${(d.value / 1000).toFixed(0)}K</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                  total ${(dealValueConcentration.total_pipeline / 1000).toFixed(0)}K
+                </span>
+                <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                  top-3: {dealValueConcentration.top3_pct}%
+                </span>
+                <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                  HHI: {dealValueConcentration.herfindahl_index}
+                </span>
+              </div>
+              <p className="text-xs text-zinc-300 italic">{dealValueConcentration.concentration_narrative}</p>
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1">Recommendations</p>
+                <ul className="space-y-1">
+                  {dealValueConcentration.recommendations.map((rec, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {rec}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealValueConcentration.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No concentration data available. Click Regenerate to generate.</p>
           )
         )}
       </Card>

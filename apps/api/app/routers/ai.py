@@ -13570,3 +13570,163 @@ async def get_deal_engagement_gap(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 17o: Deal value concentration analyser
+# ---------------------------------------------------------------------------
+
+_DEAL_VALUE_CONCENTRATION_SYSTEM = """\
+You are a senior sales operations AI analysing pipeline value concentration risk.
+Given information about deal values, concentration metrics, and herfindahl index, generate a concentration narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "concentration_narrative": "2-3 sentence narrative about pipeline value concentration and risk",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/value-concentration")
+@limiter.limit("5/minute")
+async def get_deal_value_concentration(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .order_by(Deal.value.desc())
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "deals_ranked": [],
+            "total_pipeline": 0,
+            "top_deal_pct": 0,
+            "top3_pct": 0,
+            "concentration_risk": "low",
+            "herfindahl_index": 0,
+            "concentration_narrative": "No open deals found in the pipeline.",
+            "recommendations": [
+                "Add deals to the pipeline to start tracking value concentration.",
+                "Aim for a diverse pipeline where no single deal exceeds 25% of total value.",
+                "Track concentration metrics monthly to catch over-reliance on single deals early.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    total_pipeline = sum(float(r[3] or 0) for r in rows)
+
+    if total_pipeline == 0:
+        deals_ranked = [
+            {"id": str(r[0]), "title": str(r[1]), "stage": str(r[2]),
+             "value": float(r[3] or 0), "pct_of_pipeline": 0}
+            for r in rows
+        ]
+        return {
+            "deals_ranked": deals_ranked,
+            "total_pipeline": 0,
+            "top_deal_pct": 0,
+            "top3_pct": 0,
+            "concentration_risk": "low",
+            "herfindahl_index": 0,
+            "concentration_narrative": "All open deals have zero value — update deal values to see concentration risk.",
+            "recommendations": [
+                "Set deal values to accurately track your pipeline's financial exposure.",
+                "Aim for a diverse pipeline where no single deal exceeds 25% of total value.",
+                "Track concentration metrics monthly to catch over-reliance on single deals early.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    deals_ranked = []
+    for r in rows:
+        value = float(r[3] or 0)
+        pct = round((value / total_pipeline) * 100, 1) if total_pipeline > 0 else 0
+        deals_ranked.append({
+            "id": str(r[0]),
+            "title": str(r[1]),
+            "stage": str(r[2]),
+            "value": value,
+            "pct_of_pipeline": pct,
+        })
+
+    top_deal_pct = deals_ranked[0]["pct_of_pipeline"] if deals_ranked else 0
+    top3_values = sum(d["value"] for d in deals_ranked[:3])
+    top3_pct = round((top3_values / total_pipeline) * 100, 1) if total_pipeline > 0 else 0
+
+    # Herfindahl-Hirschman Index (0–10000 scale)
+    herfindahl_index = round(sum((d["value"] / total_pipeline) ** 2 for d in deals_ranked) * 10000)
+
+    if top_deal_pct > 40 or herfindahl_index > 2500:
+        concentration_risk = "high"
+    elif top_deal_pct > 25 or herfindahl_index > 1500:
+        concentration_risk = "medium"
+    else:
+        concentration_risk = "low"
+
+    default_narrative = (
+        f"Your pipeline of ${total_pipeline:,.0f} shows {concentration_risk} concentration risk. "
+        f"The largest deal represents {top_deal_pct}% of total pipeline value "
+        f"and the top 3 deals account for {top3_pct}%. "
+        f"HHI score: {herfindahl_index}/10000."
+    )
+    default_recs = [
+        f"Diversify the pipeline — the top deal at {top_deal_pct}% creates {'critical' if top_deal_pct > 40 else 'elevated'} single-deal risk.",
+        "Prioritise adding 3–5 new mid-size deals this month to reduce concentration below the 25% threshold.",
+        "Set pipeline health alerts when any single deal exceeds 30% of total value so leadership can act early.",
+    ]
+
+    context_lines = [
+        f"Total pipeline: ${total_pipeline:,.0f}, deals: {len(rows)}, concentration risk: {concentration_risk}",
+        f"Top deal: {top_deal_pct}%, top-3 deals: {top3_pct}%, HHI: {herfindahl_index}",
+    ]
+    for d in deals_ranked[:5]:
+        context_lines.append(f"{d['title']} ({d['stage']}): ${d['value']:,.0f} ({d['pct_of_pipeline']}%)")
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_DEAL_VALUE_CONCENTRATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    concentration_narrative = str(data.get("concentration_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "deals_ranked": deals_ranked,
+        "total_pipeline": round(total_pipeline, 2),
+        "top_deal_pct": top_deal_pct,
+        "top3_pct": top3_pct,
+        "concentration_risk": concentration_risk,
+        "herfindahl_index": herfindahl_index,
+        "concentration_narrative": concentration_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
