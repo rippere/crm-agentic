@@ -10192,3 +10192,201 @@ async def get_deal_conversion_quality(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16v — AI workspace deal win/loss pattern analysis
+# ---------------------------------------------------------------------------
+
+_WIN_LOSS_PATTERNS_SYSTEM = """\
+You are a sales analyst identifying win/loss patterns across pipeline stages.
+Given stage-level win/loss counts and competitor impact data, write a 1-sentence
+insight and exactly 3 specific, actionable recommendations.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "insight": "1-sentence summary citing the best and worst converting stages or competitor impact",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+
+Rules:
+- insight: mention the highest-win-rate stage and lowest-win-rate stage, or key competitor finding
+- recommendations: practical steps to improve win rates at underperforming stages
+- Be concise\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-loss-patterns")
+@limiter.limit("5/minute")
+async def get_win_loss_patterns(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Fetch all closed deals with stage, outcome and competitor info
+    deals_result = await db.execute(
+        select(Deal.stage, Deal.competitors)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(["closed_won", "closed_lost"]))
+    )
+    deals_rows = deals_result.all()
+
+    if not deals_rows:
+        return {
+            "stage_patterns": [],
+            "competitor_impact": {
+                "with_competitors_win_rate": 0,
+                "without_competitors_win_rate": 0,
+                "insight": "No closed deals found to analyse win/loss patterns.",
+            },
+            "insight": "No closed deals found to analyse win/loss patterns.",
+            "recommendations": [
+                "Close your first deals to unlock win/loss pattern analysis.",
+                "Tag deals with outcome reasons to improve future analysis.",
+                "Record competitor information on each deal for richer insights.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Identify the last active stage for each closed deal via activity events
+    # We reuse deal stage as the stage label since closed deals have stage = closed_won/closed_lost
+    # Infer the stage from deal_moved activity events: last from_stage before closing
+    closed_deal_stages: dict[str, dict] = {}  # stage -> {won, lost}
+
+    # Aggregate by stage bucket (use "proposal" as fallback since most deals close from there)
+    # Rather than complex event queries, use the stage field directly
+    # For closed deals the stage IS closed_won or closed_lost, so we need to look at activity events
+    # to find what stage they came from. Use a simplified approach: bucket all into one category
+    # and distinguish by competitor presence.
+
+    # Simpler approach: use deal's current stage (closed_won/closed_lost) as outcome,
+    # and track competitor impact
+    won_with = won_without = lost_with = lost_without = 0
+    for stage, competitors in deals_rows:
+        has_competitors = bool(competitors and isinstance(competitors, list) and len(competitors) > 0)
+        if stage == "closed_won":
+            if has_competitors:
+                won_with += 1
+            else:
+                won_without += 1
+        else:
+            if has_competitors:
+                lost_with += 1
+            else:
+                lost_without += 1
+
+    total_won = won_with + won_without
+    total_lost = lost_with + lost_without
+    total = total_won + total_lost
+
+    # Build stage_patterns from activity event data (deal_moved → closed_won/closed_lost)
+    # Query the last stage each deal was in before closing
+    events_result = await db.execute(
+        select(ActivityEvent.description)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.type == "deal_moved")
+    )
+    event_rows = events_result.all()
+
+    import re as _re2
+    _move_re2 = _re2.compile(r"moved[^:]*:\s*([a-z_]+)\s*→\s*(closed_won|closed_lost)")
+    stage_won: dict[str, int] = {}
+    stage_lost: dict[str, int] = {}
+    for (desc,) in event_rows:
+        if not desc:
+            continue
+        m = _move_re2.search(desc)
+        if not m:
+            continue
+        from_stage, outcome = m.group(1), m.group(2)
+        if outcome == "closed_won":
+            stage_won[from_stage] = stage_won.get(from_stage, 0) + 1
+        else:
+            stage_lost[from_stage] = stage_lost.get(from_stage, 0) + 1
+
+    all_stages = set(stage_won) | set(stage_lost)
+    stage_patterns = []
+    for stg in sorted(all_stages, key=lambda s: _STAGE_ORDER.index(s) if s in _STAGE_ORDER else 99):
+        won_n = stage_won.get(stg, 0)
+        lost_n = stage_lost.get(stg, 0)
+        tot = won_n + lost_n
+        win_rate = round((won_n / tot) * 100, 1) if tot > 0 else 0.0
+        stage_patterns.append({"stage": stg, "won": won_n, "lost": lost_n, "win_rate": win_rate})
+
+    # Fallback if no activity events found
+    if not stage_patterns:
+        overall_rate = round((total_won / total) * 100, 1) if total > 0 else 0.0
+        stage_patterns = [{"stage": "all_stages", "won": total_won, "lost": total_lost, "win_rate": overall_rate}]
+
+    with_total = won_with + lost_with
+    without_total = won_without + lost_without
+    with_win_rate = round((won_with / with_total) * 100, 1) if with_total > 0 else 0.0
+    without_win_rate = round((won_without / without_total) * 100, 1) if without_total > 0 else 0.0
+
+    competitor_impact = {
+        "with_competitors_win_rate": with_win_rate,
+        "without_competitors_win_rate": without_win_rate,
+    }
+
+    # Build Claude context
+    best = max(stage_patterns, key=lambda x: x["win_rate"]) if stage_patterns else None
+    worst = min(stage_patterns, key=lambda x: x["win_rate"]) if stage_patterns else None
+    context = (
+        f"Total closed deals: {total} ({total_won} won, {total_lost} lost)\n"
+        f"Stage patterns:\n" +
+        "\n".join(f"  {p['stage']}: {p['won']} won / {p['lost']} lost = {p['win_rate']}% win rate" for p in stage_patterns) +
+        f"\nCompetitor impact:\n"
+        f"  Deals with competitors: {with_total} total, {with_win_rate}% win rate\n"
+        f"  Deals without competitors: {without_total} total, {without_win_rate}% win rate\n"
+    )
+
+    best_stage = best["stage"] if best else "unknown"
+    worst_stage = worst["stage"] if worst else "unknown"
+    default_insight = (
+        f"{best_stage.title()} stage has the highest win rate at {best['win_rate'] if best else 0}%; "
+        f"{worst_stage.title()} lags at {worst['win_rate'] if worst else 0}% — focus rep coaching there."
+    )
+    default_recs = [
+        f"Analyse what reps do differently at the {best_stage} stage to replicate those behaviours elsewhere.",
+        f"Create targeted coaching for the {worst_stage} stage where win rates are lowest.",
+        "Develop competitive battle cards for deals that have competitors to improve their win rate.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_WIN_LOSS_PATTERNS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_patterns": stage_patterns,
+        "competitor_impact": competitor_impact,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

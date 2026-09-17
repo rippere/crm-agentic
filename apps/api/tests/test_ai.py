@@ -5489,3 +5489,63 @@ async def test_conversion_quality_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/conversion-quality")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/win-loss-patterns
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_win_loss_patterns_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # First execute: closed deals (stage, competitors)
+    # Second execute: activity events for stage patterns
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result([
+            ("closed_won", []),
+            ("closed_won", ["Salesforce"]),
+            ("closed_lost", ["Salesforce"]),
+            ("closed_lost", []),
+        ]),
+        _make_execute_result([
+            ("Deal 'Alpha' moved: proposal → closed_won",),
+            ("Deal 'Beta' moved: qualified → closed_won",),
+            ("Deal 'Gamma' moved: proposal → closed_lost",),
+        ]),
+    ])
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "Proposal stage closes at 50% — qualified leads faster.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/win-loss-patterns")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["stage_patterns"], list)
+    assert len(data["stage_patterns"]) >= 1
+    assert "competitor_impact" in data
+    assert "with_competitors_win_rate" in data["competitor_impact"]
+    assert "without_competitors_win_rate" in data["competitor_impact"]
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_win_loss_patterns_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-loss-patterns")
+    assert resp.status_code == 403
