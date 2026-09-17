@@ -6381,7 +6381,7 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-concentration`, {}, token)
   },
 
-  async getDealCloseDateAccuracy(workspaceId: string, token: string) {
+  async getDealCloseDateAccuracySummary(workspaceId: string, token: string) {
     if (isDemoMode) {
       return Promise.resolve({
         total_closed: 18,

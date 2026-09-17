@@ -768,7 +768,7 @@ export default function ReportsPage() {
       setDealValueConcentrationLoading(true);
       apiClient.getDealValueConcentration("demo-workspace-1", "demo-token").then(setDealValueConcentration).catch(() => {}).finally(() => setDealValueConcentrationLoading(false));
       setDealCloseDateAccuracyLoading(true);
-      apiClient.getDealCloseDateAccuracy("demo-workspace-1", "demo-token").then(setDealCloseDateAccuracy).catch(() => {}).finally(() => setDealCloseDateAccuracyLoading(false));
+      apiClient.getDealCloseDateAccuracySummary("demo-workspace-1", "demo-token").then(setDealCloseDateAccuracy).catch(() => {}).finally(() => setDealCloseDateAccuracyLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -883,7 +883,7 @@ export default function ReportsPage() {
       setDealValueConcentrationLoading(true);
       apiClient.getDealValueConcentration(workspaceId, session.access_token).then(setDealValueConcentration).catch(() => {}).finally(() => setDealValueConcentrationLoading(false));
       setDealCloseDateAccuracyLoading(true);
-      apiClient.getDealCloseDateAccuracy(workspaceId, session.access_token).then(setDealCloseDateAccuracy).catch(() => {}).finally(() => setDealCloseDateAccuracyLoading(false));
+      apiClient.getDealCloseDateAccuracySummary(workspaceId, session.access_token).then(setDealCloseDateAccuracy).catch(() => {}).finally(() => setDealCloseDateAccuracyLoading(false));
     });
   }, []);
 
@@ -1552,7 +1552,7 @@ export default function ReportsPage() {
   const regenerateDealCloseDateAccuracy = () => {
     setDealCloseDateAccuracyLoading(true);
     const doFetch = (wid: string, tok: string) => {
-      apiClient.getDealCloseDateAccuracy(wid, tok)
+      apiClient.getDealCloseDateAccuracySummary(wid, tok)
         .then(setDealCloseDateAccuracy)
         .catch(() => {})
         .finally(() => setDealCloseDateAccuracyLoading(false));
