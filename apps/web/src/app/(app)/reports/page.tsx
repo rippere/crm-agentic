@@ -665,6 +665,12 @@ export default function ReportsPage() {
   const [repPerformanceLoading, setRepPerformanceLoading] = useState(false);
   const [repPerformanceOpen, setRepPerformanceOpen] = useState(true);
 
+  type AIPipelineFunnelStage = { stage: string; deal_count: number; total_value: number; conversion_rate: number | null };
+  type AIPipelineConversionFunnelData = { stages: AIPipelineFunnelStage[]; weakest_stage: string | null; best_stage: string | null; funnel_narrative: string; recommendations: string[]; generated_at: string };
+  const [aiFunnel, setAiFunnel] = useState<AIPipelineConversionFunnelData | null>(null);
+  const [aiFunnelLoading, setAiFunnelLoading] = useState(false);
+  const [aiFunnelOpen, setAiFunnelOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -777,6 +783,8 @@ export default function ReportsPage() {
       apiClient.getDealCloseDateAccuracySummary("demo-workspace-1", "demo-token").then(setDealCloseDateAccuracy).catch(() => {}).finally(() => setDealCloseDateAccuracyLoading(false));
       setRepPerformanceLoading(true);
       apiClient.getRepPerformance("demo-workspace-1", "demo-token").then(setRepPerformance).catch(() => {}).finally(() => setRepPerformanceLoading(false));
+      setAiFunnelLoading(true);
+      apiClient.getAIPipelineConversionFunnel("demo-workspace-1", "demo-token").then(setAiFunnel).catch(() => {}).finally(() => setAiFunnelLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -894,6 +902,8 @@ export default function ReportsPage() {
       apiClient.getDealCloseDateAccuracySummary(workspaceId, session.access_token).then(setDealCloseDateAccuracy).catch(() => {}).finally(() => setDealCloseDateAccuracyLoading(false));
       setRepPerformanceLoading(true);
       apiClient.getRepPerformance(workspaceId, session.access_token).then(setRepPerformance).catch(() => {}).finally(() => setRepPerformanceLoading(false));
+      setAiFunnelLoading(true);
+      apiClient.getAIPipelineConversionFunnel(workspaceId, session.access_token).then(setAiFunnel).catch(() => {}).finally(() => setAiFunnelLoading(false));
     });
   }, []);
 
@@ -1554,6 +1564,27 @@ export default function ReportsPage() {
         if (!session) { setDealValueConcentrationLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealValueConcentrationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAiFunnel = () => {
+    setAiFunnelLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIPipelineConversionFunnel(wid, tok)
+        .then(setAiFunnel)
+        .catch(() => {})
+        .finally(() => setAiFunnelLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAiFunnelLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAiFunnelLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -6979,6 +7010,83 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No QBR data available. Click Regenerate to generate.</p>
+          )
+        )}
+      </Card>
+
+      {/* Pipeline Conversion Funnel AI */}
+      <Card className="border-orange-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Filter className="h-4 w-4 text-orange-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Pipeline Conversion Funnel</h3>
+            {aiFunnel && aiFunnel.weakest_stage && (
+              <span className="text-xs bg-rose-900/40 text-rose-300 px-2 py-0.5 rounded-full border border-rose-700/30">
+                bottleneck: {aiFunnel.weakest_stage}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateAiFunnel}
+              disabled={aiFunnelLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", aiFunnelLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setAiFunnelOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {aiFunnelOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {aiFunnelOpen && (
+          aiFunnelLoading && !aiFunnel ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3, 4].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : aiFunnel ? (
+            <div className={cn("p-4 space-y-4", aiFunnelLoading && "opacity-40")}>
+              <ul className="space-y-3">
+                {aiFunnel.stages.map((s) => {
+                  const maxCount = Math.max(...aiFunnel.stages.map(x => x.deal_count), 1);
+                  const barPct = Math.round((s.deal_count / maxCount) * 100);
+                  return (
+                    <li key={s.stage} className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-zinc-300 capitalize w-24 flex-shrink-0">{s.stage}</span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-xs font-mono text-zinc-400">{s.deal_count} deals</span>
+                          {s.conversion_rate !== null && (
+                            <span className={cn(
+                              "text-xs px-1.5 py-0.5 rounded border font-mono",
+                              s.stage === aiFunnel.weakest_stage ? "bg-rose-900/40 text-rose-300 border-rose-700/30" :
+                              s.stage === aiFunnel.best_stage ? "bg-emerald-900/40 text-emerald-300 border-emerald-700/30" :
+                              "bg-zinc-800 text-zinc-400 border-zinc-700"
+                            )}>→ {s.conversion_rate}%</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-orange-500/60 rounded-full" style={{ width: `${barPct}%` }} />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-xs text-zinc-400 italic">{aiFunnel.funnel_narrative}</p>
+              <ul className="space-y-1">
+                {aiFunnel.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(aiFunnel.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No funnel data available.</p>
           )
         )}
       </Card>

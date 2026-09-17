@@ -6381,6 +6381,29 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-concentration`, {}, token)
   },
 
+  async getAIPipelineConversionFunnel(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stages: [
+          { stage: 'discovery',   deal_count: 18, total_value: 360000,  conversion_rate: 61.1 },
+          { stage: 'qualified',   deal_count: 11, total_value: 418000,  conversion_rate: 54.5 },
+          { stage: 'proposal',    deal_count: 6,  total_value: 312000,  conversion_rate: 66.7 },
+          { stage: 'negotiation', deal_count: 4,  total_value: 280000,  conversion_rate: null },
+        ],
+        weakest_stage: 'qualified',
+        best_stage: 'proposal',
+        funnel_narrative: '18 active deals in discovery but only 4 reach negotiation — a 78% drop across the funnel. The steepest fall is at the qualified-to-proposal stage at 55%, suggesting reps are advancing deals without a clear proposal trigger. Tightening entry criteria at qualified would raise downstream conversion and forecast accuracy.',
+        recommendations: [
+          'Add explicit exit criteria for the qualified stage — a deal should only advance to proposal when a budget, timeline, and decision-maker are confirmed.',
+          'Review the 7 deals stuck in qualified for more than 14 days; disqualify or re-engage to keep the funnel healthy and forecast clean.',
+          'Track weekly stage-to-stage conversion rates in team standups so reps can self-correct before deals stall and get buried.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/pipeline/conversion-funnel-ai`, {}, token)
+  },
+
   async getRepPerformance(workspaceId: string, token: string) {
     if (isDemoMode) {
       return Promise.resolve({
