@@ -6538,5 +6538,31 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/engagement-heatmap`, {}, token)
   },
+
+  async getAIDealVelocity(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        avg_days_to_close: 42.5,
+        stage_dwell_times: [
+          { stage: 'discovery', avg_days: 8.5 },
+          { stage: 'qualified', avg_days: 9.5 },
+          { stage: 'proposal', avg_days: 8.5 },
+          { stage: 'negotiation', avg_days: 7.5 },
+          { stage: 'closed_won', avg_days: 8.5 },
+        ],
+        fastest_close_days: 12.0,
+        slowest_close_days: 98.0,
+        total_won_deals_analysed: 18,
+        velocity_narrative: 'Won deals averaged 42.5 days from creation to close across 18 deals in the last 180 days. The fastest deal closed in 12 days while the slowest took 98 days, suggesting significant variance driven by deal complexity and stakeholder count. Deals that stall in the proposal stage account for most of the long tail — adding a proposal-review checkpoint at day 10 would compress the average by an estimated 15%.',
+        recommendations: [
+          'Set a 10-day review checkpoint in the proposal stage — stalls there account for 60% of deals exceeding your 42-day average.',
+          'Introduce qualification scoring at discovery to deprioritise deals with <30% win probability before they reach proposal.',
+          'Target an 8-week close goal for all new deals: pipeline deals beyond 56 days should trigger a manager review.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/velocity`, {}, token)
+  },
 }
 

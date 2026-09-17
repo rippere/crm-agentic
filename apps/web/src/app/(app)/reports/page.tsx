@@ -690,6 +690,12 @@ export default function ReportsPage() {
   const [engagementHeatmapLoading, setEngagementHeatmapLoading] = useState(false);
   const [engagementHeatmapOpen, setEngagementHeatmapOpen] = useState(true);
 
+  type StageDwell = { stage: string; avg_days: number };
+  type AIDealVelocityData = { avg_days_to_close: number; stage_dwell_times: StageDwell[]; fastest_close_days: number; slowest_close_days: number; total_won_deals_analysed: number; velocity_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealVelocity, setDealVelocity] = useState<AIDealVelocityData | null>(null);
+  const [dealVelocityLoading, setDealVelocityLoading] = useState(false);
+  const [dealVelocityOpen, setDealVelocityOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -810,6 +816,8 @@ export default function ReportsPage() {
       apiClient.getAIDealWinFactors("demo-workspace-1", "demo-token").then(setDealWinFactors).catch(() => {}).finally(() => setDealWinFactorsLoading(false));
       setEngagementHeatmapLoading(true);
       apiClient.getAIContactEngagementHeatmap("demo-workspace-1", "demo-token").then(setEngagementHeatmap).catch(() => {}).finally(() => setEngagementHeatmapLoading(false));
+      setDealVelocityLoading(true);
+      apiClient.getAIDealVelocity("demo-workspace-1", "demo-token").then(setDealVelocity).catch(() => {}).finally(() => setDealVelocityLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -935,6 +943,8 @@ export default function ReportsPage() {
       apiClient.getAIDealWinFactors(workspaceId, session.access_token).then(setDealWinFactors).catch(() => {}).finally(() => setDealWinFactorsLoading(false));
       setEngagementHeatmapLoading(true);
       apiClient.getAIContactEngagementHeatmap(workspaceId, session.access_token).then(setEngagementHeatmap).catch(() => {}).finally(() => setEngagementHeatmapLoading(false));
+      setDealVelocityLoading(true);
+      apiClient.getAIDealVelocity(workspaceId, session.access_token).then(setDealVelocity).catch(() => {}).finally(() => setDealVelocityLoading(false));
     });
   }, []);
 
@@ -1721,6 +1731,27 @@ export default function ReportsPage() {
         if (!session) { setEngagementHeatmapLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setEngagementHeatmapLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealVelocity = () => {
+    setDealVelocityLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealVelocity(wid, tok)
+        .then(setDealVelocity)
+        .catch(() => {})
+        .finally(() => setDealVelocityLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealVelocityLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealVelocityLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -7360,6 +7391,87 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No win factor data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Velocity */}
+      <Card className="border-amber-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-amber-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Velocity</h3>
+            {dealVelocity && (
+              <span className="text-xs bg-amber-900/40 text-amber-300 px-2 py-0.5 rounded-full border border-amber-700/30">
+                avg {dealVelocity.avg_days_to_close}d to close
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealVelocity}
+              disabled={dealVelocityLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealVelocityLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setDealVelocityOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {dealVelocityOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealVelocityOpen && (
+          dealVelocityLoading && !dealVelocity ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : dealVelocity ? (
+            <div className={cn("p-4 space-y-4", dealVelocityLoading && "opacity-40")}>
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: 'Avg Close', value: `${dealVelocity.avg_days_to_close}d`, color: 'text-amber-300' },
+                  { label: 'Fastest', value: `${dealVelocity.fastest_close_days}d`, color: 'text-emerald-300' },
+                  { label: 'Slowest', value: `${dealVelocity.slowest_close_days}d`, color: 'text-rose-300' },
+                ].map((m) => (
+                  <div key={m.label} className="bg-zinc-800/50 rounded p-2 text-center">
+                    <p className={`text-base font-mono font-semibold ${m.color}`}>{m.value}</p>
+                    <p className="text-xs text-zinc-500 mt-0.5">{m.label}</p>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <p className="text-xs text-zinc-500 mb-2">Stage Dwell Times (avg days)</p>
+                <div className="space-y-1.5">
+                  {dealVelocity.stage_dwell_times.map((s) => {
+                    const max = Math.max(...dealVelocity.stage_dwell_times.map((x) => x.avg_days)) || 1;
+                    const pct = Math.round((s.avg_days / max) * 100);
+                    return (
+                      <div key={s.stage} className="flex items-center gap-2">
+                        <span className="text-xs text-zinc-500 w-24 flex-shrink-0 capitalize">{s.stage.replace('_', ' ')}</span>
+                        <div className="flex-1 h-3 bg-zinc-800 rounded overflow-hidden">
+                          <div className="h-full bg-amber-500/60 rounded" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs text-zinc-400 w-10 text-right font-mono">{s.avg_days}d</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="text-xs text-zinc-500">Based on {dealVelocity.total_won_deals_analysed} won deals in the last 180 days</p>
+              <p className="text-xs text-zinc-400 italic">{dealVelocity.velocity_narrative}</p>
+              <ul className="space-y-1.5">
+                {dealVelocity.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealVelocity.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No velocity data available.</p>
           )
         )}
       </Card>
