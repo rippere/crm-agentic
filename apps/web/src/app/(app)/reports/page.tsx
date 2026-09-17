@@ -665,8 +665,8 @@ export default function ReportsPage() {
   const [repPerformanceLoading, setRepPerformanceLoading] = useState(false);
   const [repPerformanceOpen, setRepPerformanceOpen] = useState(true);
 
-  type FunnelStage = { stage: string; deal_count: number; total_value: number; conversion_rate: number | null };
-  type AIPipelineConversionFunnelData = { stages: FunnelStage[]; weakest_stage: string | null; best_stage: string | null; funnel_narrative: string; recommendations: string[]; generated_at: string };
+  type AIPipelineFunnelStage = { stage: string; deal_count: number; total_value: number; conversion_rate: number | null };
+  type AIPipelineConversionFunnelData = { stages: AIPipelineFunnelStage[]; weakest_stage: string | null; best_stage: string | null; funnel_narrative: string; recommendations: string[]; generated_at: string };
   const [aiFunnel, setAiFunnel] = useState<AIPipelineConversionFunnelData | null>(null);
   const [aiFunnelLoading, setAiFunnelLoading] = useState(false);
   const [aiFunnelOpen, setAiFunnelOpen] = useState(true);
