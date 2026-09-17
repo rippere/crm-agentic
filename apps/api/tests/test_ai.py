@@ -6964,3 +6964,69 @@ async def test_rep_performance_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/rep-performance")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 17r: GET /workspaces/{wid}/ai/pipeline/conversion-funnel-ai
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_conversion_funnel_ai_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Rows: (stage, value) — 8 discovery, 5 qualified, 3 proposal, 2 negotiation
+    rows = (
+        [(uuid.uuid4(), "discovery",   20000)] * 8 +
+        [(uuid.uuid4(), "qualified",   35000)] * 5 +
+        [(uuid.uuid4(), "proposal",    60000)] * 3 +
+        [(uuid.uuid4(), "negotiation", 90000)] * 2
+    )
+    # But the query only selects stage, value — so rows are 2-tuples
+    rows2 = [("discovery", 20000)] * 8 + [("qualified", 35000)] * 5 + [("proposal", 60000)] * 3 + [("negotiation", 90000)] * 2
+
+    ai_response = {
+        "funnel_narrative": "The pipeline shows a steep drop at the discovery-to-qualified stage with only 63% conversion. Proposal and negotiation stages are healthy, but top-of-funnel volume needs to increase to sustain revenue targets.",
+        "recommendations": [
+            "Improve lead qualification at discovery to raise the 63% conversion rate — add explicit exit criteria before advancing.",
+            "Increase top-of-funnel activity: more discovery deals means more opportunities even at current conversion rates.",
+            "Track weekly conversion rates per stage so reps see the funnel health and self-correct before deals stall.",
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(rows2),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/pipeline/conversion-funnel-ai")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["stages"], list)
+    assert len(body["stages"]) == 4
+    discovery = next(s for s in body["stages"] if s["stage"] == "discovery")
+    assert discovery["deal_count"] == 8
+    assert isinstance(discovery["conversion_rate"], float)
+    assert body["weakest_stage"] is not None
+    assert body["best_stage"] is not None
+    assert isinstance(body["funnel_narrative"], str) and body["funnel_narrative"]
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_pipeline_conversion_funnel_ai_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/pipeline/conversion-funnel-ai")
+    assert resp.status_code == 403

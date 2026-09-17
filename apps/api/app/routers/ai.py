@@ -13985,3 +13985,132 @@ async def get_rep_performance(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_PIPELINE_CONVERSION_FUNNEL_SYSTEM = """\
+You are a senior sales operations AI analysing pipeline conversion funnel data.
+Given per-stage deal counts, total values, and stage-to-stage conversion rates, generate a funnel narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "funnel_narrative": "2-3 sentence narrative about funnel health, conversion patterns, and where deals are lost",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+_FUNNEL_STAGES = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/pipeline/conversion-funnel-ai")
+@limiter.limit("5/minute")
+async def get_pipeline_conversion_funnel_ai(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.stage, Deal.value)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(_FUNNEL_STAGES),
+        )
+    )
+    rows = result.all()
+
+    counts: dict[str, int] = {s: 0 for s in _FUNNEL_STAGES}
+    values: dict[str, float] = {s: 0.0 for s in _FUNNEL_STAGES}
+    for r in rows:
+        stage = str(r[0])
+        if stage in counts:
+            counts[stage] += 1
+            values[stage] += float(r[1] or 0)
+
+    stages = []
+    weakest_stage: str | None = None
+    best_stage: str | None = None
+    min_rate = 101.0
+    max_rate = -1.0
+
+    for i, stage in enumerate(_FUNNEL_STAGES):
+        if i < len(_FUNNEL_STAGES) - 1:
+            next_stage = _FUNNEL_STAGES[i + 1]
+            conversion_rate = (
+                round(counts[next_stage] / counts[stage] * 100, 1)
+                if counts[stage] > 0
+                else None
+            )
+            if conversion_rate is not None:
+                if conversion_rate < min_rate:
+                    min_rate = conversion_rate
+                    weakest_stage = stage
+                if conversion_rate > max_rate:
+                    max_rate = conversion_rate
+                    best_stage = stage
+        else:
+            conversion_rate = None
+
+        stages.append({
+            "stage": stage,
+            "deal_count": counts[stage],
+            "total_value": round(values[stage], 2),
+            "conversion_rate": conversion_rate,
+        })
+
+    context_lines = ["Pipeline conversion funnel (active deals):"]
+    for s in stages:
+        cr = f"{s['conversion_rate']}% → next" if s["conversion_rate"] is not None else "final stage"
+        context_lines.append(f"{s['stage']}: {s['deal_count']} deals, ${s['total_value']:,.0f} value, conversion: {cr}")
+    if weakest_stage:
+        context_lines.append(f"Weakest conversion: {weakest_stage} ({min_rate}%)")
+    if best_stage:
+        context_lines.append(f"Best conversion: {best_stage} ({max_rate}%)")
+    context = "\n".join(context_lines)
+
+    total = sum(counts.values())
+    default_narrative = (
+        f"The pipeline has {total} active deals across {len([s for s in stages if s['deal_count'] > 0])} stages. "
+        + (f"The weakest conversion point is {weakest_stage} at {min_rate}% — this is where the most deals are being lost." if weakest_stage else "No conversion data available yet.")
+        + " Addressing the top bottleneck will have the greatest impact on revenue."
+    )
+    default_recs = [
+        f"Focus coaching on the {weakest_stage} → next-stage transition — this is where the most deals are stalling." if weakest_stage else "Build out each stage with more qualified deals to generate meaningful conversion data.",
+        "Review entry criteria for each stage to ensure deals are correctly qualified before advancing — stage pollution skews conversion metrics.",
+        "Set conversion rate targets per stage (e.g. ≥60%) and review weekly with the team to create accountability and early alerts.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_PIPELINE_CONVERSION_FUNNEL_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    funnel_narrative = str(data.get("funnel_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stages": stages,
+        "weakest_stage": weakest_stage,
+        "best_stage": best_stage,
+        "funnel_narrative": funnel_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
