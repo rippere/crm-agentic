@@ -6686,5 +6686,33 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/closure-probability-heatmap`, {}, token)
   },
+
+  async getAIContactScoreRecencyHeatmap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        cells: [
+          { score_tier: 'low',  recency_tier: 'active',  contact_count: 3,  avg_revenue: 8000,   total_revenue: 24000 },
+          { score_tier: 'low',  recency_tier: 'idle',    contact_count: 5,  avg_revenue: 6000,   total_revenue: 30000 },
+          { score_tier: 'low',  recency_tier: 'dormant', contact_count: 8,  avg_revenue: 4000,   total_revenue: 32000 },
+          { score_tier: 'mid',  recency_tier: 'active',  contact_count: 9,  avg_revenue: 28000,  total_revenue: 252000 },
+          { score_tier: 'mid',  recency_tier: 'idle',    contact_count: 6,  avg_revenue: 22000,  total_revenue: 132000 },
+          { score_tier: 'mid',  recency_tier: 'dormant', contact_count: 4,  avg_revenue: 18000,  total_revenue: 72000 },
+          { score_tier: 'high', recency_tier: 'active',  contact_count: 7,  avg_revenue: 75000,  total_revenue: 525000 },
+          { score_tier: 'high', recency_tier: 'idle',    contact_count: 5,  avg_revenue: 90000,  total_revenue: 450000 },
+          { score_tier: 'high', recency_tier: 'dormant', contact_count: 3,  avg_revenue: 110000, total_revenue: 330000 },
+        ],
+        at_risk_score_tier: 'high',
+        at_risk_recency_tier: 'idle',
+        engagement_narrative: 'Your highest-value at-risk segment is 5 high-scored contacts that have gone idle — they carry an average revenue of $90k and last engaged 31–90 days ago. These contacts have strong fit signals and should be your first outreach priority this week. Without intervention, idle contacts convert to dormant within 60 days, making re-engagement progressively harder.',
+        recommendations: [
+          'Reach out personally to all 5 high-score idle contacts this week — a tailored one-liner referencing their last interaction drives 3× higher response rates than generic templates.',
+          'Set up a 3-touch re-engagement sequence for mid-score dormant contacts; they represent $72k in latent revenue that email automation can recover at low cost.',
+          'Investigate the 3 high-score dormant contacts — if they closed with a competitor, capture the loss reason to improve future qualification.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/score-recency-heatmap`, {}, token)
+  },
 }
 

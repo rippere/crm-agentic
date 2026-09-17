@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7485,4 +7486,63 @@ async def test_closure_probability_heatmap_wrong_workspace_returns_403(app_clien
     wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/closure-probability-heatmap")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 18b: contact engagement heatmap
+# ---------------------------------------------------------------------------
+
+class FakeEngagementRow:
+    def __init__(self, ml_score, updated_at, revenue):
+        self.id = uuid.uuid4()
+        self.ml_score = ml_score
+        self.updated_at = updated_at
+        self.revenue = revenue
+
+
+@pytest.mark.asyncio
+async def test_contact_score_recency_heatmap_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    rows = [
+        FakeEngagementRow({"value": 80}, now - datetime.timedelta(days=5), 50000),   # high/active
+        FakeEngagementRow({"value": 85}, now - datetime.timedelta(days=60), 120000), # high/idle
+        FakeEngagementRow({"value": 75}, now - datetime.timedelta(days=200), 95000), # high/dormant
+        FakeEngagementRow({"value": 55}, now - datetime.timedelta(days=10), 30000),  # mid/active
+        FakeEngagementRow({"value": 30}, now - datetime.timedelta(days=300), 5000),  # low/dormant
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"engagement_narrative": "High-score dormant contacts need attention.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/score-recency-heatmap")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["cells"], list)
+    assert len(body["cells"]) == 9  # 3 score tiers × 3 recency tiers
+    high_active = next(c for c in body["cells"] if c["score_tier"] == "high" and c["recency_tier"] == "active")
+    assert high_active["contact_count"] == 1
+    assert high_active["avg_revenue"] == 50000.0
+    high_dormant = next(c for c in body["cells"] if c["score_tier"] == "high" and c["recency_tier"] == "dormant")
+    assert high_dormant["contact_count"] == 1
+    assert body["at_risk_score_tier"] in ("high",)
+    assert body["at_risk_recency_tier"] in ("idle", "dormant")
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_score_recency_heatmap_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/score-recency-heatmap")
     assert resp.status_code == 403
