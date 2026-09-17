@@ -8118,3 +8118,100 @@ async def test_priority_matrix_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/priority-matrix")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 18m – AI deal engagement report
+# ---------------------------------------------------------------------------
+
+class FakeEngagementDealRow:
+    def __init__(self, id, title, stage, value, health_score, contact_id):
+        self.id = id
+        self.title = title
+        self.stage = stage
+        self.value = value
+        self.health_score = health_score
+        self.contact_id = contact_id
+
+
+class FakeEngagementCountRow:
+    def __init__(self, key, cnt):
+        self._key = key
+        self.cnt = cnt
+
+    @property
+    def contact_id(self):
+        return self._key
+
+    @property
+    def deal_id(self):
+        return self._key
+
+    @property
+    def status(self):
+        return "done"
+
+
+@pytest.mark.asyncio
+async def test_engagement_report_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    cid1 = uuid.uuid4()
+    cid2 = uuid.uuid4()
+    did1 = uuid.uuid4()
+    did2 = uuid.uuid4()
+    deal_rows = [
+        FakeEngagementDealRow(did1, "Alpha Deal", "negotiation", 80000, 80.0, cid1),
+        FakeEngagementDealRow(did2, "Beta Deal", "proposal", 20000, 50.0, cid2),
+    ]
+    # msg rows: cid1=5 msgs → 40pts, cid2=0
+    msg_rows = [FakeEngagementCountRow(cid1, 5)]
+    # note rows: did1=3 notes → 30pts, did2=0
+    note_rows = [FakeEngagementCountRow(did1, 3)]
+    # task rows: empty
+    task_rows = []
+
+    call_count = 0
+
+    def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_execute_result(deal_rows)
+        elif call_count == 2:
+            return _make_execute_result(msg_rows)
+        elif call_count == 3:
+            return _make_execute_result(note_rows)
+        else:
+            return _make_execute_result(task_rows)
+
+    mock_db.execute = AsyncMock(side_effect=fake_execute)
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"engagement_narrative": "Pipeline looks healthy.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/engagement-report")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["engagement_buckets"]) == 3
+    assert body["total_active"] == 2
+    # Alpha Deal: msg_pts=40, note_pts=30, task_pts=0 → score=70 → high bucket
+    high_bucket = next(b for b in body["engagement_buckets"] if b["bucket"] == "high")
+    assert high_bucket["deal_count"] == 1
+    assert len(body["top_engaged"]) >= 1
+    assert body["top_engaged"][0]["title"] == "Alpha Deal"
+    assert "engagement_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_engagement_report_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/engagement-report")
+    assert resp.status_code == 403

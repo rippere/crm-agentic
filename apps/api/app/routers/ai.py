@@ -17104,3 +17104,202 @@ async def get_ai_deal_priority_matrix(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_ENGAGEMENT_REPORT_SYSTEM = (
+    "You are a sales analytics AI. Analyse a deal engagement score report for a CRM. "
+    "Engagement scores (0–100) are computed from recent messages, deal notes, and task completion. "
+    "Write a 2-sentence narrative identifying the overall engagement health of the pipeline and "
+    "3 actionable recommendations to improve low-engagement deals. "
+    "Respond ONLY with valid JSON: "
+    "{\"engagement_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/engagement-report")
+@limiter.limit("5/minute")
+async def get_ai_deal_engagement_report(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff_90 = now - datetime.timedelta(days=90)
+
+    active_stages = ["discovery", "qualified", "proposal", "negotiation"]
+
+    # Query open deals
+    deal_rows = (
+        await db.execute(
+            select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.health_score, Deal.contact_id)
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage.in_(active_stages))
+        )
+    ).all()
+
+    if not deal_rows:
+        return {
+            "engagement_buckets": [
+                {"bucket": "high", "label": "High Engagement (≥60)", "deal_count": 0, "avg_score": 0.0},
+                {"bucket": "medium", "label": "Medium Engagement (30–59)", "deal_count": 0, "avg_score": 0.0},
+                {"bucket": "low", "label": "Low Engagement (<30)", "deal_count": 0, "avg_score": 0.0},
+            ],
+            "top_engaged": [],
+            "least_engaged": [],
+            "avg_engagement_score": 0.0,
+            "total_active": 0,
+            "engagement_narrative": "No active deals found in the pipeline to analyse for engagement.",
+            "recommendations": [
+                "Add deals to the pipeline and log notes or messages to start tracking engagement.",
+                "Connect your Gmail or Slack connector to automatically capture message activity.",
+                "Create tasks linked to contacts to boost engagement scores.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # For each deal compute engagement score (same formula as per-deal endpoint)
+    # messages ×8 capped 40, deal_notes ×10 capped 30, task_completion_rate ×30
+    deal_ids = [r.id for r in deal_rows]
+    contact_ids = [r.contact_id for r in deal_rows if r.contact_id]
+
+    # Batch: message counts per contact_id (last 90 days)
+    msg_rows = (
+        await db.execute(
+            select(Message.contact_id, func.count(Message.id).label("cnt"))
+            .where(Message.contact_id.in_(contact_ids))
+            .where(Message.received_at >= cutoff_90)
+            .group_by(Message.contact_id)
+        )
+    ).all()
+    msg_by_contact = {str(r.contact_id): r.cnt for r in msg_rows}
+
+    # Batch: deal note counts per deal_id (last 90 days)
+    note_rows = (
+        await db.execute(
+            select(DealNote.deal_id, func.count(DealNote.id).label("cnt"))
+            .where(DealNote.deal_id.in_(deal_ids))
+            .where(DealNote.created_at >= cutoff_90)
+            .group_by(DealNote.deal_id)
+        )
+    ).all()
+    notes_by_deal = {str(r.deal_id): r.cnt for r in note_rows}
+
+    # Batch: task counts (open + done) per contact_id for completion rate
+    task_rows = (
+        await db.execute(
+            select(Task.contact_id, Task.status, func.count(Task.id).label("cnt"))
+            .where(Task.contact_id.in_(contact_ids))
+            .group_by(Task.contact_id, Task.status)
+        )
+    ).all()
+    task_open_by_contact: dict[str, int] = {}
+    task_done_by_contact: dict[str, int] = {}
+    for r in task_rows:
+        cid = str(r.contact_id)
+        if r.status == "done":
+            task_done_by_contact[cid] = task_done_by_contact.get(cid, 0) + r.cnt
+        else:
+            task_open_by_contact[cid] = task_open_by_contact.get(cid, 0) + r.cnt
+
+    deal_scores = []
+    for row in deal_rows:
+        cid = str(row.contact_id) if row.contact_id else ""
+        msg_count = msg_by_contact.get(cid, 0)
+        note_count = notes_by_deal.get(str(row.id), 0)
+        done = task_done_by_contact.get(cid, 0)
+        total_tasks = done + task_open_by_contact.get(cid, 0)
+        completion_rate = done / total_tasks if total_tasks > 0 else 0.0
+
+        msg_pts = min(msg_count * 8, 40)
+        note_pts = min(note_count * 10, 30)
+        task_pts = round(completion_rate * 30)
+        score = msg_pts + note_pts + task_pts
+
+        deal_scores.append({
+            "id": str(row.id),
+            "title": row.title,
+            "stage": row.stage,
+            "value": float(row.value or 0),
+            "health_score": float(row.health_score or 0),
+            "engagement_score": score,
+        })
+
+    # Bucket
+    high = [d for d in deal_scores if d["engagement_score"] >= 60]
+    medium = [d for d in deal_scores if 30 <= d["engagement_score"] < 60]
+    low = [d for d in deal_scores if d["engagement_score"] < 30]
+
+    def _avg_score(lst: list) -> float:
+        return round(sum(d["engagement_score"] for d in lst) / len(lst), 1) if lst else 0.0
+
+    engagement_buckets = [
+        {"bucket": "high", "label": "High Engagement (≥60)", "deal_count": len(high), "avg_score": _avg_score(high)},
+        {"bucket": "medium", "label": "Medium Engagement (30–59)", "deal_count": len(medium), "avg_score": _avg_score(medium)},
+        {"bucket": "low", "label": "Low Engagement (<30)", "deal_count": len(low), "avg_score": _avg_score(low)},
+    ]
+
+    sorted_by_score = sorted(deal_scores, key=lambda d: d["engagement_score"], reverse=True)
+    top_engaged = sorted_by_score[:3]
+    least_engaged = sorted_by_score[-3:][::-1] if len(sorted_by_score) >= 3 else sorted_by_score[::-1]
+    avg_engagement_score = round(sum(d["engagement_score"] for d in deal_scores) / len(deal_scores), 1)
+    total_active = len(deal_scores)
+
+    context = (
+        f"Pipeline engagement report: {total_active} active deals. "
+        f"Avg engagement score: {avg_engagement_score}/100. "
+        f"High engagement (≥60): {len(high)} deals. "
+        f"Medium engagement (30–59): {len(medium)} deals. "
+        f"Low engagement (<30): {len(low)} deals. "
+        f"Top engaged deal: {top_engaged[0]['title']} (score {top_engaged[0]['engagement_score']}) if deals exist. "
+        f"Least engaged deal: {least_engaged[0]['title']} (score {least_engaged[0]['engagement_score']}) if deals exist."
+        if top_engaged and least_engaged
+        else f"Pipeline engagement report: {total_active} active deals. Avg score: {avg_engagement_score}/100."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_ENGAGEMENT_REPORT_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    engagement_narrative = str(data.get("engagement_narrative", "")).strip()
+    if not engagement_narrative:
+        engagement_narrative = (
+            f"{len(low)} of {total_active} active deals have low engagement scores — "
+            "these require immediate attention to increase activity and improve win probability."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Schedule a follow-up call or send a personalised email to each low-engagement deal this week.",
+        "Log at least one deal note per low-engagement deal summarising the current blockers.",
+        "Create tasks linked to low-engagement deal contacts to ensure timely follow-through.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "engagement_buckets": engagement_buckets,
+        "top_engaged": top_engaged,
+        "least_engaged": least_engaged,
+        "avg_engagement_score": avg_engagement_score,
+        "total_active": total_active,
+        "engagement_narrative": engagement_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
