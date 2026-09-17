@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -696,6 +696,12 @@ export default function ReportsPage() {
   const [dealVelocityLoading, setDealVelocityLoading] = useState(false);
   const [dealVelocityOpen, setDealVelocityOpen] = useState(true);
 
+  type TopContact = { contact_id: string; name: string; deal_count: number; total_pipeline_value: number; avg_win_prob: number; avg_health: number; top_stage: string; opportunity_score: number };
+  type AITopContactOpportunitiesData = { top_contacts: TopContact[]; opportunities_narrative: string; recommendations: string[]; generated_at: string };
+  const [topOpportunities, setTopOpportunities] = useState<AITopContactOpportunitiesData | null>(null);
+  const [topOpportunitiesLoading, setTopOpportunitiesLoading] = useState(false);
+  const [topOpportunitiesOpen, setTopOpportunitiesOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -818,6 +824,8 @@ export default function ReportsPage() {
       apiClient.getAIContactEngagementHeatmap("demo-workspace-1", "demo-token").then(setEngagementHeatmap).catch(() => {}).finally(() => setEngagementHeatmapLoading(false));
       setDealVelocityLoading(true);
       apiClient.getAIDealVelocity("demo-workspace-1", "demo-token").then(setDealVelocity).catch(() => {}).finally(() => setDealVelocityLoading(false));
+      setTopOpportunitiesLoading(true);
+      apiClient.getAITopContactOpportunities("demo-workspace-1", "demo-token").then(setTopOpportunities).catch(() => {}).finally(() => setTopOpportunitiesLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -945,6 +953,8 @@ export default function ReportsPage() {
       apiClient.getAIContactEngagementHeatmap(workspaceId, session.access_token).then(setEngagementHeatmap).catch(() => {}).finally(() => setEngagementHeatmapLoading(false));
       setDealVelocityLoading(true);
       apiClient.getAIDealVelocity(workspaceId, session.access_token).then(setDealVelocity).catch(() => {}).finally(() => setDealVelocityLoading(false));
+      setTopOpportunitiesLoading(true);
+      apiClient.getAITopContactOpportunities(workspaceId, session.access_token).then(setTopOpportunities).catch(() => {}).finally(() => setTopOpportunitiesLoading(false));
     });
   }, []);
 
@@ -1752,6 +1762,27 @@ export default function ReportsPage() {
         if (!session) { setDealVelocityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealVelocityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateTopOpportunities = () => {
+    setTopOpportunitiesLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAITopContactOpportunities(wid, tok)
+        .then(setTopOpportunities)
+        .catch(() => {})
+        .finally(() => setTopOpportunitiesLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setTopOpportunitiesLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setTopOpportunitiesLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -7561,6 +7592,84 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No engagement data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Top Contact Opportunities */}
+      <Card className="border-cyan-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Star className="h-4 w-4 text-cyan-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Top Contact Opportunities</h3>
+            {topOpportunities && (
+              <span className="text-xs bg-cyan-900/40 text-cyan-300 px-2 py-0.5 rounded-full border border-cyan-700/30">
+                {topOpportunities.top_contacts.length} contacts
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateTopOpportunities}
+              disabled={topOpportunitiesLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", topOpportunitiesLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setTopOpportunitiesOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {topOpportunitiesOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {topOpportunitiesOpen && (
+          topOpportunitiesLoading && !topOpportunities ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-zinc-800 rounded" />)}
+            </div>
+          ) : topOpportunities && topOpportunities.top_contacts.length > 0 ? (
+            <div className={cn("p-4 space-y-4", topOpportunitiesLoading && "opacity-40")}>
+              <ul className="space-y-3">
+                {topOpportunities.top_contacts.map((c, i) => (
+                  <li key={c.contact_id} className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono text-zinc-500 w-5">#{i + 1}</span>
+                        <span className="text-sm font-medium text-zinc-100">{c.name}</span>
+                        <span className="text-xs bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded capitalize">{c.top_stage.replace('_', ' ')}</span>
+                      </div>
+                      <span className="text-xs font-mono font-semibold text-cyan-300">{c.opportunity_score.toFixed(1)}</span>
+                    </div>
+                    <div className="flex items-center gap-2 ml-7">
+                      <div className="flex-1 h-2 bg-zinc-800 rounded overflow-hidden">
+                        <div className="h-full bg-cyan-500/70 rounded" style={{ width: `${Math.min(c.opportunity_score, 100)}%` }} />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 ml-7 text-xs text-zinc-500">
+                      <span>{c.deal_count} deal{c.deal_count !== 1 ? 's' : ''}</span>
+                      <span className="text-zinc-700">·</span>
+                      <span>${c.total_pipeline_value.toLocaleString()} pipeline</span>
+                      <span className="text-zinc-700">·</span>
+                      <span className="text-emerald-400">Win {c.avg_win_prob.toFixed(0)}%</span>
+                      <span className="text-zinc-700">·</span>
+                      <span className="text-amber-400">Health {c.avg_health.toFixed(0)}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-400 italic">{topOpportunities.opportunities_narrative}</p>
+              <ul className="space-y-1.5">
+                {topOpportunities.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(topOpportunities.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No contact opportunity data available.</p>
           )
         )}
       </Card>

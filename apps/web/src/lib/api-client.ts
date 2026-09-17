@@ -6564,5 +6564,27 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/velocity`, {}, token)
   },
+
+  async getAITopContactOpportunities(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        top_contacts: [
+          { contact_id: 'demo-1', name: 'Sarah Chen', deal_count: 2, total_pipeline_value: 85000, avg_win_prob: 78.5, avg_health: 82.0, top_stage: 'negotiation', opportunity_score: 91.2 },
+          { contact_id: 'demo-2', name: 'James Okafor', deal_count: 1, total_pipeline_value: 120000, avg_win_prob: 65.0, avg_health: 71.0, top_stage: 'proposal', opportunity_score: 78.4 },
+          { contact_id: 'demo-3', name: 'Maria Santos', deal_count: 3, total_pipeline_value: 60000, avg_win_prob: 70.0, avg_health: 68.0, top_stage: 'qualified', opportunity_score: 72.1 },
+          { contact_id: 'demo-4', name: 'Tom Wright', deal_count: 1, total_pipeline_value: 45000, avg_win_prob: 58.0, avg_health: 60.0, top_stage: 'discovery', opportunity_score: 61.3 },
+          { contact_id: 'demo-5', name: 'Priya Patel', deal_count: 2, total_pipeline_value: 30000, avg_win_prob: 52.0, avg_health: 55.0, top_stage: 'qualified', opportunity_score: 54.8 },
+        ],
+        opportunities_narrative: 'Sarah Chen leads with a 91.2 opportunity score — two deals in negotiation totalling $85K with 79% avg win probability. James Okafor represents your highest single-deal value at $120K in proposal stage, though health at 71 needs attention before advancing. Focus closing energy on Chen and Okafor first; Santos and Wright can be nurtured in parallel with automated follow-up sequences.',
+        recommendations: [
+          'Prioritise Sarah Chen — two negotiation-stage deals at 78% win probability make her your highest near-term revenue opportunity.',
+          'Schedule a proposal review call with James Okafor this week; $120K in pipeline at 65% win probability is worth senior rep attention.',
+          'Set up automated health-score alerts for all top-5 contacts so drops below 60 trigger immediate follow-up.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/top-opportunities`, {}, token)
+  },
 }
 

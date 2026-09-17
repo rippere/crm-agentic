@@ -14637,3 +14637,172 @@ async def get_deal_velocity(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 17w – Top Contact Opportunities
+# ---------------------------------------------------------------------------
+
+_TOP_OPPORTUNITIES_SYSTEM = """\
+You are a senior sales operations AI identifying high-value contact opportunities.
+Given a ranked list of contacts by pipeline opportunity score, highlight who to
+prioritise and why.
+Respond with a JSON object containing exactly two keys:
+  "opportunities_narrative": one paragraph (2-3 sentences) summarising the top opportunities,
+  "recommendations": array of exactly 3 actionable strings about prioritising contacts.
+Output only valid JSON with no markdown fences.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/top-opportunities")
+@limiter.limit("5/minute")
+async def get_top_contact_opportunities(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    import datetime as _dt
+    now = _dt.datetime.now(timezone.utc)
+    cutoff = now - _dt.timedelta(days=90)
+
+    closed_stages = {"closed_won", "closed_lost"}
+
+    result = await db.execute(
+        select(
+            Deal.contact_id,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+            Deal.stage,
+        )
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.notin_(list(closed_stages)))
+        .where(Deal.contact_id.isnot(None))
+        .where(Deal.created_at >= cutoff)
+    )
+    deal_rows = result.all()
+
+    contact_agg: dict[uuid.UUID, dict] = {}
+    for (contact_id, value, health, win_prob, stage) in deal_rows:
+        if contact_id is None:
+            continue
+        if contact_id not in contact_agg:
+            contact_agg[contact_id] = {
+                "deal_count": 0,
+                "total_value": 0.0,
+                "health_scores": [],
+                "win_probs": [],
+                "stages": [],
+            }
+        agg = contact_agg[contact_id]
+        agg["deal_count"] += 1
+        agg["total_value"] += float(value or 0)
+        if health is not None:
+            agg["health_scores"].append(float(health))
+        if win_prob is not None:
+            agg["win_probs"].append(float(win_prob))
+        agg["stages"].append(stage or "unknown")
+
+    if not contact_agg:
+        return {
+            "top_contacts": [],
+            "opportunities_narrative": "No open deals with associated contacts found in the last 90 days.",
+            "recommendations": [
+                "Ensure deals are linked to contacts to enable opportunity scoring.",
+                "Create new deals for your most engaged contacts to build pipeline.",
+                "Review contacts without associated deals and qualify them for outreach.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    contact_ids = list(contact_agg.keys())
+    contact_result = await db.execute(
+        select(Contact.id, Contact.name)
+        .where(Contact.workspace_id == workspace_id)
+        .where(Contact.id.in_(contact_ids))
+    )
+    contact_names = {row.id: (row.name or "Unknown") for row in contact_result.all()}
+
+    scored: list[dict] = []
+    max_value = max((d["total_value"] for d in contact_agg.values()), default=1.0) or 1.0
+
+    for cid, agg in contact_agg.items():
+        avg_prob = sum(agg["win_probs"]) / len(agg["win_probs"]) if agg["win_probs"] else 50.0
+        avg_health = sum(agg["health_scores"]) / len(agg["health_scores"]) if agg["health_scores"] else 50.0
+        norm_value = agg["total_value"] / max_value
+        opportunity_score = round((avg_prob / 100.0) * 0.5 * norm_value * 100.0 + avg_prob * 0.3 + avg_health * 0.2, 1)
+        top_stage = agg["stages"][0] if agg["stages"] else "unknown"
+        scored.append({
+            "contact_id": str(cid),
+            "name": contact_names.get(cid, "Unknown"),
+            "deal_count": agg["deal_count"],
+            "total_pipeline_value": round(agg["total_value"], 2),
+            "avg_win_prob": round(avg_prob, 1),
+            "avg_health": round(avg_health, 1),
+            "top_stage": top_stage,
+            "opportunity_score": opportunity_score,
+        })
+
+    scored.sort(key=lambda x: x["opportunity_score"], reverse=True)
+    top_contacts = scored[:5]
+
+    default_narrative = (
+        f"The top opportunity is {top_contacts[0]['name']} with "
+        f"${top_contacts[0]['total_pipeline_value']:,.0f} in pipeline and "
+        f"{top_contacts[0]['avg_win_prob']:.0f}% average win probability. "
+        "Focus outreach on the highest-scoring contacts to maximise near-term revenue. "
+        "Deals with high win probability but moderate health scores are the quickest wins."
+    ) if top_contacts else "No opportunities found."
+    default_recs = [
+        f"Prioritise outreach to {top_contacts[0]['name']} — highest opportunity score with {top_contacts[0]['avg_win_prob']:.0f}% win probability.",
+        "Schedule weekly pipeline reviews for all top-5 contacts to keep deals progressing.",
+        "Assign your best-performing rep to contacts with high opportunity scores but lower health scores.",
+    ] if top_contacts else [
+        "Link deals to contacts to enable opportunity scoring.",
+        "Create deals for engaged contacts to build pipeline.",
+        "Review and qualify contacts without active deals.",
+    ]
+
+    context = (
+        f"Top contact opportunities ranked by pipeline score.\n"
+        f"Top 5 contacts:\n"
+        + "\n".join(
+            f"  {i+1}. {c['name']}: score={c['opportunity_score']}, "
+            f"deals={c['deal_count']}, value=${c['total_pipeline_value']:,.0f}, "
+            f"win_prob={c['avg_win_prob']}%, health={c['avg_health']}, stage={c['top_stage']}"
+            for i, c in enumerate(top_contacts)
+        )
+        + "\nProvide an opportunities_narrative and 3 recommendations about prioritising contacts."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_TOP_OPPORTUNITIES_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    opportunities_narrative = str(data.get("opportunities_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "top_contacts": top_contacts,
+        "opportunities_narrative": opportunities_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
