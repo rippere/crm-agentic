@@ -6871,5 +6871,27 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/quarter-readiness`, {}, token)
   },
+
+  async getAIDealTierSegmentation(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        tiers: [
+          { tier: 'enterprise', deal_count: 4, total_value: 320000, avg_value: 80000, avg_health: 72.5, avg_win_prob: 62.5, pct_of_pipeline: 46.7 },
+          { tier: 'mid_market', deal_count: 5, total_value: 155000, avg_value: 31000, avg_health: 68.2, avg_win_prob: 55.4, pct_of_pipeline: 22.6 },
+          { tier: 'smb', deal_count: 7, total_value: 210000, avg_value: 30000, avg_health: 61.3, avg_win_prob: 48.7, pct_of_pipeline: 30.7 },
+        ],
+        priority_tier: 'enterprise',
+        total_pipeline: 685000,
+        tier_narrative: 'Enterprise deals hold 47% of pipeline value across 4 high-value opportunities. The SMB tier shows strong volume with 7 deals that require win probability uplift.',
+        recommendations: [
+          'Prioritise the 4 Enterprise deals with dedicated executive-level outreach to maintain momentum.',
+          'Bundle Mid-Market deals with case studies from similar-sized customers to accelerate decisions.',
+          'Run a 30-day SMB sprint to close quick wins and free capacity for higher-value pursuits.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/tier-segmentation`, {}, token)
+  },
 }
 
