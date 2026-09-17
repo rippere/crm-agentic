@@ -678,6 +678,11 @@ export default function ReportsPage() {
   const [dealScoreDistLoading, setDealScoreDistLoading] = useState(false);
   const [dealScoreDistOpen, setDealScoreDistOpen] = useState(true);
 
+  type AIDealWinFactorsData = { won_count: number; lost_count: number; overall_win_rate: number; avg_won_value: number; avg_lost_value: number; avg_won_health: number; avg_lost_health: number; avg_won_prob: number; avg_lost_prob: number; health_delta: number; prob_delta: number; win_factors_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealWinFactors, setDealWinFactors] = useState<AIDealWinFactorsData | null>(null);
+  const [dealWinFactorsLoading, setDealWinFactorsLoading] = useState(false);
+  const [dealWinFactorsOpen, setDealWinFactorsOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -794,6 +799,8 @@ export default function ReportsPage() {
       apiClient.getAIPipelineConversionFunnel("demo-workspace-1", "demo-token").then(setAiFunnel).catch(() => {}).finally(() => setAiFunnelLoading(false));
       setDealScoreDistLoading(true);
       apiClient.getAIDealScoreDistribution("demo-workspace-1", "demo-token").then(setDealScoreDist).catch(() => {}).finally(() => setDealScoreDistLoading(false));
+      setDealWinFactorsLoading(true);
+      apiClient.getAIDealWinFactors("demo-workspace-1", "demo-token").then(setDealWinFactors).catch(() => {}).finally(() => setDealWinFactorsLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -915,6 +922,8 @@ export default function ReportsPage() {
       apiClient.getAIPipelineConversionFunnel(workspaceId, session.access_token).then(setAiFunnel).catch(() => {}).finally(() => setAiFunnelLoading(false));
       setDealScoreDistLoading(true);
       apiClient.getAIDealScoreDistribution(workspaceId, session.access_token).then(setDealScoreDist).catch(() => {}).finally(() => setDealScoreDistLoading(false));
+      setDealWinFactorsLoading(true);
+      apiClient.getAIDealWinFactors(workspaceId, session.access_token).then(setDealWinFactors).catch(() => {}).finally(() => setDealWinFactorsLoading(false));
     });
   }, []);
 
@@ -1659,6 +1668,27 @@ export default function ReportsPage() {
         if (!session) { setDealScoreDistLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealScoreDistLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealWinFactors = () => {
+    setDealWinFactorsLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealWinFactors(wid, tok)
+        .then(setDealWinFactors)
+        .catch(() => {})
+        .finally(() => setDealWinFactorsLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealWinFactorsLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealWinFactorsLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -7217,6 +7247,87 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No scoring data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Win Factors */}
+      <Card className="border-emerald-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-emerald-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Win Factors</h3>
+            {dealWinFactors && (
+              <span className="text-xs bg-emerald-900/40 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-700/30">
+                {dealWinFactors.overall_win_rate}% win rate
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateDealWinFactors}
+              disabled={dealWinFactorsLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded border border-zinc-700 hover:border-zinc-500 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", dealWinFactorsLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setDealWinFactorsOpen(o => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {dealWinFactorsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {dealWinFactorsOpen && (
+          dealWinFactorsLoading && !dealWinFactors ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : dealWinFactors ? (
+            <div className={cn("p-4 space-y-4", dealWinFactorsLoading && "opacity-40")}>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-400 mb-0.5">Won</p>
+                  <p className="text-lg font-bold text-emerald-400">{dealWinFactors.won_count}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-400 mb-0.5">Lost</p>
+                  <p className="text-lg font-bold text-rose-400">{dealWinFactors.lost_count}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-400 mb-0.5">Win Rate</p>
+                  <p className={cn("text-lg font-bold", dealWinFactors.overall_win_rate >= 60 ? "text-emerald-400" : dealWinFactors.overall_win_rate >= 40 ? "text-amber-400" : "text-rose-400")}>
+                    {dealWinFactors.overall_win_rate}%
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {([
+                  { label: "Avg health", won: dealWinFactors.avg_won_health, lost: dealWinFactors.avg_lost_health, delta: dealWinFactors.health_delta, unit: "" },
+                  { label: "Avg win prob", won: dealWinFactors.avg_won_prob, lost: dealWinFactors.avg_lost_prob, delta: dealWinFactors.prob_delta, unit: "%" },
+                ] as Array<{ label: string; won: number; lost: number; delta: number; unit: string }>).map((row) => (
+                  <div key={row.label} className="flex items-center gap-2">
+                    <span className="text-xs text-zinc-400 w-24 flex-shrink-0">{row.label}</span>
+                    <span className="text-xs font-mono text-emerald-300 w-16">won {row.won}{row.unit}</span>
+                    <span className="text-xs font-mono text-rose-300 w-16">lost {row.lost}{row.unit}</span>
+                    <span className={cn("text-xs font-mono px-1.5 py-0.5 rounded border", row.delta > 0 ? "text-emerald-300 bg-emerald-900/20 border-emerald-700/30" : "text-rose-300 bg-rose-900/20 border-rose-700/30")}>
+                      {row.delta > 0 ? "+" : ""}{row.delta}{row.unit}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{dealWinFactors.win_factors_narrative}</p>
+              <ul className="space-y-1.5">
+                {dealWinFactors.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealWinFactors.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No win factor data available.</p>
           )
         )}
       </Card>

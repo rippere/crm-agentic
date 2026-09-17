@@ -7080,3 +7080,50 @@ async def test_deal_score_distribution_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/score-distribution")
     assert resp.status_code == 403
+
+
+
+# ---------------------------------------------------------------------------
+# Phase 17t: deal win factors
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_deal_win_factors_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    rows = [
+        ("closed_won", 50000.0, 80.0, 75.0),
+        ("closed_won", 30000.0, 72.0, 68.0),
+        ("closed_lost", 20000.0, 35.0, 30.0),
+        ("closed_lost", 15000.0, 40.0, 25.0),
+        ("closed_won", 45000.0, 85.0, 82.0),
+    ]
+    mock_db.execute.return_value = _make_execute_result(rows)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"win_factors_narrative": "Test narrative.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_msg
+
+    with patch("app.routers.ai._anthropic.Anthropic", return_value=mock_client):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/win-factors")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["won_count"] == 3
+    assert body["lost_count"] == 2
+    assert isinstance(body["overall_win_rate"], float)
+    assert isinstance(body["health_delta"], float)
+    assert isinstance(body["prob_delta"], float)
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_win_factors_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-factors")
+    assert resp.status_code == 403

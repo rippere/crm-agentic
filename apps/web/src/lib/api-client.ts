@@ -6478,5 +6478,31 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/score-distribution`, {}, token)
   },
+
+  async getAIDealWinFactors(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        won_count: 14,
+        lost_count: 9,
+        overall_win_rate: 60.9,
+        avg_won_value: 48500,
+        avg_lost_value: 22000,
+        avg_won_health: 78.4,
+        avg_lost_health: 41.2,
+        avg_won_prob: 71.3,
+        avg_lost_prob: 33.8,
+        health_delta: 37.2,
+        prob_delta: 37.5,
+        win_factors_narrative: '14 deals won vs 9 lost over the last 90 days (61% win rate). Won deals had substantially higher health scores (78 vs 41) and win probability (71% vs 34%) compared to lost deals. Raising deal health to ≥70 before advancing to proposal stage is the single clearest lever for improving outcomes.',
+        recommendations: [
+          'Set a minimum health score threshold of 70 before advancing deals to the proposal stage — won deals averaged 78 vs 41 for lost deals.',
+          'Target deals where win probability reaches ≥71% before committing to a close date — this matches your historical win profile.',
+          'Run a 1-week post-mortem on each lost deal to capture what tipped the outcome while the context is fresh.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-factors`, {}, token)
+  },
 }
 
