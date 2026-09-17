@@ -6770,3 +6770,65 @@ async def test_deal_engagement_gap_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/engagement-gap")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 17o: GET /workspaces/{wid}/ai/deals/value-concentration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_value_concentration_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    rows = [
+        (uuid.uuid4(), "Enterprise Alpha", "negotiation", 180000, 70),
+        (uuid.uuid4(), "Mid Corp Beta", "proposal", 60000, 55),
+        (uuid.uuid4(), "Small Deal Gamma", "qualified", 20000, 40),
+        (uuid.uuid4(), "Starter Delta", "discovery", 10000, 30),
+    ]
+
+    ai_response = {
+        "concentration_narrative": "Pipeline of $270K shows high concentration risk. The top deal represents 67% of pipeline value — losing it would be a major setback.",
+        "recommendations": [
+            "Diversify the pipeline — the top deal at 67% creates critical single-deal risk.",
+            "Prioritise adding 3–5 new mid-size deals this month to reduce concentration.",
+            "Set pipeline health alerts when any single deal exceeds 30% of total value.",
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/value-concentration")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["deals_ranked"], list)
+    assert all("id" in d and "title" in d and "value" in d and "pct_of_pipeline" in d for d in body["deals_ranked"])
+    assert body["concentration_risk"] in ("low", "medium", "high")
+    assert isinstance(body["top_deal_pct"], float)
+    assert isinstance(body["top3_pct"], float)
+    assert isinstance(body["herfindahl_index"], int)
+    assert isinstance(body["concentration_narrative"], str) and body["concentration_narrative"]
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_value_concentration_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/value-concentration")
+    assert resp.status_code == 403

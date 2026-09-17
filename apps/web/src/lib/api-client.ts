@@ -6353,5 +6353,32 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/engagement-gap`, {}, token)
   },
+
+  async getDealValueConcentration(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        deals_ranked: [
+          { id: 'd-001', title: 'Enterprise Alpha Deal', stage: 'negotiation', value: 180000, pct_of_pipeline: 46.2 },
+          { id: 'd-002', title: 'Mid Corp Platform', stage: 'proposal', value: 95000, pct_of_pipeline: 24.4 },
+          { id: 'd-003', title: 'Beta Cloud Suite', stage: 'negotiation', value: 72000, pct_of_pipeline: 18.5 },
+          { id: 'd-004', title: 'Startup Onboarding', stage: 'qualified', value: 28000, pct_of_pipeline: 7.2 },
+          { id: 'd-005', title: 'SMB Analytics', stage: 'discovery', value: 14000, pct_of_pipeline: 3.6 },
+        ],
+        total_pipeline: 389000,
+        top_deal_pct: 46.2,
+        top3_pct: 89.1,
+        concentration_risk: 'high',
+        herfindahl_index: 2910,
+        concentration_narrative: 'Your pipeline of $389K shows high concentration risk. The top deal represents 46% of total value — a loss here would be a significant revenue setback. The top 3 deals alone account for 89% of pipeline value, leaving the business exposed to a small number of opportunities.',
+        recommendations: [
+          'Prioritise adding 5–8 new mid-size deals this quarter to reduce top-deal concentration below the 30% threshold.',
+          'Set a pipeline health alert when any single deal exceeds 35% of total value so leadership can act before it becomes a crisis.',
+          'Review the top deal\'s risk profile weekly — a high-value deal in negotiation deserves a dedicated success plan.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-concentration`, {}, token)
+  },
 }
 
