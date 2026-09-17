@@ -6632,5 +6632,28 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/reactivation-candidates`, {}, token)
   },
+
+  async getAIDealPipelineGap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stage_gaps: [
+          { stage: 'discovery', actual_count: 4, expected_count: 10, gap: 6, gap_pct: 60.0 },
+          { stage: 'qualified', actual_count: 6, expected_count: 7, gap: 1, gap_pct: 14.3 },
+          { stage: 'proposal', actual_count: 6, expected_count: 5, gap: -1, gap_pct: -20.0 },
+          { stage: 'negotiation', actual_count: 2, expected_count: 3, gap: 1, gap_pct: 33.3 },
+        ],
+        most_understocked_stage: 'discovery',
+        total_gap_count: 8,
+        pipeline_gap_narrative: 'Discovery is critically understocked at just 4 deals against a target of 10, creating a 60% gap that will translate to revenue shortfalls in 60–90 days. Proposal stage is slightly overstocked which is a positive sign, but without top-of-funnel replenishment the pipeline will thin out rapidly. Immediate prospecting investment in discovery is the highest-leverage action available.',
+        recommendations: [
+          'Double prospecting activity this week — target 6 new discovery conversations to close the 60% discovery gap before it becomes a revenue crisis.',
+          'Consider running a targeted outbound campaign to existing warm leads to accelerate deals into the qualified stage.',
+          'Review pipeline conversion rates: if proposal-to-negotiation conversion is low, qualification criteria may need tightening.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-gap`, {}, token)
+  },
 }
 

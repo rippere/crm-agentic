@@ -714,6 +714,12 @@ export default function ReportsPage() {
   const [reactivationLoading, setReactivationLoading] = useState(false);
   const [reactivationOpen, setReactivationOpen] = useState(true);
 
+  type StageGap = { stage: string; actual_count: number; expected_count: number; gap: number; gap_pct: number };
+  type AIPipelineGapData = { stage_gaps: StageGap[]; most_understocked_stage: string; total_gap_count: number; pipeline_gap_narrative: string; recommendations: string[]; generated_at: string };
+  const [pipelineGap, setPipelineGap] = useState<AIPipelineGapData | null>(null);
+  const [pipelineGapLoading, setPipelineGapLoading] = useState(false);
+  const [pipelineGapOpen, setPipelineGapOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -842,6 +848,8 @@ export default function ReportsPage() {
       apiClient.getAIContactLifetimeValue("demo-workspace-1", "demo-token").then(setContactLTV).catch(() => {}).finally(() => setContactLTVLoading(false));
       setReactivationLoading(true);
       apiClient.getAIDealReactivationCandidates("demo-workspace-1", "demo-token").then(setReactivationCandidates).catch(() => {}).finally(() => setReactivationLoading(false));
+      setPipelineGapLoading(true);
+      apiClient.getAIDealPipelineGap("demo-workspace-1", "demo-token").then(setPipelineGap).catch(() => {}).finally(() => setPipelineGapLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -975,6 +983,8 @@ export default function ReportsPage() {
       apiClient.getAIContactLifetimeValue(workspaceId, session.access_token).then(setContactLTV).catch(() => {}).finally(() => setContactLTVLoading(false));
       setReactivationLoading(true);
       apiClient.getAIDealReactivationCandidates(workspaceId, session.access_token).then(setReactivationCandidates).catch(() => {}).finally(() => setReactivationLoading(false));
+      setPipelineGapLoading(true);
+      apiClient.getAIDealPipelineGap(workspaceId, session.access_token).then(setPipelineGap).catch(() => {}).finally(() => setPipelineGapLoading(false));
     });
   }, []);
 
@@ -1782,6 +1792,27 @@ export default function ReportsPage() {
         if (!session) { setDealVelocityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealVelocityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regeneratePipelineGap = () => {
+    setPipelineGapLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealPipelineGap(wid, tok)
+        .then(setPipelineGap)
+        .catch(() => {})
+        .finally(() => setPipelineGapLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPipelineGapLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPipelineGapLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -7894,6 +7925,88 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No reactivation candidates found in the last 12 months.</p>
+          )
+        )}
+      </Card>
+
+      {/* Pipeline Gap Analysis */}
+      <Card className="border-sky-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-sky-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Pipeline Gap Analysis</h3>
+            {pipelineGap && pipelineGap.most_understocked_stage && (
+              <span className="text-xs bg-sky-900/40 text-sky-300 px-2 py-0.5 rounded-full border border-sky-700/30 capitalize">
+                {pipelineGap.most_understocked_stage} understocked
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePipelineGap}
+              disabled={pipelineGapLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", pipelineGapLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setPipelineGapOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {pipelineGapOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {pipelineGapOpen && (
+          pipelineGapLoading && !pipelineGap ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3, 4].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : pipelineGap ? (
+            <div className={cn("p-4 space-y-4", pipelineGapLoading && "opacity-40")}>
+              <div className="flex gap-4 text-xs text-zinc-400">
+                <span>Total gap: <span className="text-rose-300 font-mono font-semibold">{pipelineGap.total_gap_count} deals</span></span>
+              </div>
+              <div className="space-y-2">
+                {pipelineGap.stage_gaps.map((s) => {
+                  const isUnderstocked = s.gap > 0;
+                  const isOverstocked = s.gap < 0;
+                  const barPct = Math.min(Math.round((s.actual_count / s.expected_count) * 100), 150);
+                  return (
+                    <div key={s.stage} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-400 capitalize">{s.stage}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-zinc-500">{s.actual_count}/{s.expected_count}</span>
+                          <span className={`font-mono font-semibold ${isUnderstocked ? 'text-rose-400' : isOverstocked ? 'text-emerald-400' : 'text-zinc-400'}`}>
+                            {isUnderstocked ? `-${s.gap}` : isOverstocked ? `+${Math.abs(s.gap)}` : '✓'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="relative h-3 bg-zinc-800 rounded overflow-hidden">
+                        <div
+                          className={`h-full rounded transition-all ${isUnderstocked ? 'bg-rose-500/60' : isOverstocked ? 'bg-emerald-500/60' : 'bg-sky-500/60'}`}
+                          style={{ width: `${Math.min(barPct, 100)}%` }}
+                        />
+                        <div className="absolute inset-y-0 left-0 right-0 flex items-center">
+                          <div className="border-r-2 border-sky-400/60 h-full" style={{ marginLeft: `${Math.min(100, Math.round(100 * s.expected_count / Math.max(s.expected_count, s.actual_count)))}%` }} />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{pipelineGap.pipeline_gap_narrative}</p>
+              <ul className="space-y-1.5">
+                {pipelineGap.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(pipelineGap.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No pipeline data available.</p>
           )
         )}
       </Card>
