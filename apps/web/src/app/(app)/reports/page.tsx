@@ -433,6 +433,17 @@ export default function ReportsPage() {
   const [valueAtRiskLoading, setValueAtRiskLoading] = useState(false);
   const [valueAtRiskOpen, setValueAtRiskOpen] = useState(true);
 
+  type NextBestAction = { deal_id: string; priority: 'high' | 'medium' | 'low'; action: string; rationale: string };
+  type NextBestActions = {
+    actions: NextBestAction[];
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [nextBestActions, setNextBestActions] = useState<NextBestActions | null>(null);
+  const [nextBestActionsLoading, setNextBestActionsLoading] = useState(false);
+  const [nextBestActionsOpen, setNextBestActionsOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -509,6 +520,8 @@ export default function ReportsPage() {
       apiClient.getDealFollowupGaps("demo-workspace-1", "demo-token").then(setFollowupGaps).catch(() => {}).finally(() => setFollowupGapsLoading(false));
       setValueAtRiskLoading(true);
       apiClient.getDealValueAtRisk("demo-workspace-1", "demo-token").then(setValueAtRisk).catch(() => {}).finally(() => setValueAtRiskLoading(false));
+      setNextBestActionsLoading(true);
+      apiClient.getDealNextBestActions("demo-workspace-1", "demo-token").then(setNextBestActions).catch(() => {}).finally(() => setNextBestActionsLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -590,6 +603,8 @@ export default function ReportsPage() {
       apiClient.getDealFollowupGaps(workspaceId, session.access_token).then(setFollowupGaps).catch(() => {}).finally(() => setFollowupGapsLoading(false));
       setValueAtRiskLoading(true);
       apiClient.getDealValueAtRisk(workspaceId, session.access_token).then(setValueAtRisk).catch(() => {}).finally(() => setValueAtRiskLoading(false));
+      setNextBestActionsLoading(true);
+      apiClient.getDealNextBestActions(workspaceId, session.access_token).then(setNextBestActions).catch(() => {}).finally(() => setNextBestActionsLoading(false));
     });
   }, []);
 
@@ -1124,6 +1139,27 @@ export default function ReportsPage() {
         if (!session) { setValueAtRiskLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setValueAtRiskLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateNextBestActions = () => {
+    setNextBestActionsLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealNextBestActions(wid, tok)
+        .then(setNextBestActions)
+        .catch(() => {})
+        .finally(() => setNextBestActionsLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setNextBestActionsLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setNextBestActionsLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -4674,6 +4710,86 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No value at risk data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Next Best Actions */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-zinc-200">Next Best Actions</span>
+            {nextBestActions && (
+              <span className="text-xs font-medium text-indigo-400">
+                {nextBestActions.actions.filter((a) => a.priority === 'high').length} high priority
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateNextBestActions}
+              disabled={nextBestActionsLoading}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", nextBestActionsLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setNextBestActionsOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {nextBestActionsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {nextBestActionsOpen && (
+          nextBestActionsLoading && !nextBestActions ? (
+            <div className="h-24 animate-pulse bg-zinc-800/40 m-4 rounded" />
+          ) : nextBestActions && nextBestActions.actions.length > 0 ? (
+            <div className={cn("space-y-4 p-4", nextBestActionsLoading && "opacity-40")}>
+              <ul className="space-y-2">
+                {nextBestActions.actions.map((a, i) => (
+                  <li key={a.deal_id + i} className="flex items-start gap-3 rounded bg-zinc-800/50 px-3 py-2">
+                    <span className={cn(
+                      "mt-0.5 rounded px-1.5 py-0.5 text-xs font-semibold flex-shrink-0",
+                      a.priority === 'high' ? "bg-rose-500/20 text-rose-300" :
+                      a.priority === 'medium' ? "bg-amber-500/20 text-amber-300" :
+                      "bg-emerald-500/20 text-emerald-300"
+                    )}>
+                      {a.priority}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-xs text-zinc-200 font-medium">{a.action}</p>
+                      {a.rationale && <p className="text-xs text-zinc-500 mt-0.5">{a.rationale}</p>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-400 italic">{nextBestActions.insight}</p>
+              <ul className="space-y-1">
+                {nextBestActions.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(nextBestActions.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : nextBestActions && nextBestActions.actions.length === 0 ? (
+            <div className={cn("p-4 space-y-3", nextBestActionsLoading && "opacity-40")}>
+              <p className="text-xs text-zinc-400 italic">{nextBestActions.insight}</p>
+              <ul className="space-y-1">
+                {nextBestActions.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No next best actions data available.</p>
           )
         )}
       </Card>
