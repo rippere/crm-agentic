@@ -6832,3 +6832,67 @@ async def test_deal_value_concentration_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/value-concentration")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 17p: GET /workspaces/{wid}/ai/deals/close-date-accuracy
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_close_date_accuracy_returns_structured_response(app_client):
+    import json as _json
+    import datetime as _dt
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    rows = [
+        (uuid.uuid4(), "Alpha Corp", "closed_won", "2026-08-01", now - _dt.timedelta(days=15)),   # on-time
+        (uuid.uuid4(), "Beta Inc", "closed_lost", "2026-08-10", now - _dt.timedelta(days=5)),    # slip ~5d → on-time
+        (uuid.uuid4(), "Gamma LLC", "closed_won", "2026-07-20", now - _dt.timedelta(days=25)),   # late (slip ~25d)
+        (uuid.uuid4(), "Delta Co", "closed_won", "2026-09-01", now - _dt.timedelta(days=2)),     # early (expected future)
+    ]
+
+    ai_response = {
+        "accuracy_narrative": "Close date accuracy is moderate at 50%. Two deals slipped significantly past their expected dates, indicating a forecasting gap in late-stage deals.",
+        "recommendations": [
+            "Review late-closing deals to identify recurring causes of slippage.",
+            "Implement bi-weekly close-date audits to keep expected dates current.",
+            "Coach reps to update close dates proactively when deal pace slows.",
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/close-date-accuracy")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["total_closed"], int)
+    assert isinstance(body["accuracy_pct"], float)
+    assert isinstance(body["avg_slip_days"], float)
+    assert isinstance(body["on_time_count"], int)
+    assert isinstance(body["late_count"], int)
+    assert isinstance(body["early_count"], int)
+    assert isinstance(body["accuracy_narrative"], str) and body["accuracy_narrative"]
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_close_date_accuracy_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/close-date-accuracy")
+    assert resp.status_code == 403
