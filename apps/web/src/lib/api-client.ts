@@ -5762,5 +5762,32 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-at-risk`, {}, token)
   },
+
+  async getDealNextBestActions(workspaceId: string, token: string): Promise<{
+    actions: Array<{ deal_id: string; priority: 'high' | 'medium' | 'low'; action: string; rationale: string }>
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 800))
+      return Promise.resolve({
+        actions: [
+          { deal_id: 'd-001', priority: 'high', action: 'Schedule executive sponsor call to unblock negotiation', rationale: 'High value deal stuck 47d — needs senior escalation.' },
+          { deal_id: 'd-002', priority: 'high', action: 'Send re-engagement email with revised proposal', rationale: 'Health score 45 and no response in 18d.' },
+          { deal_id: 'd-003', priority: 'medium', action: 'Run discovery qualification call this week', rationale: 'Stuck beyond 14d threshold, move to qualified.' },
+          { deal_id: 'd-004', priority: 'low', action: 'Send weekly check-in email', rationale: 'Healthy deal on track — maintain momentum.' },
+        ],
+        insight: '4 deals prioritised — 2 require immediate attention to prevent $167K pipeline loss.',
+        recommendations: [
+          'Prioritise the TechCorp and HealthPlus deals this week — together they represent $167K at risk of slipping.',
+          'Set calendar blocks for follow-ups on stuck deals to prevent them from aging further beyond stage thresholds.',
+          'Track competitor mentions in follow-up calls to sharpen differentiation messaging for stalled proposals.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/next-best-actions`, {}, token)
+  },
 }
 

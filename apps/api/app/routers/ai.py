@@ -10816,3 +10816,191 @@ async def get_value_at_risk(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ── Phase 16z: Next-Best-Action Recommendations ─────────────────────────────
+
+_NEXT_BEST_ACTIONS_SYSTEM = """\
+You are a senior sales strategist. Given a list of deals with their stage, \
+health score, value, days in stage, and competitors, output a JSON object with:
+- "actions": array of objects, one per deal:
+    - "deal_id": string
+    - "priority": "high" | "medium" | "low"
+    - "action": string (<=12 words, specific next step)
+    - "rationale": string (<=20 words, why this action)
+- "insight": string (1 sentence overall pattern)
+- "recommendations": array of 3 strings (strategic recommendations)
+
+Priority rules:
+- high: value > $50k OR health_score < 40 OR stuck > 2x threshold
+- low: health_score >= 70 AND days_in_stage < threshold
+- medium: everything else
+
+Action must be concrete (e.g. "Schedule executive sponsor call", "Send revised proposal", "Address pricing objection").
+Return valid JSON only, no prose.\
+"""
+
+_NEXT_BEST_ACTIONS_STAGE_THRESHOLDS: dict[str, int] = {
+    "discovery": 14,
+    "qualified": 21,
+    "proposal": 30,
+    "negotiation": 45,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/next-best-actions")
+@limiter.limit("5/minute")
+async def get_next_best_actions(
+    request: Request,
+    workspace_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if str(current_user.workspace_id) != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.company,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.created_at,
+            Deal.stage_changed_at,
+            Deal.competitors,
+        )
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.not_in(["closed_won", "closed_lost"]))
+        .order_by(Deal.value.desc())
+        .limit(10)
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "actions": [],
+            "insight": "No open deals found to generate next-best-action recommendations.",
+            "recommendations": [
+                "Create your first deal in the Pipeline to start receiving AI recommendations.",
+                "Import deals from your CRM to get immediate prioritisation insights.",
+                "Connect Gmail or Slack to auto-create deals from inbound conversations.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    deals_context: list[dict] = []
+    for row in rows:
+        deal_id, title, company, stage, value, health_score, created_at, stage_changed_at, competitors = row
+        ref = stage_changed_at or created_at
+        days_in_stage = (now - ref.replace(tzinfo=datetime.timezone.utc)).days if ref else 0
+        threshold = _NEXT_BEST_ACTIONS_STAGE_THRESHOLDS.get(stage, 30)
+        competitor_list: list[str] = competitors if isinstance(competitors, list) else []
+        deals_context.append({
+            "deal_id": str(deal_id),
+            "title": title or "Untitled",
+            "company": company or "",
+            "stage": stage,
+            "value": float(value or 0),
+            "health_score": int(health_score or 0),
+            "days_in_stage": days_in_stage,
+            "threshold": threshold,
+            "competitors": competitor_list,
+        })
+
+    context_lines = ["Top open deals (by value):\n"]
+    for d in deals_context:
+        comp_str = f", competitors: {', '.join(d['competitors'])}" if d["competitors"] else ""
+        context_lines.append(
+            f"  deal_id={d['deal_id']} title={d['title']!r} company={d['company']!r} "
+            f"stage={d['stage']} value=${d['value']:,.0f} health={d['health_score']} "
+            f"days_in_stage={d['days_in_stage']} threshold={d['threshold']}{comp_str}"
+        )
+    context = "\n".join(context_lines)
+
+    default_actions = []
+    for d in deals_context:
+        if d["value"] > 50000 or d["health_score"] < 40 or d["days_in_stage"] > 2 * d["threshold"]:
+            priority = "high"
+        elif d["health_score"] >= 70 and d["days_in_stage"] < d["threshold"]:
+            priority = "low"
+        else:
+            priority = "medium"
+        if d["stage"] == "discovery":
+            action = "Schedule qualification call to advance stage"
+        elif d["stage"] == "qualified":
+            action = "Send tailored proposal based on needs"
+        elif d["stage"] == "proposal":
+            action = "Follow up on proposal and address objections"
+        else:
+            action = "Align on terms and request verbal commitment"
+        default_actions.append({
+            "deal_id": d["deal_id"],
+            "priority": priority,
+            "action": action,
+            "rationale": "Based on stage and health score.",
+        })
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            system=_NEXT_BEST_ACTIONS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    actions = data.get("actions", default_actions)
+    if not isinstance(actions, list):
+        actions = default_actions
+    valid_priorities = {"high", "medium", "low"}
+    cleaned_actions = []
+    deal_ids_seen = {d["deal_id"] for d in deals_context}
+    for a in actions:
+        if not isinstance(a, dict):
+            continue
+        if str(a.get("deal_id", "")) not in deal_ids_seen:
+            continue
+        cleaned_actions.append({
+            "deal_id": str(a.get("deal_id", "")),
+            "priority": a.get("priority", "medium") if a.get("priority") in valid_priorities else "medium",
+            "action": str(a.get("action", "Follow up with stakeholder"))[:80],
+            "rationale": str(a.get("rationale", ""))[:100],
+        })
+    if not cleaned_actions:
+        cleaned_actions = default_actions
+
+    default_insight = (
+        f"{len(deals_context)} deals prioritised — "
+        f"{sum(1 for a in cleaned_actions if a['priority'] == 'high')} require immediate attention."
+    )
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    default_recs = [
+        "Prioritise high-value, low-health deals to prevent pipeline leakage.",
+        "Set weekly cadence for follow-ups on deals stuck beyond their stage threshold.",
+        "Track competitor mentions and tailor messaging to differentiate your offering.",
+    ]
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "actions": cleaned_actions,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
