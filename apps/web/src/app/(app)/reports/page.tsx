@@ -726,6 +726,12 @@ export default function ReportsPage() {
   const [heatmapLoading, setHeatmapLoading] = useState(false);
   const [heatmapOpen, setHeatmapOpen] = useState(true);
 
+  type SRCell = { score_tier: string; recency_tier: string; contact_count: number; avg_revenue: number; total_revenue: number };
+  type AISRHeatmapData = { cells: SRCell[]; at_risk_score_tier: string; at_risk_recency_tier: string; engagement_narrative: string; recommendations: string[]; generated_at: string };
+  const [srHeatmap, setSRHeatmap] = useState<AISRHeatmapData | null>(null);
+  const [srHeatmapLoading, setSRHeatmapLoading] = useState(false);
+  const [srHeatmapOpen, setSRHeatmapOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -858,6 +864,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPipelineGap("demo-workspace-1", "demo-token").then(setPipelineGap).catch(() => {}).finally(() => setPipelineGapLoading(false));
       setHeatmapLoading(true);
       apiClient.getAIClosureProbabilityHeatmap("demo-workspace-1", "demo-token").then(setHeatmapData).catch(() => {}).finally(() => setHeatmapLoading(false));
+      setSRHeatmapLoading(true);
+      apiClient.getAIContactScoreRecencyHeatmap("demo-workspace-1", "demo-token").then(setSRHeatmap).catch(() => {}).finally(() => setSRHeatmapLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -995,6 +1003,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPipelineGap(workspaceId, session.access_token).then(setPipelineGap).catch(() => {}).finally(() => setPipelineGapLoading(false));
       setHeatmapLoading(true);
       apiClient.getAIClosureProbabilityHeatmap(workspaceId, session.access_token).then(setHeatmapData).catch(() => {}).finally(() => setHeatmapLoading(false));
+      setSRHeatmapLoading(true);
+      apiClient.getAIContactScoreRecencyHeatmap(workspaceId, session.access_token).then(setSRHeatmap).catch(() => {}).finally(() => setSRHeatmapLoading(false));
     });
   }, []);
 
@@ -1844,6 +1854,27 @@ export default function ReportsPage() {
         if (!session) { setHeatmapLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setHeatmapLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateSRHeatmap = () => {
+    setSRHeatmapLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactScoreRecencyHeatmap(wid, tok)
+        .then(setSRHeatmap)
+        .catch(() => {})
+        .finally(() => setSRHeatmapLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setSRHeatmapLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setSRHeatmapLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -8038,6 +8069,94 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No pipeline data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Contact Score × Recency Heatmap */}
+      <Card className="border-violet-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-violet-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Contact Score × Recency</h3>
+            {srHeatmap && (
+              <span className="text-xs bg-rose-900/40 text-rose-300 px-2 py-0.5 rounded-full border border-rose-700/30">
+                At-risk: {srHeatmap.at_risk_score_tier}/{srHeatmap.at_risk_recency_tier}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateSRHeatmap}
+              disabled={srHeatmapLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", srHeatmapLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setSRHeatmapOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {srHeatmapOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {srHeatmapOpen && (
+          srHeatmapLoading ? (
+            <div className="p-4 text-xs text-zinc-500 animate-pulse">Analysing contact score and recency distribution…</div>
+          ) : srHeatmap ? (
+            <div className="p-4 space-y-4">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr>
+                      <th className="text-left text-zinc-500 pr-3 py-1 font-medium">Score</th>
+                      {['active', 'idle', 'dormant'].map((rt) => (
+                        <th key={rt} className="text-center text-zinc-400 px-2 py-1 font-medium capitalize">{rt}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {['low', 'mid', 'high'].map((st) => (
+                      <tr key={st} className="border-t border-zinc-800/60">
+                        <td className="pr-3 py-2 text-zinc-300 capitalize font-medium">{st}</td>
+                        {['active', 'idle', 'dormant'].map((rt) => {
+                          const cell = srHeatmap.cells.find((c) => c.score_tier === st && c.recency_tier === rt);
+                          const count = cell?.contact_count ?? 0;
+                          const avg = cell?.avg_revenue ?? 0;
+                          const isAtRisk = st === srHeatmap.at_risk_score_tier && rt === srHeatmap.at_risk_recency_tier;
+                          const intensity = count === 0 ? 'bg-zinc-900 text-zinc-600' :
+                            (st === 'high' && rt === 'active') ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-700/30' :
+                            (st === 'high' && rt !== 'active') ? 'bg-rose-950/50 text-rose-300 border border-rose-700/20' :
+                            st === 'mid' ? 'bg-amber-950/40 text-amber-300 border border-amber-700/20' :
+                            'bg-zinc-800/50 text-zinc-400';
+                          return (
+                            <td key={rt} className={`px-2 py-2 text-center rounded ${intensity} ${isAtRisk ? 'ring-1 ring-rose-400' : ''}`}>
+                              {count > 0 ? (
+                                <div>
+                                  <div className="font-semibold">{count}</div>
+                                  <div className="text-[10px] opacity-70">${(avg / 1000).toFixed(0)}k avg</div>
+                                </div>
+                              ) : <span>—</span>}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-zinc-400 italic">{srHeatmap.engagement_narrative}</p>
+              <ul className="space-y-1.5">
+                {srHeatmap.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(srHeatmap.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No contact data available.</p>
           )
         )}
       </Card>

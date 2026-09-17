@@ -15366,3 +15366,155 @@ async def get_ai_deal_closure_probability_heatmap(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_SCORE_RECENCY_SYSTEM = """\
+You are a senior CRM analyst specialising in contact engagement strategy.
+Given a 3×3 heatmap of contacts grouped by lead-score tier and recency of last update,
+identify patterns, at-risk segments, and prioritised actions to improve engagement.
+Return ONLY valid JSON with keys: engagement_narrative (string, 2-3 sentences) and
+recommendations (list of exactly 3 strings). No markdown, no prose outside the JSON.
+"""
+
+_SR_SCORE_TIERS = [("low", 0, 40), ("mid", 40, 70), ("high", 70, 101)]
+_SR_RECENCY_TIERS = [("active", 0, 31), ("idle", 31, 91), ("dormant", 91, 99999)]
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/score-recency-heatmap")
+@limiter.limit("5/minute")
+async def get_ai_contact_score_recency_heatmap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    stmt = (
+        select(Contact.id, Contact.ml_score, Contact.updated_at, Contact.revenue)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    cells: dict[tuple[str, str], list[float]] = {}
+    for st, _, _ in _SR_SCORE_TIERS:
+        for rt, _, _ in _SR_RECENCY_TIERS:
+            cells[(st, rt)] = []
+
+    for row in rows:
+        ml = row.ml_score or {}
+        score = float(ml.get("value", 50) if isinstance(ml, dict) else 50)
+        revenue = float(row.revenue or 0)
+        days_since = (now - row.updated_at.replace(tzinfo=timezone.utc)).days if row.updated_at else 999
+
+        score_tier = "mid"
+        for tier_name, lo, hi in _SR_SCORE_TIERS:
+            if lo <= score < hi:
+                score_tier = tier_name
+                break
+
+        recency_tier = "dormant"
+        for tier_name, lo, hi in _SR_RECENCY_TIERS:
+            if lo <= days_since < hi:
+                recency_tier = tier_name
+                break
+
+        cells[(score_tier, recency_tier)].append(revenue)
+
+    cell_list = []
+    at_risk_score_tier = "high"
+    at_risk_recency_tier = "dormant"
+    at_risk_score = -1.0
+    for st, _, _ in _SR_SCORE_TIERS:
+        for rt, _, _ in _SR_RECENCY_TIERS:
+            vals = cells[(st, rt)]
+            total_rev = sum(vals)
+            avg_rev = total_rev / len(vals) if vals else 0
+            cell_list.append({
+                "score_tier": st,
+                "recency_tier": rt,
+                "contact_count": len(vals),
+                "avg_revenue": round(avg_rev, 2),
+                "total_revenue": round(total_rev, 2),
+            })
+            if st == "high" and rt in ("idle", "dormant") and total_rev > at_risk_score:
+                at_risk_score = total_rev
+                at_risk_score_tier = st
+                at_risk_recency_tier = rt
+
+    if not rows:
+        return {
+            "cells": cell_list,
+            "at_risk_score_tier": at_risk_score_tier,
+            "at_risk_recency_tier": at_risk_recency_tier,
+            "engagement_narrative": "No contacts found in this workspace. Start building your contact base to enable engagement analysis.",
+            "recommendations": [
+                "Import your existing contacts via CSV to populate the heatmap immediately.",
+                "Connect Gmail or Slack to automatically ingest contact activity and update scores.",
+                "Set up lead scoring rules so new contacts are classified from day one.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    total_contacts = len(rows)
+    at_risk_cell = next(
+        (c for c in cell_list if c["score_tier"] == at_risk_score_tier and c["recency_tier"] == at_risk_recency_tier),
+        None,
+    )
+    at_risk_count = at_risk_cell["contact_count"] if at_risk_cell else 0
+
+    default_narrative = (
+        f"Your at-risk segment is '{at_risk_score_tier}' scored contacts that are '{at_risk_recency_tier}' — "
+        f"{at_risk_count} contact(s) with strong signals but no recent engagement. "
+        "Re-engaging these contacts now is the highest-ROI activity: they already trust you and have demonstrated fit."
+    )
+    default_recs = [
+        f"Immediately reach out to the {at_risk_count} high-score {at_risk_recency_tier} contacts — personalised outreach based on their last interaction will have the highest conversion rate.",
+        "Set up automated re-engagement sequences for idle high-score contacts to prevent them from going dormant.",
+        "Review low-score active contacts: if they're engaging but scoring low, check whether the scoring model needs recalibration.",
+    ]
+
+    context = (
+        f"Contact engagement heatmap for workspace. {total_contacts} total contacts.\n"
+        f"At-risk segment: {at_risk_score_tier}/{at_risk_recency_tier} ({at_risk_count} contacts).\n"
+        "Cell breakdown (score_tier, recency_tier, count, avg_revenue):\n"
+        + "\n".join(
+            f"  {c['score_tier']}/{c['recency_tier']}: {c['contact_count']} contacts, avg rev ${c['avg_revenue']:,.0f}"
+            for c in cell_list if c["contact_count"] > 0
+        )
+        + "\nProvide engagement_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_SCORE_RECENCY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    engagement_narrative = str(data.get("engagement_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "cells": cell_list,
+        "at_risk_score_tier": at_risk_score_tier,
+        "at_risk_recency_tier": at_risk_recency_tier,
+        "engagement_narrative": engagement_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
