@@ -355,6 +355,18 @@ export default function ReportsPage() {
   const [closeRateByStageLoading, setCloseRateByStageLoading] = useState(false);
   const [closeRateByStageOpen, setCloseRateByStageOpen] = useState(true);
 
+  type PipelineChurnStage = { stage: string; total_entered: number; churned_count: number; churn_rate: number };
+  type PipelineChurn = {
+    stage_churn: PipelineChurnStage[];
+    highest_churn_stage: string | null;
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [pipelineChurn, setPipelineChurn] = useState<PipelineChurn | null>(null);
+  const [pipelineChurnLoading, setPipelineChurnLoading] = useState(false);
+  const [pipelineChurnOpen, setPipelineChurnOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -419,6 +431,8 @@ export default function ReportsPage() {
       apiClient.getDealStageConcentration("demo-workspace-1", "demo-token").then(setStageConcentration).catch(() => {}).finally(() => setStageConcentrationLoading(false));
       setCloseRateByStageLoading(true);
       apiClient.getDealCloseRateByStage("demo-workspace-1", "demo-token").then(setCloseRateByStage).catch(() => {}).finally(() => setCloseRateByStageLoading(false));
+      setPipelineChurnLoading(true);
+      apiClient.getDealPipelineChurn("demo-workspace-1", "demo-token").then(setPipelineChurn).catch(() => {}).finally(() => setPipelineChurnLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -488,6 +502,8 @@ export default function ReportsPage() {
       apiClient.getDealStageConcentration(workspaceId, session.access_token).then(setStageConcentration).catch(() => {}).finally(() => setStageConcentrationLoading(false));
       setCloseRateByStageLoading(true);
       apiClient.getDealCloseRateByStage(workspaceId, session.access_token).then(setCloseRateByStage).catch(() => {}).finally(() => setCloseRateByStageLoading(false));
+      setPipelineChurnLoading(true);
+      apiClient.getDealPipelineChurn(workspaceId, session.access_token).then(setPipelineChurn).catch(() => {}).finally(() => setPipelineChurnLoading(false));
     });
   }, []);
 
@@ -896,6 +912,27 @@ export default function ReportsPage() {
         if (!session) { setCloseRateByStageLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCloseRateByStageLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regeneratePipelineChurn = () => {
+    setPipelineChurnLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealPipelineChurn(wid, tok)
+        .then(setPipelineChurn)
+        .catch(() => {})
+        .finally(() => setPipelineChurnLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPipelineChurnLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPipelineChurnLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -3901,6 +3938,96 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No close rate data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Pipeline Churn */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-rose-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Pipeline Churn</h3>
+            {pipelineChurn?.highest_churn_stage && (
+              <span className="text-xs px-2 py-0.5 rounded-full border bg-rose-500/10 border-rose-500/20 text-rose-400">
+                Highest: {pipelineChurn.highest_churn_stage}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePipelineChurn}
+              disabled={pipelineChurnLoading}
+              className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", pipelineChurnLoading && "animate-spin")} />
+              {pipelineChurnLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setPipelineChurnOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {pipelineChurnOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {pipelineChurnOpen && (
+          pipelineChurnLoading && !pipelineChurn ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1,2,3,4].map((i) => <div key={i} className="h-8 rounded bg-zinc-800" />)}
+            </div>
+          ) : pipelineChurn ? (
+            <div className={cn("space-y-4 p-4", pipelineChurnLoading && "opacity-40")}>
+              {pipelineChurn.stage_churn.length > 0 ? (
+                <div className="space-y-2">
+                  {pipelineChurn.stage_churn.map((s) => {
+                    const isHighest = s.stage === pipelineChurn.highest_churn_stage;
+                    const barColor = s.churn_rate >= 40 ? "bg-rose-500" : s.churn_rate >= 20 ? "bg-amber-500" : "bg-zinc-600";
+                    return (
+                      <div key={s.stage} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <span className={cn("font-medium capitalize", isHighest ? "text-rose-400" : "text-zinc-300")}>
+                              {s.stage}
+                            </span>
+                            {isHighest && (
+                              <span className="text-[10px] px-1.5 py-px rounded border bg-rose-500/10 border-rose-500/20 text-rose-400">
+                                Highest churn
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 text-zinc-400">
+                            <span>{s.churned_count}/{s.total_entered} deals</span>
+                            <span className={cn("font-semibold", s.churn_rate >= 40 ? "text-rose-400" : s.churn_rate >= 20 ? "text-amber-400" : "text-zinc-300")}>
+                              {s.churn_rate}%
+                            </span>
+                          </div>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className={cn("h-full rounded-full transition-all", barColor)}
+                            style={{ width: `${Math.min(s.churn_rate, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500">No deal movement data available yet.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{pipelineChurn.insight}</p>
+              <ul className="space-y-1.5">
+                {pipelineChurn.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal-400" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(pipelineChurn.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No pipeline churn data available.</p>
           )
         )}
       </Card>
