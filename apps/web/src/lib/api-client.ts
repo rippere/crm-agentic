@@ -5565,5 +5565,34 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/close-rate-by-stage`, {}, token)
   },
+
+  async getDealPipelineChurn(workspaceId: string, token: string): Promise<{
+    stage_churn: Array<{ stage: string; total_entered: number; churned_count: number; churn_rate: number }>
+    highest_churn_stage: string | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        stage_churn: [
+          { stage: 'discovery',   total_entered: 24, churned_count: 4,  churn_rate: 16.7 },
+          { stage: 'qualified',   total_entered: 18, churned_count: 5,  churn_rate: 27.8 },
+          { stage: 'proposal',    total_entered: 12, churned_count: 6,  churn_rate: 50.0 },
+          { stage: 'negotiation', total_entered:  7, churned_count: 1,  churn_rate: 14.3 },
+        ],
+        highest_churn_stage: 'proposal',
+        insight: 'The proposal stage churns at 50% — 6 of 12 deals that entered it either regressed or were lost, making it the single biggest pipeline leak.',
+        recommendations: [
+          'Add structured proposal review checkpoints to identify at-risk deals before they stall or regress from the proposal stage.',
+          'Conduct win/loss interviews for all proposal-stage churns to surface the top 2–3 objection patterns driving losses.',
+          'Set automated alerts when a proposal-stage deal has had no activity for 7 days so reps can intervene early.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-churn`, {}, token)
+  },
 }
 

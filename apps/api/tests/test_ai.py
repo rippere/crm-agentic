@@ -5373,3 +5373,58 @@ async def test_close_rate_by_stage_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/close-rate-by-stage")
     assert resp.status_code == 403
+
+
+# Phase 16t: GET /workspaces/{wid}/ai/deals/pipeline-churn
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_churn_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Two activity events: one deal enters 'qualified' then churns to 'closed_lost'
+    # Another deal enters 'proposal' then regresses to 'qualified'
+    mock_db.execute = AsyncMock(return_value=_make_execute_result([
+        ("Deal 'Alpha' moved: discovery → qualified", None),
+        ("Deal 'Alpha' moved: qualified → closed_lost", None),
+        ("Deal 'Beta' moved: discovery → proposal", None),
+        ("Deal 'Beta' moved: proposal → qualified", None),
+    ]))
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "Qualified stage churns at 100% — all deals entering it either regressed or were lost.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/pipeline-churn")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["stage_churn"], list)
+    # qualified should show as entered=1, churned=1 (→ closed_lost)
+    # proposal should show as entered=1, churned=1 (regression → qualified)
+    qualified = next((s for s in data["stage_churn"] if s["stage"] == "qualified"), None)
+    assert qualified is not None
+    assert qualified["total_entered"] >= 1
+    assert qualified["churned_count"] >= 1
+    assert data["highest_churn_stage"] is not None
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_pipeline_churn_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-churn")
+    assert resp.status_code == 403

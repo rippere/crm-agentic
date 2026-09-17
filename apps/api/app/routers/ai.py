@@ -9833,3 +9833,177 @@ async def get_close_rate_by_stage(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16t: GET /workspaces/{wid}/ai/deals/pipeline-churn
+# ---------------------------------------------------------------------------
+
+_PIPELINE_CHURN_SYSTEM = """\
+You are a sales pipeline analyst identifying where deals are churning most.
+Given data on which stages deals exit (via closed_lost or backward stage regression),
+write a 1-sentence insight and exactly 3 specific, actionable recommendations.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "insight": "1-sentence summary referencing the highest-churn stage and churn rate",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+
+Rules:
+- insight: cite the stage name and churn rate percentage, be concise and specific
+- recommendations: practical steps to reduce churn at the worst stages
+- Be concise\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-churn")
+@limiter.limit("5/minute")
+async def get_pipeline_churn(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    import re as _re
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Query all deal_moved activity events in last 90 days
+    cutoff = now - datetime.timedelta(days=90)
+    events_result = await db.execute(
+        select(ActivityEvent.description, ActivityEvent.created_at)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.type == "deal_moved")
+        .where(ActivityEvent.created_at >= cutoff)
+        .order_by(ActivityEvent.created_at.asc())
+    )
+    events_rows = events_result.all()
+
+    # Parse "Deal '...' moved: from_stage → to_stage" lines
+    _move_re = _re.compile(r"moved[^:]*:\s*([a-z_]+)\s*→\s*([a-z_]+)")
+    _title_re3 = _re.compile(r"Deal '([^']+)'")
+
+    # Track, per deal title: list of (from_stage, to_stage, created_at) transitions
+    deal_history: dict[str, list[tuple[str, str]]] = {}
+    for desc, created_at in events_rows:
+        if not desc or not isinstance(desc, str):
+            continue
+        m = _move_re.search(desc)
+        if not m:
+            continue
+        from_s, to_s = m.group(1), m.group(2)
+        tm = _title_re3.search(desc)
+        title_key = tm.group(1) if tm else desc[:50]
+        if title_key not in deal_history:
+            deal_history[title_key] = []
+        deal_history[title_key].append((from_s, to_s))
+
+    # For each stage in _STAGE_ORDER, count:
+    #   total_entered = how many deals entered (any transition to_stage == stage)
+    #   churned_count = how many moved backward (from stage to earlier stage) OR to closed_lost
+    stage_entered: dict[str, set[str]] = {s: set() for s in _STAGE_ORDER}
+    stage_churned: dict[str, set[str]] = {s: set() for s in _STAGE_ORDER}
+
+    stage_idx = {s: i for i, s in enumerate(_STAGE_ORDER)}
+
+    for title, transitions in deal_history.items():
+        for from_s, to_s in transitions:
+            # Count deals entering a stage
+            if to_s in stage_idx:
+                stage_entered[to_s].add(title)
+
+            # Count churn from a stage:
+            # - moved to closed_lost (churn from that stage)
+            # - moved backward (to_stage index < from_stage index)
+            if from_s in stage_idx:
+                if to_s == "closed_lost":
+                    stage_churned[from_s].add(title)
+                elif to_s in stage_idx and stage_idx[to_s] < stage_idx[from_s]:
+                    stage_churned[from_s].add(title)
+
+    stage_churn = []
+    for stage in _STAGE_ORDER:
+        entered = len(stage_entered[stage])
+        churned = len(stage_churned[stage])
+        churn_rate = round(churned / entered * 100, 1) if entered > 0 else 0.0
+        stage_churn.append({
+            "stage": stage,
+            "total_entered": entered,
+            "churned_count": churned,
+            "churn_rate": churn_rate,
+        })
+
+    # Remove stages with zero activity
+    active_stages = [s for s in stage_churn if s["total_entered"] > 0]
+
+    if not active_stages:
+        return {
+            "stage_churn": [],
+            "highest_churn_stage": None,
+            "insight": "No deal movement data available for the last 90 days.",
+            "recommendations": [
+                "Ensure deals are being moved through pipeline stages so churn patterns can be tracked.",
+                "Add deal_moved activity events by updating deal stages in the pipeline.",
+                "Review your pipeline setup to ensure stages are configured correctly.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    highest_churn = max(active_stages, key=lambda s: s["churn_rate"])
+    highest_churn_stage = highest_churn["stage"]
+
+    churn_context = "\n".join(
+        f"- {s['stage']}: {s['churned_count']} churned / {s['total_entered']} entered = {s['churn_rate']}% churn rate"
+        for s in active_stages
+    )
+    context = (
+        f"Pipeline churn by stage (last 90 days):\n{churn_context}\n"
+        f"Highest churn stage: {highest_churn_stage} ({highest_churn['churn_rate']}% churn rate)\n"
+    )
+
+    default_insight = (
+        f"The {highest_churn_stage} stage has the highest churn rate at "
+        f"{highest_churn['churn_rate']}% — {highest_churn['churned_count']} of "
+        f"{highest_churn['total_entered']} deals regressed or were lost here."
+    )
+    default_recs = [
+        f"Add structured exit-criteria at the {highest_churn_stage} stage to catch deals before they regress.",
+        "Review deals that churned back to earlier stages and identify common objection patterns.",
+        "Set up automated alerts when a deal regresses to a previous stage for immediate rep intervention.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_PIPELINE_CHURN_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_churn": stage_churn,
+        "highest_churn_stage": highest_churn_stage,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
