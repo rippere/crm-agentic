@@ -6184,3 +6184,82 @@ async def test_battle_card_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/battle-card")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/risk-escalation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_risk_escalation_returns_structured_response(app_client):
+    import datetime as _dt
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.now(_dt.timezone.utc)
+    stale_date = now - _dt.timedelta(days=18)
+    deal_id_1 = uuid.uuid4()
+    deal_id_2 = uuid.uuid4()
+
+    at_risk_rows = [
+        (deal_id_1, "HealthPlus Clinical Suite", "HealthPlus", "proposal", 22000.0, 28, 25, stale_date, None),
+        (deal_id_2, "StartupX Growth Pack", "StartupX", "qualified", 15000.0, 42, 35, stale_date, ["Salesforce"]),
+    ]
+
+    ai_response = {
+        "escalations": [
+            {
+                "deal_id": str(deal_id_1),
+                "suggested_action": "Call the HealthPlus champion today to understand the decision blocker.",
+                "risk_factors": ["Proposal has been out 18 days with no response", "Health score critically low at 28", "No next meeting scheduled"],
+            },
+            {
+                "deal_id": str(deal_id_2),
+                "suggested_action": "Send a competitive battle card to the StartupX champion and schedule a re-demo.",
+                "risk_factors": ["Salesforce competition identified", "Health score below 50", "Stalled in qualified stage for 18 days"],
+            },
+        ],
+        "recommendations": [
+            "Hold an emergency pipeline review for deals with health < 40.",
+            "Require next-action dates on all at-risk deals.",
+            "Run a win/loss debrief this week.",
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(at_risk_rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/risk-escalation")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["escalations"], list)
+    assert len(data["escalations"]) == 2
+    esc = data["escalations"][0]
+    assert esc["deal_id"] == str(deal_id_1)
+    assert esc["title"] == "HealthPlus Clinical Suite"
+    assert esc["health_score"] == 28
+    assert esc["days_stale"] >= 17
+    assert isinstance(esc["risk_factors"], list) and len(esc["risk_factors"]) >= 1
+    assert isinstance(esc["suggested_action"], str) and esc["suggested_action"]
+    assert data["total_at_risk_value"] == pytest.approx(37000.0)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_risk_escalation_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/risk-escalation")
+    assert resp.status_code == 403

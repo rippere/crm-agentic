@@ -6073,5 +6073,70 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/battle-card`, {}, token)
   },
+
+  async getDealRiskEscalation(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        escalations: [
+          {
+            deal_id: 'd-risk-001',
+            title: 'HealthPlus Clinical Suite',
+            company: 'HealthPlus',
+            stage: 'proposal',
+            value: 22000,
+            health_score: 28,
+            win_probability: 25,
+            days_stale: 18,
+            risk_factors: [
+              'Proposal sent 18 days ago with no response — likely under review by procurement without an internal champion pushing it forward.',
+              'Health score of 28 is critically low, placing it in the bottom 5% of the pipeline.',
+              'No next meeting scheduled — deal has no forward momentum and risks going dark.',
+            ],
+            suggested_action: 'Call the HealthPlus champion today. Do not email — this deal needs a live conversation to surface the blocker before it slips to lost.',
+          },
+          {
+            deal_id: 'd-risk-002',
+            title: 'StartupX Growth Pack',
+            company: 'StartupX',
+            stage: 'qualified',
+            value: 15000,
+            health_score: 42,
+            win_probability: 35,
+            days_stale: 12,
+            risk_factors: [
+              'Salesforce is actively competing — StartupX has been evaluating both platforms for 3+ weeks without a decision.',
+              'Deal has been stalled in the qualified stage for 12 days — should have moved to proposal by now.',
+              'Win probability at 35% signals the rep may have lost the champion relationship.',
+            ],
+            suggested_action: 'Send the Salesforce competitive battle card to the StartupX champion and schedule a focused 30-minute re-demo this week emphasising the 3 key differentiators.',
+          },
+          {
+            deal_id: 'd-risk-003',
+            title: 'RetailX Omni Platform',
+            company: 'RetailX',
+            stage: 'discovery',
+            value: 16000,
+            health_score: 55,
+            win_probability: 48,
+            days_stale: 8,
+            risk_factors: [
+              'Still in discovery after 8 days without advancing — may be struggling to identify the economic buyer.',
+              'No deal notes logged in the last 5 days, indicating low rep engagement.',
+              'Win probability below 50% at discovery stage is a warning sign of poor qualification.',
+            ],
+            suggested_action: 'Review the RetailX account and ensure the economic buyer is identified. If not yet known, coach the rep to ask for an introduction in the next meeting.',
+          },
+        ],
+        total_at_risk_value: 53000,
+        recommendations: [
+          'Hold an emergency pipeline review for the 3 deals with health scores below 55 — total value at risk is $53K. Review each blocker and assign a specific next action before end of week.',
+          'Require reps to log a next-action date on every at-risk deal by close of business today — deals without a next step should be escalated to the manager.',
+          'Run a 15-minute daily standup this week focused only on at-risk deals until all three advance a stage or are qualified out.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/risk-escalation`, {}, token)
+  },
 }
 

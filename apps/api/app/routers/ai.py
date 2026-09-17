@@ -12090,3 +12090,207 @@ async def get_deal_battle_card(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 17f — AI workspace deal risk escalation digest
+# ---------------------------------------------------------------------------
+
+_RISK_ESCALATION_SYSTEM = """\
+You are a senior sales operations AI analysing at-risk deals in a CRM pipeline.
+
+Given a list of at-risk deals with health scores, days stale, and deal metadata, generate a targeted risk escalation digest.
+
+Respond with valid JSON only, no prose outside JSON:
+{
+  "escalations": [
+    {
+      "deal_id": "uuid string",
+      "suggested_action": "one concrete next action the rep should take today",
+      "risk_factors": ["up to 3 specific risk factors for this deal"]
+    }
+  ],
+  "recommendations": ["3 strategic recommendations for the sales manager to address pipeline risk"]
+}
+The escalations array must be in the same order as the deals provided.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/risk-escalation")
+@limiter.limit("5/minute")
+async def get_deal_risk_escalation(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Query: top 5 at-risk open deals by health score ascending
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.company,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+            Deal.stage_changed_at,
+            Deal.competitors,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+            Deal.health_score < 60,
+        )
+        .order_by(Deal.health_score.asc())
+        .limit(5)
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "escalations": [],
+            "total_at_risk_value": 0.0,
+            "recommendations": [
+                "All open deals have health scores above 60 — no escalations needed right now.",
+                "Schedule a pipeline review next week to maintain deal health before any slip occurs.",
+                "Keep monitoring deal activity; health scores below 60 will trigger an escalation alert here.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    total_at_risk_value = sum(float(r[4] or 0) for r in rows)
+
+    # Compute days_stale for each deal
+    deal_context_parts = []
+    deal_ids = []
+    for r in rows:
+        deal_id = str(r[0])
+        deal_ids.append(deal_id)
+        title = r[1] or "Untitled"
+        company = r[2] or "Unknown"
+        stage = r[3] or "unknown"
+        value = float(r[4] or 0)
+        health = int(r[5] or 0)
+        win_prob = int(r[6] or 0) if r[6] is not None else 0
+        stage_changed_at = r[7]
+        competitors = r[8]
+
+        days_stale = 0
+        if stage_changed_at:
+            sc = stage_changed_at.replace(tzinfo=datetime.timezone.utc) if not stage_changed_at.tzinfo else stage_changed_at
+            days_stale = max(0, int((now - sc).total_seconds() / 86400))
+
+        has_competitor = bool(competitors and (
+            (isinstance(competitors, list) and len(competitors) > 0) or
+            (isinstance(competitors, str) and competitors.strip())
+        ))
+
+        deal_context_parts.append(
+            f"- deal_id={deal_id}, title=\"{title}\", company={company}, stage={stage}, "
+            f"value=${value:,.0f}, health={health}, win_probability={win_prob}%, "
+            f"days_stale={days_stale}, competitor_pressure={'yes' if has_competitor else 'no'}"
+        )
+
+    context = "At-risk deals (health < 60), sorted worst first:\n" + "\n".join(deal_context_parts)
+
+    default_escalations = []
+    for r in rows:
+        deal_id = str(r[0])
+        health = int(r[5] or 0)
+        stage_changed_at = r[7]
+        days_stale = 0
+        if stage_changed_at:
+            sc = stage_changed_at.replace(tzinfo=datetime.timezone.utc) if not stage_changed_at.tzinfo else stage_changed_at
+            days_stale = max(0, int((now - sc).total_seconds() / 86400))
+        default_escalations.append({
+            "deal_id": deal_id,
+            "suggested_action": f"Schedule an immediate check-in call — this deal has been stale for {days_stale} days with health score {health}.",
+            "risk_factors": [
+                f"Health score critically low at {health}/100.",
+                f"No stage movement in {days_stale} days — likely stalled.",
+                "Win probability below threshold — needs re-qualification.",
+            ],
+        })
+
+    default_recs = [
+        f"Immediately review the {len(rows)} at-risk deals (total value ${total_at_risk_value:,.0f}) in a pipeline call this week.",
+        "Require reps to log a next-action date on every deal with health < 60 before end of day.",
+        "Consider running a win/loss debrief on recently lost deals to identify patterns that predict health score decline.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            system=_RISK_ESCALATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    # Merge AI escalations with our computed deal rows
+    ai_escalations = data.get("escalations", [])
+    if not isinstance(ai_escalations, list):
+        ai_escalations = []
+
+    ai_by_id = {str(e.get("deal_id", "")): e for e in ai_escalations if isinstance(e, dict)}
+
+    escalations = []
+    for i, r in enumerate(rows):
+        deal_id = str(r[0])
+        title = r[1] or "Untitled"
+        company = r[2] or "Unknown"
+        stage = r[3] or "unknown"
+        value = float(r[4] or 0)
+        health = int(r[5] or 0)
+        win_prob = int(r[6] or 0) if r[6] is not None else 0
+        stage_changed_at = r[7]
+        days_stale = 0
+        if stage_changed_at:
+            sc = stage_changed_at.replace(tzinfo=datetime.timezone.utc) if not stage_changed_at.tzinfo else stage_changed_at
+            days_stale = max(0, int((now - sc).total_seconds() / 86400))
+
+        ai_entry = ai_by_id.get(deal_id, {})
+        suggested_action = str(ai_entry.get("suggested_action", default_escalations[i]["suggested_action"])).strip()
+        if not suggested_action:
+            suggested_action = default_escalations[i]["suggested_action"]
+        raw_rf = ai_entry.get("risk_factors", [])
+        risk_factors = [str(f) for f in (raw_rf if isinstance(raw_rf, list) else [])[:3]]
+        if not risk_factors:
+            risk_factors = default_escalations[i]["risk_factors"]
+
+        escalations.append({
+            "deal_id": deal_id,
+            "title": title,
+            "company": company,
+            "stage": stage,
+            "value": value,
+            "health_score": health,
+            "win_probability": win_prob,
+            "days_stale": days_stale,
+            "risk_factors": risk_factors,
+            "suggested_action": suggested_action,
+        })
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "escalations": escalations,
+        "total_at_risk_value": total_at_risk_value,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

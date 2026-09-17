@@ -531,6 +531,29 @@ export default function ReportsPage() {
   const [battleCardOpen, setBattleCardOpen] = useState(true);
   const [battleCardExpanded, setBattleCardExpanded] = useState<string | null>(null);
 
+  type RiskEscalation = {
+    deal_id: string;
+    title: string;
+    company: string;
+    stage: string;
+    value: number;
+    health_score: number;
+    win_probability: number;
+    days_stale: number;
+    risk_factors: string[];
+    suggested_action: string;
+  };
+  type RiskEscalationData = {
+    escalations: RiskEscalation[];
+    total_at_risk_value: number;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [riskEscalation, setRiskEscalation] = useState<RiskEscalationData | null>(null);
+  const [riskEscalationLoading, setRiskEscalationLoading] = useState(false);
+  const [riskEscalationOpen, setRiskEscalationOpen] = useState(true);
+  const [riskEscalationExpanded, setRiskEscalationExpanded] = useState<string | null>(null);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -619,6 +642,8 @@ export default function ReportsPage() {
       apiClient.getDealPlaybook("demo-workspace-1", "demo-token").then(setPlaybook).catch(() => {}).finally(() => setPlaybookLoading(false));
       setBattleCardLoading(true);
       apiClient.getDealBattleCard("demo-workspace-1", "demo-token").then(setBattleCard).catch(() => {}).finally(() => setBattleCardLoading(false));
+      setRiskEscalationLoading(true);
+      apiClient.getDealRiskEscalation("demo-workspace-1", "demo-token").then(setRiskEscalation).catch(() => {}).finally(() => setRiskEscalationLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -712,6 +737,8 @@ export default function ReportsPage() {
       apiClient.getDealPlaybook(workspaceId, session.access_token).then(setPlaybook).catch(() => {}).finally(() => setPlaybookLoading(false));
       setBattleCardLoading(true);
       apiClient.getDealBattleCard(workspaceId, session.access_token).then(setBattleCard).catch(() => {}).finally(() => setBattleCardLoading(false));
+      setRiskEscalationLoading(true);
+      apiClient.getDealRiskEscalation(workspaceId, session.access_token).then(setRiskEscalation).catch(() => {}).finally(() => setRiskEscalationLoading(false));
     });
   }, []);
 
@@ -1267,6 +1294,27 @@ export default function ReportsPage() {
         if (!session) { setCoachingDigestLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCoachingDigestLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateRiskEscalation = () => {
+    setRiskEscalationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealRiskEscalation(wid, tok)
+        .then(setRiskEscalation)
+        .catch(() => {})
+        .finally(() => setRiskEscalationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setRiskEscalationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setRiskEscalationLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5109,6 +5157,105 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No coaching digest data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Risk Escalation Digest */}
+      <Card className="border-rose-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-rose-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Risk Escalation Digest</h3>
+            {riskEscalation && (
+              <span className="text-xs bg-rose-900/40 text-rose-300 px-2 py-0.5 rounded-full border border-rose-700/30">
+                {riskEscalation.escalations.length} at-risk deal{riskEscalation.escalations.length !== 1 ? "s" : ""}
+              </span>
+            )}
+            {riskEscalation && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                ${riskEscalation.total_at_risk_value.toLocaleString()} at risk
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateRiskEscalation}
+              disabled={riskEscalationLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", riskEscalationLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setRiskEscalationOpen(!riskEscalationOpen)}>
+              {riskEscalationOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {riskEscalationOpen && (
+          riskEscalationLoading && !riskEscalation ? (
+            <div className="p-6 text-center text-xs text-zinc-500 animate-pulse">Generating risk escalation digest…</div>
+          ) : riskEscalation && riskEscalation.escalations.length > 0 ? (
+            <div className={cn("p-4 space-y-4", riskEscalationLoading && "opacity-40")}>
+              <div className="space-y-2">
+                {riskEscalation.escalations.map((deal) => (
+                  <div key={deal.deal_id} className="rounded-lg border border-zinc-800 bg-zinc-900/50">
+                    <button
+                      className="w-full flex items-center justify-between p-3 text-left"
+                      onClick={() => setRiskEscalationExpanded(riskEscalationExpanded === deal.deal_id ? null : deal.deal_id)}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className={cn("inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold flex-shrink-0",
+                          deal.health_score < 40 ? "bg-rose-900/60 text-rose-300" : "bg-amber-900/60 text-amber-300"
+                        )}>{deal.health_score}</span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-zinc-100 truncate">{deal.title}</p>
+                          <p className="text-xs text-zinc-500">{deal.company} · {deal.stage} · ${deal.value.toLocaleString()} · {deal.days_stale}d stale</p>
+                        </div>
+                      </div>
+                      {riskEscalationExpanded === deal.deal_id ? <ChevronUp className="h-3 w-3 text-zinc-500" /> : <ChevronDown className="h-3 w-3 text-zinc-500" />}
+                    </button>
+                    {riskEscalationExpanded === deal.deal_id && (
+                      <div className="px-3 pb-3 space-y-3 border-t border-zinc-800 pt-3">
+                        <div>
+                          <p className="text-xs font-medium text-zinc-400 mb-1">Risk Factors</p>
+                          <ul className="space-y-1">
+                            {deal.risk_factors.map((rf, i) => (
+                              <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                                <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0" />
+                                {rf}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div className="rounded-md bg-zinc-800/60 p-2">
+                          <p className="text-xs font-medium text-zinc-400 mb-1">Suggested Action</p>
+                          <p className="text-xs text-zinc-200">{deal.suggested_action}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-lg bg-rose-950/30 border border-rose-800/30 p-3">
+                <p className="text-xs font-semibold text-rose-300 mb-2">Total Value at Risk: ${riskEscalation.total_at_risk_value.toLocaleString()}</p>
+                <ul className="space-y-1">
+                  {riskEscalation.recommendations.map((r, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(riskEscalation.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : riskEscalation && riskEscalation.escalations.length === 0 ? (
+            <div className="p-4">
+              <p className="text-xs text-zinc-400 italic">No at-risk deals found. Your pipeline looks healthy!</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No risk escalation data available.</p>
           )
         )}
       </Card>
