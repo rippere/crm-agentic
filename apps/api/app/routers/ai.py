@@ -14410,3 +14410,114 @@ async def get_deal_win_factors(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 17u – Contact Engagement Heatmap
+# ---------------------------------------------------------------------------
+
+_ENGAGEMENT_HEATMAP_SYSTEM = """\
+You are a senior sales operations AI analysing contact engagement patterns.
+Given hourly and daily activity event counts for the last 90 days, identify
+optimal outreach timing windows and engagement trends.
+Respond with a JSON object containing exactly two keys:
+  "engagement_narrative": one paragraph (2-3 sentences) summarising timing patterns,
+  "recommendations": array of exactly 3 actionable strings about optimal outreach timing.
+Output only valid JSON with no markdown fences.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/engagement-heatmap")
+@limiter.limit("5/minute")
+async def get_contact_engagement_heatmap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    import datetime as _dt
+    now = _dt.datetime.now(timezone.utc)
+    cutoff = now - _dt.timedelta(days=90)
+
+    result = await db.execute(
+        select(ActivityEvent.created_at)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.created_at >= cutoff)
+    )
+    rows = result.all()
+
+    hour_counts: dict[int, int] = {h: 0 for h in range(24)}
+    day_counts: dict[str, int] = {d: 0 for d in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]}
+    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    for (created_at,) in rows:
+        if created_at is None:
+            continue
+        if hasattr(created_at, "tzinfo") and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        hour_counts[created_at.hour] += 1
+        day_counts[day_names[created_at.weekday()]] += 1
+
+    total_events = sum(hour_counts.values())
+
+    peak_hour = max(hour_counts, key=lambda h: hour_counts[h]) if total_events > 0 else 9
+    peak_day = max(day_counts, key=lambda d: day_counts[d]) if total_events > 0 else "Tuesday"
+
+    hour_buckets = [{"hour": h, "count": hour_counts[h]} for h in range(24)]
+    day_buckets = [{"day": d, "count": day_counts[d]} for d in day_names]
+
+    default_narrative = (
+        f"Peak engagement occurs at hour {peak_hour}:00 UTC on {peak_day}s. "
+        "Scheduling outreach during these windows can improve response rates. "
+        "Consider aligning automated follow-ups with these high-activity periods."
+    )
+    default_recs = [
+        f"Schedule outreach emails to send at {peak_hour}:00 UTC for maximum engagement.",
+        f"Prioritise {peak_day} as your primary outreach day based on activity patterns.",
+        "Set automated follow-up sequences to trigger during peak engagement windows.",
+    ]
+
+    context = (
+        f"Workspace contact engagement over the last 90 days.\n"
+        f"Total activity events: {total_events}\n"
+        f"Peak hour (UTC): {peak_hour}:00 ({hour_counts[peak_hour]} events)\n"
+        f"Peak day: {peak_day} ({day_counts[peak_day]} events)\n"
+        f"Hour distribution: {json.dumps(hour_buckets)}\n"
+        f"Day distribution: {json.dumps(day_buckets)}\n"
+        "Provide an engagement_narrative and 3 recommendations about optimal outreach timing."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_ENGAGEMENT_HEATMAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    engagement_narrative = str(data.get("engagement_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "hour_buckets": hour_buckets,
+        "day_buckets": day_buckets,
+        "peak_hour": peak_hour,
+        "peak_day": peak_day,
+        "total_events": total_events,
+        "engagement_narrative": engagement_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

@@ -7127,3 +7127,47 @@ async def test_deal_win_factors_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-factors")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_contact_engagement_heatmap_returns_structured_response(app_client, monkeypatch):
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    rows = [
+        (_dt.datetime(2026, 6, 1, 10, 0, 0, tzinfo=_dt.timezone.utc),),
+        (_dt.datetime(2026, 6, 2, 10, 0, 0, tzinfo=_dt.timezone.utc),),
+        (_dt.datetime(2026, 6, 3, 10, 0, 0, tzinfo=_dt.timezone.utc),),
+        (_dt.datetime(2026, 6, 1, 14, 0, 0, tzinfo=_dt.timezone.utc),),
+        (_dt.datetime(2026, 6, 2, 14, 0, 0, tzinfo=_dt.timezone.utc),),
+    ]
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute.return_value = _make_execute_result(rows)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"engagement_narrative": "Peak at 10 UTC.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_msg
+
+    with patch("app.routers.ai._anthropic.Anthropic", return_value=mock_client):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/engagement-heatmap")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["hour_buckets"]) == 24
+    assert len(body["day_buckets"]) == 7
+    assert isinstance(body["peak_hour"], int)
+    assert isinstance(body["peak_day"], str)
+    assert body["total_events"] == 5
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_engagement_heatmap_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/engagement-heatmap")
+    assert resp.status_code == 403
