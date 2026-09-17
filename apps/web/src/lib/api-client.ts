@@ -5622,5 +5622,37 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/conversion-quality`, {}, token)
   },
+
+  async getDealWinLossPatterns(workspaceId: string, token: string): Promise<{
+    stage_patterns: Array<{ stage: string; won: number; lost: number; win_rate: number }>
+    competitor_impact: { with_competitors_win_rate: number; without_competitors_win_rate: number }
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        stage_patterns: [
+          { stage: 'discovery',   won: 8,  lost: 16, win_rate: 33.3 },
+          { stage: 'qualified',   won: 12, lost: 8,  win_rate: 60.0 },
+          { stage: 'proposal',    won: 7,  lost: 5,  win_rate: 58.3 },
+          { stage: 'negotiation', won: 9,  lost: 3,  win_rate: 75.0 },
+        ],
+        competitor_impact: {
+          with_competitors_win_rate: 44.2,
+          without_competitors_win_rate: 68.7,
+        },
+        insight: 'Negotiation stage closes at 75% — the highest of any stage — while discovery lags at 33%, suggesting early qualification gaps are the biggest win/loss driver.',
+        recommendations: [
+          'Improve discovery-stage qualification criteria to filter out low-probability deals earlier and reduce time wasted on low-intent leads.',
+          'Study what negotiation-stage reps do differently and build a playbook reps can use from qualified onwards.',
+          'Develop competitive battle cards to close the 24-point win-rate gap when competitors are present.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-loss-patterns`, {}, token)
+  },
 }
 

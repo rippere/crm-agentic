@@ -379,6 +379,18 @@ export default function ReportsPage() {
   const [conversionQualityLoading, setConversionQualityLoading] = useState(false);
   const [conversionQualityOpen, setConversionQualityOpen] = useState(true);
 
+  type WinLossStagePattern = { stage: string; won: number; lost: number; win_rate: number };
+  type WinLossPatterns = {
+    stage_patterns: WinLossStagePattern[];
+    competitor_impact: { with_competitors_win_rate: number; without_competitors_win_rate: number };
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [winLossPatterns, setWinLossPatterns] = useState<WinLossPatterns | null>(null);
+  const [winLossPatternsLoading, setWinLossPatternsLoading] = useState(false);
+  const [winLossPatternsOpen, setWinLossPatternsOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -447,6 +459,8 @@ export default function ReportsPage() {
       apiClient.getDealPipelineChurn("demo-workspace-1", "demo-token").then(setPipelineChurn).catch(() => {}).finally(() => setPipelineChurnLoading(false));
       setConversionQualityLoading(true);
       apiClient.getDealConversionQuality("demo-workspace-1", "demo-token").then(setConversionQuality).catch(() => {}).finally(() => setConversionQualityLoading(false));
+      setWinLossPatternsLoading(true);
+      apiClient.getDealWinLossPatterns("demo-workspace-1", "demo-token").then(setWinLossPatterns).catch(() => {}).finally(() => setWinLossPatternsLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -520,6 +534,8 @@ export default function ReportsPage() {
       apiClient.getDealPipelineChurn(workspaceId, session.access_token).then(setPipelineChurn).catch(() => {}).finally(() => setPipelineChurnLoading(false));
       setConversionQualityLoading(true);
       apiClient.getDealConversionQuality(workspaceId, session.access_token).then(setConversionQuality).catch(() => {}).finally(() => setConversionQualityLoading(false));
+      setWinLossPatternsLoading(true);
+      apiClient.getDealWinLossPatterns(workspaceId, session.access_token).then(setWinLossPatterns).catch(() => {}).finally(() => setWinLossPatternsLoading(false));
     });
   }, []);
 
@@ -970,6 +986,27 @@ export default function ReportsPage() {
         if (!session) { setConversionQualityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setConversionQualityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateWinLossPatterns = () => {
+    setWinLossPatternsLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealWinLossPatterns(wid, tok)
+        .then(setWinLossPatterns)
+        .catch(() => {})
+        .finally(() => setWinLossPatternsLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setWinLossPatternsLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setWinLossPatternsLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -4141,6 +4178,90 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No conversion quality data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Win/Loss Patterns */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-rose-400" />
+            <span className="text-sm font-semibold text-zinc-200">Win/Loss Patterns</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateWinLossPatterns}
+              disabled={winLossPatternsLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              <RefreshCw className={cn("h-3 w-3", winLossPatternsLoading && "animate-spin")} />
+              {winLossPatternsLoading ? "Generating…" : "Regenerate"}
+            </button>
+            <button onClick={() => setWinLossPatternsOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {winLossPatternsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {winLossPatternsOpen && (
+          winLossPatternsLoading && !winLossPatterns ? (
+            <div className="h-24 animate-pulse bg-zinc-800/40 m-4 rounded" />
+          ) : winLossPatterns ? (
+            <div className={cn("space-y-4 p-4", winLossPatternsLoading && "opacity-40")}>
+              {/* Per-stage bars */}
+              <div className="space-y-2">
+                {winLossPatterns.stage_patterns.map((p) => (
+                  <div key={p.stage}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-zinc-300 capitalize">{p.stage.replace(/_/g, " ")}</span>
+                      <span className="text-xs text-zinc-400">
+                        {p.won}W / {p.lost}L · <span className={p.win_rate >= 60 ? "text-emerald-400" : p.win_rate >= 40 ? "text-amber-400" : "text-rose-400"}>{p.win_rate}%</span>
+                      </span>
+                    </div>
+                    <div className="h-2 w-full rounded bg-zinc-800 flex overflow-hidden">
+                      <div
+                        className="h-2 bg-emerald-500"
+                        style={{ width: `${(p.won / Math.max(p.won + p.lost, 1)) * 100}%` }}
+                      />
+                      <div
+                        className="h-2 bg-rose-500"
+                        style={{ width: `${(p.lost / Math.max(p.won + p.lost, 1)) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {/* Competitor impact */}
+              <div className="rounded-lg bg-zinc-800/50 border border-zinc-700/40 p-3 space-y-1">
+                <p className="text-xs font-medium text-zinc-300">Competitor Impact</p>
+                <div className="flex items-center justify-between text-xs text-zinc-400">
+                  <span>With competitors</span>
+                  <span className={winLossPatterns.competitor_impact.with_competitors_win_rate >= 50 ? "text-emerald-400" : "text-rose-400"}>
+                    {winLossPatterns.competitor_impact.with_competitors_win_rate}% win rate
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-zinc-400">
+                  <span>Without competitors</span>
+                  <span className={winLossPatterns.competitor_impact.without_competitors_win_rate >= 50 ? "text-emerald-400" : "text-rose-400"}>
+                    {winLossPatterns.competitor_impact.without_competitors_win_rate}% win rate
+                  </span>
+                </div>
+              </div>
+              <p className="text-xs text-zinc-400 italic">{winLossPatterns.insight}</p>
+              <ul className="space-y-1">
+                {winLossPatterns.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(winLossPatterns.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No win/loss pattern data available.</p>
           )
         )}
       </Card>
