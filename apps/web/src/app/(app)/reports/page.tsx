@@ -8501,7 +8501,7 @@ export default function ReportsPage() {
           <div className="flex items-center gap-2">
             <DollarSign className="h-4 w-4 text-sky-400" />
             <h3 className="text-sm font-semibold text-zinc-100">Revenue Forecast</h3>
-            {revenueForecast && (
+            {aiForecast && (
               <span className="text-xs bg-sky-900/40 text-sky-300 px-2 py-0.5 rounded-full border border-sky-700/30">
                 ${aiForecast.total_expected.toLocaleString()} expected
               </span>
