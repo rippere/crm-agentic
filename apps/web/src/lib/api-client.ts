@@ -6189,5 +6189,42 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/pipeline/velocity-heatmap`, {}, token)
   },
+
+  async getWinLossSummary(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        win_rate: 58,
+        avg_won_value: 48000,
+        avg_lost_value: 22000,
+        won_count: 14,
+        lost_count: 10,
+        avg_won_health: 81,
+        avg_lost_health: 44,
+        top_wins: [
+          { title: 'Acme Corp Enterprise', value: 95000 },
+          { title: 'Beta Tech Cloud Suite', value: 72000 },
+          { title: 'Gamma Retail Platform', value: 61000 },
+        ],
+        top_losses: [
+          { title: 'Delta SaaS Migration', value: 38000 },
+          { title: 'Epsilon Analytics', value: 27000 },
+          { title: 'Zeta Ops Upgrade', value: 18000 },
+        ],
+        patterns: [
+          { pattern_type: 'won', description: 'Won deals maintain health scores above 75 throughout the sales cycle, indicating consistent engagement.' },
+          { pattern_type: 'won', description: 'Average won deal value is $48K — deals in the $40K–$80K range convert at the highest rate.' },
+          { pattern_type: 'lost', description: 'Lost deals average $22K, suggesting smaller-scope prospects may have budget constraints not uncovered early.' },
+          { pattern_type: 'lost', description: 'Health scores in lost deals drop below 50 by the proposal stage — earlier re-engagement could recover some deals.' },
+        ],
+        recommendations: [
+          'Replicate the qualification criteria of your top 3 won deals across the team to maintain pipeline quality.',
+          'Set a health-score alert at 55 to flag deals at risk of churning before they reach the proposal stage.',
+          'Run win-loss debrief calls within 2 weeks of close to capture fresh insight from both outcomes.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-loss-summary`, {}, token)
+  },
 }
 

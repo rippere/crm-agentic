@@ -6392,3 +6392,71 @@ async def test_velocity_heatmap_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/pipeline/velocity-heatmap")
     assert resp.status_code == 403
+
+
+# Phase 17i — Win/Loss Summary (value/health-based aggregation)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_win_loss_summary_returns_structured_response(app_client):
+    import datetime as _dt
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    rows = [
+        (uuid.uuid4(), "Acme Deal", "closed_won", 50000, 85, 0.88, now - _dt.timedelta(days=10)),
+        (uuid.uuid4(), "Beta Corp", "closed_won", 35000, 78, 0.72, now - _dt.timedelta(days=20)),
+        (uuid.uuid4(), "Gamma Inc", "closed_lost", 25000, 42, 0.30, now - _dt.timedelta(days=15)),
+        (uuid.uuid4(), "Delta LLC", "closed_lost", 18000, 38, 0.25, now - _dt.timedelta(days=25)),
+    ]
+
+    ai_response = {
+        "patterns": [
+            {"pattern_type": "won", "description": "Won deals show high health scores above 75."},
+            {"pattern_type": "won", "description": "Winning deals average 42K in value, indicating strong ROI fit."},
+            {"pattern_type": "lost", "description": "Lost deals had low health scores below 50, suggesting poor engagement."},
+            {"pattern_type": "lost", "description": "Lost deals average 21K — pricing or scope may be misaligned."},
+        ],
+        "recommendations": [
+            "Replicate behaviours of top won deals across the team.",
+            "Set health score alert at 50 to flag at-risk deals early.",
+            "Debrief on top 3 lost deals to build objection-handling playbooks.",
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/win-loss-summary")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["win_rate"] == 50
+    assert body["won_count"] == 2
+    assert body["lost_count"] == 2
+    assert body["avg_won_value"] == 42500
+    assert body["avg_lost_value"] == 21500
+    assert len(body["patterns"]) == 4
+    assert any(p["pattern_type"] == "won" for p in body["patterns"])
+    assert any(p["pattern_type"] == "lost" for p in body["patterns"])
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_win_loss_summary_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-loss-summary")
+    assert resp.status_code == 403
