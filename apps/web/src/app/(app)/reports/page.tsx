@@ -702,6 +702,12 @@ export default function ReportsPage() {
   const [topOpportunitiesLoading, setTopOpportunitiesLoading] = useState(false);
   const [topOpportunitiesOpen, setTopOpportunitiesOpen] = useState(true);
 
+  type LTVContact = { contact_id: string; name: string; closed_won_revenue: number; pipeline_value: number; win_rate: number; estimated_ltv: number };
+  type AIContactLTVData = { top_contacts: LTVContact[]; avg_ltv: number; total_ltv_potential: number; ltv_narrative: string; recommendations: string[]; generated_at: string };
+  const [contactLTV, setContactLTV] = useState<AIContactLTVData | null>(null);
+  const [contactLTVLoading, setContactLTVLoading] = useState(false);
+  const [contactLTVOpen, setContactLTVOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -826,6 +832,8 @@ export default function ReportsPage() {
       apiClient.getAIDealVelocity("demo-workspace-1", "demo-token").then(setDealVelocity).catch(() => {}).finally(() => setDealVelocityLoading(false));
       setTopOpportunitiesLoading(true);
       apiClient.getAITopContactOpportunities("demo-workspace-1", "demo-token").then(setTopOpportunities).catch(() => {}).finally(() => setTopOpportunitiesLoading(false));
+      setContactLTVLoading(true);
+      apiClient.getAIContactLifetimeValue("demo-workspace-1", "demo-token").then(setContactLTV).catch(() => {}).finally(() => setContactLTVLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -955,6 +963,8 @@ export default function ReportsPage() {
       apiClient.getAIDealVelocity(workspaceId, session.access_token).then(setDealVelocity).catch(() => {}).finally(() => setDealVelocityLoading(false));
       setTopOpportunitiesLoading(true);
       apiClient.getAITopContactOpportunities(workspaceId, session.access_token).then(setTopOpportunities).catch(() => {}).finally(() => setTopOpportunitiesLoading(false));
+      setContactLTVLoading(true);
+      apiClient.getAIContactLifetimeValue(workspaceId, session.access_token).then(setContactLTV).catch(() => {}).finally(() => setContactLTVLoading(false));
     });
   }, []);
 
@@ -1762,6 +1772,27 @@ export default function ReportsPage() {
         if (!session) { setDealVelocityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealVelocityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateContactLTV = () => {
+    setContactLTVLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactLifetimeValue(wid, tok)
+        .then(setContactLTV)
+        .catch(() => {})
+        .finally(() => setContactLTVLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setContactLTVLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setContactLTVLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -7670,6 +7701,89 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No contact opportunity data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Contact Lifetime Value */}
+      <Card className="border-emerald-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Star className="h-4 w-4 text-emerald-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Contact Lifetime Value</h3>
+            {contactLTV && (
+              <span className="text-xs bg-emerald-900/40 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-700/30">
+                avg ${contactLTV.avg_ltv.toLocaleString()}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateContactLTV}
+              disabled={contactLTVLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", contactLTVLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setContactLTVOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {contactLTVOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {contactLTVOpen && (
+          contactLTVLoading && !contactLTV ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-zinc-800 rounded" />)}
+            </div>
+          ) : contactLTV && contactLTV.top_contacts.length > 0 ? (
+            <div className={cn("p-4 space-y-4", contactLTVLoading && "opacity-40")}>
+              <div className="flex gap-4 text-xs text-zinc-400">
+                <span>Total LTV potential: <span className="text-emerald-300 font-mono font-semibold">${contactLTV.total_ltv_potential.toLocaleString()}</span></span>
+                <span>Avg LTV: <span className="text-zinc-200 font-mono">${contactLTV.avg_ltv.toLocaleString()}</span></span>
+              </div>
+              <ul className="space-y-3">
+                {contactLTV.top_contacts.map((c, i) => {
+                  const maxLTV = contactLTV.top_contacts[0]?.estimated_ltv || 1;
+                  const pct = Math.round((c.estimated_ltv / maxLTV) * 100);
+                  return (
+                    <li key={c.contact_id} className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono text-zinc-500 w-5">#{i + 1}</span>
+                          <span className="text-sm font-medium text-zinc-100">{c.name}</span>
+                        </div>
+                        <span className="text-xs font-mono font-semibold text-emerald-300">${c.estimated_ltv.toLocaleString()}</span>
+                      </div>
+                      <div className="flex items-center gap-2 ml-7">
+                        <div className="flex-1 h-2 bg-zinc-800 rounded overflow-hidden">
+                          <div className="h-full bg-emerald-500/70 rounded" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 ml-7 text-xs text-zinc-500">
+                        <span className="text-emerald-400">Won ${c.closed_won_revenue.toLocaleString()}</span>
+                        <span className="text-zinc-700">·</span>
+                        <span className="text-sky-400">Pipeline ${c.pipeline_value.toLocaleString()}</span>
+                        <span className="text-zinc-700">·</span>
+                        <span>Win rate {c.win_rate.toFixed(0)}%</span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-xs text-zinc-400 italic">{contactLTV.ltv_narrative}</p>
+              <ul className="space-y-1.5">
+                {contactLTV.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(contactLTV.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No LTV data available.</p>
           )
         )}
       </Card>
