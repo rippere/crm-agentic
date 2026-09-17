@@ -14521,3 +14521,119 @@ async def get_contact_engagement_heatmap(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 17v – Deal Velocity Analysis
+# ---------------------------------------------------------------------------
+
+_DEAL_VELOCITY_SYSTEM = """\
+You are a senior sales operations AI analysing deal velocity and pipeline speed.
+Given stage dwell times and close durations for won deals, identify bottlenecks
+and opportunities to accelerate the pipeline.
+Respond with a JSON object containing exactly two keys:
+  "velocity_narrative": one paragraph (2-3 sentences) summarising velocity patterns,
+  "recommendations": array of exactly 3 actionable strings about accelerating pipeline.
+Output only valid JSON with no markdown fences.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/velocity")
+@limiter.limit("5/minute")
+async def get_deal_velocity(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    import datetime as _dt
+    now = _dt.datetime.now(timezone.utc)
+    cutoff = now - _dt.timedelta(days=180)
+
+    result = await db.execute(
+        select(Deal.created_at, Deal.stage_changed_at, Deal.value)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.stage_changed_at >= cutoff)
+    )
+    rows = result.all()
+
+    total_won = len(rows)
+    days_to_close_list: list[float] = []
+    for (created_at, stage_changed_at, value) in rows:
+        if created_at is None or stage_changed_at is None:
+            continue
+        if hasattr(created_at, "tzinfo") and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        if hasattr(stage_changed_at, "tzinfo") and stage_changed_at.tzinfo is None:
+            stage_changed_at = stage_changed_at.replace(tzinfo=timezone.utc)
+        delta = (stage_changed_at - created_at).total_seconds() / 86400.0
+        if delta >= 0:
+            days_to_close_list.append(delta)
+
+    avg_days_to_close = round(sum(days_to_close_list) / len(days_to_close_list), 1) if days_to_close_list else 0.0
+    fastest_close_days = round(min(days_to_close_list), 1) if days_to_close_list else 0.0
+    slowest_close_days = round(max(days_to_close_list), 1) if days_to_close_list else 0.0
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closed_won"]
+    stage_avg_days = avg_days_to_close / len(stage_order) if avg_days_to_close > 0 else 0.0
+    stage_dwell_times = [
+        {"stage": s, "avg_days": round(stage_avg_days, 1)}
+        for s in stage_order
+    ]
+
+    default_narrative = (
+        f"Won deals averaged {avg_days_to_close} days from creation to close across {total_won} deals. "
+        f"The fastest close took {fastest_close_days} days while the slowest took {slowest_close_days} days. "
+        "Focus on reducing time spent in early stages to compress the overall cycle."
+    )
+    default_recs = [
+        f"Target a close cycle under {round(avg_days_to_close * 0.8, 0):.0f} days — 20% faster than your {avg_days_to_close}-day average.",
+        "Introduce a qualification scorecard at discovery to cut low-probability deals earlier.",
+        "Set automatic reminders when a deal stalls in any stage beyond your average dwell time.",
+    ]
+
+    context = (
+        f"Won deals velocity analysis for the last 180 days.\n"
+        f"Total won deals analysed: {total_won}\n"
+        f"Average days to close: {avg_days_to_close}\n"
+        f"Fastest close: {fastest_close_days} days\n"
+        f"Slowest close: {slowest_close_days} days\n"
+        f"Estimated stage dwell times: {json.dumps(stage_dwell_times)}\n"
+        "Provide a velocity_narrative and 3 recommendations about accelerating pipeline."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_VELOCITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    velocity_narrative = str(data.get("velocity_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "avg_days_to_close": avg_days_to_close,
+        "stage_dwell_times": stage_dwell_times,
+        "fastest_close_days": fastest_close_days,
+        "slowest_close_days": slowest_close_days,
+        "total_won_deals_analysed": total_won,
+        "velocity_narrative": velocity_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

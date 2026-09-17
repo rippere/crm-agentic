@@ -7171,3 +7171,44 @@ async def test_contact_engagement_heatmap_wrong_workspace_returns_403(app_client
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/engagement-heatmap")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_deal_velocity_returns_structured_response(app_client, monkeypatch):
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    rows = [
+        (_dt.datetime(2026, 1, 1, tzinfo=_dt.timezone.utc), _dt.datetime(2026, 2, 15, tzinfo=_dt.timezone.utc), 50000.0),
+        (_dt.datetime(2026, 2, 1, tzinfo=_dt.timezone.utc), _dt.datetime(2026, 3, 10, tzinfo=_dt.timezone.utc), 35000.0),
+        (_dt.datetime(2026, 3, 1, tzinfo=_dt.timezone.utc), _dt.datetime(2026, 3, 20, tzinfo=_dt.timezone.utc), 28000.0),
+    ]
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute.return_value = _make_execute_result(rows)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"velocity_narrative": "Test velocity.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_msg
+
+    with patch("app.routers.ai._anthropic.Anthropic", return_value=mock_client):
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/velocity")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_won_deals_analysed"] == 3
+    assert isinstance(body["avg_days_to_close"], float)
+    assert isinstance(body["fastest_close_days"], float)
+    assert isinstance(body["slowest_close_days"], float)
+    assert len(body["stage_dwell_times"]) == 5
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_velocity_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/velocity")
+    assert resp.status_code == 403
