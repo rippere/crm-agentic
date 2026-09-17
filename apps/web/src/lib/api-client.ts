@@ -6815,5 +6815,31 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-leak`, {}, token)
   },
+
+  async getAIDealPipelineCoverage(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        coverage_ratio: 2.4,
+        coverage_status: 'good',
+        weighted_pipeline: 312000,
+        target_revenue: 130000,
+        total_open_pipeline: 685000,
+        stage_breakdown: [
+          { stage: 'discovery', deal_count: 6, total_value: 180000, weighted_value: 45000, pct_of_weighted: 14.4 },
+          { stage: 'qualified', deal_count: 5, total_value: 220000, weighted_value: 78000, pct_of_weighted: 25.0 },
+          { stage: 'proposal', deal_count: 4, total_value: 185000, weighted_value: 110000, pct_of_weighted: 35.3 },
+          { stage: 'negotiation', deal_count: 3, total_value: 100000, weighted_value: 79000, pct_of_weighted: 25.3 },
+        ],
+        coverage_narrative: 'Your weighted pipeline of $312k provides 2.4× coverage against the $130k quarterly target, which is solid but below the 3× best-practice threshold. Proposal and negotiation stages carry the most near-term value; accelerating those deals would materially boost coverage.',
+        recommendations: [
+          'Aim for 3× pipeline coverage — add 2–3 new qualified opportunities in the discovery or qualified stage to close the gap.',
+          'Prioritise the 4 proposal-stage deals for executive sponsorship and shortened approval cycles to pull revenue forward.',
+          'Review and qualify out low-probability discovery deals to focus resources on the highest-value pipeline.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-coverage`, {}, token)
+  },
 }
 

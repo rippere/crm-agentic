@@ -16108,3 +16108,173 @@ async def get_ai_deal_value_leak(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_PIPELINE_COVERAGE_SYSTEM = (
+    "You are a sales analytics AI. Analyse pipeline coverage health for a CRM. "
+    "Given open pipeline weighted by win probability vs a revenue target derived from "
+    "recent closed-won history, identify whether the pipeline is sufficient and what "
+    "actions would improve coverage. "
+    "Respond ONLY with valid JSON: {\"coverage_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_STAGE_WIN_WEIGHTS = {
+    "discovery": 0.10,
+    "qualified": 0.25,
+    "proposal": 0.50,
+    "negotiation": 0.75,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-coverage")
+@limiter.limit("5/minute")
+async def get_ai_pipeline_coverage(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    ninety_days_ago = now - datetime.timedelta(days=90)
+
+    # Closed-won revenue in last 90 days
+    won_result = await db.execute(
+        select(Deal.value)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= ninety_days_ago,
+        )
+    )
+    won_rows = won_result.all()
+    closed_won_90d = sum(float(r.value or 0) for r in won_rows)
+
+    # Target: 3x the 90-day closed-won run rate as a pipeline coverage target
+    target_revenue = closed_won_90d * 3.0 if closed_won_90d else 0.0
+
+    # Open deals - compute weighted pipeline
+    open_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(list(_STAGE_WIN_WEIGHTS.keys())),
+        )
+    )
+    open_rows = open_result.all()
+
+    if not open_rows and not won_rows:
+        return {
+            "coverage_ratio": 0.0,
+            "coverage_status": "critical",
+            "weighted_pipeline": 0.0,
+            "target_revenue": 0.0,
+            "total_open_pipeline": 0.0,
+            "stage_breakdown": [],
+            "coverage_narrative": "No open deals or closed-won history found. Build pipeline to establish a coverage baseline.",
+            "recommendations": [
+                "Focus on prospecting to build an initial pipeline in the discovery stage.",
+                "Set deal value and probability fields for all active opportunities.",
+                "Review CRM data quality to ensure deals are correctly staged.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Per-stage aggregation
+    stage_data: dict = {}
+    for row in open_rows:
+        s = row.stage
+        v = float(row.value or 0)
+        prob = float(row.ml_win_probability or 0) / 100.0
+        weight = _STAGE_WIN_WEIGHTS.get(s, 0.5)
+        weighted = v * max(prob, weight)
+        if s not in stage_data:
+            stage_data[s] = {"deal_count": 0, "total_value": 0.0, "weighted_value": 0.0}
+        stage_data[s]["deal_count"] += 1
+        stage_data[s]["total_value"] += v
+        stage_data[s]["weighted_value"] += weighted
+
+    total_open_pipeline = sum(d["total_value"] for d in stage_data.values())
+    weighted_pipeline = sum(d["weighted_value"] for d in stage_data.values())
+
+    coverage_ratio = round(weighted_pipeline / target_revenue, 2) if target_revenue else 0.0
+
+    if coverage_ratio >= 3.0:
+        coverage_status = "excellent"
+    elif coverage_ratio >= 2.0:
+        coverage_status = "good"
+    elif coverage_ratio >= 1.0:
+        coverage_status = "needs_attention"
+    else:
+        coverage_status = "critical"
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation"]
+    stage_breakdown = [
+        {
+            "stage": s,
+            "deal_count": stage_data[s]["deal_count"],
+            "total_value": round(stage_data[s]["total_value"], 2),
+            "weighted_value": round(stage_data[s]["weighted_value"], 2),
+            "pct_of_weighted": round(stage_data[s]["weighted_value"] / weighted_pipeline * 100, 1) if weighted_pipeline else 0.0,
+        }
+        for s in stage_order
+        if s in stage_data
+    ]
+
+    default_narrative = (
+        f"Weighted pipeline of ${weighted_pipeline:,.0f} covers {coverage_ratio:.1f}x the 90-day revenue target "
+        f"(${target_revenue:,.0f}). Coverage status: {coverage_status}."
+    )
+    default_recs = [
+        "Increase deal sourcing at the discovery stage to raise overall pipeline coverage above 3x.",
+        "Accelerate proposal-stage deals to improve near-term revenue realisation.",
+        "Review deals with low ML win probability to either qualify or disqualify them.",
+    ]
+
+    context = (
+        f"Pipeline coverage analysis. Closed-won 90d: ${closed_won_90d:,.0f}. "
+        f"Target: ${target_revenue:,.0f}. Weighted pipeline: ${weighted_pipeline:,.0f}. "
+        f"Coverage ratio: {coverage_ratio}x. Status: {coverage_status}. "
+        "Stage breakdown: " + "; ".join(
+            f"{sb['stage']} {sb['deal_count']} deals ${sb['total_value']:,.0f} weighted ${sb['weighted_value']:,.0f}"
+            for sb in stage_breakdown
+        ) + ". Provide coverage_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_PIPELINE_COVERAGE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    coverage_narrative = str(data.get("coverage_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations_list = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations_list) < 3:
+        recommendations_list.append(default_recs[len(recommendations_list) % 3])
+
+    return {
+        "coverage_ratio": coverage_ratio,
+        "coverage_status": coverage_status,
+        "weighted_pipeline": round(weighted_pipeline, 2),
+        "target_revenue": round(target_revenue, 2),
+        "total_open_pipeline": round(total_open_pipeline, 2),
+        "stage_breakdown": stage_breakdown,
+        "coverage_narrative": coverage_narrative,
+        "recommendations": recommendations_list,
+        "generated_at": now.isoformat() + "Z",
+    }
