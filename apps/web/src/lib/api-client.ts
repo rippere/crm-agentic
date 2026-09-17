@@ -6300,5 +6300,34 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/health-trend`, {}, token)
   },
+
+  async getDealStagnation(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stagnant_deals: [
+          { id: 'd-001', title: 'Legacy Enterprise Upgrade', stage: 'proposal', health_score: 48, days_in_stage: 32 },
+          { id: 'd-002', title: 'Beta Corp SaaS Migration', stage: 'negotiation', health_score: 55, days_in_stage: 21 },
+          { id: 'd-003', title: 'Gamma Retail Platform', stage: 'qualified', health_score: 62, days_in_stage: 17 },
+        ],
+        stage_avg_days: [
+          { stage: 'discovery', avg_days: 8, count: 2 },
+          { stage: 'qualified', avg_days: 17, count: 3 },
+          { stage: 'proposal', avg_days: 24, count: 3 },
+          { stage: 'negotiation', avg_days: 19, count: 2 },
+          { stage: 'closing', avg_days: 6, count: 1 },
+        ],
+        total_stagnant_count: 3,
+        most_stagnant: { title: 'Legacy Enterprise Upgrade', days: 32 },
+        stagnation_narrative: '3 of 11 open deals are stagnant, stuck in their current stage for more than 14 days. The proposal stage shows the highest average age at 24 days — deals entering proposal without a clear champion are most at risk of stalling indefinitely.',
+        recommendations: [
+          'Schedule immediate deal reviews for all 3 stagnant deals this week and create a concrete next-step action plan or disqualify each one.',
+          'Set automated 14-day stage-age alerts so reps receive a nudge before a deal becomes fully stuck.',
+          'Review the proposal stage entry criteria — deals averaging 24 days here signal a qualification gap upstream.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/stagnation`, {}, token)
+  },
 }
 
