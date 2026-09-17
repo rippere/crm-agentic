@@ -654,7 +654,7 @@ export default function ReportsPage() {
       setRiskEscalationLoading(true);
       apiClient.getDealRiskEscalation("demo-workspace-1", "demo-token").then(setRiskEscalation).catch(() => {}).finally(() => setRiskEscalationLoading(false));
       setMomentumLoading(true);
-      apiClient.getDealMomentum("demo-workspace-1", "demo-token").then(setMomentum).catch(() => {}).finally(() => setMomentumLoading(false));
+      apiClient.getWorkspaceMomentum("demo-workspace-1", "demo-token").then(setMomentum).catch(() => {}).finally(() => setMomentumLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -751,7 +751,7 @@ export default function ReportsPage() {
       setRiskEscalationLoading(true);
       apiClient.getDealRiskEscalation(workspaceId, session.access_token).then(setRiskEscalation).catch(() => {}).finally(() => setRiskEscalationLoading(false));
       setMomentumLoading(true);
-      apiClient.getDealMomentum(workspaceId, session.access_token).then(setMomentum).catch(() => {}).finally(() => setMomentumLoading(false));
+      apiClient.getWorkspaceMomentum(workspaceId, session.access_token).then(setMomentum).catch(() => {}).finally(() => setMomentumLoading(false));
     });
   }, []);
 
@@ -1315,7 +1315,7 @@ export default function ReportsPage() {
   const regenerateMomentum = () => {
     setMomentumLoading(true);
     const doFetch = (wid: string, tok: string) => {
-      apiClient.getDealMomentum(wid, tok)
+      apiClient.getWorkspaceMomentum(wid, tok)
         .then(setMomentum)
         .catch(() => {})
         .finally(() => setMomentumLoading(false));

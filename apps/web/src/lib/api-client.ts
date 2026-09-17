@@ -6139,7 +6139,7 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/risk-escalation`, {}, token)
   },
 
-  async getDealMomentum(workspaceId: string, token: string) {
+  async getWorkspaceMomentum(workspaceId: string, token: string) {
     if (isDemoMode) {
       return Promise.resolve({
         accelerating: [
