@@ -6329,5 +6329,29 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/stagnation`, {}, token)
   },
+
+  async getDealEngagementGap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        disengaged_deals: [
+          { id: 'd-001', title: 'Legacy Enterprise Upgrade', stage: 'proposal', health_score: 45, days_since_activity: 28 },
+          { id: 'd-002', title: 'Beta Corp SaaS Migration', stage: 'negotiation', health_score: 52, days_since_activity: 19 },
+          { id: 'd-003', title: 'Gamma Retail Platform', stage: 'qualified', health_score: 60, days_since_activity: 12 },
+          { id: 'd-004', title: 'Delta Ops Integration', stage: 'proposal', health_score: 38, days_since_activity: 9 },
+        ],
+        avg_days_since_activity: 11,
+        total_disengaged: 4,
+        top_disengaged: { title: 'Legacy Enterprise Upgrade', days: 28 },
+        engagement_narrative: '4 of 11 open deals have not been updated in over 7 days. The proposal stage shows the highest gap with 2 disengaged deals — without fresh activity, these are at risk of being lost to more engaged competitors.',
+        recommendations: [
+          'Review and update all 4 disengaged deals this week — add notes, move stage, or disqualify each one with a clear decision.',
+          'Set a 7-day maximum engagement SLA so reps receive automatic alerts when deals go quiet.',
+          'Add next-action dates to every active deal so reps have a clear cadence and no deal drifts without accountability.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/engagement-gap`, {}, token)
+  },
 }
 

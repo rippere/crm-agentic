@@ -13434,3 +13434,139 @@ async def get_deal_stagnation(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 17n: Deal engagement gap analyser
+# ---------------------------------------------------------------------------
+
+_DEAL_ENGAGEMENT_GAP_SYSTEM = """\
+You are a senior sales operations AI analysing deal engagement gaps across a CRM pipeline.
+Given information about deals that have not been updated recently, average days since last activity, and total disengaged count, generate an engagement narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "engagement_narrative": "2-3 sentence narrative about deal engagement gaps",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/engagement-gap")
+@limiter.limit("5/minute")
+async def get_deal_engagement_gap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    ENGAGEMENT_THRESHOLD_DAYS = 7
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.health_score, Deal.updated_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "disengaged_deals": [],
+            "avg_days_since_activity": 0,
+            "total_disengaged": 0,
+            "top_disengaged": None,
+            "engagement_narrative": "No open deals found in the pipeline.",
+            "recommendations": [
+                "Add deals to the pipeline to start tracking engagement.",
+                "Set up a regular cadence of updates so deal records stay current.",
+                "Define engagement SLAs per stage to ensure deals receive timely attention.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    deal_infos = []
+    for row in rows:
+        deal_id, title, stage, health_score, updated_at = row
+        if updated_at is None:
+            days_since = 0.0
+        else:
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=datetime.timezone.utc)
+            days_since = max(0.0, (now - updated_at).total_seconds() / 86400)
+        deal_infos.append({
+            "id": str(deal_id),
+            "title": str(title),
+            "stage": str(stage),
+            "health_score": int(health_score or 50),
+            "days_since_activity": round(days_since),
+        })
+
+    all_days = [d["days_since_activity"] for d in deal_infos]
+    avg_days_since_activity = round(sum(all_days) / len(all_days)) if all_days else 0
+
+    disengaged = [d for d in deal_infos if d["days_since_activity"] > ENGAGEMENT_THRESHOLD_DAYS]
+    disengaged.sort(key=lambda d: d["days_since_activity"], reverse=True)
+    total_disengaged = len(disengaged)
+
+    top_disengaged = (
+        {"title": disengaged[0]["title"], "days": disengaged[0]["days_since_activity"]}
+        if disengaged else None
+    )
+
+    default_narrative = (
+        f"{total_disengaged} deal{'s have' if total_disengaged != 1 else ' has'} not been updated "
+        f"in more than {ENGAGEMENT_THRESHOLD_DAYS} days. "
+        f"The pipeline averages {avg_days_since_activity} days since last activity across {len(rows)} open deals."
+    )
+    default_recs = [
+        f"Review and update all {total_disengaged} disengaged deals this week — add notes, move stage, or disqualify each one.",
+        f"Set a {ENGAGEMENT_THRESHOLD_DAYS}-day maximum engagement SLA: any deal without activity triggers an automatic rep alert.",
+        "Add next-action dates to every active deal so reps have a clear cadence and deals don't drift without accountability.",
+    ]
+
+    context_lines = [
+        f"Open deals: {len(rows)}, avg days since last update: {avg_days_since_activity}",
+        f"Disengaged (>{ENGAGEMENT_THRESHOLD_DAYS}d without update): {total_disengaged}",
+    ]
+    if top_disengaged:
+        context_lines.append(f"Most disengaged: {top_disengaged['title']} ({top_disengaged['days']} days)")
+    for d in disengaged[:5]:
+        context_lines.append(f"{d['title']} ({d['stage']}): {d['days_since_activity']}d, health {d['health_score']}")
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_DEAL_ENGAGEMENT_GAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    engagement_narrative = str(data.get("engagement_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "disengaged_deals": disengaged,
+        "avg_days_since_activity": avg_days_since_activity,
+        "total_disengaged": total_disengaged,
+        "top_disengaged": top_disengaged,
+        "engagement_narrative": engagement_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

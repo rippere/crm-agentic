@@ -6708,3 +6708,65 @@ async def test_deal_stagnation_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/stagnation")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 17n: GET /workspaces/{wid}/ai/deals/engagement-gap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_engagement_gap_returns_structured_response(app_client):
+    import datetime as _dt
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    rows = [
+        (uuid.uuid4(), "Disengaged Alpha", "proposal", 55, now - _dt.timedelta(days=21)),
+        (uuid.uuid4(), "Disengaged Beta", "negotiation", 42, now - _dt.timedelta(days=14)),
+        (uuid.uuid4(), "Active Gamma", "discovery", 80, now - _dt.timedelta(days=2)),
+    ]
+
+    ai_response = {
+        "engagement_narrative": "2 of 3 open deals have not been updated in over 7 days. Proposal and negotiation deals are at highest risk of falling through due to lack of engagement.",
+        "recommendations": [
+            "Review and update all 2 disengaged deals this week — add notes or move stage for each.",
+            "Set a 7-day maximum engagement SLA so reps receive automatic alerts when deals go quiet.",
+            "Add next-action dates to every active deal to maintain a clear engagement cadence.",
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/engagement-gap")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["disengaged_deals"], list)
+    assert all("id" in d and "title" in d and "stage" in d and "days_since_activity" in d for d in body["disengaged_deals"])
+    assert body["total_disengaged"] == 2
+    assert body["top_disengaged"]["days"] == 21
+    assert isinstance(body["avg_days_since_activity"], int)
+    assert isinstance(body["engagement_narrative"], str) and body["engagement_narrative"]
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_engagement_gap_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/engagement-gap")
+    assert resp.status_code == 403
