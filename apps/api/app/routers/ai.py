@@ -11205,3 +11205,202 @@ async def get_coaching_digest(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_QBR_SUMMARY_SYSTEM = """\
+You are a senior sales analytics AI generating a Quarterly Business Review (QBR) summary for a sales leader.
+
+Given workspace CRM data for the last 90 days, produce a concise, actionable QBR summary.
+
+Respond with valid JSON only, no prose outside JSON:
+{
+  "wins_summary": "2-sentence narrative celebrating key wins and total revenue closed",
+  "pipeline_status": "2-sentence narrative on current pipeline health, momentum, and areas of concern",
+  "strategic_recommendations": ["specific actionable recommendation 1", "specific recommendation 2", "specific recommendation 3"]
+}
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/qbr-summary")
+@limiter.limit("5/minute")
+async def get_qbr_summary(
+    request: Request,
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if str(current_user.workspace_id) != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_90 = now - datetime.timedelta(days=90)
+
+    won_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.company, Deal.value, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+        .order_by(Deal.value.desc())
+    )
+    won_rows = won_result.all()
+
+    lost_result = await db.execute(
+        select(func.count())
+        .select_from(Deal)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+    )
+    lost_count = lost_result.scalar() or 0
+
+    open_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.company, Deal.stage, Deal.value, Deal.health_score, Deal.ml_win_probability)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .order_by(Deal.value.desc())
+    )
+    open_rows = open_result.all()
+
+    won_count = len(won_rows)
+    won_revenue = sum(float(r[3] or 0) for r in won_rows)
+    total_closed = won_count + int(lost_count)
+    win_rate = round((won_count / total_closed * 100)) if total_closed > 0 else 0
+
+    top_wins = [
+        {
+            "id": str(r[0]),
+            "title": str(r[1] or ""),
+            "company": str(r[2] or ""),
+            "value": float(r[3] or 0),
+            "closed_at": r[4].isoformat() + "Z" if r[4] else None,
+        }
+        for r in won_rows[:3]
+    ]
+
+    open_count = len(open_rows)
+    total_pipeline = sum(float(r[4] or 0) for r in open_rows)
+    at_risk_rows = [r for r in open_rows if int(r[5] or 50) < 50]
+    at_risk_count = len(at_risk_rows)
+    avg_prob = (
+        round(sum(float(r[6] or 0) for r in open_rows) / open_count)
+        if open_count > 0 else 0
+    )
+
+    top_risks = [
+        {
+            "id": str(r[0]),
+            "title": str(r[1] or ""),
+            "company": str(r[2] or ""),
+            "stage": str(r[3] or ""),
+            "value": float(r[4] or 0),
+            "health_score": int(r[5] or 0),
+        }
+        for r in sorted(at_risk_rows, key=lambda x: float(x[4] or 0), reverse=True)[:3]
+    ]
+
+    stage_breakdown: dict[str, int] = {}
+    for r in open_rows:
+        s = str(r[3] or "unknown")
+        stage_breakdown[s] = stage_breakdown.get(s, 0) + 1
+
+    quarter = (now.month - 1) // 3 + 1
+    quarter_label = f"Q{quarter} {now.year}"
+
+    context_lines = [
+        f"Quarter: {quarter_label}",
+        f"Closed Won (last 90 days): {won_count} deals · ${won_revenue:,.0f} revenue",
+        f"Closed Lost (last 90 days): {int(lost_count)} deals",
+        f"Win Rate: {win_rate}%",
+        f"Open Pipeline: {open_count} deals · ${total_pipeline:,.0f} total value",
+        f"At-Risk Deals (health<50): {at_risk_count}",
+        f"Avg Win Probability: {avg_prob}%",
+        f"Stage Breakdown: " + ", ".join(f"{s}: {c}" for s, c in stage_breakdown.items()),
+    ]
+    if top_wins:
+        context_lines.append("Top Wins: " + "; ".join(f"{w['title']} (${w['value']:,.0f})" for w in top_wins))
+    if top_risks:
+        context_lines.append("Top At-Risk: " + "; ".join(f"{r['title']} health={r['health_score']}" for r in top_risks))
+    context = "\n".join(context_lines)
+
+    default_wins_summary = (
+        f"In {quarter_label} the team closed {won_count} deals totalling ${won_revenue:,.0f} in revenue, "
+        f"achieving a {win_rate}% win rate against {int(lost_count)} losses."
+    )
+    default_pipeline_status = (
+        f"The pipeline holds {open_count} open deals worth ${total_pipeline:,.0f}, "
+        f"with {at_risk_count} deals flagged at-risk and an average win probability of {avg_prob}%."
+    )
+    default_recs = [
+        f"Focus on the {at_risk_count} at-risk deals — schedule a pipeline review before quarter end.",
+        "Run a win-loss debrief on last quarter's losses to identify common objection patterns.",
+        "Ensure all open deals have a next-action date set — follow-up discipline drives velocity.",
+    ]
+
+    metrics = {
+        "closed_won_count": won_count,
+        "closed_won_revenue": won_revenue,
+        "closed_lost_count": int(lost_count),
+        "win_rate": win_rate,
+        "open_deal_count": open_count,
+        "total_pipeline_value": total_pipeline,
+        "at_risk_count": at_risk_count,
+        "avg_win_probability": avg_prob,
+    }
+
+    if won_count == 0 and open_count == 0:
+        return {
+            "quarter": quarter_label,
+            "wins_summary": default_wins_summary,
+            "pipeline_status": default_pipeline_status,
+            "top_wins": [],
+            "top_risks": [],
+            "strategic_recommendations": default_recs,
+            "metrics": metrics,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_QBR_SUMMARY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    wins_summary = data.get("wins_summary", default_wins_summary)
+    if not isinstance(wins_summary, str) or not wins_summary.strip():
+        wins_summary = default_wins_summary
+
+    pipeline_status = data.get("pipeline_status", default_pipeline_status)
+    if not isinstance(pipeline_status, str) or not pipeline_status.strip():
+        pipeline_status = default_pipeline_status
+
+    raw_recs = data.get("strategic_recommendations", [])
+    strategic_recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(strategic_recommendations) < 3:
+        strategic_recommendations.append(default_recs[len(strategic_recommendations) % 3])
+
+    return {
+        "quarter": quarter_label,
+        "wins_summary": wins_summary,
+        "pipeline_status": pipeline_status,
+        "top_wins": top_wins,
+        "top_risks": top_risks,
+        "strategic_recommendations": strategic_recommendations,
+        "metrics": metrics,
+        "generated_at": now.isoformat() + "Z",
+    }

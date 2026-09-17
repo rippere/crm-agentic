@@ -5842,5 +5842,41 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/coaching-digest`, {}, token)
   },
+
+  async getQbrSummary(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        quarter: 'Q3 2026',
+        wins_summary: 'Q3 2026 was a breakout quarter — the team closed 5 deals worth $412K, the highest revenue quarter in the company\'s history and 38% above Q2. TechCorp\'s $145K negotiation win and Acme\'s $89K close were the headline performers, both converting after personalised executive outreach.',
+        pipeline_status: 'The current pipeline holds 11 open deals worth $285K with an average win probability of 61%. Three deals are flagged at-risk with health scores below 50 — HealthPlus ($22K) and StartupX ($15K) need immediate attention to prevent quarter-end slippage.',
+        top_wins: [
+          { id: 'd-001', title: 'TechCorp Enterprise Suite', company: 'TechCorp', value: 145000, closed_at: new Date(Date.now() - 15 * 86400000).toISOString() },
+          { id: 'd-win2', title: 'Acme Platform Pro', company: 'Acme Inc', value: 89000, closed_at: new Date(Date.now() - 30 * 86400000).toISOString() },
+          { id: 'd-win3', title: 'DataCo Analytics Hub', company: 'DataCo', value: 67000, closed_at: new Date(Date.now() - 45 * 86400000).toISOString() },
+        ],
+        top_risks: [
+          { id: 'd-002', title: 'HealthPlus Clinical Suite', company: 'HealthPlus', stage: 'proposal', value: 22000, health_score: 35 },
+          { id: 'd-003', title: 'StartupX Growth Pack', company: 'StartupX', stage: 'qualified', value: 15000, health_score: 42 },
+        ],
+        strategic_recommendations: [
+          'Prioritise HealthPlus and StartupX re-engagement this week — both are at-risk and represent $37K of pipeline that could slip to Q4.',
+          'Run a structured win-loss debrief on the 2 lost deals this quarter to identify objection patterns and improve the close rate in Q4.',
+          'Ensure every open deal has a next-action date set before week end — follow-up discipline is the single biggest driver of pipeline velocity.',
+        ],
+        metrics: {
+          closed_won_count: 5,
+          closed_won_revenue: 412000,
+          closed_lost_count: 2,
+          win_rate: 71,
+          open_deal_count: 11,
+          total_pipeline_value: 285000,
+          at_risk_count: 3,
+          avg_win_probability: 61,
+        },
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/qbr-summary`, {}, token)
+  },
 }
 
