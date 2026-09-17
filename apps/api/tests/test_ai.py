@@ -6100,3 +6100,87 @@ async def test_playbook_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/playbook")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/battle-card
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_battle_card_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    open_rows = [
+        ("HealthPlus Suite", ["Salesforce", "HubSpot"]),
+        ("StartupX CRM", ["Salesforce"]),
+        ("RetailX Omni", ["Pipedrive"]),
+    ]
+    won_rows = [
+        ("TechCorp Enterprise", ["Salesforce"]),
+        ("Acme Platform", ["HubSpot"]),
+    ]
+    lost_rows = [
+        ("DataCo Analytics", ["Salesforce"]),
+        ("GrowthCo CRM", ["Salesforce"]),
+    ]
+
+    ai_response = {
+        "battle_cards": [
+            {
+                "competitor": "Salesforce",
+                "key_differentiators": ["Simpler UX", "Lower TCO", "Faster implementation"],
+                "objection_responses": ["On price: our 3yr TCO is 30% lower", "On features: we focus on outcomes", "On support: named CSM from day 1"],
+                "positioning": "Unlike Salesforce, we focus on outcomes over complexity.",
+            },
+            {
+                "competitor": "HubSpot",
+                "key_differentiators": ["Better enterprise features", "More integrations", "Dedicated support"],
+                "objection_responses": ["On price: enterprise tier is comparable", "On ease of use: our onboarding is 2 weeks", "On marketing tools: we integrate with best-in-class"],
+                "positioning": "Unlike HubSpot, we scale with your enterprise without pricing penalties.",
+            },
+        ],
+        "recommendations": ["Train on Salesforce battle card first", "Track competitors on all deals", "Run quarterly win/loss reviews"],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(open_rows),
+            _make_execute_result(won_rows),
+            _make_execute_result(lost_rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/battle-card")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["battle_cards"], list)
+    assert len(data["battle_cards"]) >= 1
+    card = data["battle_cards"][0]
+    assert "competitor" in card
+    assert "key_differentiators" in card and isinstance(card["key_differentiators"], list)
+    assert "objection_responses" in card and isinstance(card["objection_responses"], list)
+    assert "positioning" in card
+    assert card["competitor"] == "Salesforce"
+    assert card["encounter_count"] >= 3
+    assert isinstance(data["top_competitor"], str)
+    assert data["top_competitor"] == "Salesforce"
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_battle_card_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/battle-card")
+    assert resp.status_code == 403

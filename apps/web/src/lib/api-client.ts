@@ -6008,5 +6008,70 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/playbook`, {}, token)
   },
+
+  async getDealBattleCard(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        battle_cards: [
+          {
+            competitor: 'Salesforce',
+            encounter_count: 7,
+            win_rate: 43,
+            key_differentiators: [
+              'Implementation in 2 weeks vs Salesforce\'s 3–6 month deployment — get value immediately, not after a project.',
+              'All-inclusive pricing with no per-module fees — a comparable Salesforce setup costs 2.4× more over 3 years.',
+              'A dedicated named CSM from day one vs Salesforce\'s tiered support model that routes SMBs to a generic queue.',
+            ],
+            objection_responses: [
+              '"Everyone uses Salesforce" → Salesforce has 20% market share; 80% of the market chose something else. The question is what fits your workflow, not what\'s most familiar.',
+              '"We need Salesforce\'s ecosystem" → We integrate natively with 200+ tools including every major Salesforce partner. Show me the specific tool you need and we\'ll confirm compatibility today.',
+              '"Salesforce is more proven" → We\'ve closed 3 enterprise customers who migrated from Salesforce in the last 6 months — introductions available if helpful.',
+            ],
+            positioning: 'Unlike Salesforce, we deliver enterprise power without the enterprise complexity — your team is fully operational in 2 weeks, not 6 months.',
+          },
+          {
+            competitor: 'HubSpot',
+            encounter_count: 4,
+            win_rate: 75,
+            key_differentiators: [
+              'Purpose-built for B2B sales intelligence vs HubSpot\'s marketing-first CRM bolted onto a sales layer.',
+              'AI-native deal coaching and pipeline analysis built in — HubSpot requires 3rd-party tools to get comparable insights.',
+              'Flat per-seat pricing that doesn\'t penalise you for growing the team the way HubSpot\'s tier jumps do.',
+            ],
+            objection_responses: [
+              '"HubSpot is easier to use" → Our onboarding takes 2 weeks and includes dedicated setup support. Book a live walkthrough and see for yourself.',
+              '"We already use HubSpot marketing" → We integrate bidirectionally with HubSpot Marketing Hub — you keep the marketing tools and get a better CRM.',
+              '"HubSpot is cheaper" → HubSpot Sales Hub Professional for a 10-person team is $4,800/year before add-ons. Our comparable plan is $3,600 with all features included.',
+            ],
+            positioning: 'Unlike HubSpot, we\'re built for sales-led teams — deeper pipeline intelligence, smarter AI coaching, and pricing that scales without surprises.',
+          },
+          {
+            competitor: 'Pipedrive',
+            encounter_count: 2,
+            win_rate: 100,
+            key_differentiators: [
+              'AI-powered coaching and deal health scoring built in — Pipedrive is a pipeline visualiser with no intelligence layer.',
+              'Full contact enrichment, activity tracking and email integration in one platform vs Pipedrive\'s patchwork of Zapier integrations.',
+              'Scales to enterprise with role-based permissions, SSO, and audit logs — Pipedrive caps out at mid-market.',
+            ],
+            objection_responses: [
+              '"Pipedrive is simpler" → We\'re as simple to use but actually tell you what to do next — Pipedrive shows you the pipeline but not the actions.',
+              '"Pipedrive is cheaper" → At scale, Pipedrive\'s Essential plan lacks the AI and reporting features you need, and the upgrade cost narrows the gap significantly.',
+              '"We love the Kanban view" → Our pipeline board is identical to Pipedrive\'s — and you get AI deal scoring and coaching on top of it.',
+            ],
+            positioning: 'Unlike Pipedrive, we don\'t just show you the pipeline — we tell you what\'s at risk, what to do next, and why deals are won or lost.',
+          },
+        ],
+        top_competitor: 'Salesforce',
+        recommendations: [
+          'Run a Salesforce-specific battle card session with the sales team this quarter — 7 active encounters make it the top competitive priority.',
+          'Collect win/loss notes on every competitive deal so the AI can sharpen battle cards with real objection data over time.',
+          'Add a "Competitors" field as mandatory on all deals over $20K to ensure coverage improves beyond the current 60% tracking rate.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/battle-card`, {}, token)
+  },
 }
 

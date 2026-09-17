@@ -11869,3 +11869,224 @@ async def get_deal_playbook(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 17e — AI workspace competitor battle cards
+# ---------------------------------------------------------------------------
+
+_BATTLE_CARD_SYSTEM = """\
+You are a senior sales strategy AI analysing competitor intelligence from CRM data.
+
+Given competitor encounter data (how often each competitor appears in deals and the win/loss record against them), generate actionable battle cards.
+
+Respond with valid JSON only, no prose outside JSON:
+{
+  "battle_cards": [
+    {
+      "competitor": "CompetitorName",
+      "key_differentiators": ["3 ways we beat this competitor"],
+      "objection_responses": ["3 ready responses to common objections this competitor raises"],
+      "positioning": "one-sentence positioning statement when facing this competitor"
+    }
+  ],
+  "recommendations": ["3 strategic recommendations for competing in this market"]
+}
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/battle-card")
+@limiter.limit("5/minute")
+async def get_deal_battle_card(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_90 = now - datetime.timedelta(days=90)
+
+    # Query 1: open deals with competitors field
+    open_result = await db.execute(
+        select(Deal.title, Deal.competitors)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+            Deal.competitors.isnot(None),
+        )
+    )
+    open_rows = open_result.all()
+
+    # Query 2: closed_won deals with competitors (last 90d)
+    won_result = await db.execute(
+        select(Deal.title, Deal.competitors)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= cutoff_90,
+            Deal.competitors.isnot(None),
+        )
+    )
+    won_rows = won_result.all()
+
+    # Query 3: closed_lost deals with competitors (last 90d)
+    lost_result = await db.execute(
+        select(Deal.title, Deal.competitors)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff_90,
+            Deal.competitors.isnot(None),
+        )
+    )
+    lost_rows = lost_result.all()
+
+    # Aggregate competitor encounter counts and win/loss records
+    competitor_data: dict[str, dict] = defaultdict(lambda: {"open": 0, "won": 0, "lost": 0})
+
+    def _extract_competitors(rows: list, outcome: str) -> None:
+        for title, comps in rows:
+            if not comps:
+                continue
+            names: list[str] = []
+            if isinstance(comps, list):
+                names = [str(c).strip() for c in comps if c]
+            elif isinstance(comps, str):
+                names = [c.strip() for c in comps.split(",") if c.strip()]
+            for name in names:
+                if name:
+                    competitor_data[name][outcome] += 1
+
+    _extract_competitors(open_rows, "open")
+    _extract_competitors(won_rows, "won")
+    _extract_competitors(lost_rows, "lost")
+
+    if not competitor_data:
+        return {
+            "battle_cards": [],
+            "top_competitor": None,
+            "recommendations": [
+                "Start tracking competitors on deals — add competitor names to the deal record to enable battle-card generation.",
+                "Review lost deals from the last quarter and identify which competitors were mentioned.",
+                "Set up a win/loss debrief process to capture competitor intelligence systematically.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Build sorted competitor list for context
+    competitor_list = []
+    for name, counts in competitor_data.items():
+        total_closed = counts["won"] + counts["lost"]
+        win_rate = round(counts["won"] / total_closed * 100) if total_closed > 0 else None
+        encounter_count = counts["open"] + counts["won"] + counts["lost"]
+        competitor_list.append({
+            "competitor": name,
+            "encounter_count": encounter_count,
+            "open_count": counts["open"],
+            "won_count": counts["won"],
+            "lost_count": counts["lost"],
+            "win_rate": win_rate,
+        })
+
+    competitor_list.sort(key=lambda c: -c["encounter_count"])
+    top_competitor = competitor_list[0]["competitor"] if competitor_list else None
+
+    context_lines = [
+        "Competitor encounter data from CRM deals (last 90 days):",
+    ]
+    for c in competitor_list[:6]:
+        wr = f"{c['win_rate']}%" if c["win_rate"] is not None else "no closed data"
+        context_lines.append(
+            f"- {c['competitor']}: {c['encounter_count']} encounters, win rate {wr} "
+            f"({c['won_count']} won, {c['lost_count']} lost, {c['open_count']} open)"
+        )
+    context = "\n".join(context_lines)
+
+    default_battle_cards = [
+        {
+            "competitor": c["competitor"],
+            "encounter_count": c["encounter_count"],
+            "win_rate": c["win_rate"],
+            "key_differentiators": [
+                "Superior integration ecosystem with 200+ native connectors vs limited options.",
+                "Dedicated customer success team with guaranteed 2-hour response SLA.",
+                "Transparent pricing with no hidden implementation or migration fees.",
+            ],
+            "objection_responses": [
+                "If they claim lower price: our TCO over 3 years is typically 30% lower once implementation costs are factored in.",
+                "If they claim more features: our platform focuses on the 20% of features that drive 80% of outcomes — less noise, faster adoption.",
+                "If they claim better support: we offer a named CSM from day one; ask them who your point of contact will be post-sale.",
+            ],
+            "positioning": f"Unlike {c['competitor']}, we focus on outcomes over features — faster time-to-value with lower total cost of ownership.",
+        }
+        for c in competitor_list[:3]
+    ]
+    default_recs = [
+        f"Prioritise battle card training for {top_competitor} — they appear most frequently in the pipeline.",
+        "Run a quarterly win/loss review focused on competitive deals to keep intelligence fresh.",
+        "Add competitor tracking as a required field on all deals over $10K to improve data coverage.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            system=_BATTLE_CARD_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    raw_cards = data.get("battle_cards", [])
+    if not isinstance(raw_cards, list) or len(raw_cards) == 0:
+        raw_cards = []
+
+    # Merge AI card content with our computed metrics
+    merged_cards = []
+    comp_lookup = {c["competitor"]: c for c in competitor_list}
+    seen_competitors = set()
+
+    for ai_card in raw_cards[:6]:
+        name = str(ai_card.get("competitor", "")).strip()
+        if not name or name in seen_competitors:
+            continue
+        seen_competitors.add(name)
+        metrics = comp_lookup.get(name, {"encounter_count": 0, "win_rate": None})
+        merged_cards.append({
+            "competitor": name,
+            "encounter_count": metrics.get("encounter_count", 0),
+            "win_rate": metrics.get("win_rate"),
+            "key_differentiators": [str(d) for d in (ai_card.get("key_differentiators") or [])[:3]],
+            "objection_responses": [str(r) for r in (ai_card.get("objection_responses") or [])[:3]],
+            "positioning": str(ai_card.get("positioning", "")),
+        })
+
+    # Ensure cards exist for top competitors if AI missed them
+    for c in competitor_list[:3]:
+        if c["competitor"] not in seen_competitors:
+            default = next((d for d in default_battle_cards if d["competitor"] == c["competitor"]), None)
+            if default:
+                merged_cards.append(default)
+
+    if not merged_cards:
+        merged_cards = default_battle_cards
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "battle_cards": merged_cards,
+        "top_competitor": top_competitor,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -512,6 +512,25 @@ export default function ReportsPage() {
   const [playbookOpen, setPlaybookOpen] = useState(true);
   const [playbookExpandedStage, setPlaybookExpandedStage] = useState<string | null>(null);
 
+  type BattleCard = {
+    competitor: string;
+    encounter_count: number;
+    win_rate: number | null;
+    key_differentiators: string[];
+    objection_responses: string[];
+    positioning: string;
+  };
+  type BattleCardData = {
+    battle_cards: BattleCard[];
+    top_competitor: string | null;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [battleCard, setBattleCard] = useState<BattleCardData | null>(null);
+  const [battleCardLoading, setBattleCardLoading] = useState(false);
+  const [battleCardOpen, setBattleCardOpen] = useState(true);
+  const [battleCardExpanded, setBattleCardExpanded] = useState<string | null>(null);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -598,6 +617,8 @@ export default function ReportsPage() {
       apiClient.getDealConversionPaths("demo-workspace-1", "demo-token").then(setConversionPaths).catch(() => {}).finally(() => setConversionPathsLoading(false));
       setPlaybookLoading(true);
       apiClient.getDealPlaybook("demo-workspace-1", "demo-token").then(setPlaybook).catch(() => {}).finally(() => setPlaybookLoading(false));
+      setBattleCardLoading(true);
+      apiClient.getDealBattleCard("demo-workspace-1", "demo-token").then(setBattleCard).catch(() => {}).finally(() => setBattleCardLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -689,6 +710,8 @@ export default function ReportsPage() {
       apiClient.getDealConversionPaths(workspaceId, session.access_token).then(setConversionPaths).catch(() => {}).finally(() => setConversionPathsLoading(false));
       setPlaybookLoading(true);
       apiClient.getDealPlaybook(workspaceId, session.access_token).then(setPlaybook).catch(() => {}).finally(() => setPlaybookLoading(false));
+      setBattleCardLoading(true);
+      apiClient.getDealBattleCard(workspaceId, session.access_token).then(setBattleCard).catch(() => {}).finally(() => setBattleCardLoading(false));
     });
   }, []);
 
@@ -1244,6 +1267,27 @@ export default function ReportsPage() {
         if (!session) { setCoachingDigestLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCoachingDigestLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateBattleCard = () => {
+    setBattleCardLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealBattleCard(wid, tok)
+        .then(setBattleCard)
+        .catch(() => {})
+        .finally(() => setBattleCardLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setBattleCardLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setBattleCardLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5065,6 +5109,130 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No coaching digest data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Competitor Battle Cards */}
+      <Card className="border-orange-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-orange-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Competitor Battle Cards</h3>
+            {battleCard && battleCard.top_competitor && (
+              <span className="text-xs bg-orange-900/40 text-orange-300 px-2 py-0.5 rounded-full border border-orange-700/30">
+                Top: {battleCard.top_competitor}
+              </span>
+            )}
+            {battleCard && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                {battleCard.battle_cards.length} competitor{battleCard.battle_cards.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateBattleCard}
+              disabled={battleCardLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", battleCardLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setBattleCardOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {battleCardOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {battleCardOpen && (
+          battleCardLoading && !battleCard ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-12 bg-zinc-800 rounded" />)}
+            </div>
+          ) : battleCard && battleCard.battle_cards.length > 0 ? (
+            <div className={cn("p-4 space-y-4", battleCardLoading && "opacity-40")}>
+              <div className="space-y-1">
+                {battleCard.battle_cards.map((card) => (
+                  <div key={card.competitor} className="rounded-lg border border-zinc-800 overflow-hidden">
+                    <button
+                      onClick={() => setBattleCardExpanded(battleCardExpanded === card.competitor ? null : card.competitor)}
+                      className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-zinc-800/50 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-semibold text-zinc-200">{card.competitor}</span>
+                        <span className="text-xs text-zinc-500">{card.encounter_count} encounter{card.encounter_count !== 1 ? "s" : ""}</span>
+                        {card.win_rate !== null && (
+                          <span className={cn(
+                            "text-xs px-1.5 py-0.5 rounded font-mono",
+                            card.win_rate >= 60 ? "bg-emerald-900/40 text-emerald-300 border border-emerald-700/30" :
+                            card.win_rate >= 40 ? "bg-amber-900/40 text-amber-300 border border-amber-700/30" :
+                            "bg-rose-900/40 text-rose-300 border border-rose-700/30"
+                          )}>
+                            {card.win_rate}% win rate
+                          </span>
+                        )}
+                      </div>
+                      {battleCardExpanded === card.competitor ? <ChevronUp className="h-3 w-3 text-zinc-500" /> : <ChevronDown className="h-3 w-3 text-zinc-500" />}
+                    </button>
+                    {battleCardExpanded === card.competitor && (
+                      <div className="px-3 pb-3 space-y-3 border-t border-zinc-800">
+                        {card.positioning && (
+                          <div className="pt-2">
+                            <p className="text-xs text-zinc-400 italic">{card.positioning}</p>
+                          </div>
+                        )}
+                        <div>
+                          <p className="text-xs font-semibold text-emerald-400 mb-1">Key Differentiators</p>
+                          <ul className="space-y-0.5">
+                            {card.key_differentiators.map((d, i) => (
+                              <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
+                                <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />{d}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-amber-400 mb-1">Objection Responses</p>
+                          <ul className="space-y-0.5">
+                            {card.objection_responses.map((r, i) => (
+                              <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
+                                <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />{r}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1.5">Strategic Recommendations</p>
+                <ul className="space-y-1">
+                  {battleCard.recommendations.map((r, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(battleCard.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : battleCard && battleCard.battle_cards.length === 0 ? (
+            <div className="p-4 space-y-2">
+              <p className="text-xs text-zinc-400 italic">No competitor data found in your deals. Start tracking competitors to enable battle-card generation.</p>
+              <ul className="space-y-1">
+                {battleCard.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No battle card data available. Click Regenerate to generate.</p>
           )
         )}
       </Card>
