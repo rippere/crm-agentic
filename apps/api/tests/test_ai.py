@@ -5929,3 +5929,174 @@ async def test_qbr_summary_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/qbr-summary")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/conversion-path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_conversion_path_returns_structured_response(app_client):
+    import datetime as _dt
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    won_rows = [("TechCorp Enterprise Suite",), ("Acme Platform Pro",)]
+    lost_rows = [("HealthPlus Clinical Suite",)]
+
+    ts1 = now - _dt.timedelta(days=40)
+    ts2 = now - _dt.timedelta(days=30)
+    ts3 = now - _dt.timedelta(days=20)
+    ts4 = now - _dt.timedelta(days=35)
+    ts5 = now - _dt.timedelta(days=25)
+    ts6 = now - _dt.timedelta(days=15)
+    ts7 = now - _dt.timedelta(days=30)
+    ts8 = now - _dt.timedelta(days=10)
+
+    event_rows = [
+        ("Deal 'TechCorp Enterprise Suite' → qualified (reason: good fit)", ts1),
+        ("Deal 'TechCorp Enterprise Suite' → proposal (reason: demo done)", ts2),
+        ("Deal 'TechCorp Enterprise Suite' → closed_won (reason: signed)", ts3),
+        ("Deal 'Acme Platform Pro' → qualified (reason: budget confirmed)", ts4),
+        ("Deal 'Acme Platform Pro' → proposal (reason: rfp)", ts5),
+        ("Deal 'Acme Platform Pro' → closed_won (reason: approved)", ts6),
+        ("Deal 'HealthPlus Clinical Suite' → qualified (reason: intro done)", ts7),
+        ("Deal 'HealthPlus Clinical Suite' → closed_lost (reason: competitor)", ts8),
+    ]
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "The qualified-proposal-closed_won path dominates wins.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(won_rows),
+            _make_execute_result(lost_rows),
+            _make_execute_result(event_rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/conversion-path")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["paths"], list)
+    assert len(data["paths"]) >= 1
+    path = data["paths"][0]
+    assert "stages_sequence" in path and isinstance(path["stages_sequence"], list)
+    assert "deal_count" in path
+    assert "win_rate" in path
+    assert "avg_days" in path
+    assert path["deal_count"] == 2
+    assert path["win_rate"] == 100
+    assert isinstance(data["most_common_path"], list)
+    assert isinstance(data["fastest_path"], list)
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_conversion_path_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/conversion-path")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/playbook
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_playbook_returns_structured_response(app_client):
+    import datetime as _dt
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.now(_dt.timezone.utc)
+    closed_at = now - _dt.timedelta(days=15)
+    created_at = now - _dt.timedelta(days=45)
+
+    won_rows = [
+        (uuid.uuid4(), "TechCorp Enterprise Suite", 145000.0, 88, closed_at, created_at),
+        (uuid.uuid4(), "Acme Platform Pro", 89000.0, 82, closed_at, created_at),
+    ]
+    lost_rows = [
+        (uuid.uuid4(), "HealthPlus Clinical Suite", 30, closed_at, created_at),
+    ]
+    event_rows = [
+        ("Deal 'TechCorp Enterprise Suite' → qualified (reason: fit)", now - _dt.timedelta(days=40)),
+        ("Deal 'TechCorp Enterprise Suite' → proposal (reason: demo)", now - _dt.timedelta(days=30)),
+        ("Deal 'TechCorp Enterprise Suite' → negotiation (reason: rfp)", now - _dt.timedelta(days=20)),
+        ("Deal 'TechCorp Enterprise Suite' → closed_won (reason: signed)", now - _dt.timedelta(days=15)),
+        ("Deal 'Acme Platform Pro' → qualified (reason: budget)", now - _dt.timedelta(days=38)),
+        ("Deal 'Acme Platform Pro' → proposal (reason: demo)", now - _dt.timedelta(days=25)),
+        ("Deal 'Acme Platform Pro' → closed_won (reason: approved)", now - _dt.timedelta(days=15)),
+    ]
+
+    playbook_response = {
+        "playbook_title": "High-Value Enterprise Playbook",
+        "key_behaviors": ["Deep discovery", "Multi-stakeholder alignment", "ROI-led proposals"],
+        "stage_playbook": [
+            {
+                "stage": "discovery",
+                "key_actions": ["Map buying committee", "Quantify pain", "Set MAP"],
+                "success_signals": ["Stakeholders engaged", "Budget confirmed"],
+                "common_mistakes": ["Rushing to demo", "Single-threading"],
+            }
+        ],
+        "recommendations": ["Focus on enterprise deals", "Improve discovery", "Track cycle time"],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(playbook_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(won_rows),
+            _make_execute_result(lost_rows),
+            _make_execute_result(event_rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/playbook")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["playbook_title"], str) and data["playbook_title"]
+    assert isinstance(data["key_behaviors"], list) and len(data["key_behaviors"]) == 3
+    assert isinstance(data["stage_playbook"], list) and len(data["stage_playbook"]) >= 1
+    stage = data["stage_playbook"][0]
+    assert "stage" in stage
+    assert "key_actions" in stage and isinstance(stage["key_actions"], list)
+    assert "success_signals" in stage and isinstance(stage["success_signals"], list)
+    assert "common_mistakes" in stage and isinstance(stage["common_mistakes"], list)
+    wp = data["winning_profile"]
+    assert wp["won_count"] == 2
+    assert wp["lost_count"] == 1
+    assert wp["win_rate"] == 67
+    assert wp["avg_health"] == 85
+    assert wp["avg_cycle_days"] > 0
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_playbook_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/playbook")
+    assert resp.status_code == 403

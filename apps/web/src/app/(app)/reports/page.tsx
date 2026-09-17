@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -480,6 +480,38 @@ export default function ReportsPage() {
   const [qbrSummaryLoading, setQbrSummaryLoading] = useState(false);
   const [qbrSummaryOpen, setQbrSummaryOpen] = useState(true);
 
+  type ConversionPath = { stages_sequence: string[]; deal_count: number; win_rate: number; avg_days: number };
+  type ConversionPathData = {
+    paths: ConversionPath[];
+    most_common_path: string[] | null;
+    fastest_path: string[] | null;
+    insight: string;
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [conversionPaths, setConversionPaths] = useState<ConversionPathData | null>(null);
+  const [conversionPathsLoading, setConversionPathsLoading] = useState(false);
+  const [conversionPathsOpen, setConversionPathsOpen] = useState(true);
+
+  type StagePlaybookEntry = {
+    stage: string;
+    key_actions: string[];
+    success_signals: string[];
+    common_mistakes: string[];
+  };
+  type PlaybookData = {
+    playbook_title: string;
+    winning_profile: { avg_health: number; avg_cycle_days: number; won_count: number; lost_count: number; win_rate: number };
+    key_behaviors: string[];
+    stage_playbook: StagePlaybookEntry[];
+    recommendations: string[];
+    generated_at: string;
+  };
+  const [playbook, setPlaybook] = useState<PlaybookData | null>(null);
+  const [playbookLoading, setPlaybookLoading] = useState(false);
+  const [playbookOpen, setPlaybookOpen] = useState(true);
+  const [playbookExpandedStage, setPlaybookExpandedStage] = useState<string | null>(null);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -562,6 +594,10 @@ export default function ReportsPage() {
       apiClient.getDealCoachingDigest("demo-workspace-1", "demo-token").then(setCoachingDigest).catch(() => {}).finally(() => setCoachingDigestLoading(false));
       setQbrSummaryLoading(true);
       apiClient.getQbrSummary("demo-workspace-1", "demo-token").then(setQbrSummary).catch(() => {}).finally(() => setQbrSummaryLoading(false));
+      setConversionPathsLoading(true);
+      apiClient.getDealConversionPaths("demo-workspace-1", "demo-token").then(setConversionPaths).catch(() => {}).finally(() => setConversionPathsLoading(false));
+      setPlaybookLoading(true);
+      apiClient.getDealPlaybook("demo-workspace-1", "demo-token").then(setPlaybook).catch(() => {}).finally(() => setPlaybookLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -649,6 +685,10 @@ export default function ReportsPage() {
       apiClient.getDealCoachingDigest(workspaceId, session.access_token).then(setCoachingDigest).catch(() => {}).finally(() => setCoachingDigestLoading(false));
       setQbrSummaryLoading(true);
       apiClient.getQbrSummary(workspaceId, session.access_token).then(setQbrSummary).catch(() => {}).finally(() => setQbrSummaryLoading(false));
+      setConversionPathsLoading(true);
+      apiClient.getDealConversionPaths(workspaceId, session.access_token).then(setConversionPaths).catch(() => {}).finally(() => setConversionPathsLoading(false));
+      setPlaybookLoading(true);
+      apiClient.getDealPlaybook(workspaceId, session.access_token).then(setPlaybook).catch(() => {}).finally(() => setPlaybookLoading(false));
     });
   }, []);
 
@@ -1204,6 +1244,48 @@ export default function ReportsPage() {
         if (!session) { setCoachingDigestLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCoachingDigestLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regeneratePlaybook = () => {
+    setPlaybookLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealPlaybook(wid, tok)
+        .then(setPlaybook)
+        .catch(() => {})
+        .finally(() => setPlaybookLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPlaybookLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPlaybookLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateConversionPaths = () => {
+    setConversionPathsLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealConversionPaths(wid, tok)
+        .then(setConversionPaths)
+        .catch(() => {})
+        .finally(() => setConversionPathsLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setConversionPathsLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setConversionPathsLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -4983,6 +5065,218 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No coaching digest data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Deal Playbook */}
+      <Card className="border-emerald-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <BookOpen className="h-4 w-4 text-emerald-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Deal Playbook</h3>
+            {playbook && (
+              <span className="text-xs bg-emerald-900/40 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-700/30 truncate max-w-[200px]">
+                {playbook.playbook_title}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePlaybook}
+              disabled={playbookLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", playbookLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setPlaybookOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {playbookOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {playbookOpen && (
+          playbookLoading && !playbook ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : playbook ? (
+            <div className={cn("p-4 space-y-4", playbookLoading && "opacity-40")}>
+              {/* Winning profile metrics */}
+              <div className="grid grid-cols-5 gap-2">
+                {[
+                  { label: "Won", value: playbook.winning_profile.won_count, color: "text-emerald-400" },
+                  { label: "Lost", value: playbook.winning_profile.lost_count, color: "text-rose-400" },
+                  { label: "Win Rate", value: `${playbook.winning_profile.win_rate}%`, color: "text-indigo-400" },
+                  { label: "Avg Health", value: playbook.winning_profile.avg_health, color: "text-amber-400" },
+                  { label: "Cycle Days", value: `${playbook.winning_profile.avg_cycle_days}d`, color: "text-zinc-300" },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="rounded-lg bg-zinc-800/60 p-2 text-center">
+                    <p className={cn("text-sm font-bold font-mono", color)}>{value}</p>
+                    <p className="text-xs text-zinc-500 mt-0.5">{label}</p>
+                  </div>
+                ))}
+              </div>
+              {/* Key behaviors */}
+              <div>
+                <p className="text-xs font-semibold text-emerald-400 mb-1.5">Key Winning Behaviors</p>
+                <ul className="space-y-1">
+                  {playbook.key_behaviors.map((b, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                      {b}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              {/* Stage playbook accordion */}
+              {playbook.stage_playbook.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-zinc-400 mb-1.5">Stage-by-Stage Playbook</p>
+                  <div className="space-y-1">
+                    {playbook.stage_playbook.map((entry) => (
+                      <div key={entry.stage} className="rounded-lg border border-zinc-800 overflow-hidden">
+                        <button
+                          onClick={() => setPlaybookExpandedStage(playbookExpandedStage === entry.stage ? null : entry.stage)}
+                          className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800/50 transition-colors"
+                        >
+                          <span className="capitalize font-mono">{entry.stage}</span>
+                          {playbookExpandedStage === entry.stage ? <ChevronUp className="h-3 w-3 text-zinc-500" /> : <ChevronDown className="h-3 w-3 text-zinc-500" />}
+                        </button>
+                        {playbookExpandedStage === entry.stage && (
+                          <div className="px-3 pb-3 space-y-2 border-t border-zinc-800">
+                            <div className="pt-2">
+                              <p className="text-xs font-semibold text-emerald-400 mb-1">Key Actions</p>
+                              <ul className="space-y-0.5">
+                                {entry.key_actions.map((a, i) => (
+                                  <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
+                                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500 flex-shrink-0" />{a}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                            <div>
+                              <p className="text-xs font-semibold text-sky-400 mb-1">Success Signals</p>
+                              <ul className="space-y-0.5">
+                                {entry.success_signals.map((s, i) => (
+                                  <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
+                                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-sky-400 flex-shrink-0" />{s}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                            <div>
+                              <p className="text-xs font-semibold text-rose-400 mb-1">Common Mistakes</p>
+                              <ul className="space-y-0.5">
+                                {entry.common_mistakes.map((m, i) => (
+                                  <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
+                                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0" />{m}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Recommendations */}
+              <div>
+                <p className="text-xs font-semibold text-zinc-400 mb-1.5">Recommendations</p>
+                <ul className="space-y-1">
+                  {playbook.recommendations.map((r, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-zinc-600">Generated {new Date(playbook.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No playbook data available. Click Regenerate to generate.</p>
+          )
+        )}
+      </Card>
+
+      {/* Conversion Path Analysis */}
+      <Card className="border-sky-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Route className="h-4 w-4 text-sky-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Conversion Path Analysis</h3>
+            {conversionPaths && conversionPaths.paths.length > 0 && (
+              <span className="text-xs bg-sky-900/40 text-sky-300 px-2 py-0.5 rounded-full border border-sky-700/30">
+                {conversionPaths.paths.length} path{conversionPaths.paths.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateConversionPaths}
+              disabled={conversionPathsLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", conversionPathsLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setConversionPathsOpen((o) => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {conversionPathsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {conversionPathsOpen && (
+          conversionPathsLoading && !conversionPaths ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : conversionPaths && conversionPaths.paths.length > 0 ? (
+            <div className={cn("p-4 space-y-4", conversionPathsLoading && "opacity-40")}>
+              <ul className="space-y-3">
+                {conversionPaths.paths.map((p, i) => (
+                  <li key={i} className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {p.stages_sequence.map((s, si) => (
+                        <span key={si} className="flex items-center gap-1">
+                          <span className="text-xs px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 font-mono">{s}</span>
+                          {si < p.stages_sequence.length - 1 && <ArrowRight className="h-3 w-3 text-zinc-600 flex-shrink-0" />}
+                        </span>
+                      ))}
+                      {conversionPaths.most_common_path && JSON.stringify(p.stages_sequence) === JSON.stringify(conversionPaths.most_common_path) && (
+                        <span className="text-xs bg-sky-900/40 text-sky-300 px-1.5 py-0.5 rounded border border-sky-700/30">most common</span>
+                      )}
+                      {conversionPaths.fastest_path && JSON.stringify(p.stages_sequence) === JSON.stringify(conversionPaths.fastest_path) && (
+                        <span className="text-xs bg-emerald-900/40 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-700/30">fastest</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-zinc-500">
+                      <span>{p.deal_count} deal{p.deal_count !== 1 ? "s" : ""}</span>
+                      <span>{p.win_rate}% win rate</span>
+                      {p.avg_days > 0 && <span>{p.avg_days}d avg</span>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-400 italic">{conversionPaths.insight}</p>
+              <ul className="space-y-1">
+                {conversionPaths.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">
+                Generated {new Date(conversionPaths.generated_at).toLocaleString()} · Claude Haiku
+              </p>
+            </div>
+          ) : conversionPaths && conversionPaths.paths.length === 0 ? (
+            <p className="text-xs text-zinc-500 p-4 italic">{conversionPaths.insight}</p>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No conversion path data available.</p>
           )
         )}
       </Card>
