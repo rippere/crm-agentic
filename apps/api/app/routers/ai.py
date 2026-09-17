@@ -14806,3 +14806,150 @@ async def get_top_contact_opportunities(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+_LTV_SYSTEM = """\
+You are a senior customer success AI specialising in lifetime value analysis.
+You will receive a summary of contact LTV data (closed revenue + weighted pipeline).
+Return ONLY a valid JSON object with keys:
+  "ltv_narrative": string — 2-3 sentence insight about LTV distribution and growth patterns
+  "recommendations": list of exactly 3 actionable strings for nurturing high-LTV accounts
+No markdown, no extra keys.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/lifetime-value")
+@limiter.limit("5/minute")
+async def get_ai_contact_lifetime_value(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    # Fetch all contacts in workspace
+    contact_rows = (await db.execute(
+        select(Contact.id, Contact.name).where(Contact.workspace_id == workspace_id)
+    )).all()
+
+    # Fetch all deals for workspace (closed_won + open) with value and win_prob
+    deal_rows = (await db.execute(
+        select(Deal.contact_id, Deal.stage, Deal.value, Deal.ml_win_probability)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id.isnot(None),
+        )
+    )).all()
+
+    # Aggregate per contact
+    contact_map: dict = {row.id: row.name for row in contact_rows}
+    agg: dict = {}  # contact_id -> {closed_won_revenue, pipeline_value, won, total}
+
+    for row in deal_rows:
+        cid = row.contact_id
+        if cid not in agg:
+            agg[cid] = {"closed_won_revenue": 0.0, "pipeline_value": 0.0, "won": 0, "total": 0, "win_probs": []}
+        val = float(row.value or 0)
+        prob = float(row.ml_win_probability or 50.0)
+        agg[cid]["total"] += 1
+        if row.stage == "closed_won":
+            agg[cid]["closed_won_revenue"] += val
+            agg[cid]["won"] += 1
+        elif row.stage not in ("closed_lost",):
+            agg[cid]["pipeline_value"] += val
+            agg[cid]["win_probs"].append(prob)
+
+    results: list[dict] = []
+    for cid, data in agg.items():
+        avg_prob = sum(data["win_probs"]) / len(data["win_probs"]) if data["win_probs"] else 0.0
+        weighted_pipeline = data["pipeline_value"] * avg_prob / 100.0
+        estimated_ltv = data["closed_won_revenue"] + weighted_pipeline
+        win_rate = round(data["won"] / data["total"] * 100, 1) if data["total"] else 0.0
+        results.append({
+            "contact_id": str(cid),
+            "name": contact_map.get(cid, "Unknown"),
+            "closed_won_revenue": round(data["closed_won_revenue"], 2),
+            "pipeline_value": round(data["pipeline_value"], 2),
+            "win_rate": win_rate,
+            "estimated_ltv": round(estimated_ltv, 2),
+        })
+
+    results.sort(key=lambda x: x["estimated_ltv"], reverse=True)
+    top_contacts = results[:10]
+
+    if not top_contacts:
+        return {
+            "top_contacts": [],
+            "avg_ltv": 0.0,
+            "total_ltv_potential": 0.0,
+            "ltv_narrative": "No contact deal data found.",
+            "recommendations": [
+                "Link deals to contacts to enable LTV tracking.",
+                "Close won deals to start building historical LTV data.",
+                "Assign open deals to contacts for weighted LTV calculation.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    avg_ltv = round(sum(r["estimated_ltv"] for r in results) / len(results), 2)
+    total_ltv_potential = round(sum(r["estimated_ltv"] for r in results), 2)
+
+    default_narrative = (
+        f"Top contact by LTV is {top_contacts[0]['name']} with an estimated "
+        f"${top_contacts[0]['estimated_ltv']:,.0f} (${top_contacts[0]['closed_won_revenue']:,.0f} won + "
+        f"${top_contacts[0]['pipeline_value']:,.0f} weighted pipeline). "
+        f"Average estimated LTV across {len(results)} contacts is ${avg_ltv:,.0f}. "
+        "Focus retention and expansion efforts on the highest-LTV accounts."
+    )
+    default_recs = [
+        f"Prioritise executive business reviews with {top_contacts[0]['name']} to protect and grow your highest-LTV relationship.",
+        "Identify upsell opportunities for contacts with high closed-won revenue but low pipeline value.",
+        "Assign dedicated account managers to the top 3 LTV contacts to accelerate deal progression.",
+    ]
+
+    context = (
+        f"Contact lifetime value analysis.\n"
+        f"Total contacts with deals: {len(results)}, avg LTV: ${avg_ltv:,.0f}, total LTV potential: ${total_ltv_potential:,.0f}.\n"
+        f"Top 5 contacts by estimated LTV:\n"
+        + "\n".join(
+            f"  {i+1}. {c['name']}: est_ltv=${c['estimated_ltv']:,.0f}, "
+            f"won=${c['closed_won_revenue']:,.0f}, pipeline=${c['pipeline_value']:,.0f}, "
+            f"win_rate={c['win_rate']}%"
+            for i, c in enumerate(top_contacts[:5])
+        )
+        + "\nProvide a ltv_narrative and 3 recommendations for nurturing high-LTV accounts."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_LTV_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data_json = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    ltv_narrative = str(data_json.get("ltv_narrative", "")).strip() or default_narrative
+    raw_recs = data_json.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "top_contacts": top_contacts,
+        "avg_ltv": avg_ltv,
+        "total_ltv_potential": total_ltv_potential,
+        "ltv_narrative": ltv_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

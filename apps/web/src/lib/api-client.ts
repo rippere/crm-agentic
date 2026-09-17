@@ -6586,5 +6586,29 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/top-opportunities`, {}, token)
   },
+
+  async getAIContactLifetimeValue(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        top_contacts: [
+          { contact_id: 'demo-1', name: 'Sarah Chen', closed_won_revenue: 180000, pipeline_value: 85000, win_rate: 72.0, estimated_ltv: 241200 },
+          { contact_id: 'demo-2', name: 'James Okafor', closed_won_revenue: 95000, pipeline_value: 120000, win_rate: 65.0, estimated_ltv: 173000 },
+          { contact_id: 'demo-3', name: 'Maria Santos', closed_won_revenue: 120000, pipeline_value: 60000, win_rate: 58.0, estimated_ltv: 154800 },
+          { contact_id: 'demo-4', name: 'Tom Wright', closed_won_revenue: 60000, pipeline_value: 45000, win_rate: 50.0, estimated_ltv: 82500 },
+          { contact_id: 'demo-5', name: 'Priya Patel', closed_won_revenue: 40000, pipeline_value: 30000, win_rate: 45.0, estimated_ltv: 53500 },
+        ],
+        avg_ltv: 141000,
+        total_ltv_potential: 705000,
+        ltv_narrative: 'Sarah Chen leads with an estimated $241K lifetime value driven by $180K in closed revenue and $85K active pipeline at 79% win probability. The top 5 contacts collectively represent $705K in estimated LTV. Concentrating account management resources on Chen and Okafor would protect over $414K in combined LTV.',
+        recommendations: [
+          'Schedule quarterly executive business reviews with Sarah Chen and James Okafor to protect and grow your top two LTV relationships.',
+          'Identify upsell and expansion opportunities for Maria Santos who has strong closed revenue but moderate pipeline coverage.',
+          'Create tailored success plans for the top 5 LTV contacts with personalised milestone checkpoints to accelerate deal progression.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/lifetime-value`, {}, token)
+  },
 }
 

@@ -7264,3 +7264,66 @@ async def test_top_contact_opportunities_wrong_workspace_returns_403(app_client)
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/top-opportunities")
     assert resp.status_code == 403
+
+# ── Phase 17x: contact lifetime value ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_contact_lifetime_value_returns_structured_response(app_client, monkeypatch):
+    import uuid as _uuid
+    contact_id_1 = _uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    contact_id_2 = _uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    class FakeContactRow:
+        def __init__(self, id_, name):
+            self.id = id_
+            self.name = name
+
+    class FakeDealRow:
+        def __init__(self, contact_id, stage, value, ml_win_probability):
+            self.contact_id = contact_id
+            self.stage = stage
+            self.value = value
+            self.ml_win_probability = ml_win_probability
+
+    contact_rows = [FakeContactRow(contact_id_1, "Alice"), FakeContactRow(contact_id_2, "Bob")]
+    deal_rows = [
+        FakeDealRow(contact_id_1, "closed_won", 80000.0, 100.0),
+        FakeDealRow(contact_id_1, "proposal", 40000.0, 70.0),
+        FakeDealRow(contact_id_2, "negotiation", 60000.0, 60.0),
+    ]
+
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result(contact_rows),
+        _make_execute_result(deal_rows),
+    ])
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"ltv_narrative": "Alice leads LTV.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/lifetime-value")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["top_contacts"], list)
+    assert len(body["top_contacts"]) >= 1
+    alice = next((c for c in body["top_contacts"] if c["name"] == "Alice"), None)
+    assert alice is not None
+    assert alice["closed_won_revenue"] == 80000.0
+    assert alice["estimated_ltv"] > alice["closed_won_revenue"]
+    assert isinstance(body["avg_ltv"], float)
+    assert isinstance(body["total_ltv_potential"], float)
+    assert len(body["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_contact_lifetime_value_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/lifetime-value")
+    assert resp.status_code == 403
