@@ -6226,5 +6226,30 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-loss-summary`, {}, token)
   },
+
+  async getSalesForecast(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        weighted_pipeline: 312000,
+        best_case: 480000,
+        worst_case: 85000,
+        deal_count: 11,
+        stage_breakdown: [
+          { stage: 'negotiation', weighted_value: 132000, count: 3 },
+          { stage: 'proposal', weighted_value: 88000, count: 4 },
+          { stage: 'qualified', weighted_value: 54000, count: 2 },
+          { stage: 'discovery', weighted_value: 38000, count: 2 },
+        ],
+        forecast_narrative: 'Your pipeline of 11 open deals carries a weighted forecast of $312K. Negotiation-stage deals represent the highest near-term revenue opportunity at $132K weighted. Improving health scores in proposal-stage deals could push the best-case outcome above $500K this quarter.',
+        adjustments: [
+          { factor: 'Negotiation stage momentum', impact: 'positive', magnitude: 'high' },
+          { factor: 'Proposal stage stall risk', impact: 'negative', magnitude: 'medium' },
+          { factor: 'Discovery volume building pipeline', impact: 'positive', magnitude: 'low' },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/sales-forecast`, {}, token)
+  },
 }
 

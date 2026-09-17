@@ -12813,3 +12813,162 @@ async def get_win_loss_summary(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+_SALES_FORECAST_SYSTEM = """\
+You are a senior sales operations AI generating a revenue forecast for a CRM pipeline.
+Given the weighted pipeline value, best-case, worst-case, deal count, and stage breakdown, generate a concise forecast narrative and 3 adjustment factors.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "forecast_narrative": "2-3 sentence forecast summary",
+  "adjustments": [
+    {"factor": "factor name", "impact": "positive", "magnitude": "high"},
+    {"factor": "factor name", "impact": "negative", "magnitude": "medium"},
+    {"factor": "factor name", "impact": "positive", "magnitude": "low"}
+  ]
+}
+impact must be "positive" or "negative". magnitude must be "high", "medium", or "low".
+Provide exactly 3 adjustments.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/sales-forecast")
+@limiter.limit("5/minute")
+async def get_sales_forecast(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    rows = result.all()
+
+    deal_count = len(rows)
+
+    if deal_count == 0:
+        return {
+            "weighted_pipeline": 0,
+            "best_case": 0,
+            "worst_case": 0,
+            "deal_count": 0,
+            "stage_breakdown": [],
+            "forecast_narrative": "No open deals found. Add deals to the pipeline to generate a sales forecast.",
+            "adjustments": [
+                {"factor": "Pipeline coverage", "impact": "negative", "magnitude": "high"},
+                {"factor": "New deal creation", "impact": "positive", "magnitude": "medium"},
+                {"factor": "Lead qualification", "impact": "positive", "magnitude": "low"},
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Compute weighted pipeline, best case, worst case
+    weighted_pipeline = 0.0
+    best_case = 0.0
+    worst_case = 0.0
+    stage_totals: dict[str, dict] = {}
+
+    for row in rows:
+        value = float(row[2] or 0)
+        health = int(row[3] or 50)
+        win_prob = float(row[4] or 0.5)
+        stage = str(row[1])
+
+        weighted_pipeline += value * win_prob
+        if health > 60:
+            best_case += value
+        if health < 50:
+            worst_case += value * 0.5
+
+        if stage not in stage_totals:
+            stage_totals[stage] = {"weighted_value": 0.0, "count": 0}
+        stage_totals[stage]["weighted_value"] += value * win_prob
+        stage_totals[stage]["count"] += 1
+
+    weighted_pipeline = round(weighted_pipeline)
+    best_case = round(best_case)
+    worst_case = round(worst_case)
+
+    stage_breakdown = [
+        {"stage": s, "weighted_value": round(v["weighted_value"]), "count": v["count"]}
+        for s, v in sorted(stage_totals.items(), key=lambda x: -x[1]["weighted_value"])
+    ]
+
+    context_lines = [
+        f"Open deals: {deal_count}",
+        f"Weighted pipeline: ${weighted_pipeline:,.0f}",
+        f"Best case (health>60): ${best_case:,.0f}",
+        f"Worst case (health<50, 50% likely): ${worst_case:,.0f}",
+        "Stage breakdown: " + ", ".join(
+            f"{b['stage']} ${b['weighted_value']:,.0f} ({b['count']} deals)"
+            for b in stage_breakdown
+        ),
+    ]
+    context = "\n".join(context_lines)
+
+    default_narrative = (
+        f"Your pipeline holds {deal_count} open deals with a weighted forecast of ${weighted_pipeline:,.0f}. "
+        f"Best-case revenue from highly engaged deals is ${best_case:,.0f}, while at-risk deals contribute a worst-case baseline of ${worst_case:,.0f}. "
+        "Focus on improving health scores in low-probability stages to close the gap between scenarios."
+    )
+    default_adjustments = [
+        {"factor": "Deal health distribution", "impact": "positive" if best_case > worst_case else "negative", "magnitude": "high"},
+        {"factor": "Win probability alignment", "impact": "positive", "magnitude": "medium"},
+        {"factor": "Stage concentration risk", "impact": "negative" if len(stage_breakdown) < 3 else "positive", "magnitude": "low"},
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_SALES_FORECAST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    forecast_narrative = str(data.get("forecast_narrative", "")).strip() or default_narrative
+
+    raw_adjs = data.get("adjustments", [])
+    adjustments = []
+    for a in (raw_adjs if isinstance(raw_adjs, list) else [])[:3]:
+        if isinstance(a, dict):
+            factor = str(a.get("factor", ""))
+            impact = str(a.get("impact", "positive"))
+            magnitude = str(a.get("magnitude", "medium"))
+            if factor and impact in ("positive", "negative") and magnitude in ("high", "medium", "low"):
+                adjustments.append({"factor": factor, "impact": impact, "magnitude": magnitude})
+    while len(adjustments) < 3:
+        adjustments.append(default_adjustments[len(adjustments) % 3])
+
+    return {
+        "weighted_pipeline": weighted_pipeline,
+        "best_case": best_case,
+        "worst_case": worst_case,
+        "deal_count": deal_count,
+        "stage_breakdown": stage_breakdown,
+        "forecast_narrative": forecast_narrative,
+        "adjustments": adjustments,
+        "generated_at": now.isoformat() + "Z",
+    }

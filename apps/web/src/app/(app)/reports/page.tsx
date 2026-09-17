@@ -585,6 +585,17 @@ export default function ReportsPage() {
   const [winLossSummaryLoading, setWinLossSummaryLoading] = useState(false);
   const [winLossSummaryOpen, setWinLossSummaryOpen] = useState(true);
 
+  type ForecastAdjustment = { factor: string; impact: 'positive' | 'negative'; magnitude: 'high' | 'medium' | 'low' };
+  type ForecastStage = { stage: string; weighted_value: number; count: number };
+  type SalesForecastData = {
+    weighted_pipeline: number; best_case: number; worst_case: number; deal_count: number;
+    stage_breakdown: ForecastStage[]; forecast_narrative: string;
+    adjustments: ForecastAdjustment[]; generated_at: string;
+  };
+  const [salesForecast, setSalesForecast] = useState<SalesForecastData | null>(null);
+  const [salesForecastLoading, setSalesForecastLoading] = useState(false);
+  const [salesForecastOpen, setSalesForecastOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -681,6 +692,8 @@ export default function ReportsPage() {
       apiClient.getVelocityHeatmap("demo-workspace-1", "demo-token").then(setVelocityHeatmap).catch(() => {}).finally(() => setVelocityHeatmapLoading(false));
       setWinLossSummaryLoading(true);
       apiClient.getWinLossSummary("demo-workspace-1", "demo-token").then(setWinLossSummary).catch(() => {}).finally(() => setWinLossSummaryLoading(false));
+      setSalesForecastLoading(true);
+      apiClient.getSalesForecast("demo-workspace-1", "demo-token").then(setSalesForecast).catch(() => {}).finally(() => setSalesForecastLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -782,6 +795,8 @@ export default function ReportsPage() {
       apiClient.getVelocityHeatmap(workspaceId, session.access_token).then(setVelocityHeatmap).catch(() => {}).finally(() => setVelocityHeatmapLoading(false));
       setWinLossSummaryLoading(true);
       apiClient.getWinLossSummary(workspaceId, session.access_token).then(setWinLossSummary).catch(() => {}).finally(() => setWinLossSummaryLoading(false));
+      setSalesForecastLoading(true);
+      apiClient.getSalesForecast(workspaceId, session.access_token).then(setSalesForecast).catch(() => {}).finally(() => setSalesForecastLoading(false));
     });
   }, []);
 
@@ -1379,6 +1394,27 @@ export default function ReportsPage() {
         if (!session) { setWinLossSummaryLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setWinLossSummaryLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateSalesForecast = () => {
+    setSalesForecastLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getSalesForecast(wid, tok)
+        .then(setSalesForecast)
+        .catch(() => {})
+        .finally(() => setSalesForecastLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setSalesForecastLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setSalesForecastLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -5481,6 +5517,127 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No win/loss data available. Click Regenerate to generate.</p>
+          )
+        )}
+      </Card>
+
+      {/* Sales Forecast */}
+      <Card className="border-sky-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-sky-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Sales Forecast</h3>
+            {salesForecast && (
+              <span className="text-xs bg-sky-900/40 text-sky-300 px-2 py-0.5 rounded-full border border-sky-700/30">
+                ${(salesForecast.weighted_pipeline / 1000).toFixed(0)}K weighted
+              </span>
+            )}
+            {salesForecast && (
+              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700">
+                {salesForecast.deal_count} deals
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateSalesForecast}
+              disabled={salesForecastLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", salesForecastLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setSalesForecastOpen(!salesForecastOpen)}>
+              {salesForecastOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {salesForecastOpen && (
+          salesForecastLoading && !salesForecast ? (
+            <div className="p-6 text-center text-xs text-zinc-500 animate-pulse">Generating sales forecast…</div>
+          ) : salesForecast ? (
+            <div className={cn("p-4 space-y-4", salesForecastLoading && "opacity-40")}>
+              {/* 3-value summary row */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-md bg-sky-950/30 border border-sky-800/20 p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Weighted</p>
+                  <p className="text-sm font-semibold text-sky-300">${salesForecast.weighted_pipeline.toLocaleString()}</p>
+                </div>
+                <div className="rounded-md bg-emerald-950/30 border border-emerald-800/20 p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Best Case</p>
+                  <p className="text-sm font-semibold text-emerald-300">${salesForecast.best_case.toLocaleString()}</p>
+                </div>
+                <div className="rounded-md bg-rose-950/30 border border-rose-800/20 p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Worst Case</p>
+                  <p className="text-sm font-semibold text-rose-300">${salesForecast.worst_case.toLocaleString()}</p>
+                </div>
+              </div>
+              {/* Stage breakdown table */}
+              {salesForecast.stage_breakdown.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-zinc-400 mb-2">Stage Breakdown</p>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-zinc-800">
+                        <th className="text-left text-zinc-500 font-medium pb-2 pr-4">Stage</th>
+                        <th className="text-right text-zinc-500 font-medium pb-2 pr-4">Weighted Value</th>
+                        <th className="text-right text-zinc-500 font-medium pb-2">Deals</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {salesForecast.stage_breakdown.map((s, i) => {
+                        const maxVal = Math.max(...salesForecast.stage_breakdown.map(x => x.weighted_value));
+                        const pct = maxVal > 0 ? s.weighted_value / maxVal : 0;
+                        const color = pct > 0.6 ? "text-sky-300" : pct > 0.3 ? "text-zinc-200" : "text-zinc-500";
+                        return (
+                          <tr key={i} className="border-b border-zinc-800/50">
+                            <td className="py-2 pr-4 text-zinc-300 capitalize">{s.stage.replace(/_/g, " ")}</td>
+                            <td className={cn("py-2 pr-4 text-right font-mono font-semibold", color)}>${s.weighted_value.toLocaleString()}</td>
+                            <td className="py-2 text-right text-zinc-500">{s.count}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {/* Narrative */}
+              <div className="rounded-md bg-zinc-800/50 border border-zinc-700/30 p-3">
+                <p className="text-xs text-zinc-300 italic">{salesForecast.forecast_narrative}</p>
+              </div>
+              {/* Adjustments */}
+              {salesForecast.adjustments.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-zinc-400 mb-2">Adjustment Factors</p>
+                  <div className="space-y-1.5">
+                    {salesForecast.adjustments.map((a, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <span className={cn(
+                          "text-xs",
+                          a.impact === 'positive' ? "text-emerald-400" : "text-rose-400"
+                        )}>
+                          {a.impact === 'positive' ? '↑' : '↓'}
+                        </span>
+                        <span className={cn(
+                          "text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0",
+                          a.magnitude === 'high'
+                            ? "bg-zinc-700/80 text-zinc-200"
+                            : a.magnitude === 'medium'
+                            ? "bg-zinc-800 text-zinc-400"
+                            : "bg-zinc-900 text-zinc-600"
+                        )}>
+                          {a.magnitude}
+                        </span>
+                        <p className="text-xs text-zinc-300">{a.factor}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-zinc-600">Generated {new Date(salesForecast.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 p-4">No forecast data available. Click Regenerate to generate.</p>
           )
         )}
       </Card>

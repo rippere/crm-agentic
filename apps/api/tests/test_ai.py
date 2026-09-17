@@ -6460,3 +6460,64 @@ async def test_win_loss_summary_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-loss-summary")
     assert resp.status_code == 403
+
+
+# Phase 17j — Sales Forecast
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_sales_forecast_returns_structured_response(app_client):
+    import json as _json
+
+    fastapi_app, mock_db, workspace_id = app_client
+
+    rows = [
+        (uuid.uuid4(), "discovery", 40000, 75, 0.30),
+        (uuid.uuid4(), "proposal", 80000, 65, 0.55),
+        (uuid.uuid4(), "negotiation", 120000, 80, 0.80),
+        (uuid.uuid4(), "qualified", 30000, 40, 0.20),
+    ]
+
+    ai_response = {
+        "forecast_narrative": "Your pipeline carries 4 open deals with a strong weighted forecast. Negotiation stage deals drive the majority of expected revenue.",
+        "adjustments": [
+            {"factor": "Negotiation stage strength", "impact": "positive", "magnitude": "high"},
+            {"factor": "Discovery stage volume", "impact": "negative", "magnitude": "medium"},
+            {"factor": "Win probability spread", "impact": "positive", "magnitude": "low"},
+        ],
+    }
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=_json.dumps(ai_response))]
+        mock_client.messages.create.return_value = mock_msg
+        mock_db.execute = AsyncMock(side_effect=[
+            _make_execute_result(rows),
+        ])
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/sales-forecast")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deal_count"] == 4
+    assert body["weighted_pipeline"] > 0
+    assert isinstance(body["best_case"], (int, float))
+    assert isinstance(body["worst_case"], (int, float))
+    assert isinstance(body["stage_breakdown"], list) and len(body["stage_breakdown"]) > 0
+    assert isinstance(body["forecast_narrative"], str) and body["forecast_narrative"]
+    assert len(body["adjustments"]) == 3
+    assert all(a["impact"] in ("positive", "negative") for a in body["adjustments"])
+    assert all(a["magnitude"] in ("high", "medium", "low") for a in body["adjustments"])
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_sales_forecast_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/sales-forecast")
+    assert resp.status_code == 403
