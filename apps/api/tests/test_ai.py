@@ -5606,3 +5606,65 @@ async def test_avg_deal_size_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/avg-deal-size-trend")
     assert resp.status_code == 403
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/followup-gaps
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_followup_gaps_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    stale = now - _dt.timedelta(days=20)
+    recent = now - _dt.timedelta(days=3)
+    mid_range = now - _dt.timedelta(days=10)
+
+    deal_id1 = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    deal_id2 = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    deal_id3 = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    mock_db.execute = AsyncMock(return_value=_make_execute_result([
+        (deal_id1, "Deal A", "Acme", "proposal", stale),
+        (deal_id2, "Deal B", "Beta", "qualified", mid_range),
+        (deal_id3, "Deal C", "Gamma", "discovery", recent),
+    ]))
+
+    with patch("app.routers.ai._anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=(
+            '{"insight": "1 deal overdue for follow-up — act now.", '
+            '"recommendations": ["r1", "r2", "r3"]}'
+        ))]
+        mock_client.messages.create.return_value = mock_msg
+
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+            resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/followup-gaps")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["overdue"], list)
+    assert isinstance(data["due_soon"], list)
+    assert isinstance(data["on_track_count"], int)
+    assert isinstance(data["avg_days_since_contact"], (int, float))
+    assert len(data["overdue"]) == 1
+    assert data["overdue"][0]["title"] == "Deal A"
+    assert len(data["due_soon"]) == 1
+    assert data["on_track_count"] == 1
+    assert isinstance(data["insight"], str)
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_followup_gaps_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/followup-gaps")
+    assert resp.status_code == 403
