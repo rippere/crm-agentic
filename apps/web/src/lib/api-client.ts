@@ -7043,5 +7043,35 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/engagement-report`, {}, token)
   },
+
+  async getAIDealPipelineRiskScore(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        overall_risk_score: 42,
+        risk_level: 'medium',
+        total_active_deals: 14,
+        risk_breakdown: {
+          health_risk: 38,
+          velocity_risk: 52,
+          probability_risk: 35,
+        },
+        riskiest_deals: [
+          { id: 'd-008', title: 'Pinnacle Systems', stage: 'proposal', value: 45000, health_score: 28, win_probability: 22, days_in_stage: 47, composite_risk: 82 },
+          { id: 'd-013', title: 'Zephyr Corp', stage: 'qualified', value: 31000, health_score: 35, win_probability: 31, days_in_stage: 38, composite_risk: 74 },
+          { id: 'd-005', title: 'Horizon Ltd', stage: 'negotiation', value: 68000, health_score: 42, win_probability: 38, days_in_stage: 56, composite_risk: 68 },
+          { id: 'd-017', title: 'BlueSky Inc', stage: 'discovery', value: 22000, health_score: 55, win_probability: 40, days_in_stage: 29, composite_risk: 55 },
+          { id: 'd-011', title: 'Apex Group', stage: 'proposal', value: 37000, health_score: 60, win_probability: 45, days_in_stage: 33, composite_risk: 48 },
+        ],
+        risk_narrative: '3 deals show critical risk indicators with health scores below 40 and stagnant stages, dragging the portfolio risk score to medium at 42/100. Velocity risk is the dominant factor at 52/100, with 4 deals exceeding their expected stage duration by more than 2×.',
+        recommendations: [
+          'Schedule urgent check-in calls for Pinnacle Systems and Zephyr Corp this week — both have health scores below 35 and are likely to churn without immediate action.',
+          'Update next-action dates and log fresh deal notes for all 4 deals exceeding their stage thresholds to reset velocity risk scores.',
+          'Review win probability estimates for the bottom 5 deals and consider moving deals below 25% probability to a nurture track.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-risk-score`, {}, token)
+  },
 }
 

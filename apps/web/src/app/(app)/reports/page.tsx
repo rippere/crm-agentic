@@ -792,6 +792,11 @@ export default function ReportsPage() {
   const [engagementReport, setEngagementReport] = useState<AIEngagementReportData | null>(null);
   const [engagementReportLoading, setEngagementReportLoading] = useState(false);
   const [engagementReportOpen, setEngagementReportOpen] = useState(true);
+  type AIRiskDeal = { id: string; title: string; stage: string; value: number; health_score: number; win_probability: number; days_in_stage: number; composite_risk: number };
+  type AIPipelineRiskData = { overall_risk_score: number; risk_level: string; total_active_deals: number; risk_breakdown: { health_risk: number; velocity_risk: number; probability_risk: number }; riskiest_deals: AIRiskDeal[]; risk_narrative: string; recommendations: string[]; generated_at: string };
+  const [pipelineRiskScore, setPipelineRiskScore] = useState<AIPipelineRiskData | null>(null);
+  const [pipelineRiskScoreLoading, setPipelineRiskScoreLoading] = useState(false);
+  const [pipelineRiskScoreOpen, setPipelineRiskScoreOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -949,6 +954,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPriorityMatrix("demo-workspace-1", "demo-token").then(setPriorityMatrix).catch(() => {}).finally(() => setPriorityMatrixLoading(false));
       setEngagementReportLoading(true);
       apiClient.getAIDealEngagementReport("demo-workspace-1", "demo-token").then(setEngagementReport).catch(() => {}).finally(() => setEngagementReportLoading(false));
+      setPipelineRiskScoreLoading(true);
+      apiClient.getAIDealPipelineRiskScore("demo-workspace-1", "demo-token").then(setPipelineRiskScore).catch(() => {}).finally(() => setPipelineRiskScoreLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1110,6 +1117,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPriorityMatrix(workspaceId, session.access_token).then(setPriorityMatrix).catch(() => {}).finally(() => setPriorityMatrixLoading(false));
       setEngagementReportLoading(true);
       apiClient.getAIDealEngagementReport(workspaceId, session.access_token).then(setEngagementReport).catch(() => {}).finally(() => setEngagementReportLoading(false));
+      setPipelineRiskScoreLoading(true);
+      apiClient.getAIDealPipelineRiskScore(workspaceId, session.access_token).then(setPipelineRiskScore).catch(() => {}).finally(() => setPipelineRiskScoreLoading(false));
     });
   }, []);
 
@@ -2169,6 +2178,27 @@ export default function ReportsPage() {
         if (!session) { setEngagementReportLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setEngagementReportLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regeneratePipelineRiskScore = () => {
+    setPipelineRiskScoreLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealPipelineRiskScore(wid, tok)
+        .then(setPipelineRiskScore)
+        .catch(() => {})
+        .finally(() => setPipelineRiskScoreLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPipelineRiskScoreLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPipelineRiskScoreLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -9669,6 +9699,118 @@ export default function ReportsPage() {
             </div>
           ) : (
             <p className="text-xs text-zinc-500 p-4">No close date data available.</p>
+          )
+        )}
+      </Card>
+
+      {/* Pipeline Risk Score */}
+      <Card className="border-rose-500/20">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 text-rose-400" />
+            <span className="text-sm font-semibold text-zinc-200">Pipeline Risk Score</span>
+            {pipelineRiskScore && (
+              <span className={cn(
+                "text-xs px-2 py-0.5 rounded-full border",
+                pipelineRiskScore.risk_level === 'low'
+                  ? "bg-emerald-900/40 text-emerald-300 border-emerald-700/30"
+                  : pipelineRiskScore.risk_level === 'medium'
+                  ? "bg-amber-900/40 text-amber-300 border-amber-700/30"
+                  : pipelineRiskScore.risk_level === 'high'
+                  ? "bg-rose-900/40 text-rose-300 border-rose-700/30"
+                  : "bg-red-900/40 text-red-300 border-red-700/30"
+              )}>
+                {pipelineRiskScore.overall_risk_score}/100 · {pipelineRiskScore.risk_level}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePipelineRiskScore}
+              disabled={pipelineRiskScoreLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3 w-3", pipelineRiskScoreLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            <button onClick={() => setPipelineRiskScoreOpen((v) => !v)} className="text-zinc-400 hover:text-zinc-200 transition-colors">
+              {pipelineRiskScoreOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {pipelineRiskScoreOpen && (
+          pipelineRiskScoreLoading && !pipelineRiskScore ? (
+            <div className="p-4 space-y-2 animate-pulse">
+              {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-zinc-800 rounded" />)}
+            </div>
+          ) : pipelineRiskScore && pipelineRiskScore.total_active_deals > 0 ? (
+            <div className={cn("p-4 space-y-4", pipelineRiskScoreLoading && "opacity-40")}>
+              {/* Risk breakdown */}
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: "Health Risk", value: pipelineRiskScore.risk_breakdown.health_risk, color: "rose" },
+                  { label: "Velocity Risk", value: pipelineRiskScore.risk_breakdown.velocity_risk, color: "orange" },
+                  { label: "Prob Risk", value: pipelineRiskScore.risk_breakdown.probability_risk, color: "amber" },
+                ].map((item) => (
+                  <div key={item.label} className={cn(
+                    "rounded-lg border p-3 text-center",
+                    item.value >= 60 ? "bg-rose-500/8 border-rose-500/20" : item.value >= 40 ? "bg-amber-500/8 border-amber-500/20" : "bg-zinc-800/60 border-zinc-700/30"
+                  )}>
+                    <p className={cn(
+                      "text-xl font-bold font-mono",
+                      item.value >= 60 ? "text-rose-400" : item.value >= 40 ? "text-amber-400" : "text-zinc-300"
+                    )}>{item.value}</p>
+                    <p className="text-xs text-zinc-500 mt-0.5">{item.label}</p>
+                  </div>
+                ))}
+              </div>
+              {/* Riskiest deals */}
+              {pipelineRiskScore.riskiest_deals.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">Top Riskiest Deals</p>
+                  {pipelineRiskScore.riskiest_deals.map((deal) => (
+                    <div key={deal.id} className="flex items-center gap-3">
+                      <Link href={`/pipeline/${deal.id}`} className="flex-1 min-w-0 group">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs text-zinc-200 group-hover:text-indigo-300 transition-colors truncate">{deal.title}</span>
+                          <ExternalLink className="h-3 w-3 text-zinc-600 group-hover:text-indigo-400 flex-shrink-0" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                            <div
+                              className={cn("h-full rounded-full", deal.composite_risk >= 70 ? "bg-rose-500" : deal.composite_risk >= 50 ? "bg-amber-500" : "bg-zinc-500")}
+                              style={{ width: `${deal.composite_risk}%` }}
+                            />
+                          </div>
+                          <span className={cn(
+                            "text-xs font-mono flex-shrink-0",
+                            deal.composite_risk >= 70 ? "text-rose-400" : deal.composite_risk >= 50 ? "text-amber-400" : "text-zinc-400"
+                          )}>{deal.composite_risk}</span>
+                        </div>
+                      </Link>
+                      <div className="flex-shrink-0 flex gap-1">
+                        <span className="text-xs bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded capitalize">{deal.stage.replace('_', ' ')}</span>
+                        <span className="text-xs bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded">{deal.days_in_stage}d</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{pipelineRiskScore.risk_narrative}</p>
+              <ul className="space-y-1">
+                {pipelineRiskScore.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(pipelineRiskScore.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : pipelineRiskScore ? (
+            <div className="p-6 text-center text-zinc-500 text-sm">No active deals to assess for pipeline risk.</div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the pipeline risk score.</div>
           )
         )}
       </Card>
