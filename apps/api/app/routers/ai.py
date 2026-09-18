@@ -17303,3 +17303,175 @@ async def get_ai_deal_engagement_report(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 18n: AI deal pipeline risk score
+# ---------------------------------------------------------------------------
+
+_STAGE_RISK_THRESHOLDS: dict[str, int] = {
+    "discovery": 14,
+    "qualified": 21,
+    "proposal": 30,
+    "negotiation": 45,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-risk-score")
+@limiter.limit("5/minute")
+async def get_ai_deal_pipeline_risk_score(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    active_stages = ["discovery", "qualified", "proposal", "negotiation"]
+
+    deal_rows = (
+        await db.execute(
+            select(
+                Deal.id, Deal.title, Deal.stage, Deal.value,
+                Deal.health_score, Deal.ml_win_probability,
+                Deal.stage_changed_at, Deal.created_at,
+            )
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage.in_(active_stages))
+        )
+    ).all()
+
+    if not deal_rows:
+        return {
+            "overall_risk_score": 0,
+            "risk_level": "low",
+            "total_active_deals": 0,
+            "risk_breakdown": {"health_risk": 0, "velocity_risk": 0, "probability_risk": 0},
+            "riskiest_deals": [],
+            "risk_narrative": "No active deals found to assess pipeline risk.",
+            "recommendations": [
+                "Add deals to the pipeline to begin tracking risk.",
+                "Connect connectors and log activity to enable health scoring.",
+                "Set expected close dates and next actions for each deal.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    deal_risks = []
+    health_risks: list[float] = []
+    velocity_risks: list[float] = []
+    prob_risks: list[float] = []
+
+    for row in deal_rows:
+        health = float(row.health_score or 50)
+        health_risk = 100.0 - health
+
+        ref = row.stage_changed_at or row.created_at
+        if ref is not None:
+            ref_aware = ref if ref.tzinfo else ref.replace(tzinfo=timezone.utc)
+            days_in_stage = max((now - ref_aware).days, 0)
+        else:
+            days_in_stage = 0
+        threshold = _STAGE_RISK_THRESHOLDS.get(row.stage, 30)
+        velocity_ratio = min(days_in_stage / threshold, 3.0) if threshold > 0 else 0.0
+        velocity_risk = min(round(velocity_ratio / 3.0 * 100), 100)
+
+        prob = float(row.ml_win_probability or 50)
+        prob_risk = 100.0 - prob
+
+        composite_risk = round(health_risk * 0.40 + velocity_risk * 0.35 + prob_risk * 0.25)
+
+        health_risks.append(health_risk)
+        velocity_risks.append(float(velocity_risk))
+        prob_risks.append(prob_risk)
+
+        deal_risks.append({
+            "id": str(row.id),
+            "title": row.title,
+            "stage": row.stage,
+            "value": float(row.value or 0),
+            "health_score": round(health),
+            "win_probability": round(prob),
+            "days_in_stage": days_in_stage,
+            "composite_risk": composite_risk,
+        })
+
+    n = len(deal_risks)
+    avg_health_risk = round(sum(health_risks) / n)
+    avg_velocity_risk = round(sum(velocity_risks) / n)
+    avg_prob_risk = round(sum(prob_risks) / n)
+    overall_risk_score = round(avg_health_risk * 0.40 + avg_velocity_risk * 0.35 + avg_prob_risk * 0.25)
+
+    if overall_risk_score >= 70:
+        risk_level = "critical"
+    elif overall_risk_score >= 50:
+        risk_level = "high"
+    elif overall_risk_score >= 30:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    sorted_risks = sorted(deal_risks, key=lambda d: d["composite_risk"], reverse=True)
+    riskiest_deals = sorted_risks[:5]
+
+    context = (
+        f"You are a sales analytics AI. Summarise the pipeline risk for a sales team.\n"
+        f"Context: {n} active deals. Overall risk score {overall_risk_score}/100 ({risk_level}).\n"
+        f"Health risk avg {avg_health_risk}/100, velocity risk avg {avg_velocity_risk}/100, "
+        f"win-probability risk avg {avg_prob_risk}/100.\n"
+        f"Riskiest deal: '{riskiest_deals[0]['title']}' (composite risk {riskiest_deals[0]['composite_risk']}/100, "
+        f"health {riskiest_deals[0]['health_score']}, win prob {riskiest_deals[0]['win_probability']}%, "
+        f"{riskiest_deals[0]['days_in_stage']}d in {riskiest_deals[0]['stage']}).\n"
+        f"Write risk_narrative (2 sentences) and exactly 3 specific recommendations.\n"
+        f"Respond ONLY with valid JSON: "
+        f'{{\"risk_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}}'
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        parsed = json.loads(raw)
+        risk_narrative = str(parsed.get("risk_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        risk_narrative = (
+            f"Pipeline risk is {risk_level} at {overall_risk_score}/100, driven primarily by "
+            f"velocity stalls (avg {avg_velocity_risk}/100) and health degradation (avg {avg_health_risk}/100)."
+        )
+        recommendations = [
+            f"Immediately review '{riskiest_deals[0]['title']}' — it has the highest composite risk ({riskiest_deals[0]['composite_risk']}/100).",
+            "Update deal health scores and log fresh notes for all stalled deals to reduce velocity risk.",
+            "Focus win-probability improvement on deals below 40% — schedule discovery calls or demos.",
+        ]
+
+    _default_recs = [
+        "Review and action the top 5 riskiest deals this sprint.",
+        "Log activity notes on all stalled deals to reset velocity risk.",
+        "Reassess win probability for deals stuck in stage more than 2× expected duration.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(_default_recs[len(recommendations) % 3])
+
+    return {
+        "overall_risk_score": overall_risk_score,
+        "risk_level": risk_level,
+        "total_active_deals": n,
+        "risk_breakdown": {
+            "health_risk": avg_health_risk,
+            "velocity_risk": avg_velocity_risk,
+            "probability_risk": avg_prob_risk,
+        },
+        "riskiest_deals": riskiest_deals,
+        "risk_narrative": risk_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

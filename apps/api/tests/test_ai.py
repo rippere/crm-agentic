@@ -8215,3 +8215,75 @@ async def test_engagement_report_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/engagement-report")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 18n – AI deal pipeline risk score
+# ---------------------------------------------------------------------------
+
+class FakePipelineRiskDealRow:
+    def __init__(self, id, title, stage, value, health_score, ml_win_probability, stage_changed_at, created_at):
+        self.id = id
+        self.title = title
+        self.stage = stage
+        self.value = value
+        self.health_score = health_score
+        self.ml_win_probability = ml_win_probability
+        self.stage_changed_at = stage_changed_at
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_pipeline_risk_score_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    import datetime as dt
+    now = dt.datetime.now(dt.timezone.utc)
+
+    deal_rows = [
+        # High risk: health=20, win_prob=15, stalled 42d in proposal (threshold 30d → ratio 1.4 → vel_risk=47)
+        # health_risk=80, vel_risk=47, prob_risk=85 → composite = 80*0.40+47*0.35+85*0.25 = 32+16.45+21.25 = 69.7 → 70 → critical
+        FakePipelineRiskDealRow(
+            uuid.uuid4(), "Risky Deal", "proposal", 50000, 20.0, 15.0,
+            now - dt.timedelta(days=42), now - dt.timedelta(days=60)
+        ),
+        # Low risk: health=85, win_prob=80, only 3d in discovery (threshold 14d → ratio 0.21 → vel_risk=7)
+        # health_risk=15, vel_risk=7, prob_risk=20 → composite = 15*0.40+7*0.35+20*0.25 = 6+2.45+5 = 13.45 → 13
+        FakePipelineRiskDealRow(
+            uuid.uuid4(), "Safe Deal", "discovery", 30000, 85.0, 80.0,
+            now - dt.timedelta(days=3), now - dt.timedelta(days=10)
+        ),
+    ]
+
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(deal_rows))
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"risk_narrative": "Pipeline has mixed risk.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/pipeline-risk-score")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_active_deals"] == 2
+    assert "overall_risk_score" in body
+    assert body["risk_level"] in ("low", "medium", "high", "critical")
+    assert "risk_breakdown" in body
+    assert set(body["risk_breakdown"].keys()) == {"health_risk", "velocity_risk", "probability_risk"}
+    assert len(body["riskiest_deals"]) == 2
+    # Riskiest deal should be "Risky Deal"
+    assert body["riskiest_deals"][0]["title"] == "Risky Deal"
+    assert body["riskiest_deals"][0]["composite_risk"] > body["riskiest_deals"][1]["composite_risk"]
+    assert "risk_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_pipeline_risk_score_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-risk-score")
+    assert resp.status_code == 403
