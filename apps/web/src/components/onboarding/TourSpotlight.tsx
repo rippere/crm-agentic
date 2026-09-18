@@ -103,6 +103,7 @@ export default function TourSpotlight() {
   const {
     currentStep, stepIndex, steps, isActive, completedStepIds,
     next, back, skip, pause, isJumpAhead, goTo,
+    curriculum, completion, dismissCompletion,
   } = tour;
 
   const [mounted, setMounted] = useState(false);
@@ -114,6 +115,7 @@ export default function TourSpotlight() {
   const [prereqFailed, setPrereqFailed] = useState(false);
 
   const cardRef = useRef<HTMLDivElement>(null);
+  const completionCardRef = useRef<HTMLDivElement>(null);
   const confirmAttempted = useRef(false);
 
   useEffect(() => setMounted(true), []);
@@ -206,6 +208,38 @@ export default function TourSpotlight() {
     }
   }, [isActive, stepIndex]);
 
+  // The completion celebration is a real modal (aria-modal), but `isActive` is
+  // already false by the time it shows, so the step popover's keydown trap above
+  // doesn't cover it. Give it its own Esc-to-dismiss + Tab focus-trap so keyboard
+  // and AT users can't tab out into the (only visually covered) page behind it.
+  useEffect(() => {
+    if (!completion) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        dismissCompletion();
+        return;
+      }
+      if (e.key === "Tab") {
+        const focusable = completionCardRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input, [tabindex]:not([tabindex="-1"])',
+        );
+        if (!focusable || focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [completion, dismissCompletion]);
+
   const handleConfirm = useCallback(async () => {
     const cp = currentStep?.checkpoint;
     // Soft-verify: on the FIRST confirm, if the check fails, nudge but don't block.
@@ -232,7 +266,59 @@ export default function TourSpotlight() {
     [rect, anchor, vw, vh, popoverH],
   );
 
-  if (!mounted || !isActive || !currentStep) return null;
+  if (!mounted) return null;
+
+  // Celebration card — shown once a module completes (isActive is already false).
+  // A brief, explicit reward that the plain "overlay unmounts" flow never gave.
+  if (completion) {
+    return createPortal(
+      <div
+        className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+        style={{ backgroundColor: "rgba(9,9,11,0.72)" }}
+      >
+        <motion.div
+          ref={completionCardRef}
+          initial={{ opacity: 0, scale: 0.95, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.22, ease: "easeOut" }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Module complete"
+          className="w-[360px] max-w-[calc(100vw-16px)] rounded-2xl border border-indigo-500/40 bg-zinc-900 p-6 text-center shadow-2xl shadow-black/60"
+        >
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-indigo-500/40 bg-indigo-500/15">
+            <Check className="h-7 w-7 text-indigo-400" />
+          </div>
+          <h2 className="mb-1 text-lg font-semibold text-zinc-100">{completion.headline}</h2>
+          <p className="mb-4 text-sm leading-relaxed text-zinc-400">
+            {completion.isFinale
+              ? "You've finished the essentials — your workspace is set up and running on real data. Explore anytime; the launcher can replay any part."
+              : `Nice work — ${completion.moduleTitle} done.`}
+          </p>
+          <div className="mb-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+            <div
+              className="h-full rounded-full bg-indigo-500 transition-all"
+              style={{ width: `${completion.percent}%` }}
+            />
+          </div>
+          <p className="mb-5 text-xs text-zinc-500">{completion.percent}% of setup complete</p>
+          <button
+            type="button"
+            onClick={dismissCompletion}
+            autoFocus
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500 cursor-pointer"
+          >
+            {completion.isFinale
+              ? <>Done <Check className="h-4 w-4" /></>
+              : <>Keep going <ArrowRight className="h-4 w-4" /></>}
+          </button>
+        </motion.div>
+      </div>,
+      document.body,
+    );
+  }
+
+  if (!isActive || !currentStep) return null;
 
   const jumpAhead = isJumpAhead(stepIndex);
   const isLast = stepIndex === steps.length - 1;
@@ -294,6 +380,27 @@ export default function TourSpotlight() {
           style={{ top: popoverPos.top, left: popoverPos.left, width: POPOVER_W, maxWidth: "calc(100vw - 16px)", maxHeight: "calc(100vh - 16px)" }}
         >
           <div className="p-5">
+            {/* Curriculum progress (Module N of M) — the cross-module momentum
+                the per-module step dots below can't show. Absent for Module 0. */}
+            {curriculum && (
+              <div className="mb-3">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                    Module {curriculum.moduleIndex + 1} of {curriculum.moduleCount}
+                  </span>
+                  <span className="text-[10px] font-mono font-semibold text-indigo-400">
+                    {curriculum.percent}%
+                  </span>
+                </div>
+                <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-800">
+                  <div
+                    className="h-full rounded-full bg-indigo-500/70 transition-all"
+                    style={{ width: `${curriculum.percent}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Header: progress + close */}
             <div className="flex items-center justify-between mb-3">
               <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.14em] text-indigo-400">

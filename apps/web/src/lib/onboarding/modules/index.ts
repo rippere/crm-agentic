@@ -69,15 +69,28 @@ export const capstoneModules: TourModule[] = [
 ];
 
 /**
- * Modules that run inside the (app) shell, in order (shared core → Sales track →
- * PM track). Mounted by AppTour, which offers them in sequence and auto-offers
- * each on first visit to its home route. Track modules are mode-gated by their
- * steps' showForModes; AppTour skips any module that has zero steps for the
- * current workspace mode, so a Sales workspace never sees PM modules and vice versa.
+ * Activation core — the ONLY modules auto-offered on first run. Deliberately
+ * short (Home base + Contacts ≈ 9 steps, on top of Module 0's ~6) so a brand-new
+ * user reaches a real payoff — a named workspace, having met Nova, and their
+ * first contacts in — in one sitting. Everything heavier is deferred to
+ * `level2Modules` and reached from the launcher AFTER the core is done, so
+ * first-run completion isn't gated on a 30-step marathon or on data the user
+ * doesn't have yet (a synced inbox, a recorded call).
  */
-export const appShellModules: TourModule[] = [
+export const activationModules: TourModule[] = [
   module1HomeBase,
   module2Contacts,
+];
+
+/**
+ * Level-2 first-run — the rest of the fundamentals (Inbox & Calls, then the
+ * Sales/PM tracks). NOT auto-offered: these are surfaced by the launcher once
+ * the activation core is complete, in order, one at a time ("Continue tour").
+ * Module 3 lives here on purpose — its AI payoff needs a populated inbox/call,
+ * which a day-one user rarely has, so it waits until the user has data. Track
+ * modules are mode-gated by their steps' showForModes.
+ */
+export const level2Modules: TourModule[] = [
   module3InboxCalls,
   moduleS1Leads,
   moduleS2Pipeline,
@@ -85,6 +98,17 @@ export const appShellModules: TourModule[] = [
   moduleS4Reports,
   moduleP1Tasks,
   moduleP2Projects,
+];
+
+/**
+ * Every shell module in first-run order (activation core → level-2). Used as the
+ * curriculum denominator for the progress indicator and by any consumer that
+ * needs the full first-run set. AppTour auto-offers ONLY `activationModules`;
+ * `level2Modules` and the capstone are launcher-gated.
+ */
+export const appShellModules: TourModule[] = [
+  ...activationModules,
+  ...level2Modules,
 ];
 
 /**

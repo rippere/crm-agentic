@@ -69,6 +69,28 @@ export function filterStepsForMode(
 
 /* ─── Context shape ─── */
 
+/** Curriculum-level position of the active module, for the progress indicator. */
+export interface CurriculumProgress {
+  /** Zero-based index of the active module within the first-run curriculum. */
+  moduleIndex: number;
+  /** Total first-run modules for the current mode. */
+  moduleCount: number;
+  /** Percent of first-run modules completed (0–100). */
+  percent: number;
+}
+
+/** A just-completed module — drives the celebration card. */
+export interface TourCompletion {
+  moduleId: string;
+  moduleTitle: string;
+  /** Celebration heading (a milestone headline, or a generic "Module complete"). */
+  headline: string;
+  /** First-run completion % after this module (0–100). */
+  percent: number;
+  /** True when this completes the entire first-run curriculum. */
+  isFinale: boolean;
+}
+
 export interface TourController {
   /** The active module, or null when no tour is running. */
   module: TourModule | null;
@@ -102,6 +124,17 @@ export interface TourController {
    * completed step — used to warn on skip-ahead (soft gate; still allowed).
    */
   isJumpAhead: (index: number) => boolean;
+
+  /**
+   * Curriculum-level progress for the active module, or null when the host
+   * didn't supply a `curriculumOrder` (e.g. Module 0) or the active module isn't
+   * part of the first-run set (the capstone). Drives the module progress bar.
+   */
+  curriculum: CurriculumProgress | null;
+  /** Set when a module has just been completed — drives the celebration card. */
+  completion: TourCompletion | null;
+  /** Dismiss the celebration card (the launcher then offers the next module). */
+  dismissCompletion: () => void;
 }
 
 const TourContext = createContext<TourController | null>(null);
@@ -117,12 +150,27 @@ export interface TourProviderProps {
   scopeKey?: string;
   /** Active workspace mode, for branch-by-mode filtering. */
   mode?: WorkspaceMode;
+  /**
+   * The ordered first-run curriculum for the current mode (activation core →
+   * level-2). When supplied, the provider computes `curriculum` for the progress
+   * bar and raises a `completion` celebration when a module finishes. Omitted by
+   * Module 0's provider, which then shows neither.
+   */
+  curriculumOrder?: TourModule[];
+  /**
+   * Optional map of moduleId → celebration headline, for milestone modules
+   * (e.g. finishing the activation core). A module not in the map gets a generic
+   * "Module complete" headline.
+   */
+  milestones?: Record<string, string>;
 }
 
 export function TourProvider({
   children,
   scopeKey = "anon",
   mode,
+  curriculumOrder,
+  milestones,
 }: TourProviderProps) {
   const [module, setModule] = useState<TourModule | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
@@ -130,6 +178,7 @@ export function TourProvider({
   const [completedStepIds, setCompletedStepIds] = useState<string[]>([]);
   const [progressStatus, setProgressStatus] =
     useState<TourProgress["status"]>("not-started");
+  const [completion, setCompletion] = useState<TourCompletion | null>(null);
 
   const steps = useMemo(
     () => (module ? filterStepsForMode(module.steps, mode) : []),
@@ -139,6 +188,27 @@ export function TourProvider({
   // Keep a ref so persistence effects read the latest without re-subscribing.
   const latest = useRef({ stepIndex, completedStepIds, progressStatus, module });
   latest.current = { stepIndex, completedStepIds, progressStatus, module };
+
+  // Curriculum config as a ref so `next()` can raise the celebration card without
+  // taking curriculumOrder/milestones as dependencies.
+  const cfg = useRef({ curriculumOrder, milestones, scopeKey });
+  cfg.current = { curriculumOrder, milestones, scopeKey };
+
+  /** How many first-run modules are persisted "completed" for this scope. */
+  const completedModuleCount = (order: TourModule[], scope: string) =>
+    order.filter((m) => peekTourProgress(m.id, scope)?.status === "completed").length;
+
+  // Where the active module sits in the first-run curriculum (for the progress
+  // bar). Null when no curriculum was supplied (Module 0) or the active module is
+  // outside the first-run set (the capstone).
+  const curriculum = useMemo<CurriculumProgress | null>(() => {
+    const order = curriculumOrder;
+    if (!order || order.length === 0 || !module) return null;
+    const idx = order.findIndex((m) => m.id === module.id);
+    if (idx < 0) return null;
+    const done = completedModuleCount(order, scopeKey);
+    return { moduleIndex: idx, moduleCount: order.length, percent: Math.round((done / order.length) * 100) };
+  }, [curriculumOrder, module, scopeKey, completedStepIds, completion]);
 
   const persist = useCallback(
     (status: TourProgress["status"], index: number, completed: string[]) => {
@@ -160,6 +230,7 @@ export function TourProvider({
       const filtered = filterStepsForMode(mod.steps, mode);
       const saved = opts?.restart ? null : loadProgress(mod.id, scopeKey);
 
+      setCompletion(null);
       setModule(mod);
       if (saved && saved.status !== "completed") {
         const idx = Math.min(Math.max(saved.stepIndex, 0), Math.max(filtered.length - 1, 0));
@@ -195,6 +266,21 @@ export function TourProvider({
       setIsActive(false);
       setProgressStatus("completed");
       persist("completed", stepIndex, completed);
+      // Celebrate. persist() has already written this module as "completed", so
+      // the count below includes it. Skipped when no curriculumOrder (Module 0),
+      // so it never double-ups with the wizard's own "you're all set" screen.
+      const { curriculumOrder: order, milestones: ms, scopeKey: scope } = cfg.current;
+      const mod = latest.current.module;
+      if (mod && order && order.length > 0) {
+        const done = completedModuleCount(order, scope);
+        setCompletion({
+          moduleId: mod.id,
+          moduleTitle: mod.title,
+          headline: ms?.[mod.id] ?? "Module complete",
+          percent: Math.round((done / order.length) * 100),
+          isFinale: done >= order.length,
+        });
+      }
     } else {
       setStepIndex(nextIdx);
       persist("in-progress", nextIdx, completed);
@@ -232,6 +318,8 @@ export function TourProvider({
     persist("in-progress", latest.current.stepIndex, latest.current.completedStepIds);
   }, [persist]);
 
+  const dismissCompletion = useCallback(() => setCompletion(null), []);
+
   const isJumpAhead = useCallback(
     (index: number) => {
       // Furthest completed position among the current filtered steps.
@@ -260,10 +348,14 @@ export function TourProvider({
       skip,
       pause,
       isJumpAhead,
+      curriculum,
+      completion,
+      dismissCompletion,
     }),
     [
       module, steps, stepIndex, isActive, completedStepIds, progressStatus,
       start, next, back, goTo, skip, pause, isJumpAhead,
+      curriculum, completion, dismissCompletion,
     ],
   );
 

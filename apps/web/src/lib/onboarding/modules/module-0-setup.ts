@@ -86,7 +86,7 @@ export const module0Setup: TourModule = {
       },
       anchor: { selector: '[data-tour="mode-select"]', placement: "auto", padding: 6 },
       actionGuidance:
-        "Pick the mode that matches your team. Not sure? Both is the safe default — you can change it later in Settings.",
+        "Pick the one that matches your team: Sales if you're driving deals, Project Management if you're running projects. Not sure? Start with the single track that fits best — you can add the other (or switch to Both) later in Settings. Picking one keeps your first run focused.",
       whatJustHappened:
         "Continuing here creates your workspace on the server with the mode you chose, and refreshes your session so it's bound to the new workspace.",
       forwardReference: "Next: connect Gmail and Slack so the agents have data to act on.",
