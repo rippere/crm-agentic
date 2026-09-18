@@ -544,7 +544,7 @@ export default function DashboardPage() {
       />
 
       {/* KPI Grid */}
-      <section aria-labelledby="kpi-heading">
+      <section data-tour="dashboard-home" aria-labelledby="kpi-heading">
         <h2 id="kpi-heading" className="sr-only">Key Performance Indicators</h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {computeKPIs(deals).map((kpi) => (

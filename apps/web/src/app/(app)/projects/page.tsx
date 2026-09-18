@@ -312,6 +312,7 @@ export default function ProjectsPage() {
       <div className="flex items-center justify-between">
         <Header title="Projects" subtitle={`${totalCount} project${totalCount !== 1 ? "s" : ""}`} />
         <button
+          data-tour="projects-new"
           onClick={() => setShowModal(true)}
           className="flex items-center gap-2 rounded-lg bg-violet-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-violet-500 transition-colors"
         >
@@ -346,7 +347,7 @@ export default function ProjectsPage() {
           </button>
         </div>
       ) : (
-        <div className="flex flex-col gap-8">
+        <div data-tour="projects-list" className="flex flex-col gap-8">
           {manualProjects.length > 0 && (
             <section>
               <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">Manual</p>

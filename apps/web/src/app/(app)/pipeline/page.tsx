@@ -873,7 +873,7 @@ export default function PipelinePage() {
       </div>
 
       {/* Pipeline Pulse */}
-      <Card className="p-0 overflow-hidden">
+      <Card data-tour="pipeline-pulse" className="p-0 overflow-hidden">
         <button
           className="w-full flex items-center gap-2 px-4 py-3 hover:bg-zinc-800/30 transition-colors cursor-pointer"
           onClick={() => setPulseOpen((o) => !o)}
@@ -1081,7 +1081,7 @@ export default function PipelinePage() {
               {pipelineSummaryLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
               Pipeline AI
             </button>
-            <Button variant="cta" size="sm" onClick={() => setNewDealStage("discovery")}>
+            <Button data-tour="pipeline-new" variant="cta" size="sm" onClick={() => setNewDealStage("discovery")}>
               <Plus className="h-3.5 w-3.5" /> New Deal
             </Button>
           </div>
@@ -1097,7 +1097,7 @@ export default function PipelinePage() {
             ))}
           </div>
         ) : (
-          <div className="flex gap-4 overflow-x-auto pb-4" role="region" aria-label="Deals pipeline board">
+          <div data-tour="pipeline-board" className="flex gap-4 overflow-x-auto pb-4" role="region" aria-label="Deals pipeline board">
             {dealStageOrder.map((stage) => (
               <StageColumn
                 key={stage}
