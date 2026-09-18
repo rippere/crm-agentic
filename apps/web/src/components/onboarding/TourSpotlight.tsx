@@ -22,7 +22,7 @@ interface PopoverPos {
   placement: TourPlacement;
 }
 
-/** Choose a popover position given the target rect and viewport. */
+/** Choose a popover position that stays in view and does NOT cover the target. */
 function computePopoverPos(
   rect: AnchorRect | null,
   preferred: TourPlacement,
@@ -30,59 +30,66 @@ function computePopoverPos(
   vh: number,
   popoverH: number,
 ): PopoverPos {
-  // No target → center it.
+  const M = 8;
+
+  // No target on screen (the anchored control hasn't mounted yet, or the
+  // underlying wizard has advanced past this step) → dock to the BOTTOM of the
+  // viewport, not dead-center, so a centered form behind the coach-mark stays
+  // visible instead of being buried under the card.
   if (!rect) {
     return {
-      top: Math.max(GAP, vh / 2 - popoverH / 2),
-      left: Math.max(GAP, vw / 2 - POPOVER_W / 2),
+      top: Math.max(M, vh - popoverH - GAP),
+      left: Math.min(Math.max(vw / 2 - POPOVER_W / 2, M), vw - POPOVER_W - M),
       placement: "auto",
     };
   }
 
-  const spaceBelow = vh - (rect.top + rect.height);
-  const spaceAbove = rect.top;
-  const spaceRight = vw - (rect.left + rect.width);
-  const spaceLeft = rect.left;
+  const fitsInView = (top: number, left: number) =>
+    left >= M && left + POPOVER_W <= vw - M && top >= M && top + popoverH <= vh - M;
+  const coversTarget = (top: number, left: number) =>
+    left < rect.left + rect.width && left + POPOVER_W > rect.left &&
+    top < rect.top + rect.height && top + popoverH > rect.top;
 
-  let placement = preferred;
-  if (placement === "auto") {
-    const order: [TourPlacement, number][] = [
-      ["bottom", spaceBelow],
-      ["top", spaceAbove],
-      ["right", spaceRight],
-      ["left", spaceLeft],
-    ];
-    order.sort((a, b) => b[1] - a[1]);
-    placement = order[0][0];
+  const cx = rect.left + rect.width / 2 - POPOVER_W / 2;
+  const cy = rect.top + rect.height / 2 - popoverH / 2;
+  const candidates: Record<Exclude<TourPlacement, "auto">, { top: number; left: number }> = {
+    bottom: { top: rect.top + rect.height + GAP, left: cx },
+    top: { top: rect.top - popoverH - GAP, left: cx },
+    right: { top: cy, left: rect.left + rect.width + GAP },
+    left: { top: cy, left: rect.left - POPOVER_W - GAP },
+  };
+  const order = (
+    preferred && preferred !== "auto"
+      ? [preferred, "bottom", "top", "right", "left"]
+      : ["bottom", "top", "right", "left"]
+  ) as Array<Exclude<TourPlacement, "auto">>;
+
+  // 1) First side where the card fully fits AND doesn't overlap the target.
+  for (const p of order) {
+    const c = candidates[p];
+    if (fitsInView(c.top, c.left) && !coversTarget(c.top, c.left)) {
+      return { top: c.top, left: c.left, placement: p };
+    }
   }
 
-  let top = 0;
-  let left = 0;
-  switch (placement) {
-    case "top":
-      top = rect.top - popoverH - GAP;
-      left = rect.left + rect.width / 2 - POPOVER_W / 2;
-      break;
-    case "bottom":
-      top = rect.top + rect.height + GAP;
-      left = rect.left + rect.width / 2 - POPOVER_W / 2;
-      break;
-    case "left":
-      top = rect.top + rect.height / 2 - popoverH / 2;
-      left = rect.left - POPOVER_W - GAP;
-      break;
-    case "right":
-    default:
-      top = rect.top + rect.height / 2 - popoverH / 2;
-      left = rect.left + rect.width + GAP;
-      break;
+  // 2) Tight viewport — no side fits cleanly. Take the roomiest side, clamp into
+  //    view, and if that STILL covers the target, dock below (else above) it so
+  //    the highlighted control stays visible.
+  const room: Record<Exclude<TourPlacement, "auto">, number> = {
+    bottom: vh - (rect.top + rect.height),
+    top: rect.top,
+    right: vw - (rect.left + rect.width),
+    left: rect.left,
+  };
+  const best = [...order].sort((a, b) => room[b] - room[a])[0];
+  let top = Math.min(Math.max(candidates[best].top, M), vh - popoverH - M);
+  let left = Math.min(Math.max(candidates[best].left, M), vw - POPOVER_W - M);
+  if (coversTarget(top, left)) {
+    const belowTop = rect.top + rect.height + GAP;
+    top = belowTop + popoverH <= vh - M ? belowTop : Math.max(M, rect.top - popoverH - GAP);
+    left = Math.min(Math.max(cx, M), vw - POPOVER_W - M);
   }
-
-  // Clamp into viewport with an 8px margin.
-  const M = 8;
-  left = Math.min(Math.max(left, M), vw - POPOVER_W - M);
-  top = Math.min(Math.max(top, M), vh - popoverH - M);
-  return { top, left, placement };
+  return { top, left, placement: best };
 }
 
 /* ─── Overlay ─── */
@@ -353,7 +360,9 @@ export default function TourSpotlight() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            style={{ backgroundColor: "rgba(9,9,11,0.72)" }}
+            // Lighter than the spotlight dim: with no cut-out the whole screen is
+            // dimmed, so keep the form behind the coach-mark clearly readable.
+            style={{ backgroundColor: "rgba(9,9,11,0.55)" }}
           />
         )}
       </AnimatePresence>
@@ -377,7 +386,7 @@ export default function TourSpotlight() {
           // (six slots + AI tip) never pushes its checkpoint buttons off-screen
           // on a short viewport. popoverH is measured from this capped height,
           // so placement uses the real on-screen size.
-          style={{ top: popoverPos.top, left: popoverPos.left, width: POPOVER_W, maxWidth: "calc(100vw - 16px)", maxHeight: "calc(100vh - 16px)" }}
+          style={{ top: popoverPos.top, left: popoverPos.left, width: POPOVER_W, maxWidth: "calc(100vw - 16px)", maxHeight: "min(640px, calc(100dvh - 24px))" }}
         >
           <div className="p-5">
             {/* Curriculum progress (Module N of M) — the cross-module momentum
