@@ -15,81 +15,75 @@ import { useAnchorRect, type AnchorRect } from "./useAnchorRect";
 
 const POPOVER_W = 360;
 const GAP = 16; // px between spotlight and popover
+const MIN_SIDE = 140; // smallest height we'll squeeze the card into a tight gap
 
 interface PopoverPos {
-  top: number;
+  /** Exactly one of top/bottom is set — CSS anchoring for the absolute card. */
+  top?: number;
+  bottom?: number;
   left: number;
   placement: TourPlacement;
+  /** Cap the card height so it fits its side without covering the anchor. */
+  maxHeight: number;
 }
 
-/** Choose a popover position that stays in view and does NOT cover the target. */
+/**
+ * Choose a popover position that never covers the highlighted control.
+ *
+ * The card can be tall (six slots). On a small viewport it won't fit whole above
+ * or below the anchor, so instead of letting it blanket the form we cap its
+ * HEIGHT to the room on its chosen side and let it scroll internally — the anchor
+ * always stays visible. A horizontal side (beside the anchor) is preferred when
+ * the card's full width fits there, since that keeps near-full height.
+ */
 function computePopoverPos(
   rect: AnchorRect | null,
-  preferred: TourPlacement,
   vw: number,
   vh: number,
-  popoverH: number,
 ): PopoverPos {
   const M = 8;
+  const fullH = vh - 2 * M;
+  const clampX = (x: number) => Math.min(Math.max(x, M), vw - POPOVER_W - M);
 
-  // No target on screen (the anchored control hasn't mounted yet, or the
-  // underlying wizard has advanced past this step) → dock to the BOTTOM of the
-  // viewport, not dead-center, so a centered form behind the coach-mark stays
+  // No target on screen (control not mounted, or the wizard advanced past this
+  // step) → dock to the BOTTOM so a centered form behind the coach-mark stays
   // visible instead of being buried under the card.
   if (!rect) {
+    return { bottom: GAP, left: clampX(vw / 2 - POPOVER_W / 2), placement: "auto", maxHeight: fullH };
+  }
+
+  const aTop = rect.top;
+  const aBottom = rect.top + rect.height;
+  const aLeft = rect.left;
+  const aRight = rect.left + rect.width;
+  const roomBelow = vh - aBottom - GAP - M;
+  const roomAbove = aTop - GAP - M;
+  const roomRight = vw - aRight - GAP - M;
+  const roomLeft = aLeft - GAP - M;
+  const cx = clampX(aLeft + rect.width / 2 - POPOVER_W / 2);
+
+  // 1) Beside the anchor when the card's full WIDTH fits → near-full height,
+  //    starting around the anchor's top and scrolling if long.
+  if (roomRight >= POPOVER_W || roomLeft >= POPOVER_W) {
+    const right = roomRight >= roomLeft;
+    const top = Math.min(Math.max(aTop, M), vh - MIN_SIDE - M);
     return {
-      top: Math.max(M, vh - popoverH - GAP),
-      left: Math.min(Math.max(vw / 2 - POPOVER_W / 2, M), vw - POPOVER_W - M),
-      placement: "auto",
+      top,
+      left: right ? aRight + GAP : aLeft - POPOVER_W - GAP,
+      placement: right ? "right" : "left",
+      maxHeight: vh - top - M,
     };
   }
 
-  const fitsInView = (top: number, left: number) =>
-    left >= M && left + POPOVER_W <= vw - M && top >= M && top + popoverH <= vh - M;
-  const coversTarget = (top: number, left: number) =>
-    left < rect.left + rect.width && left + POPOVER_W > rect.left &&
-    top < rect.top + rect.height && top + popoverH > rect.top;
-
-  const cx = rect.left + rect.width / 2 - POPOVER_W / 2;
-  const cy = rect.top + rect.height / 2 - popoverH / 2;
-  const candidates: Record<Exclude<TourPlacement, "auto">, { top: number; left: number }> = {
-    bottom: { top: rect.top + rect.height + GAP, left: cx },
-    top: { top: rect.top - popoverH - GAP, left: cx },
-    right: { top: cy, left: rect.left + rect.width + GAP },
-    left: { top: cy, left: rect.left - POPOVER_W - GAP },
-  };
-  const order = (
-    preferred && preferred !== "auto"
-      ? [preferred, "bottom", "top", "right", "left"]
-      : ["bottom", "top", "right", "left"]
-  ) as Array<Exclude<TourPlacement, "auto">>;
-
-  // 1) First side where the card fully fits AND doesn't overlap the target.
-  for (const p of order) {
-    const c = candidates[p];
-    if (fitsInView(c.top, c.left) && !coversTarget(c.top, c.left)) {
-      return { top: c.top, left: c.left, placement: p };
-    }
+  // 2) Otherwise the vertical side with more room, anchored by the edge FACING
+  //    the anchor (top → pin the card's bottom; bottom → pin its top) so the
+  //    card grows AWAY from the anchor and its height is irrelevant to overlap.
+  //    Height is capped to the room, so it scrolls internally instead of
+  //    spilling over the control.
+  if (roomBelow >= roomAbove) {
+    return { top: aBottom + GAP, left: cx, placement: "bottom", maxHeight: Math.max(MIN_SIDE, roomBelow) };
   }
-
-  // 2) Tight viewport — no side fits cleanly. Take the roomiest side, clamp into
-  //    view, and if that STILL covers the target, dock below (else above) it so
-  //    the highlighted control stays visible.
-  const room: Record<Exclude<TourPlacement, "auto">, number> = {
-    bottom: vh - (rect.top + rect.height),
-    top: rect.top,
-    right: vw - (rect.left + rect.width),
-    left: rect.left,
-  };
-  const best = [...order].sort((a, b) => room[b] - room[a])[0];
-  let top = Math.min(Math.max(candidates[best].top, M), vh - popoverH - M);
-  let left = Math.min(Math.max(candidates[best].left, M), vw - POPOVER_W - M);
-  if (coversTarget(top, left)) {
-    const belowTop = rect.top + rect.height + GAP;
-    top = belowTop + popoverH <= vh - M ? belowTop : Math.max(M, rect.top - popoverH - GAP);
-    left = Math.min(Math.max(cx, M), vw - POPOVER_W - M);
-  }
-  return { top, left, placement: best };
+  return { bottom: vh - aTop + GAP, left: cx, placement: "top", maxHeight: Math.max(MIN_SIDE, roomAbove) };
 }
 
 /* ─── Overlay ─── */
@@ -116,7 +110,6 @@ export default function TourSpotlight() {
   const [mounted, setMounted] = useState(false);
   const [vw, setVw] = useState(0);
   const [vh, setVh] = useState(0);
-  const [popoverH, setPopoverH] = useState(320);
   const [verifyState, setVerifyState] = useState<VerifyState>("idle");
   const [showNudge, setShowNudge] = useState<string | null>(null);
   const [prereqFailed, setPrereqFailed] = useState(false);
@@ -172,11 +165,6 @@ export default function TourSpotlight() {
     const timer = window.setInterval(run, 400);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [currentStep]);
-
-  // Measure the card so top/bottom placement accounts for real height.
-  useEffect(() => {
-    if (cardRef.current) setPopoverH(cardRef.current.offsetHeight);
-  }, [currentStep, showNudge, prereqFailed]);
 
   // Keyboard: Esc pauses; focus trap keeps Tab inside the card.
   useEffect(() => {
@@ -269,8 +257,8 @@ export default function TourSpotlight() {
   }, [currentStep, next]);
 
   const popoverPos = useMemo(
-    () => computePopoverPos(rect, anchor?.placement ?? "auto", vw, vh, popoverH),
-    [rect, anchor, vw, vh, popoverH],
+    () => computePopoverPos(rect, vw, vh),
+    [rect, vw, vh],
   );
 
   if (!mounted) return null;
@@ -386,7 +374,13 @@ export default function TourSpotlight() {
           // (six slots + AI tip) never pushes its checkpoint buttons off-screen
           // on a short viewport. popoverH is measured from this capped height,
           // so placement uses the real on-screen size.
-          style={{ top: popoverPos.top, left: popoverPos.left, width: POPOVER_W, maxWidth: "calc(100vw - 16px)", maxHeight: "min(640px, calc(100dvh - 24px))" }}
+          style={{
+            ...(popoverPos.top !== undefined ? { top: popoverPos.top } : { bottom: popoverPos.bottom }),
+            left: popoverPos.left,
+            width: POPOVER_W,
+            maxWidth: "calc(100vw - 16px)",
+            maxHeight: `${popoverPos.maxHeight}px`,
+          }}
         >
           <div className="p-5">
             {/* Curriculum progress (Module N of M) — the cross-module momentum
@@ -508,8 +502,10 @@ export default function TourSpotlight() {
               </p>
             )}
 
-            {/* Slot 6 — checkpoint controls */}
-            <div className="flex items-center gap-2 mt-1">
+            {/* Slot 6 — checkpoint controls. Sticky footer so the confirm/Back
+                buttons stay reachable when the card's height is capped and its
+                content scrolls on a small viewport. */}
+            <div className="sticky bottom-0 -mx-5 -mb-5 mt-2 flex items-center gap-2 border-t border-zinc-800 bg-zinc-900 px-5 py-3">
               <button
                 type="button"
                 onClick={back}
