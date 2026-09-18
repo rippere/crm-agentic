@@ -5333,5 +5333,1715 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/revenue/trend-analysis`, {}, token)
   },
+
+  // Phase 16n: Contact Inactivity Risk
+  getContactInactivityRisk: (
+    workspaceId: string,
+    token: string,
+  ): Promise<{
+    critical_count: number
+    high_risk_count: number
+    watch_count: number
+    total_contacts: number
+    contacts_by_bucket: Array<{
+      bucket: 'critical' | 'high_risk' | 'watch'
+      contacts: Array<{ id: string; name: string; email: string; company: string; days_since_touch: number }>
+    }>
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> => {
+    if (isDemoMode) {
+      return Promise.resolve({
+        critical_count: 3,
+        high_risk_count: 5,
+        watch_count: 7,
+        total_contacts: 47,
+        contacts_by_bucket: [
+          {
+            bucket: 'critical',
+            contacts: [
+              { id: 'c-001', name: 'Sarah Chen', email: 'sarah.chen@techcorp.com', company: 'TechCorp', days_since_touch: 82 },
+              { id: 'c-002', name: 'Marcus Johnson', email: 'mjohnson@globalinc.com', company: 'Global Inc', days_since_touch: 74 },
+              { id: 'c-003', name: 'Priya Patel', email: 'p.patel@innovate.io', company: 'Innovate.io', days_since_touch: 63 },
+            ],
+          },
+          {
+            bucket: 'high_risk',
+            contacts: [
+              { id: 'c-004', name: 'David Kim', email: 'd.kim@nexusco.com', company: 'NexusCo', days_since_touch: 45 },
+              { id: 'c-005', name: 'Emma Walsh', email: 'ewalsh@pinnacle.com', company: 'Pinnacle Ltd', days_since_touch: 38 },
+            ],
+          },
+          {
+            bucket: 'watch',
+            contacts: [
+              { id: 'c-006', name: 'James Rivera', email: 'j.rivera@apexgroup.com', company: 'Apex Group', days_since_touch: 22 },
+              { id: 'c-007', name: 'Lisa Tanaka', email: 'ltanaka@fusiontech.com', company: 'FusionTech', days_since_touch: 18 },
+            ],
+          },
+        ],
+        insight:
+          '3 contacts are critically overdue for outreach (60+ days silent), putting high-value relationships at serious churn risk. ' +
+          'Act immediately on the critical tier before these accounts are lost.',
+        recommendations: [
+          'Send personalised re-engagement emails to the 3 critically inactive contacts within 24 hours.',
+          'Block out time this week to call the 5 high-risk contacts before they cross the 60-day threshold.',
+          'Set up a recurring 2-week check-in reminder for all active prospects to prevent future gaps.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/inactivity-risk`, {}, token)
+  },
+
+  async getDealsPipelineMomentum(workspaceId: string, token: string): Promise<{
+    momentum_score: number
+    momentum_rating: 'accelerating' | 'steady' | 'stalling' | 'declining'
+    new_deals_14d: number
+    stage_moves_14d: number
+    at_risk_count: number
+    highlights: string[]
+    warnings: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 750))
+      return Promise.resolve({
+        momentum_score: 68,
+        momentum_rating: 'steady',
+        new_deals_14d: 4,
+        stage_moves_14d: 9,
+        at_risk_count: 3,
+        highlights: [
+          '4 new deals entered the pipeline in the last 14 days, indicating healthy top-of-funnel activity.',
+          '9 stage advances recorded this fortnight — deals are progressing through the funnel.',
+          'Average deal health is 71/100, showing a majority of opportunities are well-managed.',
+        ],
+        warnings: [
+          '3 deals are flagged as at-risk (health < 50) and need immediate attention.',
+          'Stage move velocity has plateaued — consider pushing stalled deals with targeted outreach.',
+          'No new deals in the negotiation stage this fortnight; check for proposal bottlenecks.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-momentum`, {}, token)
+  },
+
+  async getDealAgeRisk(workspaceId: string, token: string): Promise<{
+    overdue_count: number
+    at_risk_count: number
+    on_track_count: number
+    total_open_deals: number
+    deals: Array<{ id: string; title: string | null; stage: string; days_open: number; expected_days: number; risk_level: 'overdue' | 'at_risk' | 'on_track' }>
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        overdue_count: 2,
+        at_risk_count: 3,
+        on_track_count: 7,
+        total_open_deals: 12,
+        deals: [
+          { id: 'd-001', title: 'TechCorp Enterprise License', stage: 'proposal', days_open: 65, expected_days: 30, risk_level: 'overdue' },
+          { id: 'd-002', title: 'Startup IO Growth Plan', stage: 'negotiation', days_open: 98, expected_days: 45, risk_level: 'overdue' },
+          { id: 'd-demo-3', title: 'Global Corp Platform', stage: 'qualified', days_open: 35, expected_days: 21, risk_level: 'at_risk' },
+          { id: 'd-demo-4', title: 'Agency LLC Upgrade', stage: 'discovery', days_open: 22, expected_days: 14, risk_level: 'at_risk' },
+          { id: 'd-demo-5', title: 'Enterprise Co Suite', stage: 'proposal', days_open: 40, expected_days: 30, risk_level: 'at_risk' },
+          { id: 'd-003', title: 'Ventures VC Series B', stage: 'discovery', days_open: 8, expected_days: 14, risk_level: 'on_track' },
+          { id: 'd-demo-7', title: 'Media Co Renewal', stage: 'qualified', days_open: 12, expected_days: 21, risk_level: 'on_track' },
+        ],
+        insight: '2 deals have exceeded twice their expected stage duration, signalling pipeline stagnation that risks revenue slippage.',
+        recommendations: [
+          'Prioritise immediate outreach to the 2 overdue deals to identify blockers and re-engage decision makers.',
+          'Set next-action reminders on all 3 at-risk deals before they cross the overdue threshold.',
+          'Review stage benchmarks quarterly — if expected days are consistently underestimated, update them.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/age-risk`, {}, token)
+  },
+
+  async getTopPerformerDeals(workspaceId: string, token: string): Promise<{
+    top_by_value: Array<{ id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null }>
+    top_by_speed: Array<{ id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null }>
+    top_by_confidence: Array<{ id: string; title: string | null; company: string | null; value: number; win_probability: number; cycle_days: number | null }>
+    avg_win_rate: number | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 750))
+      const deals = [
+        { id: 'd-001', title: 'Enterprise Platform Deal', company: 'Acme Corp', value: 142000, win_probability: 92, cycle_days: 18 },
+        { id: 'd-002', title: 'Mid-Market Expansion', company: 'BetaTech', value: 88000, win_probability: 85, cycle_days: 24 },
+        { id: 'd-003', title: 'Strategic Partnership', company: 'Gamma Ltd', value: 95000, win_probability: 88, cycle_days: 12 },
+        { id: 'd-004', title: 'SaaS Bundle Close', company: 'Delta Inc', value: 62000, win_probability: 79, cycle_days: 9 },
+        { id: 'd-005', title: 'Upsell — Advanced Tier', company: 'Acme Corp', value: 55000, win_probability: 76, cycle_days: 7 },
+      ]
+      return Promise.resolve({
+        top_by_value: [...deals].sort((a, b) => b.value - a.value),
+        top_by_speed: [...deals].sort((a, b) => (a.cycle_days ?? 999) - (b.cycle_days ?? 999)),
+        top_by_confidence: [...deals].sort((a, b) => b.win_probability - a.win_probability),
+        avg_win_rate: 84,
+        insight: 'Enterprise deals above $80K close with 88%+ confidence and an average 21-day cycle — replicating this profile is your fastest path to revenue growth.',
+        recommendations: [
+          'Prioritise enterprise-tier prospects in your pipeline to replicate the high-value close pattern.',
+          'Study the 7–12 day fast-close playbook for SMB deals and apply it to stalled mid-market opportunities.',
+          'Set win probability floor of 79%+ as a qualification signal for deals worth pursuing aggressively.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/top-performers`, {}, token)
+  },
+
+  async getDealStageConcentration(workspaceId: string, token: string): Promise<{
+    stages: Array<{ stage: string; count: number; total_value: number; avg_health: number | null; pct_of_pipeline: number }>
+    highest_value_stage: string | null
+    most_stalled_stage: string | null
+    total_pipeline_value: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        stages: [
+          { stage: 'discovery',   count: 8, total_value: 92000,  avg_health: 71, pct_of_pipeline: 18.5 },
+          { stage: 'qualified',   count: 6, total_value: 145000, avg_health: 65, pct_of_pipeline: 29.2 },
+          { stage: 'proposal',    count: 5, total_value: 178000, avg_health: 58, pct_of_pipeline: 35.8 },
+          { stage: 'negotiation', count: 3, total_value: 82000,  avg_health: 43, pct_of_pipeline: 16.5 },
+        ],
+        highest_value_stage: 'proposal',
+        most_stalled_stage: 'negotiation',
+        total_pipeline_value: 497000,
+        insight: 'Over 35% of pipeline value ($178K) sits in Proposal with declining health — unblocking these 5 deals is the single highest-impact action.',
+        recommendations: [
+          'Review the 5 proposal-stage deals this week; schedule calls to address any objections before health drops further.',
+          'Accelerate the 3 negotiation deals (avg health 43) — offer a time-bound incentive to close in the next 30 days.',
+          'Ensure discovery-stage deals are qualified quickly: 8 deals represent 18.5% of pipeline value and need a clear next step.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/stage-concentration`, {}, token)
+  },
+
+  async getDealCloseRateByStage(workspaceId: string, token: string): Promise<{
+    stage_rates: Array<{ stage: string; win_count: number; loss_count: number; total: number; win_rate: number }>
+    best_converting_stage: string | null
+    worst_converting_stage: string | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 650))
+      return Promise.resolve({
+        stage_rates: [
+          { stage: 'discovery',   win_count: 4,  loss_count: 8,  total: 12, win_rate: 33.3 },
+          { stage: 'qualified',   win_count: 9,  loss_count: 7,  total: 16, win_rate: 56.3 },
+          { stage: 'proposal',    win_count: 14, loss_count: 6,  total: 20, win_rate: 70.0 },
+          { stage: 'negotiation', win_count: 11, loss_count: 3,  total: 14, win_rate: 78.6 },
+        ],
+        best_converting_stage: 'negotiation',
+        worst_converting_stage: 'discovery',
+        insight: 'Negotiation closes at 78.6% — the highest of any stage — while discovery converts just 33.3%, suggesting poor early qualification is the main drag on overall win rate.',
+        recommendations: [
+          'Tighten discovery qualification criteria to filter out low-fit leads before they consume proposal resources.',
+          'Study what makes negotiation-stage deals succeed at 78.6% and codify those as a playbook for earlier stages.',
+          'Add Win/Loss reason tagging to every closed deal to identify recurring objection patterns by stage.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/close-rate-by-stage`, {}, token)
+  },
+
+  async getDealPipelineChurn(workspaceId: string, token: string): Promise<{
+    stage_churn: Array<{ stage: string; total_entered: number; churned_count: number; churn_rate: number }>
+    highest_churn_stage: string | null
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        stage_churn: [
+          { stage: 'discovery',   total_entered: 24, churned_count: 4,  churn_rate: 16.7 },
+          { stage: 'qualified',   total_entered: 18, churned_count: 5,  churn_rate: 27.8 },
+          { stage: 'proposal',    total_entered: 12, churned_count: 6,  churn_rate: 50.0 },
+          { stage: 'negotiation', total_entered:  7, churned_count: 1,  churn_rate: 14.3 },
+        ],
+        highest_churn_stage: 'proposal',
+        insight: 'The proposal stage churns at 50% — 6 of 12 deals that entered it either regressed or were lost, making it the single biggest pipeline leak.',
+        recommendations: [
+          'Add structured proposal review checkpoints to identify at-risk deals before they stall or regress from the proposal stage.',
+          'Conduct win/loss interviews for all proposal-stage churns to surface the top 2–3 objection patterns driving losses.',
+          'Set automated alerts when a proposal-stage deal has had no activity for 7 days so reps can intervene early.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-churn`, {}, token)
+  },
+
+  async getDealConversionQuality(workspaceId: string, token: string): Promise<{
+    quality_tiers: Array<{ tier: string; count: number; avg_value: number; avg_cycle_days: number; avg_health: number }>
+    avg_quality_score: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        quality_tiers: [
+          { tier: 'high',   count: 8,  avg_value: 52000, avg_cycle_days: 18, avg_health: 88 },
+          { tier: 'medium', count: 11, avg_value: 24000, avg_cycle_days: 35, avg_health: 62 },
+          { tier: 'low',    count: 4,  avg_value: 9000,  avg_cycle_days: 61, avg_health: 38 },
+        ],
+        avg_quality_score: 61.4,
+        insight: '8 high-quality wins averaging 18 days to close — fast cycle and strong health scores are the defining traits of top-tier deals.',
+        recommendations: [
+          'Review high-quality deal timelines to identify the engagement cadence that drives fast closes.',
+          'Set minimum health score thresholds for deals entering the negotiation stage.',
+          'Create playbooks based on high-quality deal patterns for reps to follow.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/conversion-quality`, {}, token)
+  },
+
+  async getDealWinLossPatterns(workspaceId: string, token: string): Promise<{
+    stage_patterns: Array<{ stage: string; won: number; lost: number; win_rate: number }>
+    competitor_impact: { with_competitors_win_rate: number; without_competitors_win_rate: number }
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        stage_patterns: [
+          { stage: 'discovery',   won: 8,  lost: 16, win_rate: 33.3 },
+          { stage: 'qualified',   won: 12, lost: 8,  win_rate: 60.0 },
+          { stage: 'proposal',    won: 7,  lost: 5,  win_rate: 58.3 },
+          { stage: 'negotiation', won: 9,  lost: 3,  win_rate: 75.0 },
+        ],
+        competitor_impact: {
+          with_competitors_win_rate: 44.2,
+          without_competitors_win_rate: 68.7,
+        },
+        insight: 'Negotiation stage closes at 75% — the highest of any stage — while discovery lags at 33%, suggesting early qualification gaps are the biggest win/loss driver.',
+        recommendations: [
+          'Improve discovery-stage qualification criteria to filter out low-probability deals earlier and reduce time wasted on low-intent leads.',
+          'Study what negotiation-stage reps do differently and build a playbook reps can use from qualified onwards.',
+          'Develop competitive battle cards to close the 24-point win-rate gap when competitors are present.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-loss-patterns`, {}, token)
+  },
+
+  async getAvgDealSizeTrend(workspaceId: string, token: string): Promise<{
+    months: Array<{ month: string; avg_value: number; deal_count: number }>
+    trend_direction: string
+    best_month: string | null
+    pct_change: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        months: [
+          { month: '2025-10', avg_value: 28000, deal_count: 4 },
+          { month: '2025-11', avg_value: 31500, deal_count: 5 },
+          { month: '2025-12', avg_value: 29800, deal_count: 3 },
+          { month: '2026-01', avg_value: 34200, deal_count: 6 },
+          { month: '2026-02', avg_value: 38000, deal_count: 5 },
+          { month: '2026-03', avg_value: 36500, deal_count: 4 },
+          { month: '2026-04', avg_value: 41000, deal_count: 7 },
+          { month: '2026-05', avg_value: 39800, deal_count: 5 },
+          { month: '2026-06', avg_value: 44500, deal_count: 6 },
+          { month: '2026-07', avg_value: 47200, deal_count: 8 },
+          { month: '2026-08', avg_value: 45600, deal_count: 6 },
+          { month: '2026-09', avg_value: 51000, deal_count: 5 },
+        ],
+        trend_direction: 'growing',
+        best_month: '2026-09',
+        pct_change: 45.2,
+        insight: 'Average deal size has grown 45% over the past year — from $28K to $51K — driven by larger enterprise deals entering the pipeline in Q2.',
+        recommendations: [
+          'Double down on enterprise outreach, which is clearly driving the avg deal size growth observed since Q1.',
+          'Set a minimum deal value threshold of $35K to keep the pipeline quality high and protect the upward trend.',
+          'Develop expansion playbooks for existing customers to further increase average deal values without incremental CAC.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/avg-deal-size-trend`, {}, token)
+  },
+
+  async getDealFollowupGaps(workspaceId: string, token: string): Promise<{
+    overdue: Array<{ deal_id: string; title: string; company: string; stage: string; days_since_contact: number }>
+    due_soon: Array<{ deal_id: string; title: string; company: string; stage: string; days_since_contact: number }>
+    on_track_count: number
+    avg_days_since_contact: number
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        overdue: [
+          { deal_id: 'd-001', title: 'TechCorp Platform Expansion', company: 'TechCorp', stage: 'negotiation', days_since_contact: 21 },
+          { deal_id: 'd-002', title: 'HealthPlus EHR Integration', company: 'HealthPlus', stage: 'proposal', days_since_contact: 17 },
+          { deal_id: 'd-003', title: 'RetailX Omnichannel Suite', company: 'RetailX', stage: 'qualified', days_since_contact: 16 },
+        ],
+        due_soon: [
+          { deal_id: 'd-004', title: 'FinCo Analytics Dashboard', company: 'FinCo', stage: 'proposal', days_since_contact: 12 },
+          { deal_id: 'd-005', title: 'EduLearn LMS Upgrade', company: 'EduLearn', stage: 'discovery', days_since_contact: 8 },
+        ],
+        on_track_count: 9,
+        avg_days_since_contact: 6.4,
+        insight: '3 deals in advanced stages haven\'t been contacted in 16+ days — silence in negotiation is the fastest way to lose a deal.',
+        recommendations: [
+          'Prioritise the 3 overdue deals immediately — send a personal note to each within 24 hours to re-establish contact.',
+          'Schedule weekly check-in calls for all negotiation-stage deals to maintain momentum and unblock objections early.',
+          'Set a 7-day follow-up SLA as a team standard and use the CRM to trigger automatic reminders for each rep.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/followup-gaps`, {}, token)
+  },
+
+  async getDealValueAtRisk(workspaceId: string, token: string): Promise<{
+    total_pipeline_value: number
+    at_risk_value: number
+    at_risk_pct: number
+    at_risk_deals: Array<{ deal_id: string; title: string; company: string; stage: string; value: number; health_score: number; risk_reason: string }>
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        total_pipeline_value: 487000,
+        at_risk_value: 183000,
+        at_risk_pct: 37.6,
+        at_risk_deals: [
+          { deal_id: 'd-001', title: 'TechCorp Platform Expansion', company: 'TechCorp', stage: 'negotiation', value: 145000, health_score: 38, risk_reason: 'health score 38; stuck in negotiation for 47d (threshold 45d)' },
+          { deal_id: 'd-002', title: 'HealthPlus EHR Integration', company: 'HealthPlus', stage: 'proposal', value: 22000, health_score: 45, risk_reason: 'health score 45' },
+          { deal_id: 'd-003', title: 'RetailX Omnichannel Suite', company: 'RetailX', stage: 'discovery', value: 16000, health_score: 72, risk_reason: 'stuck in discovery for 19d (threshold 14d)' },
+        ],
+        insight: '$183K (37.6%) of pipeline is at risk — the TechCorp deal alone accounts for 79% of the at-risk value and needs immediate executive engagement.',
+        recommendations: [
+          'Escalate the TechCorp deal to executive sponsorship — a stalled $145K negotiation is a high-priority save that needs fresh momentum.',
+          'Schedule health-check calls for HealthPlus and RetailX within 48 hours to understand blockers and agree next steps.',
+          'Implement a 30-day deal review cadence for all proposals to catch health score drops before they become lost deals.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-at-risk`, {}, token)
+  },
+
+  async getDealNextBestActions(workspaceId: string, token: string): Promise<{
+    actions: Array<{ deal_id: string; priority: 'high' | 'medium' | 'low'; action: string; rationale: string }>
+    insight: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 800))
+      return Promise.resolve({
+        actions: [
+          { deal_id: 'd-001', priority: 'high', action: 'Schedule executive sponsor call to unblock negotiation', rationale: 'High value deal stuck 47d — needs senior escalation.' },
+          { deal_id: 'd-002', priority: 'high', action: 'Send re-engagement email with revised proposal', rationale: 'Health score 45 and no response in 18d.' },
+          { deal_id: 'd-003', priority: 'medium', action: 'Run discovery qualification call this week', rationale: 'Stuck beyond 14d threshold, move to qualified.' },
+          { deal_id: 'd-004', priority: 'low', action: 'Send weekly check-in email', rationale: 'Healthy deal on track — maintain momentum.' },
+        ],
+        insight: '4 deals prioritised — 2 require immediate attention to prevent $167K pipeline loss.',
+        recommendations: [
+          'Prioritise the TechCorp and HealthPlus deals this week — together they represent $167K at risk of slipping.',
+          'Set calendar blocks for follow-ups on stuck deals to prevent them from aging further beyond stage thresholds.',
+          'Track competitor mentions in follow-up calls to sharpen differentiation messaging for stalled proposals.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/next-best-actions`, {}, token)
+  },
+
+  async getDealCoachingDigest(workspaceId: string, token: string): Promise<{
+    coached_deals: Array<{
+      deal_id: string; title: string; stage: string; value: number;
+      what_to_do: string; what_to_avoid: string; talking_points: string[];
+    }>
+    weekly_theme: string
+    recommendations: string[]
+    generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 900))
+      return Promise.resolve({
+        coached_deals: [
+          {
+            deal_id: 'd-001',
+            title: 'TechCorp Platform Expansion',
+            stage: 'negotiation',
+            value: 145000,
+            what_to_do: 'Request an executive sponsor call this week to unblock the stalled negotiation. Prepare a concise one-page summary of remaining open items and proposed resolutions to make the meeting outcome-driven.',
+            what_to_avoid: 'Do not send another email follow-up without a specific call-to-action — vague check-ins at this stage signal lack of urgency and reduce buyer confidence.',
+            talking_points: ['Which open items are blocking sign-off this week?', 'Can we align on a signature date if we resolve the SLA clause?', 'Would an executive-to-executive call help accelerate final approval?'],
+          },
+          {
+            deal_id: 'd-002',
+            title: 'HealthPlus EHR Integration',
+            stage: 'proposal',
+            value: 22000,
+            what_to_do: 'Send a personalised follow-up email addressing the integration timeline concern raised in the last call. Offer a 30-minute technical review session with your solutions engineer.',
+            what_to_avoid: 'Avoid re-sending the original proposal without changes — it signals you did not listen to their feedback and will likely be ignored again.',
+            talking_points: ['What specific concerns do you have about the 90-day integration timeline?', 'Would a phased rollout help reduce risk for your team?', 'Who else needs to be involved before you can approve the proposal?'],
+          },
+          {
+            deal_id: 'd-003',
+            title: 'RetailX Omnichannel Suite',
+            stage: 'discovery',
+            value: 16000,
+            what_to_do: 'Run a structured discovery call using the MEDDIC framework. Document budget, decision authority, and a clear success definition before moving forward.',
+            what_to_avoid: 'Do not pitch product features until you have confirmed the buyer has budget authority and a clear timeline — you risk wasting both parties\' time.',
+            talking_points: ['What problem are you trying to solve in the next 90 days?', 'Who owns the budget for this initiative?', 'What does a successful outcome look like for your team by end of year?'],
+          },
+        ],
+        weekly_theme: 'This week\'s priority is re-engaging the TechCorp negotiation — $145K is within reach if you can unblock the SLA clause before month end.',
+        recommendations: [
+          'Block 30 minutes each morning for deal follow-ups — consistency at this stage beats sporadic intense effort.',
+          'Update deal health scores after every customer interaction so your pipeline reflects current reality.',
+          'Schedule a Friday pipeline review to validate close-date accuracy and reassign stalled deals.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/coaching-digest`, {}, token)
+  },
+
+  async getQbrSummary(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        quarter: 'Q3 2026',
+        wins_summary: 'Q3 2026 was a breakout quarter — the team closed 5 deals worth $412K, the highest revenue quarter in the company\'s history and 38% above Q2. TechCorp\'s $145K negotiation win and Acme\'s $89K close were the headline performers, both converting after personalised executive outreach.',
+        pipeline_status: 'The current pipeline holds 11 open deals worth $285K with an average win probability of 61%. Three deals are flagged at-risk with health scores below 50 — HealthPlus ($22K) and StartupX ($15K) need immediate attention to prevent quarter-end slippage.',
+        top_wins: [
+          { id: 'd-001', title: 'TechCorp Enterprise Suite', company: 'TechCorp', value: 145000, closed_at: new Date(Date.now() - 15 * 86400000).toISOString() },
+          { id: 'd-win2', title: 'Acme Platform Pro', company: 'Acme Inc', value: 89000, closed_at: new Date(Date.now() - 30 * 86400000).toISOString() },
+          { id: 'd-win3', title: 'DataCo Analytics Hub', company: 'DataCo', value: 67000, closed_at: new Date(Date.now() - 45 * 86400000).toISOString() },
+        ],
+        top_risks: [
+          { id: 'd-002', title: 'HealthPlus Clinical Suite', company: 'HealthPlus', stage: 'proposal', value: 22000, health_score: 35 },
+          { id: 'd-003', title: 'StartupX Growth Pack', company: 'StartupX', stage: 'qualified', value: 15000, health_score: 42 },
+        ],
+        strategic_recommendations: [
+          'Prioritise HealthPlus and StartupX re-engagement this week — both are at-risk and represent $37K of pipeline that could slip to Q4.',
+          'Run a structured win-loss debrief on the 2 lost deals this quarter to identify objection patterns and improve the close rate in Q4.',
+          'Ensure every open deal has a next-action date set before week end — follow-up discipline is the single biggest driver of pipeline velocity.',
+        ],
+        metrics: {
+          closed_won_count: 5,
+          closed_won_revenue: 412000,
+          closed_lost_count: 2,
+          win_rate: 71,
+          open_deal_count: 11,
+          total_pipeline_value: 285000,
+          at_risk_count: 3,
+          avg_win_probability: 61,
+        },
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/qbr-summary`, {}, token)
+  },
+
+  async getDealConversionPaths(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        paths: [
+          {
+            stages_sequence: ['discovery', 'qualified', 'proposal', 'negotiation', 'closed_won'],
+            deal_count: 4,
+            win_rate: 75,
+            avg_days: 38.5,
+          },
+          {
+            stages_sequence: ['discovery', 'qualified', 'proposal', 'closed_won'],
+            deal_count: 3,
+            win_rate: 60,
+            avg_days: 22.0,
+          },
+          {
+            stages_sequence: ['discovery', 'proposal', 'closed_won'],
+            deal_count: 2,
+            win_rate: 50,
+            avg_days: 14.0,
+          },
+        ],
+        most_common_path: ['discovery', 'qualified', 'proposal', 'negotiation', 'closed_won'],
+        fastest_path: ['discovery', 'proposal', 'closed_won'],
+        insight: 'Your most common winning path runs through negotiation — deals that skip it close 41 % faster but convert at a lower rate. Consider a lightweight negotiation checkpoint for mid-value deals to maintain both speed and quality.',
+        recommendations: [
+          'For deals over $50K, always include a structured negotiation phase to protect win rate.',
+          'Fast-track deals under $20K through the short path (discovery → proposal → closed_won) to maximise throughput.',
+          'Flag any deal stuck in a stage for more than 14 days — it signals the path has stalled and needs intervention.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/conversion-path`, {}, token)
+  },
+
+  async getDealPlaybook(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        playbook_title: 'Enterprise Velocity Playbook',
+        winning_profile: {
+          avg_health: 84,
+          avg_cycle_days: 32.5,
+          won_count: 5,
+          lost_count: 2,
+          win_rate: 71,
+        },
+        key_behaviors: [
+          'Top-performing deals spend at least 7 days in the qualified stage — rushing to proposal before confirming BANT is the single biggest predictor of loss.',
+          'All winning deals had a named champion who introduced the team to the economic buyer before the proposal was sent.',
+          'Winning deals average a touch every 4 days; deals that go silent for 10+ days have a 3× higher churn rate.',
+        ],
+        stage_playbook: [
+          {
+            stage: 'discovery',
+            key_actions: [
+              'Map the full buying committee in the first call — identify economic buyer, champion, and blockers.',
+              'Quantify the cost of the current problem in the customer\'s own language.',
+              'Set a Mutual Action Plan (MAP) with agreed milestones before leaving the meeting.',
+            ],
+            success_signals: [
+              'Customer shares internal documentation or introduces a second stakeholder.',
+              'Economic buyer confirms budget authority and timeline.',
+            ],
+            common_mistakes: [
+              'Moving to demo before the pain is fully documented and confirmed.',
+              'Single-threading through one stakeholder who lacks decision power.',
+            ],
+          },
+          {
+            stage: 'qualified',
+            key_actions: [
+              'Run a tailored demo that maps directly to the top 3 pain points discovered.',
+              'Confirm BANT and get the customer to rank their evaluation criteria.',
+              'Present a ROI model with the customer\'s own numbers.',
+            ],
+            success_signals: [
+              'Customer asks for pricing or requests a proposal.',
+              'Champion reports positive internal feedback and schedules a leadership review.',
+            ],
+            common_mistakes: [
+              'Sending a generic proposal deck without customisation.',
+              'Failing to identify and address the key competitor in the evaluation.',
+            ],
+          },
+          {
+            stage: 'proposal',
+            key_actions: [
+              'Walk through the proposal live — never send it cold.',
+              'Address the top 3 objections proactively before they are raised.',
+              'Set a clear next step: decision date, legal review, or negotiation kickoff.',
+            ],
+            success_signals: [
+              'Customer shares the proposal internally and reports back with questions.',
+              'Legal or procurement is introduced.',
+            ],
+            common_mistakes: [
+              'Ignoring competitor mentions rather than directly addressing the differentiation.',
+              'Failing to create urgency or a compelling event to drive a decision.',
+            ],
+          },
+          {
+            stage: 'negotiation',
+            key_actions: [
+              'Anchor on value and ROI before discussing price adjustments.',
+              'Understand their constraints fully before making any concessions.',
+              'Require a verbal commit before sending revised commercial terms.',
+            ],
+            success_signals: [
+              'Customer requests contract redlines or sets an internal signing deadline.',
+              'Legal review is initiated.',
+            ],
+            common_mistakes: [
+              'Caving on price without asking for something in return (faster close, expanded scope).',
+              'Letting the negotiation stall without a defined follow-up cadence.',
+            ],
+          },
+        ],
+        recommendations: [
+          'Implement a mandatory 7-day minimum in the qualified stage for deals over $30K to ensure BANT is fully confirmed.',
+          'Require every deal to have a named champion before it advances past discovery — track this in deal notes.',
+          'Set an automated alert for any deal with no activity for 8+ days — immediate outreach cuts stall rate by 40%.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/playbook`, {}, token)
+  },
+
+  async getDealBattleCard(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        battle_cards: [
+          {
+            competitor: 'Salesforce',
+            encounter_count: 7,
+            win_rate: 43,
+            key_differentiators: [
+              'Implementation in 2 weeks vs Salesforce\'s 3–6 month deployment — get value immediately, not after a project.',
+              'All-inclusive pricing with no per-module fees — a comparable Salesforce setup costs 2.4× more over 3 years.',
+              'A dedicated named CSM from day one vs Salesforce\'s tiered support model that routes SMBs to a generic queue.',
+            ],
+            objection_responses: [
+              '"Everyone uses Salesforce" → Salesforce has 20% market share; 80% of the market chose something else. The question is what fits your workflow, not what\'s most familiar.',
+              '"We need Salesforce\'s ecosystem" → We integrate natively with 200+ tools including every major Salesforce partner. Show me the specific tool you need and we\'ll confirm compatibility today.',
+              '"Salesforce is more proven" → We\'ve closed 3 enterprise customers who migrated from Salesforce in the last 6 months — introductions available if helpful.',
+            ],
+            positioning: 'Unlike Salesforce, we deliver enterprise power without the enterprise complexity — your team is fully operational in 2 weeks, not 6 months.',
+          },
+          {
+            competitor: 'HubSpot',
+            encounter_count: 4,
+            win_rate: 75,
+            key_differentiators: [
+              'Purpose-built for B2B sales intelligence vs HubSpot\'s marketing-first CRM bolted onto a sales layer.',
+              'AI-native deal coaching and pipeline analysis built in — HubSpot requires 3rd-party tools to get comparable insights.',
+              'Flat per-seat pricing that doesn\'t penalise you for growing the team the way HubSpot\'s tier jumps do.',
+            ],
+            objection_responses: [
+              '"HubSpot is easier to use" → Our onboarding takes 2 weeks and includes dedicated setup support. Book a live walkthrough and see for yourself.',
+              '"We already use HubSpot marketing" → We integrate bidirectionally with HubSpot Marketing Hub — you keep the marketing tools and get a better CRM.',
+              '"HubSpot is cheaper" → HubSpot Sales Hub Professional for a 10-person team is $4,800/year before add-ons. Our comparable plan is $3,600 with all features included.',
+            ],
+            positioning: 'Unlike HubSpot, we\'re built for sales-led teams — deeper pipeline intelligence, smarter AI coaching, and pricing that scales without surprises.',
+          },
+          {
+            competitor: 'Pipedrive',
+            encounter_count: 2,
+            win_rate: 100,
+            key_differentiators: [
+              'AI-powered coaching and deal health scoring built in — Pipedrive is a pipeline visualiser with no intelligence layer.',
+              'Full contact enrichment, activity tracking and email integration in one platform vs Pipedrive\'s patchwork of Zapier integrations.',
+              'Scales to enterprise with role-based permissions, SSO, and audit logs — Pipedrive caps out at mid-market.',
+            ],
+            objection_responses: [
+              '"Pipedrive is simpler" → We\'re as simple to use but actually tell you what to do next — Pipedrive shows you the pipeline but not the actions.',
+              '"Pipedrive is cheaper" → At scale, Pipedrive\'s Essential plan lacks the AI and reporting features you need, and the upgrade cost narrows the gap significantly.',
+              '"We love the Kanban view" → Our pipeline board is identical to Pipedrive\'s — and you get AI deal scoring and coaching on top of it.',
+            ],
+            positioning: 'Unlike Pipedrive, we don\'t just show you the pipeline — we tell you what\'s at risk, what to do next, and why deals are won or lost.',
+          },
+        ],
+        top_competitor: 'Salesforce',
+        recommendations: [
+          'Run a Salesforce-specific battle card session with the sales team this quarter — 7 active encounters make it the top competitive priority.',
+          'Collect win/loss notes on every competitive deal so the AI can sharpen battle cards with real objection data over time.',
+          'Add a "Competitors" field as mandatory on all deals over $20K to ensure coverage improves beyond the current 60% tracking rate.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/battle-card`, {}, token)
+  },
+
+  async getDealRiskEscalation(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        escalations: [
+          {
+            deal_id: 'd-risk-001',
+            title: 'HealthPlus Clinical Suite',
+            company: 'HealthPlus',
+            stage: 'proposal',
+            value: 22000,
+            health_score: 28,
+            win_probability: 25,
+            days_stale: 18,
+            risk_factors: [
+              'Proposal sent 18 days ago with no response — likely under review by procurement without an internal champion pushing it forward.',
+              'Health score of 28 is critically low, placing it in the bottom 5% of the pipeline.',
+              'No next meeting scheduled — deal has no forward momentum and risks going dark.',
+            ],
+            suggested_action: 'Call the HealthPlus champion today. Do not email — this deal needs a live conversation to surface the blocker before it slips to lost.',
+          },
+          {
+            deal_id: 'd-risk-002',
+            title: 'StartupX Growth Pack',
+            company: 'StartupX',
+            stage: 'qualified',
+            value: 15000,
+            health_score: 42,
+            win_probability: 35,
+            days_stale: 12,
+            risk_factors: [
+              'Salesforce is actively competing — StartupX has been evaluating both platforms for 3+ weeks without a decision.',
+              'Deal has been stalled in the qualified stage for 12 days — should have moved to proposal by now.',
+              'Win probability at 35% signals the rep may have lost the champion relationship.',
+            ],
+            suggested_action: 'Send the Salesforce competitive battle card to the StartupX champion and schedule a focused 30-minute re-demo this week emphasising the 3 key differentiators.',
+          },
+          {
+            deal_id: 'd-risk-003',
+            title: 'RetailX Omni Platform',
+            company: 'RetailX',
+            stage: 'discovery',
+            value: 16000,
+            health_score: 55,
+            win_probability: 48,
+            days_stale: 8,
+            risk_factors: [
+              'Still in discovery after 8 days without advancing — may be struggling to identify the economic buyer.',
+              'No deal notes logged in the last 5 days, indicating low rep engagement.',
+              'Win probability below 50% at discovery stage is a warning sign of poor qualification.',
+            ],
+            suggested_action: 'Review the RetailX account and ensure the economic buyer is identified. If not yet known, coach the rep to ask for an introduction in the next meeting.',
+          },
+        ],
+        total_at_risk_value: 53000,
+        recommendations: [
+          'Hold an emergency pipeline review for the 3 deals with health scores below 55 — total value at risk is $53K. Review each blocker and assign a specific next action before end of week.',
+          'Require reps to log a next-action date on every at-risk deal by close of business today — deals without a next step should be escalated to the manager.',
+          'Run a 15-minute daily standup this week focused only on at-risk deals until all three advance a stage or are qualified out.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/risk-escalation`, {}, token)
+  },
+
+  async getWorkspaceMomentum(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        accelerating: [
+          { deal_id: 'd-mom-001', title: 'Acme Enterprise Suite', velocity_score: 78, trend_description: 'Moved from qualified to proposal in 4 days — champion is engaged and budget is confirmed.' },
+          { deal_id: 'd-mom-002', title: 'TechCorp Analytics', velocity_score: 65, trend_description: 'Executive sponsor identified last week — deal is gaining executive attention and moving fast.' },
+        ],
+        decelerating: [
+          { deal_id: 'd-mom-003', title: 'MedGroup Portal', velocity_score: 45, trend_description: 'Proposal sent 9 days ago — procurement review is slowing progress but deal is still alive.' },
+          { deal_id: 'd-mom-004', title: 'RetailX Omni', velocity_score: 38, trend_description: 'Discovery phase stagnating — rep cadence has dropped from 3x/week to 1x/week.' },
+        ],
+        stalled: [
+          { deal_id: 'd-mom-005', title: 'StartupX Growth Pack', velocity_score: 12, trend_description: 'No stage movement in 22 days — champion has gone quiet and last email bounced.' },
+        ],
+        momentum_index: 62,
+        insight: 'Pipeline momentum is moderately healthy with 2 deals accelerating. The stalled StartupX deal is the primary concern — without immediate intervention it is likely to churn. The 2 decelerating deals need a cadence reset this week.',
+        recommendations: [
+          'Immediately re-engage the StartupX champion — try a LinkedIn message or ask for a warm intro from a mutual contact, as emails are not landing.',
+          'Schedule a pipeline review for decelerating deals this week — identify the specific blocker for each and assign a concrete next step to the rep.',
+          'Use the accelerating Acme deal as a case study — document what is working and share the playbook with the rest of the team.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/momentum`, {}, token)
+  },
+
+  async getVelocityHeatmap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        transitions: [
+          { from_stage: 'proposal', to_stage: 'negotiation', median_days: 21, deal_count: 8 },
+          { from_stage: 'qualified', to_stage: 'proposal', median_days: 14, deal_count: 12 },
+          { from_stage: 'negotiation', to_stage: 'closed_won', median_days: 11, deal_count: 6 },
+          { from_stage: 'discovery', to_stage: 'qualified', median_days: 7, deal_count: 15 },
+        ],
+        bottleneck_stage: 'proposal',
+        fastest_transition: 'discovery -> qualified',
+        slowest_transition: 'proposal -> negotiation',
+        insight: 'The proposal stage is the primary bottleneck in your pipeline, with a median of 21 days to advance to negotiation. Deals that do advance tend to move quickly through negotiation, suggesting the bottleneck is in getting stakeholder alignment on the proposal itself. Discovery to qualification is healthy at 7 days.',
+        recommendations: [
+          'Introduce a proposal review checklist to ensure every proposal includes a clear ROI section, success metrics, and a specific ask — this reduces back-and-forth that inflates proposal time.',
+          'Set a 14-day SLA on proposals: if a deal hasn\'t moved in 14 days, it requires a manager-level review call with the customer.',
+          'Templatize your top-performing proposals and share them with all reps — deals using the top-3 proposal templates advance 40% faster on average.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/pipeline/velocity-heatmap`, {}, token)
+  },
+
+  async getWinLossSummary(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        win_rate: 58,
+        avg_won_value: 48000,
+        avg_lost_value: 22000,
+        won_count: 14,
+        lost_count: 10,
+        avg_won_health: 81,
+        avg_lost_health: 44,
+        top_wins: [
+          { title: 'Acme Corp Enterprise', value: 95000 },
+          { title: 'Beta Tech Cloud Suite', value: 72000 },
+          { title: 'Gamma Retail Platform', value: 61000 },
+        ],
+        top_losses: [
+          { title: 'Delta SaaS Migration', value: 38000 },
+          { title: 'Epsilon Analytics', value: 27000 },
+          { title: 'Zeta Ops Upgrade', value: 18000 },
+        ],
+        patterns: [
+          { pattern_type: 'won', description: 'Won deals maintain health scores above 75 throughout the sales cycle, indicating consistent engagement.' },
+          { pattern_type: 'won', description: 'Average won deal value is $48K — deals in the $40K–$80K range convert at the highest rate.' },
+          { pattern_type: 'lost', description: 'Lost deals average $22K, suggesting smaller-scope prospects may have budget constraints not uncovered early.' },
+          { pattern_type: 'lost', description: 'Health scores in lost deals drop below 50 by the proposal stage — earlier re-engagement could recover some deals.' },
+        ],
+        recommendations: [
+          'Replicate the qualification criteria of your top 3 won deals across the team to maintain pipeline quality.',
+          'Set a health-score alert at 55 to flag deals at risk of churning before they reach the proposal stage.',
+          'Run win-loss debrief calls within 2 weeks of close to capture fresh insight from both outcomes.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-loss-summary`, {}, token)
+  },
+
+  async getSalesForecast(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        weighted_pipeline: 312000,
+        best_case: 480000,
+        worst_case: 85000,
+        deal_count: 11,
+        stage_breakdown: [
+          { stage: 'negotiation', weighted_value: 132000, count: 3 },
+          { stage: 'proposal', weighted_value: 88000, count: 4 },
+          { stage: 'qualified', weighted_value: 54000, count: 2 },
+          { stage: 'discovery', weighted_value: 38000, count: 2 },
+        ],
+        forecast_narrative: 'Your pipeline of 11 open deals carries a weighted forecast of $312K. Negotiation-stage deals represent the highest near-term revenue opportunity at $132K weighted. Improving health scores in proposal-stage deals could push the best-case outcome above $500K this quarter.',
+        adjustments: [
+          { factor: 'Negotiation stage momentum', impact: 'positive', magnitude: 'high' },
+          { factor: 'Proposal stage stall risk', impact: 'negative', magnitude: 'medium' },
+          { factor: 'Discovery volume building pipeline', impact: 'positive', magnitude: 'low' },
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/sales-forecast`, {}, token)
+  },
+
+  async getDealAgeDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        buckets: [
+          { label: '<30d', count: 4, total_value: 128000, pct_of_pipeline: 26 },
+          { label: '30-60d', count: 5, total_value: 185000, pct_of_pipeline: 37 },
+          { label: '60-90d', count: 3, total_value: 92000, pct_of_pipeline: 19 },
+          { label: '>90d', count: 2, total_value: 88000, pct_of_pipeline: 18 },
+        ],
+        oldest_deal: { title: 'Legacy Enterprise Upgrade', days: 112 },
+        newest_deal: { title: 'Inbound Trial - Q3', days: 4 },
+        avg_age_days: 48,
+        aging_insight: 'Your pipeline averages 48 days old with 2 deals exceeding 90 days. The >90d segment holds $88K in value — a targeted review this week could recover or close these deals before quarter end.',
+        recommendations: [
+          'Review the 2 deals older than 90 days and decide whether to close, disqualify, or escalate each one.',
+          'Set a 120-day max pipeline age policy and add an automated health-score alert at 90 days.',
+          'Run a weekly aging report on Monday mornings to catch deals drifting toward the 60-day mark.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/age-distribution`, {}, token)
+  },
+
+  async getDealHealthTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stage_health: [
+          { stage: 'discovery', avg_health: 74, count: 3 },
+          { stage: 'qualified', avg_health: 68, count: 4 },
+          { stage: 'proposal', avg_health: 55, count: 3 },
+          { stage: 'negotiation', avg_health: 48, count: 2 },
+          { stage: 'closing', avg_health: 62, count: 1 },
+        ],
+        overall_avg_health: 62,
+        trend_direction: 'declining',
+        at_risk_count: 3,
+        health_narrative: 'Pipeline health averages 62 overall, with a declining trend from early to late stages. Discovery and qualification stages show healthy scores above 65, but deals stall as they enter proposal and negotiation — 3 deals are at critical risk below 40.',
+        recommendations: [
+          'Schedule a deal health review for all 3 at-risk deals below 40 this week — these are at immediate risk of being lost.',
+          'Set automated alerts when any deal drops below 50 health score so reps can intervene before deals stall further.',
+          'Identify what keeps discovery-stage deals healthy (74 avg) and replicate those practices across the proposal stage.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/health-trend`, {}, token)
+  },
+
+  async getDealStagnation(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stagnant_deals: [
+          { id: 'd-001', title: 'Legacy Enterprise Upgrade', stage: 'proposal', health_score: 48, days_in_stage: 32 },
+          { id: 'd-002', title: 'Beta Corp SaaS Migration', stage: 'negotiation', health_score: 55, days_in_stage: 21 },
+          { id: 'd-003', title: 'Gamma Retail Platform', stage: 'qualified', health_score: 62, days_in_stage: 17 },
+        ],
+        stage_avg_days: [
+          { stage: 'discovery', avg_days: 8, count: 2 },
+          { stage: 'qualified', avg_days: 17, count: 3 },
+          { stage: 'proposal', avg_days: 24, count: 3 },
+          { stage: 'negotiation', avg_days: 19, count: 2 },
+          { stage: 'closing', avg_days: 6, count: 1 },
+        ],
+        total_stagnant_count: 3,
+        most_stagnant: { title: 'Legacy Enterprise Upgrade', days: 32 },
+        stagnation_narrative: '3 of 11 open deals are stagnant, stuck in their current stage for more than 14 days. The proposal stage shows the highest average age at 24 days — deals entering proposal without a clear champion are most at risk of stalling indefinitely.',
+        recommendations: [
+          'Schedule immediate deal reviews for all 3 stagnant deals this week and create a concrete next-step action plan or disqualify each one.',
+          'Set automated 14-day stage-age alerts so reps receive a nudge before a deal becomes fully stuck.',
+          'Review the proposal stage entry criteria — deals averaging 24 days here signal a qualification gap upstream.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/stagnation`, {}, token)
+  },
+
+  async getDealEngagementGap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        disengaged_deals: [
+          { id: 'd-001', title: 'Legacy Enterprise Upgrade', stage: 'proposal', health_score: 45, days_since_activity: 28 },
+          { id: 'd-002', title: 'Beta Corp SaaS Migration', stage: 'negotiation', health_score: 52, days_since_activity: 19 },
+          { id: 'd-003', title: 'Gamma Retail Platform', stage: 'qualified', health_score: 60, days_since_activity: 12 },
+          { id: 'd-004', title: 'Delta Ops Integration', stage: 'proposal', health_score: 38, days_since_activity: 9 },
+        ],
+        avg_days_since_activity: 11,
+        total_disengaged: 4,
+        top_disengaged: { title: 'Legacy Enterprise Upgrade', days: 28 },
+        engagement_narrative: '4 of 11 open deals have not been updated in over 7 days. The proposal stage shows the highest gap with 2 disengaged deals — without fresh activity, these are at risk of being lost to more engaged competitors.',
+        recommendations: [
+          'Review and update all 4 disengaged deals this week — add notes, move stage, or disqualify each one with a clear decision.',
+          'Set a 7-day maximum engagement SLA so reps receive automatic alerts when deals go quiet.',
+          'Add next-action dates to every active deal so reps have a clear cadence and no deal drifts without accountability.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/engagement-gap`, {}, token)
+  },
+
+  async getDealValueConcentration(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        deals_ranked: [
+          { id: 'd-001', title: 'Enterprise Alpha Deal', stage: 'negotiation', value: 180000, pct_of_pipeline: 46.2 },
+          { id: 'd-002', title: 'Mid Corp Platform', stage: 'proposal', value: 95000, pct_of_pipeline: 24.4 },
+          { id: 'd-003', title: 'Beta Cloud Suite', stage: 'negotiation', value: 72000, pct_of_pipeline: 18.5 },
+          { id: 'd-004', title: 'Startup Onboarding', stage: 'qualified', value: 28000, pct_of_pipeline: 7.2 },
+          { id: 'd-005', title: 'SMB Analytics', stage: 'discovery', value: 14000, pct_of_pipeline: 3.6 },
+        ],
+        total_pipeline: 389000,
+        top_deal_pct: 46.2,
+        top3_pct: 89.1,
+        concentration_risk: 'high',
+        herfindahl_index: 2910,
+        concentration_narrative: 'Your pipeline of $389K shows high concentration risk. The top deal represents 46% of total value — a loss here would be a significant revenue setback. The top 3 deals alone account for 89% of pipeline value, leaving the business exposed to a small number of opportunities.',
+        recommendations: [
+          'Prioritise adding 5–8 new mid-size deals this quarter to reduce top-deal concentration below the 30% threshold.',
+          'Set a pipeline health alert when any single deal exceeds 35% of total value so leadership can act before it becomes a crisis.',
+          'Review the top deal\'s risk profile weekly — a high-value deal in negotiation deserves a dedicated success plan.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-concentration`, {}, token)
+  },
+
+  async getAIPipelineConversionFunnel(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stages: [
+          { stage: 'discovery',   deal_count: 18, total_value: 360000,  conversion_rate: 61.1 },
+          { stage: 'qualified',   deal_count: 11, total_value: 418000,  conversion_rate: 54.5 },
+          { stage: 'proposal',    deal_count: 6,  total_value: 312000,  conversion_rate: 66.7 },
+          { stage: 'negotiation', deal_count: 4,  total_value: 280000,  conversion_rate: null },
+        ],
+        weakest_stage: 'qualified',
+        best_stage: 'proposal',
+        funnel_narrative: '18 active deals in discovery but only 4 reach negotiation — a 78% drop across the funnel. The steepest fall is at the qualified-to-proposal stage at 55%, suggesting reps are advancing deals without a clear proposal trigger. Tightening entry criteria at qualified would raise downstream conversion and forecast accuracy.',
+        recommendations: [
+          'Add explicit exit criteria for the qualified stage — a deal should only advance to proposal when a budget, timeline, and decision-maker are confirmed.',
+          'Review the 7 deals stuck in qualified for more than 14 days; disqualify or re-engage to keep the funnel healthy and forecast clean.',
+          'Track weekly stage-to-stage conversion rates in team standups so reps can self-correct before deals stall and get buried.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/pipeline/conversion-funnel-ai`, {}, token)
+  },
+
+  async getRepPerformance(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        reps: [
+          { name: 'Alice Chen',    won_count: 8, lost_count: 3, win_rate: 73, total_revenue: 312000, avg_deal_size: 39000 },
+          { name: 'Bob Martinez',  won_count: 5, lost_count: 4, win_rate: 56, total_revenue: 195000, avg_deal_size: 39000 },
+          { name: 'Carol Smith',   won_count: 4, lost_count: 2, win_rate: 67, total_revenue: 148000, avg_deal_size: 37000 },
+          { name: 'David Kim',     won_count: 3, lost_count: 5, win_rate: 38, total_revenue: 92000,  avg_deal_size: 30667 },
+        ],
+        top_rep: 'Alice Chen',
+        total_reps: 4,
+        performance_narrative: 'Alice Chen leads the team with $312K in revenue and a 73% win rate — the highest on the team. Bob and Carol are solid mid-performers, while David\'s 38% win rate signals a need for focused coaching on deal qualification and late-stage objection handling.',
+        recommendations: [
+          'Pair Alice Chen with David Kim for bi-weekly deal reviews to transfer qualification and closing techniques to the lower-performing rep.',
+          'Investigate David Kim\'s 38% win rate — analyse lost deals to find common objections and gaps in the sales process.',
+          'Set Q4 revenue targets anchored to each rep\'s 90-day baseline to create clear, motivating benchmarks and track improvement.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/rep-performance`, {}, token)
+  },
+
+  async getDealCloseDateAccuracySummary(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        total_closed: 18,
+        accuracy_pct: 61.1,
+        avg_slip_days: 14.3,
+        on_time_count: 11,
+        late_count: 5,
+        early_count: 2,
+        accuracy_narrative: '18 deals closed in the last 90 days with a close date accuracy of 61%. 11 deals closed on time, 5 slipped by an average of 14 days, and 2 closed ahead of schedule. Improving forecast discipline in the negotiation stage would bring accuracy above the 70% benchmark.',
+        recommendations: [
+          'Review the 5 late-closing deals to identify whether slippage stems from buyer delays, internal bottlenecks, or poor initial qualification.',
+          'Set a bi-weekly close-date audit cadence so reps update expected dates before they become stale and mislead the forecast.',
+          'Celebrate on-time closes in team standups and share what made those deals predictable to reinforce accurate forecasting habits.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/close-date-accuracy`, {}, token)
+  },
+
+  async getAIDealScoreDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        win_prob_buckets: [
+          { range: '0-20', count: 4 },
+          { range: '21-40', count: 6 },
+          { range: '41-60', count: 8 },
+          { range: '61-80', count: 7 },
+          { range: '81-100', count: 3 },
+        ],
+        health_buckets: [
+          { label: 'healthy', count: 12 },
+          { label: 'at_risk', count: 9 },
+          { label: 'critical', count: 7 },
+        ],
+        avg_win_prob: 51.4,
+        avg_health_score: 56.8,
+        high_confidence_count: 10,
+        critical_count: 7,
+        scoring_narrative: '28 open deals show an average win probability of 51% and health score of 57. 7 deals are in critical health — these require immediate attention to prevent revenue loss. 10 high-confidence deals represent a strong near-term revenue opportunity.',
+        recommendations: [
+          'Immediately review the 7 critical-health deals with their assigned reps — low health scores are the strongest predictor of churn and loss.',
+          'Nurture the 10 high-confidence deals (win_prob>70%) to close this quarter — these are your most predictable near-term revenue.',
+          'Set a team target of keeping fewer than 20% of deals in the 0–20% win probability bucket and review the distribution weekly.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/score-distribution`, {}, token)
+  },
+
+  async getAIDealWinFactors(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        won_count: 14,
+        lost_count: 9,
+        overall_win_rate: 60.9,
+        avg_won_value: 48500,
+        avg_lost_value: 22000,
+        avg_won_health: 78.4,
+        avg_lost_health: 41.2,
+        avg_won_prob: 71.3,
+        avg_lost_prob: 33.8,
+        health_delta: 37.2,
+        prob_delta: 37.5,
+        win_factors_narrative: '14 deals won vs 9 lost over the last 90 days (61% win rate). Won deals had substantially higher health scores (78 vs 41) and win probability (71% vs 34%) compared to lost deals. Raising deal health to ≥70 before advancing to proposal stage is the single clearest lever for improving outcomes.',
+        recommendations: [
+          'Set a minimum health score threshold of 70 before advancing deals to the proposal stage — won deals averaged 78 vs 41 for lost deals.',
+          'Target deals where win probability reaches ≥71% before committing to a close date — this matches your historical win profile.',
+          'Run a 1-week post-mortem on each lost deal to capture what tipped the outcome while the context is fresh.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-factors`, {}, token)
+  },
+
+  async getAIContactEngagementHeatmap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const hourBuckets = Array.from({ length: 24 }, (_, h) => ({
+        hour: h,
+        count: h >= 9 && h <= 17 ? Math.floor(Math.random() * 8) + 3 : Math.floor(Math.random() * 3),
+      }))
+      hourBuckets[10].count = 18
+      hourBuckets[14].count = 15
+      return Promise.resolve({
+        hour_buckets: hourBuckets,
+        day_buckets: [
+          { day: 'Mon', count: 22 },
+          { day: 'Tue', count: 31 },
+          { day: 'Wed', count: 28 },
+          { day: 'Thu', count: 25 },
+          { day: 'Fri', count: 19 },
+          { day: 'Sat', count: 7 },
+          { day: 'Sun', count: 4 },
+        ],
+        peak_hour: 10,
+        peak_day: 'Tuesday',
+        total_events: 136,
+        engagement_narrative: 'Contact engagement peaks at 10:00 UTC on Tuesdays, with strong secondary activity at 14:00 UTC mid-week. Weekend activity drops sharply, suggesting contacts are largely office-based professionals. Scheduling outreach during Tuesday-Thursday morning windows should yield the highest open and response rates.',
+        recommendations: [
+          'Schedule outreach emails to send at 10:00 UTC for maximum engagement — this is your historical peak hour.',
+          'Prioritise Tuesday as your primary outreach day; it consistently generates 25% more activity than other weekdays.',
+          'Avoid Saturday/Sunday sends — engagement is 4-5× lower on weekends, wasting send-time optimisation credits.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/engagement-heatmap`, {}, token)
+  },
+
+  async getAIDealVelocity(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        avg_days_to_close: 42.5,
+        stage_dwell_times: [
+          { stage: 'discovery', avg_days: 8.5 },
+          { stage: 'qualified', avg_days: 9.5 },
+          { stage: 'proposal', avg_days: 8.5 },
+          { stage: 'negotiation', avg_days: 7.5 },
+          { stage: 'closed_won', avg_days: 8.5 },
+        ],
+        fastest_close_days: 12.0,
+        slowest_close_days: 98.0,
+        total_won_deals_analysed: 18,
+        velocity_narrative: 'Won deals averaged 42.5 days from creation to close across 18 deals in the last 180 days. The fastest deal closed in 12 days while the slowest took 98 days, suggesting significant variance driven by deal complexity and stakeholder count. Deals that stall in the proposal stage account for most of the long tail — adding a proposal-review checkpoint at day 10 would compress the average by an estimated 15%.',
+        recommendations: [
+          'Set a 10-day review checkpoint in the proposal stage — stalls there account for 60% of deals exceeding your 42-day average.',
+          'Introduce qualification scoring at discovery to deprioritise deals with <30% win probability before they reach proposal.',
+          'Target an 8-week close goal for all new deals: pipeline deals beyond 56 days should trigger a manager review.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/velocity`, {}, token)
+  },
+
+  async getAITopContactOpportunities(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        top_contacts: [
+          { contact_id: 'demo-1', name: 'Sarah Chen', deal_count: 2, total_pipeline_value: 85000, avg_win_prob: 78.5, avg_health: 82.0, top_stage: 'negotiation', opportunity_score: 91.2 },
+          { contact_id: 'demo-2', name: 'James Okafor', deal_count: 1, total_pipeline_value: 120000, avg_win_prob: 65.0, avg_health: 71.0, top_stage: 'proposal', opportunity_score: 78.4 },
+          { contact_id: 'demo-3', name: 'Maria Santos', deal_count: 3, total_pipeline_value: 60000, avg_win_prob: 70.0, avg_health: 68.0, top_stage: 'qualified', opportunity_score: 72.1 },
+          { contact_id: 'demo-4', name: 'Tom Wright', deal_count: 1, total_pipeline_value: 45000, avg_win_prob: 58.0, avg_health: 60.0, top_stage: 'discovery', opportunity_score: 61.3 },
+          { contact_id: 'demo-5', name: 'Priya Patel', deal_count: 2, total_pipeline_value: 30000, avg_win_prob: 52.0, avg_health: 55.0, top_stage: 'qualified', opportunity_score: 54.8 },
+        ],
+        opportunities_narrative: 'Sarah Chen leads with a 91.2 opportunity score — two deals in negotiation totalling $85K with 79% avg win probability. James Okafor represents your highest single-deal value at $120K in proposal stage, though health at 71 needs attention before advancing. Focus closing energy on Chen and Okafor first; Santos and Wright can be nurtured in parallel with automated follow-up sequences.',
+        recommendations: [
+          'Prioritise Sarah Chen — two negotiation-stage deals at 78% win probability make her your highest near-term revenue opportunity.',
+          'Schedule a proposal review call with James Okafor this week; $120K in pipeline at 65% win probability is worth senior rep attention.',
+          'Set up automated health-score alerts for all top-5 contacts so drops below 60 trigger immediate follow-up.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/top-opportunities`, {}, token)
+  },
+
+  async getAIContactLifetimeValue(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        top_contacts: [
+          { contact_id: 'demo-1', name: 'Sarah Chen', closed_won_revenue: 180000, pipeline_value: 85000, win_rate: 72.0, estimated_ltv: 241200 },
+          { contact_id: 'demo-2', name: 'James Okafor', closed_won_revenue: 95000, pipeline_value: 120000, win_rate: 65.0, estimated_ltv: 173000 },
+          { contact_id: 'demo-3', name: 'Maria Santos', closed_won_revenue: 120000, pipeline_value: 60000, win_rate: 58.0, estimated_ltv: 154800 },
+          { contact_id: 'demo-4', name: 'Tom Wright', closed_won_revenue: 60000, pipeline_value: 45000, win_rate: 50.0, estimated_ltv: 82500 },
+          { contact_id: 'demo-5', name: 'Priya Patel', closed_won_revenue: 40000, pipeline_value: 30000, win_rate: 45.0, estimated_ltv: 53500 },
+        ],
+        avg_ltv: 141000,
+        total_ltv_potential: 705000,
+        ltv_narrative: 'Sarah Chen leads with an estimated $241K lifetime value driven by $180K in closed revenue and $85K active pipeline at 79% win probability. The top 5 contacts collectively represent $705K in estimated LTV. Concentrating account management resources on Chen and Okafor would protect over $414K in combined LTV.',
+        recommendations: [
+          'Schedule quarterly executive business reviews with Sarah Chen and James Okafor to protect and grow your top two LTV relationships.',
+          'Identify upsell and expansion opportunities for Maria Santos who has strong closed revenue but moderate pipeline coverage.',
+          'Create tailored success plans for the top 5 LTV contacts with personalised milestone checkpoints to accelerate deal progression.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/lifetime-value`, {}, token)
+  },
+
+  async getAIDealReactivationCandidates(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        candidates: [
+          { deal_id: 'demo-1', title: 'Acme Corp Enterprise', stage: 'closed_lost', value: 120000, days_since_close: 28, reactivation_score: 0.872, win_probability: 62.0 },
+          { deal_id: 'demo-2', title: 'TechVentures Platform', stage: 'closed_lost', value: 85000, days_since_close: 45, reactivation_score: 0.741, win_probability: 55.0 },
+          { deal_id: 'demo-3', title: 'GlobalRetail Suite', stage: 'closed_lost', value: 60000, days_since_close: 72, reactivation_score: 0.618, win_probability: 48.0 },
+          { deal_id: 'demo-4', title: 'Meridian Analytics', stage: 'closed_lost', value: 40000, days_since_close: 110, reactivation_score: 0.492, win_probability: 40.0 },
+          { deal_id: 'demo-5', title: 'Summit Group Basic', stage: 'closed_lost', value: 25000, days_since_close: 180, reactivation_score: 0.331, win_probability: 32.0 },
+        ],
+        reactivation_narrative: "Acme Corp Enterprise leads reactivation candidates with a 0.87 score — lost just 28 days ago on a $120K deal at 62% historical win probability. TechVentures and GlobalRetail are also strong bets with losses under 75 days. Deals within 90 days of close have the highest receptivity to win-back outreach, especially when competitors' implementations reveal gaps.",
+        recommendations: [
+          "Re-engage Acme Corp Enterprise immediately with a revised proposal — 28 days is within the optimal win-back window and the deal value justifies senior rep involvement.",
+          "Send a personalised case study to TechVentures Platform showing a comparable customer's success story to reopen the conversation.",
+          "Create a structured win-back sequence: personalised email at 30d, phone call at 45d, executive touch at 60d for all top-3 candidates.",
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/reactivation-candidates`, {}, token)
+  },
+
+  async getAIDealPipelineGap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stage_gaps: [
+          { stage: 'discovery', actual_count: 4, expected_count: 10, gap: 6, gap_pct: 60.0 },
+          { stage: 'qualified', actual_count: 6, expected_count: 7, gap: 1, gap_pct: 14.3 },
+          { stage: 'proposal', actual_count: 6, expected_count: 5, gap: -1, gap_pct: -20.0 },
+          { stage: 'negotiation', actual_count: 2, expected_count: 3, gap: 1, gap_pct: 33.3 },
+        ],
+        most_understocked_stage: 'discovery',
+        total_gap_count: 8,
+        pipeline_gap_narrative: 'Discovery is critically understocked at just 4 deals against a target of 10, creating a 60% gap that will translate to revenue shortfalls in 60–90 days. Proposal stage is slightly overstocked which is a positive sign, but without top-of-funnel replenishment the pipeline will thin out rapidly. Immediate prospecting investment in discovery is the highest-leverage action available.',
+        recommendations: [
+          'Double prospecting activity this week — target 6 new discovery conversations to close the 60% discovery gap before it becomes a revenue crisis.',
+          'Consider running a targeted outbound campaign to existing warm leads to accelerate deals into the qualified stage.',
+          'Review pipeline conversion rates: if proposal-to-negotiation conversion is low, qualification criteria may need tightening.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-gap`, {}, token)
+  },
+
+  async getAIClosureProbabilityHeatmap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        cells: [
+          { stage: 'discovery', win_prob_tier: 'low', deal_count: 5, avg_value: 12000, total_value: 60000 },
+          { stage: 'discovery', win_prob_tier: 'mid', deal_count: 3, avg_value: 18000, total_value: 54000 },
+          { stage: 'discovery', win_prob_tier: 'high', deal_count: 1, avg_value: 22000, total_value: 22000 },
+          { stage: 'qualified', win_prob_tier: 'low', deal_count: 2, avg_value: 25000, total_value: 50000 },
+          { stage: 'qualified', win_prob_tier: 'mid', deal_count: 6, avg_value: 35000, total_value: 210000 },
+          { stage: 'qualified', win_prob_tier: 'high', deal_count: 3, avg_value: 42000, total_value: 126000 },
+          { stage: 'proposal', win_prob_tier: 'low', deal_count: 1, avg_value: 48000, total_value: 48000 },
+          { stage: 'proposal', win_prob_tier: 'mid', deal_count: 4, avg_value: 65000, total_value: 260000 },
+          { stage: 'proposal', win_prob_tier: 'high', deal_count: 5, avg_value: 80000, total_value: 400000 },
+          { stage: 'negotiation', win_prob_tier: 'low', deal_count: 0, avg_value: 0, total_value: 0 },
+          { stage: 'negotiation', win_prob_tier: 'mid', deal_count: 2, avg_value: 95000, total_value: 190000 },
+          { stage: 'negotiation', win_prob_tier: 'high', deal_count: 4, avg_value: 110000, total_value: 440000 },
+        ],
+        hotspot_stage: 'proposal',
+        hotspot_tier: 'high',
+        heatmap_narrative: 'The proposal/high tier is your most valuable concentration with 5 deals averaging $80k — these are the deals most likely to close and should receive maximum sales attention this week. Negotiation/high also shows 4 high-conviction deals at $110k average, representing immediate revenue. Discovery is skewed to low-probability, signalling a qualification gap that will affect pipeline quality in 60–90 days.',
+        recommendations: [
+          'Schedule executive business reviews for all 5 proposal/high deals this week — these are your highest-probability revenue drivers.',
+          'Move the 4 qualified/mid deals to high-tier by running discovery deep-dives; use AI Deal Coach for win-theme scripts.',
+          'Tighten discovery qualification to reduce the volume of low-probability deals entering the pipeline.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/closure-probability-heatmap`, {}, token)
+  },
+
+  async getAIContactScoreRecencyHeatmap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        cells: [
+          { score_tier: 'low',  recency_tier: 'active',  contact_count: 3,  avg_revenue: 8000,   total_revenue: 24000 },
+          { score_tier: 'low',  recency_tier: 'idle',    contact_count: 5,  avg_revenue: 6000,   total_revenue: 30000 },
+          { score_tier: 'low',  recency_tier: 'dormant', contact_count: 8,  avg_revenue: 4000,   total_revenue: 32000 },
+          { score_tier: 'mid',  recency_tier: 'active',  contact_count: 9,  avg_revenue: 28000,  total_revenue: 252000 },
+          { score_tier: 'mid',  recency_tier: 'idle',    contact_count: 6,  avg_revenue: 22000,  total_revenue: 132000 },
+          { score_tier: 'mid',  recency_tier: 'dormant', contact_count: 4,  avg_revenue: 18000,  total_revenue: 72000 },
+          { score_tier: 'high', recency_tier: 'active',  contact_count: 7,  avg_revenue: 75000,  total_revenue: 525000 },
+          { score_tier: 'high', recency_tier: 'idle',    contact_count: 5,  avg_revenue: 90000,  total_revenue: 450000 },
+          { score_tier: 'high', recency_tier: 'dormant', contact_count: 3,  avg_revenue: 110000, total_revenue: 330000 },
+        ],
+        at_risk_score_tier: 'high',
+        at_risk_recency_tier: 'idle',
+        engagement_narrative: 'Your highest-value at-risk segment is 5 high-scored contacts that have gone idle — they carry an average revenue of $90k and last engaged 31–90 days ago. These contacts have strong fit signals and should be your first outreach priority this week. Without intervention, idle contacts convert to dormant within 60 days, making re-engagement progressively harder.',
+        recommendations: [
+          'Reach out personally to all 5 high-score idle contacts this week — a tailored one-liner referencing their last interaction drives 3× higher response rates than generic templates.',
+          'Set up a 3-touch re-engagement sequence for mid-score dormant contacts; they represent $72k in latent revenue that email automation can recover at low cost.',
+          'Investigate the 3 high-score dormant contacts — if they closed with a competitor, capture the loss reason to improve future qualification.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/score-recency-heatmap`, {}, token)
+  },
+
+  async getAIDealVelocityAnomalies(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        anomalies: [
+          { deal_id: 'd1', title: 'Acme Enterprise Expansion', stage: 'negotiation', value: 180000, win_probability: 0.72, days_in_stage: 38, stage_avg_days: 12, stall_ratio: 3.17 },
+          { deal_id: 'd2', title: 'Globex Platform License', stage: 'proposal', value: 95000, win_probability: 0.55, days_in_stage: 28, stage_avg_days: 10, stall_ratio: 2.80 },
+          { deal_id: 'd3', title: 'Initech Q4 Renewal', stage: 'qualified', value: 60000, win_probability: 0.48, days_in_stage: 36, stage_avg_days: 14, stall_ratio: 2.57 },
+          { deal_id: 'd4', title: 'Umbrella Corp Pilot', stage: 'discovery', value: 25000, win_probability: 0.35, days_in_stage: 16, stage_avg_days: 7, stall_ratio: 2.29 },
+          { deal_id: 'd5', title: 'Cyberdyne Integration', stage: 'proposal', value: 42000, win_probability: 0.41, days_in_stage: 22, stage_avg_days: 10, stall_ratio: 2.20 },
+        ],
+        total_stalled: 5,
+        anomaly_narrative: '5 deals are stalled beyond 2× their stage average, putting $402k in pipeline at risk. The most critical is Acme Enterprise Expansion — stuck in negotiation for 38 days against a 12-day average. Stalled high-value deals decay in win probability at roughly 5% per week; immediate outreach and blocker removal is essential.',
+        recommendations: [
+          'Schedule a decision-maker call for Acme Enterprise Expansion today — at 38 days in negotiation, the deal needs an executive champion to break the impasse, not another follow-up email.',
+          'For each stalled deal, ask the contact to name the single thing blocking progress and set a deadline. Converting an open-ended stall into a specific blocker doubles unblock rates.',
+          'Review your proposal template — 3 of 5 stalls are in proposal/negotiation, suggesting pricing or scope clarity issues that a revised template or a deal desk review could fix.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/velocity-anomalies`, {}, token)
+  },
+
+  async getAIDealOutcomeFactors(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        won_count: 28,
+        lost_count: 14,
+        win_rate: 66.7,
+        won_avg_value: 87500,
+        lost_avg_value: 32000,
+        won_avg_health: 78.4,
+        lost_avg_health: 41.2,
+        won_avg_win_prob: 76.8,
+        lost_avg_win_prob: 28.5,
+        won_avg_days_to_close: 38,
+        lost_avg_days_to_close: 62,
+        value_sweet_spot_min: 60000,
+        value_sweet_spot_max: 110000,
+        win_loss_narrative: 'Won deals score 78 avg health vs 41 for lost — health score is the single strongest predictor of outcome. Won deals also close in 38 days on average vs 62 for lost, suggesting that longer sales cycles signal unresolved blockers that compound into losses.',
+        recommendations: [
+          'Flag any deal with a health score below 50 for immediate review — these deals mirror your lost-deal profile and need intervention, not just follow-up.',
+          'Your value sweet spot is $60k–$110k; deals outside this range (especially below $32k) close at much lower rates and may not justify full-cycle pursuit.',
+          'If a deal exceeds 45 days in the pipeline without a stage change, schedule a executive sponsor call — cycle length beyond your won-deal average is a leading indicator of loss.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/outcome-factors`, {}, token)
+  },
+
+  async getAIDealRevenueForecast(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        forecast_30d: 142500,
+        forecast_60d: 87300,
+        forecast_90d: 34200,
+        total_pipeline: 520000,
+        total_expected: 264000,
+        deal_count: 18,
+        top_deals: [
+          { deal_id: 'd1', title: 'Acme Enterprise Renewal', stage: 'negotiation', value: 180000, win_probability: 82, expected_revenue: 147600, close_horizon: '30d' },
+          { deal_id: 'd2', title: 'Globex Platform Expansion', stage: 'proposal', value: 95000, win_probability: 65, expected_revenue: 61750, close_horizon: '30d' },
+          { deal_id: 'd3', title: 'Initech Full Deployment', stage: 'qualified', value: 120000, win_probability: 55, expected_revenue: 66000, close_horizon: '60d' },
+          { deal_id: 'd4', title: 'Umbrella Corp Pilot', stage: 'qualified', value: 75000, win_probability: 40, expected_revenue: 30000, close_horizon: '60d' },
+          { deal_id: 'd5', title: 'Cyberdyne Integration', stage: 'discovery', value: 50000, win_probability: 35, expected_revenue: 17500, close_horizon: '90d' },
+        ],
+        forecast_narrative: 'Expected revenue of $264k over 90 days, with $143k weighted in the next 30 days from 2 high-probability negotiation and proposal deals. The 60-day bucket is healthy but relies heavily on 2 deals in qualified — any stall there would materially impact the quarter.',
+        recommendations: [
+          'The 30-day forecast is concentrated in just 2 deals — Acme and Globex. Prioritise executive engagement on both to protect near-term revenue.',
+          'Move at least 2 qualified deals to proposal this week to strengthen the 60-day bucket; a thin proposal pipeline means the Q4 back half is at risk.',
+          'Update win probabilities for all 18 active deals — stale probabilities at the tail of the pipeline inflate forecast figures and misallocate rep attention.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/revenue-forecast`, {}, token)
+  },
+
+  async getAIDealValueLeak(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stage_leaks: [
+          { stage: 'proposal', deal_count: 5, leaked_value: 285000, avg_value: 57000, pct_of_total_leaked: 52.3 },
+          { stage: 'negotiation', deal_count: 3, leaked_value: 175000, avg_value: 58333, pct_of_total_leaked: 32.1 },
+          { stage: 'qualified', deal_count: 4, leaked_value: 84500, avg_value: 21125, pct_of_total_leaked: 15.6 },
+        ],
+        total_leaked: 544500,
+        biggest_leak_stage: 'proposal',
+        leak_narrative: '$544.5k in pipeline value was lost across 12 deals in the last 180 days. The proposal stage accounts for over half of all losses, suggesting deals are being pushed to proposal before they are fully qualified. Tighter stage-entry criteria and a structured discovery process would materially reduce leakage at this point in the funnel.',
+        recommendations: [
+          'Introduce a mandatory discovery checklist before advancing any deal to proposal — unqualified proposals drive the majority of leakage.',
+          'Schedule a win/loss debrief for every deal lost at negotiation stage to identify the most common objection patterns and build counter-scripts.',
+          'Flag any deal stalled in proposal for more than 14 days for an executive review — early stalls in this stage rarely self-resolve.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/value-leak`, {}, token)
+  },
+
+  async getAIDealPipelineCoverage(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        coverage_ratio: 2.4,
+        coverage_status: 'good',
+        weighted_pipeline: 312000,
+        target_revenue: 130000,
+        total_open_pipeline: 685000,
+        stage_breakdown: [
+          { stage: 'discovery', deal_count: 6, total_value: 180000, weighted_value: 45000, pct_of_weighted: 14.4 },
+          { stage: 'qualified', deal_count: 5, total_value: 220000, weighted_value: 78000, pct_of_weighted: 25.0 },
+          { stage: 'proposal', deal_count: 4, total_value: 185000, weighted_value: 110000, pct_of_weighted: 35.3 },
+          { stage: 'negotiation', deal_count: 3, total_value: 100000, weighted_value: 79000, pct_of_weighted: 25.3 },
+        ],
+        coverage_narrative: 'Your weighted pipeline of $312k provides 2.4× coverage against the $130k quarterly target, which is solid but below the 3× best-practice threshold. Proposal and negotiation stages carry the most near-term value; accelerating those deals would materially boost coverage.',
+        recommendations: [
+          'Aim for 3× pipeline coverage — add 2–3 new qualified opportunities in the discovery or qualified stage to close the gap.',
+          'Prioritise the 4 proposal-stage deals for executive sponsorship and shortened approval cycles to pull revenue forward.',
+          'Review and qualify out low-probability discovery deals to focus resources on the highest-value pipeline.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-coverage`, {}, token)
+  },
+
+  async getAIDealQuarterReadiness(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        next_quarter: 'Q4 2026',
+        quarterly_target: 185000,
+        expected_revenue: 221000,
+        readiness_score: 90,
+        readiness_status: 'on_track',
+        gap: 36000,
+        open_deal_count: 11,
+        avg_health_score: 71.4,
+        high_confidence_count: 4,
+        stage_mix: [
+          { stage: 'discovery', deal_count: 3, total_value: 90000, expected_value: 12600 },
+          { stage: 'qualified', deal_count: 3, total_value: 120000, expected_value: 38400 },
+          { stage: 'proposal', deal_count: 3, total_value: 145000, expected_value: 87000 },
+          { stage: 'negotiation', deal_count: 2, total_value: 120000, expected_value: 83000 },
+        ],
+        readiness_narrative: 'With $221k in expected revenue against a $185k target, the pipeline covers Q4 2026 with a comfortable surplus. Strong negotiation and proposal stages are the key drivers. Maintain momentum by advancing the 3 qualified deals and ensuring proposal-stage deals don\'t stall.',
+        recommendations: [
+          'Accelerate the 3 proposal-stage deals by scheduling executive sign-off meetings before quarter-end.',
+          'Convert the 3 qualified deals to proposal within the next 2 weeks to secure the Q4 revenue buffer.',
+          'Monitor the 2 negotiation-stage deals weekly — a slip in either would bring coverage below target.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/quarter-readiness`, {}, token)
+  },
+
+  async getAIDealTierSegmentation(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        tiers: [
+          { tier: 'enterprise', deal_count: 4, total_value: 320000, avg_value: 80000, avg_health: 72.5, avg_win_prob: 62.5, pct_of_pipeline: 46.7 },
+          { tier: 'mid_market', deal_count: 5, total_value: 155000, avg_value: 31000, avg_health: 68.2, avg_win_prob: 55.4, pct_of_pipeline: 22.6 },
+          { tier: 'smb', deal_count: 7, total_value: 210000, avg_value: 30000, avg_health: 61.3, avg_win_prob: 48.7, pct_of_pipeline: 30.7 },
+        ],
+        priority_tier: 'enterprise',
+        total_pipeline: 685000,
+        tier_narrative: 'Enterprise deals hold 47% of pipeline value across 4 high-value opportunities. The SMB tier shows strong volume with 7 deals that require win probability uplift.',
+        recommendations: [
+          'Prioritise the 4 Enterprise deals with dedicated executive-level outreach to maintain momentum.',
+          'Bundle Mid-Market deals with case studies from similar-sized customers to accelerate decisions.',
+          'Run a 30-day SMB sprint to close quick wins and free capacity for higher-value pursuits.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/tier-segmentation`, {}, token)
+  },
+
+  async getAIDealSeasonalPatterns(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        monthly_patterns: [
+          { month: 'Jan', month_number: 1, deal_count: 2, revenue: 45000, pct_of_annual: 4.2 },
+          { month: 'Feb', month_number: 2, deal_count: 3, revenue: 62000, pct_of_annual: 5.8 },
+          { month: 'Mar', month_number: 3, deal_count: 5, revenue: 98000, pct_of_annual: 9.2 },
+          { month: 'Apr', month_number: 4, deal_count: 3, revenue: 55000, pct_of_annual: 5.1 },
+          { month: 'May', month_number: 5, deal_count: 4, revenue: 72000, pct_of_annual: 6.7 },
+          { month: 'Jun', month_number: 6, deal_count: 6, revenue: 115000, pct_of_annual: 10.7 },
+          { month: 'Jul', month_number: 7, deal_count: 2, revenue: 38000, pct_of_annual: 3.5 },
+          { month: 'Aug', month_number: 8, deal_count: 2, revenue: 41000, pct_of_annual: 3.8 },
+          { month: 'Sep', month_number: 9, deal_count: 4, revenue: 88000, pct_of_annual: 8.2 },
+          { month: 'Oct', month_number: 10, deal_count: 5, revenue: 102000, pct_of_annual: 9.5 },
+          { month: 'Nov', month_number: 11, deal_count: 7, revenue: 145000, pct_of_annual: 13.5 },
+          { month: 'Dec', month_number: 12, deal_count: 8, revenue: 212000, pct_of_annual: 19.8 },
+        ],
+        quarterly_breakdown: [
+          { quarter: 'Q1', deal_count: 10, revenue: 205000, pct_of_annual: 19.2 },
+          { quarter: 'Q2', deal_count: 13, revenue: 242000, pct_of_annual: 22.6 },
+          { quarter: 'Q3', deal_count: 8, revenue: 167000, pct_of_annual: 15.6 },
+          { quarter: 'Q4', deal_count: 20, revenue: 459000, pct_of_annual: 42.9 },
+        ],
+        peak_month: 'Dec',
+        slowest_month: 'Jul',
+        total_annual_revenue: 1073000,
+        seasonal_narrative: 'Q4 dominates with 43% of annual revenue, driven by budget-flush closings in November and December. Q3 is the softest quarter with only 16% of annual closed revenue, presenting an opportunity for proactive pipeline acceleration.',
+        recommendations: [
+          'Accelerate Q3 pipeline by pulling 90-day closings forward — offer early-bird incentives in July and August.',
+          'Pre-load December with qualified proposals in October to avoid last-minute deal slippage.',
+          'Use the Q1 and Q2 momentum (42% combined) to build executive relationships that convert in Q4.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/seasonal-patterns`, {}, token)
+  },
+
+  async getAIDealStallAnalysis(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        buckets: [
+          { bucket: 'fresh', label: '0–6 days', deal_count: 4, total_value: 95000, avg_stall_days: 3.5 },
+          { bucket: 'warming', label: '7–13 days', deal_count: 5, total_value: 142000, avg_stall_days: 10.2 },
+          { bucket: 'stalling', label: '14–29 days', deal_count: 6, total_value: 198000, avg_stall_days: 21.4 },
+          { bucket: 'at_risk', label: '30–59 days', deal_count: 4, total_value: 165000, avg_stall_days: 44.8 },
+          { bucket: 'critical', label: '60+ days', deal_count: 3, total_value: 210000, avg_stall_days: 82.3 },
+        ],
+        top_stalled_deals: [
+          { id: 'd1', title: 'Apex Corp Enterprise', stage: 'negotiation', value: 90000, health_score: 32.0, stall_days: 94 },
+          { id: 'd2', title: 'BlueSky SaaS Renewal', stage: 'proposal', value: 75000, health_score: 41.0, stall_days: 78 },
+          { id: 'd3', title: 'Meridian Consulting', stage: 'negotiation', value: 45000, health_score: 38.0, stall_days: 75 },
+          { id: 'd4', title: 'NovaTech Platform', stage: 'qualified', value: 38000, health_score: 55.0, stall_days: 52 },
+          { id: 'd5', title: 'Pinnacle Logistics', stage: 'proposal', value: 29000, health_score: 62.0, stall_days: 47 },
+        ],
+        avg_stall_days: 28.6,
+        critical_count: 3,
+        at_risk_count: 4,
+        total_active: 22,
+        stall_narrative: '3 deals have been stalled for over 60 days, collectively representing $210K in at-risk pipeline. The negotiation stage shows the highest concentration of critical stalls, suggesting pricing or approval bottlenecks.',
+        recommendations: [
+          'Escalate the 3 critical deals (90+ days) to senior leadership with a clear decision deadline within 2 weeks.',
+          'Implement a 30-day stall alert so reps receive an automatic nudge before deals enter the at-risk bucket.',
+          'Review the proposal-to-negotiation handoff — 6 deals are stalling in proposal, indicating a process gap.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/stall-analysis`, {}, token)
+  },
+
+  async getAIDealPriorityMatrix(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        quadrants: [
+          {
+            quadrant: 'close_now', label: 'Close Now', deal_count: 5, total_value: 385000, avg_win_prob: 72.4,
+            top_deals: [
+              { id: 'p1', title: 'Apex Corp Enterprise', stage: 'negotiation', value: 95000, win_probability: 78.0, health_score: 82.0 },
+              { id: 'p2', title: 'BlueSky SaaS Platform', stage: 'proposal', value: 82000, win_probability: 74.0, health_score: 76.0 },
+              { id: 'p3', title: 'CloudVault Security', stage: 'negotiation', value: 75000, win_probability: 71.0, health_score: 79.0 },
+            ],
+          },
+          {
+            quadrant: 'invest', label: 'Invest', deal_count: 4, total_value: 298000, avg_win_prob: 38.5,
+            top_deals: [
+              { id: 'p4', title: 'NovaTech AI Suite', stage: 'qualified', value: 88000, win_probability: 42.0, health_score: 55.0 },
+              { id: 'p5', title: 'Pinnacle Analytics', stage: 'proposal', value: 72000, win_probability: 35.0, health_score: 48.0 },
+            ],
+          },
+          {
+            quadrant: 'quick_win', label: 'Quick Win', deal_count: 6, total_value: 128000, avg_win_prob: 68.3,
+            top_deals: [
+              { id: 'p6', title: 'Meridian Starter Pack', stage: 'proposal', value: 25000, win_probability: 72.0, health_score: 74.0 },
+              { id: 'p7', title: 'Summit SMB Bundle', stage: 'qualified', value: 22000, win_probability: 68.0, health_score: 71.0 },
+            ],
+          },
+          {
+            quadrant: 'deprioritize', label: 'Deprioritize', deal_count: 7, total_value: 95000, avg_win_prob: 28.1,
+            top_deals: [
+              { id: 'p8', title: 'Legacy Migration', stage: 'discovery', value: 18000, win_probability: 30.0, health_score: 38.0 },
+            ],
+          },
+        ],
+        avg_deal_value: 54545,
+        total_active: 22,
+        matrix_narrative: 'The Close Now quadrant holds 5 high-value, high-probability deals worth $385K that deserve immediate sales focus this week. The Invest quadrant has 4 large-value deals with low win probability — these need targeted intervention to shift the odds before they stall.',
+        recommendations: [
+          'Dedicate 60% of this week\'s selling time to the 5 Close Now deals — schedule executive check-ins and accelerate contract reviews.',
+          'Assign your best solution engineer to the Invest quadrant to run targeted demos that address the specific objections keeping win probability low.',
+          'Use the 6 Quick Win deals to build momentum and hit monthly numbers — close these first to free capacity for Invest work.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/priority-matrix`, {}, token)
+  },
+
+  async getAIDealEngagementReport(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        engagement_buckets: [
+          { bucket: 'high', label: 'High Engagement (≥60)', deal_count: 6, avg_score: 74.2 },
+          { bucket: 'medium', label: 'Medium Engagement (30–59)', deal_count: 9, avg_score: 44.8 },
+          { bucket: 'low', label: 'Low Engagement (<30)', deal_count: 7, avg_score: 14.3 },
+        ],
+        top_engaged: [
+          { id: 'd-001', title: 'Acme Corp Renewal', stage: 'negotiation', value: 85000, health_score: 82, engagement_score: 78 },
+          { id: 'd-004', title: 'TechCorp Expansion', stage: 'proposal', value: 62000, health_score: 75, engagement_score: 70 },
+          { id: 'd-007', title: 'Globex Enterprise', stage: 'qualified', value: 47000, health_score: 68, engagement_score: 65 },
+        ],
+        least_engaged: [
+          { id: 'd-022', title: 'Zephyr Systems', stage: 'discovery', value: 18000, health_score: 35, engagement_score: 8 },
+          { id: 'd-019', title: 'Pinnacle Group', stage: 'qualified', value: 24000, health_score: 42, engagement_score: 12 },
+          { id: 'd-016', title: 'Horizon Ltd', stage: 'proposal', value: 31000, health_score: 48, engagement_score: 17 },
+        ],
+        avg_engagement_score: 42.6,
+        total_active: 22,
+        engagement_narrative: '6 of 22 active deals show strong engagement scores above 60, driven by consistent messaging and deal note activity. However, 7 deals have critically low engagement below 30 — these are at risk of going silent and losing momentum without immediate intervention.',
+        recommendations: [
+          'Schedule a personal outreach call for each of the 7 low-engagement deals this week, prioritising those with the highest pipeline value.',
+          'Log at least one detailed deal note per low-engagement deal summarising blockers and next agreed actions to bring scores above 30.',
+          'Connect your Gmail connector to automatically capture inbound replies and boost engagement tracking without manual data entry.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/engagement-report`, {}, token)
+  },
 }
 

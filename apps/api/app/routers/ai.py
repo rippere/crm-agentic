@@ -8890,3 +8890,8416 @@ async def get_revenue_trend_analysis(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+# ── Contact Inactivity Risk ───────────────────────────────────────────────────
+
+_INACTIVITY_RISK_SYSTEM = """\
+You are a CRM analyst specialising in contact re-engagement. Given contact inactivity statistics, \
+write a concise 2-sentence insight and 3 prioritised recommendations. \
+Reply ONLY with a valid JSON object: \
+{"insight": "<2-sentence analysis>", "recommendations": ["...", "...", "..."]} \
+Exactly 3 recommendations. No markdown. Pure JSON only."""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/inactivity-risk")
+@limiter.limit("5/minute")
+async def get_contact_inactivity_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+
+    # All customer/prospect contacts in workspace
+    contacts_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.email, Contact.company)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Contact.status.in_(["customer", "prospect"]),
+        )
+    )
+    contacts = contacts_result.all()
+    total_contacts = len(contacts)
+
+    if total_contacts == 0:
+        return {
+            "critical_count": 0,
+            "high_risk_count": 0,
+            "watch_count": 0,
+            "total_contacts": 0,
+            "contacts_by_bucket": [],
+            "insight": "No customer or prospect contacts exist in this workspace yet. Add contacts to track inactivity.",
+            "recommendations": [
+                "Import your existing contacts and set their status to prospect or customer.",
+                "Connect your email to automatically track message activity.",
+                "Add notes after meetings to build engagement history.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    contact_ids = [c[0] for c in contacts]
+    contact_map = {
+        c[0]: {"id": str(c[0]), "name": c[1] or "", "email": c[2] or "", "company": c[3] or ""}
+        for c in contacts
+    }
+
+    # Last message touch per contact
+    msg_result = await db.execute(
+        select(Message.contact_id, func.max(Message.received_at).label("last_msg"))
+        .where(Message.contact_id.in_(contact_ids))
+        .group_by(Message.contact_id)
+    )
+    msg_touches = {row[0]: row[1] for row in msg_result.all()}
+
+    # Last note touch per contact
+    note_result = await db.execute(
+        select(ContactNote.contact_id, func.max(ContactNote.created_at).label("last_note"))
+        .where(ContactNote.contact_id.in_(contact_ids))
+        .group_by(ContactNote.contact_id)
+    )
+    note_touches = {row[0]: row[1] for row in note_result.all()}
+
+    critical_contacts: list[dict] = []
+    high_risk_contacts: list[dict] = []
+    watch_contacts: list[dict] = []
+
+    for cid in contact_ids:
+        mt = msg_touches.get(cid)
+        nt = note_touches.get(cid)
+        candidates = [t for t in (mt, nt) if t is not None]
+        if not candidates:
+            days_since = 999
+        else:
+            last = max(candidates)
+            if hasattr(last, "tzinfo") and last.tzinfo is not None:
+                last = last.replace(tzinfo=None)
+            days_since = (now - last).days
+
+        entry = {**contact_map[cid], "days_since_touch": days_since}
+        if days_since > 60:
+            critical_contacts.append(entry)
+        elif days_since > 30:
+            high_risk_contacts.append(entry)
+        elif days_since > 14:
+            watch_contacts.append(entry)
+
+    critical_count = len(critical_contacts)
+    high_risk_count = len(high_risk_contacts)
+    watch_count = len(watch_contacts)
+
+    contacts_by_bucket: list[dict] = []
+    if critical_contacts:
+        contacts_by_bucket.append({"bucket": "critical", "contacts": critical_contacts})
+    if high_risk_contacts:
+        contacts_by_bucket.append({"bucket": "high_risk", "contacts": high_risk_contacts})
+    if watch_contacts:
+        contacts_by_bucket.append({"bucket": "watch", "contacts": watch_contacts})
+
+    if critical_count == 0 and high_risk_count == 0 and watch_count == 0:
+        return {
+            "critical_count": 0,
+            "high_risk_count": 0,
+            "watch_count": 0,
+            "total_contacts": total_contacts,
+            "contacts_by_bucket": [],
+            "insight": "All contacts have been recently engaged — excellent relationship health.",
+            "recommendations": [
+                "Maintain the current engagement cadence to keep contacts active.",
+                "Set up recurring reminders to check in every 2 weeks.",
+                "Review contact goals quarterly to ensure alignment.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Contact inactivity risk snapshot:\n"
+        f"- Total customer/prospect contacts: {total_contacts}\n"
+        f"- Critical (>60 days without any contact): {critical_count}\n"
+        f"- High risk (30–60 days silent): {high_risk_count}\n"
+        f"- Watch (14–30 days silent): {watch_count}\n"
+    )
+
+    _default_insight = (
+        f"{critical_count} contact{'s are' if critical_count != 1 else ' is'} critically overdue for outreach "
+        f"(60+ days silent), with {high_risk_count} more at high risk of going dark."
+    )
+    _default_recs = [
+        f"Immediately reach out to the {critical_count} critically inactive contact{'s' if critical_count != 1 else ''}.",
+        f"Schedule follow-up calls for the {high_risk_count} high-risk contact{'s' if high_risk_count != 1 else ''} this week.",
+        "Set up automated email sequences to maintain a consistent 2-week engagement cadence.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_INACTIVITY_RISK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data_json = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data_json.get("insight", _default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = _default_insight
+
+    raw_recs = data_json.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(_default_recs[len(recommendations) % 3])
+
+    return {
+        "critical_count": critical_count,
+        "high_risk_count": high_risk_count,
+        "watch_count": watch_count,
+        "total_contacts": total_contacts,
+        "contacts_by_bucket": contacts_by_bucket,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16o — AI workspace deal pipeline momentum snapshot
+# ---------------------------------------------------------------------------
+
+_PIPELINE_MOMENTUM_SYSTEM = (
+    "You are a CRM sales analytics expert. Analyse the pipeline momentum data "
+    "and return a JSON object with exactly these keys:\n"
+    "- highlights: list of 3 short positive observations about pipeline momentum\n"
+    "- warnings: list of 3 short risk signals or concerns\n"
+    "Return only valid JSON, no markdown."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-momentum")
+@limiter.limit("5/minute")
+async def get_deals_pipeline_momentum(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.utcnow()
+    cutoff_14d = now - datetime.timedelta(days=14)
+
+    # Query 1: open deal count, at-risk count (health < 50), avg health
+    deals_result = await db.execute(
+        select(Deal.id, Deal.health_score, Deal.created_at, Deal.stage)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    open_deals = deals_result.all()
+
+    # Query 2: stage moves in last 14 days from activity_events
+    moves_result = await db.execute(
+        select(func.count(ActivityEvent.id))
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "deal_moved",
+            ActivityEvent.created_at >= cutoff_14d,
+        )
+    )
+    stage_moves_14d = moves_result.scalar() or 0
+
+    total_open = len(open_deals)
+    new_deals_14d = sum(
+        1 for d in open_deals
+        if d.created_at and (
+            (d.created_at.replace(tzinfo=None) if d.created_at.tzinfo else d.created_at) >= cutoff_14d
+        )
+    )
+    at_risk_count = sum(1 for d in open_deals if (d.health_score or 0) < 50)
+    avg_health = (
+        sum((d.health_score or 0) for d in open_deals) / total_open
+        if total_open > 0 else 0
+    )
+
+    # Momentum score: 0-100
+    # Components: stage_moves (0-40), new deals (0-30), health (0-30)
+    moves_score = min(40, stage_moves_14d * 4)
+    new_deals_score = min(30, new_deals_14d * 5)
+    health_score_comp = int(avg_health * 0.3)
+    momentum_score = min(100, moves_score + new_deals_score + health_score_comp)
+
+    if momentum_score >= 70:
+        momentum_rating = "accelerating"
+    elif momentum_score >= 45:
+        momentum_rating = "steady"
+    elif momentum_score >= 20:
+        momentum_rating = "stalling"
+    else:
+        momentum_rating = "declining"
+
+    if total_open == 0:
+        return {
+            "momentum_score": 0,
+            "momentum_rating": "declining",
+            "new_deals_14d": 0,
+            "stage_moves_14d": 0,
+            "at_risk_count": 0,
+            "highlights": [
+                "Pipeline is empty — add deals to start tracking momentum.",
+                "Connect your CRM data sources to enable momentum tracking.",
+                "Create your first deal to begin building pipeline velocity.",
+            ],
+            "warnings": [
+                "No open deals in the pipeline.",
+                "Pipeline momentum cannot be calculated without active deals.",
+                "Revenue risk is high with no deals in progress.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Open deals: {total_open}\n"
+        f"New deals in last 14 days: {new_deals_14d}\n"
+        f"Stage moves in last 14 days: {stage_moves_14d}\n"
+        f"At-risk deals (health < 50): {at_risk_count}\n"
+        f"Average deal health: {round(avg_health, 1)}\n"
+        f"Momentum score: {momentum_score}/100 ({momentum_rating})\n"
+    )
+
+    _default_highlights = [
+        f"Pipeline has {total_open} active deal{'s' if total_open != 1 else ''}.",
+        f"{stage_moves_14d} stage move{'s' if stage_moves_14d != 1 else ''} recorded in the last 14 days.",
+        f"{new_deals_14d} new deal{'s' if new_deals_14d != 1 else ''} entered the pipeline this fortnight.",
+    ]
+    _default_warnings = [
+        f"{at_risk_count} deal{'s' if at_risk_count != 1 else ''} flagged as at-risk (health < 50).",
+        "Review stalled deals to re-activate pipeline movement.",
+        "Monitor close dates to avoid revenue forecast slippage.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_PIPELINE_MOMENTUM_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data_json = json.loads(raw)
+        highlights = [str(h) for h in (data_json.get("highlights") or [])[:3]]
+        warnings = [str(w) for w in (data_json.get("warnings") or [])[:3]]
+    except Exception:
+        highlights = []
+        warnings = []
+
+    while len(highlights) < 3:
+        highlights.append(_default_highlights[len(highlights) % 3])
+    while len(warnings) < 3:
+        warnings.append(_default_warnings[len(warnings) % 3])
+
+    return {
+        "momentum_score": momentum_score,
+        "momentum_rating": momentum_rating,
+        "new_deals_14d": new_deals_14d,
+        "stage_moves_14d": stage_moves_14d,
+        "at_risk_count": at_risk_count,
+        "highlights": highlights,
+        "warnings": warnings,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# Phase 16p — AI workspace deal age risk report
+# ---------------------------------------------------------------------------
+
+_DEAL_AGE_RISK_PROMPT = """You are Nova, a CRM AI sales analyst. Given a deal age risk report, provide a 1-sentence insight and 3 actionable recommendations to reduce deal aging risk.
+
+Deal age context:
+{context}
+
+Return JSON:
+{{
+  "insight": "one sentence summarising the key deal aging risk finding",
+  "recommendations": ["action 1", "action 2", "action 3"]
+}}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/age-risk")
+@limiter.limit("5/minute")
+async def get_deals_age_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(timezone.utc)
+    open_stages = ["discovery", "qualified", "proposal", "negotiation"]
+
+    # Query open deals
+    open_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.created_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(open_stages),
+        )
+    )
+    open_deals = open_result.all()
+
+    if not open_deals:
+        return {
+            "overdue_count": 0,
+            "at_risk_count": 0,
+            "on_track_count": 0,
+            "total_open_deals": 0,
+            "deals": [],
+            "insight": "No open deals found. Add deals to begin tracking age risk.",
+            "recommendations": [
+                "Create your first deals and set expected close dates to enable age tracking.",
+                "Import historical deal data to establish per-stage time benchmarks.",
+                "Use the pipeline view to quickly add new deals from your prospect list.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    # Compute median days-to-close per stage from closed_won deals
+    closed_result = await db.execute(
+        select(Deal.stage, Deal.created_at, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    closed_rows = closed_result.all()
+
+    # Build stage cycle-time benchmarks from closed deals
+    # Use precursor stage as proxy: discovery→qualified→proposal→negotiation→closed
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closed_won"]
+    stage_defaults = {
+        "discovery": 14, "qualified": 21, "proposal": 30, "negotiation": 45,
+    }
+
+    # Compute days from created_at to stage_changed_at for closed deals
+    closed_cycle_days: list[float] = []
+    for row in closed_rows:
+        if row.created_at and row.stage_changed_at:
+            ca = row.created_at.replace(tzinfo=timezone.utc) if not row.created_at.tzinfo else row.created_at
+            sa = row.stage_changed_at.replace(tzinfo=timezone.utc) if not row.stage_changed_at.tzinfo else row.stage_changed_at
+            days = (sa - ca).total_seconds() / 86400
+            if days > 0:
+                closed_cycle_days.append(days)
+
+    # Median overall cycle time — use as scaling reference
+    if closed_cycle_days:
+        closed_cycle_days.sort()
+        n = len(closed_cycle_days)
+        median_cycle = closed_cycle_days[n // 2]
+    else:
+        median_cycle = None  # fall back to defaults
+
+    # Classify each open deal
+    overdue_deals = []
+    at_risk_deals = []
+    on_track_deals = []
+
+    for d in open_deals:
+        stage = d.stage
+        expected = stage_defaults.get(stage, 21)
+        if median_cycle is not None:
+            # Scale expected by ratio of median cycle vs sum of defaults up to this stage
+            stage_idx = stage_order.index(stage) if stage in stage_order else 1
+            default_until = sum(list(stage_defaults.values())[:stage_idx + 1])
+            scale = median_cycle / max(sum(stage_defaults.values()), 1)
+            expected = max(7, round(expected * scale))
+
+        created = d.created_at
+        if created and not created.tzinfo:
+            created = created.replace(tzinfo=timezone.utc)
+        days_open = (now - created).days if created else 0
+
+        entry = {
+            "id": str(d.id),
+            "title": d.title,
+            "stage": stage,
+            "days_open": days_open,
+            "expected_days": expected,
+            "risk_level": "on_track",
+        }
+
+        if days_open > expected * 2:
+            entry["risk_level"] = "overdue"
+            overdue_deals.append(entry)
+        elif days_open > expected * 1.5:
+            entry["risk_level"] = "at_risk"
+            at_risk_deals.append(entry)
+        else:
+            on_track_deals.append(entry)
+
+    risk_order = {"overdue": 0, "at_risk": 1, "on_track": 2}
+    all_deals = sorted(
+        overdue_deals + at_risk_deals + on_track_deals,
+        key=lambda x: (risk_order[x["risk_level"]], -x["days_open"]),
+    )
+
+    context = (
+        f"Total open deals: {len(open_deals)}.\n"
+        f"Overdue (>2× expected): {len(overdue_deals)} deals.\n"
+        f"At-risk (>1.5× expected): {len(at_risk_deals)} deals.\n"
+        f"On-track: {len(on_track_deals)} deals.\n"
+    )
+    if overdue_deals:
+        oldest = max(overdue_deals, key=lambda x: x["days_open"])
+        context += f"Most overdue: '{oldest['title']}' at {oldest['days_open']} days open in {oldest['stage']} stage.\n"
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": _DEAL_AGE_RISK_PROMPT.format(context=context),
+        }],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = text[:200]
+        recommendations = []
+
+    while len(recommendations) < 3:
+        recommendations.append("Review aging deals and schedule follow-ups to re-activate them.")
+
+    return {
+        "overdue_count": len(overdue_deals),
+        "at_risk_count": len(at_risk_deals),
+        "on_track_count": len(on_track_deals),
+        "total_open_deals": len(open_deals),
+        "deals": all_deals,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16q: GET /workspaces/{wid}/ai/deals/top-performers
+# ---------------------------------------------------------------------------
+
+_TOP_PERFORMERS_SYSTEM = """\
+You are a sales analytics AI. Given data about top-performing closed-won deals across three dimensions (value, speed, confidence), write a 1-sentence insight and exactly 3 specific recommendations to replicate the success patterns.
+Respond with JSON only: {"insight": "...", "recommendations": ["...", "...", "..."]}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/top-performers")
+@limiter.limit("5/minute")
+async def top_performer_deals(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+
+    result = await db.execute(
+        select(
+            Deal.id, Deal.title, Deal.company, Deal.value,
+            Deal.ml_win_probability, Deal.created_at, Deal.updated_at,
+        ).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+        )
+    )
+    closed_won = result.all()
+
+    if not closed_won:
+        return {
+            "top_by_value": [],
+            "top_by_speed": [],
+            "top_by_confidence": [],
+            "avg_win_rate": None,
+            "insight": "No closed-won deals to analyse yet.",
+            "recommendations": [
+                "Close your first deal to start building top-performer insights.",
+                "Set ML win probability on open deals to enable confidence tracking.",
+                "Record cycle time by tracking created_at and close date on each deal.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    deals_data = []
+    for row in closed_won:
+        deal_id, title, company, value, ml_win_prob, created_at, updated_at = (
+            row[0], row[1], row[2], float(row[3] or 0), row[4] or 0, row[5], row[6],
+        )
+        ca = created_at.replace(tzinfo=None) if (created_at and created_at.tzinfo) else created_at
+        ua = updated_at.replace(tzinfo=None) if (updated_at and updated_at.tzinfo) else updated_at
+        cycle_days = (ua - ca).days if (ca and ua) else 9999
+
+        deals_data.append({
+            "id": str(deal_id),
+            "title": title,
+            "company": company,
+            "value": round(float(value)),
+            "win_probability": ml_win_prob,
+            "cycle_days": cycle_days if cycle_days < 9999 else None,
+        })
+
+    top_by_value = sorted(deals_data, key=lambda d: -d["value"])[:5]
+    top_by_speed = sorted(
+        [d for d in deals_data if d["cycle_days"] is not None],
+        key=lambda d: d["cycle_days"]
+    )[:5]
+    top_by_confidence = sorted(deals_data, key=lambda d: -d["win_probability"])[:5]
+
+    avg_win_rate = round(sum(d["win_probability"] for d in deals_data) / len(deals_data), 1)
+
+    summary_context = (
+        f"Top performer deals analysis:\n"
+        f"- total_closed_won: {len(deals_data)}\n"
+        f"- avg_win_probability_at_close: {avg_win_rate}%\n"
+        f"- top_value_deal: {top_by_value[0]['title']} (${top_by_value[0]['value']:,})\n"
+        f"- fastest_deal_days: {top_by_speed[0]['cycle_days'] if top_by_speed else 'N/A'}\n"
+        f"- highest_confidence_probability: {top_by_confidence[0]['win_probability']}%"
+    )
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        system=_TOP_PERFORMERS_SYSTEM,
+        messages=[{"role": "user", "content": summary_context}],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "High-value deals drive the most revenue impact.")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = "High-value deals drive the most revenue impact."
+        recommendations = []
+
+    while len(recommendations) < 3:
+        recommendations.append("Study the patterns of your fastest-closing deals to replicate success.")
+
+    return {
+        "top_by_value": top_by_value,
+        "top_by_speed": top_by_speed,
+        "top_by_confidence": top_by_confidence,
+        "avg_win_rate": avg_win_rate,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
+
+
+# Phase 16r — AI workspace deal stage concentration report
+# ---------------------------------------------------------------------------
+
+_STAGE_CONCENTRATION_SYSTEM = """\
+You are a CRM sales analyst. Given a breakdown of open deals by pipeline stage \
+(count, total_value, avg_health per stage), write a 1-sentence insight about where \
+value is concentrated or stalled, and suggest the 3 most impactful actions. \
+Reply ONLY with valid JSON: \
+{"insight": "<1-sentence>", "recommendations": ["...", "...", "..."]} \
+No markdown. Pure JSON only."""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/stage-concentration")
+@limiter.limit("5/minute")
+async def get_deal_stage_concentration(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.utcnow()
+
+    deals_result = await db.execute(
+        select(Deal.stage, Deal.value, Deal.health_score)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.not_in(["closed_won", "closed_lost"]),
+        )
+    )
+    deals = deals_result.all()
+
+    if not deals:
+        return {
+            "stages": [],
+            "highest_value_stage": None,
+            "most_stalled_stage": None,
+            "total_pipeline_value": 0,
+            "insight": "No open deals found. Add deals to your pipeline to see stage concentration insights.",
+            "recommendations": [
+                "Create your first deal in the pipeline to start tracking stage concentration.",
+                "Import existing opportunities to get an immediate pipeline view.",
+                "Review your lead qualification criteria to ensure deals enter the right stage.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    stage_data: dict = {}
+    for row in deals:
+        stage = row.stage or "unknown"
+        if stage not in stage_data:
+            stage_data[stage] = {"count": 0, "total_value": 0.0, "health_scores": []}
+        stage_data[stage]["count"] += 1
+        stage_data[stage]["total_value"] += float(row.value or 0)
+        if row.health_score is not None:
+            stage_data[stage]["health_scores"].append(int(row.health_score))
+
+    total_pipeline_value = sum(s["total_value"] for s in stage_data.values())
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation"]
+    sorted_stages = sorted(
+        stage_data.keys(),
+        key=lambda s: stage_order.index(s) if s in stage_order else len(stage_order),
+    )
+
+    stages = []
+    for stage in sorted_stages:
+        sd = stage_data[stage]
+        avg_h = round(sum(sd["health_scores"]) / len(sd["health_scores"])) if sd["health_scores"] else None
+        pct = round(sd["total_value"] / total_pipeline_value * 100, 1) if total_pipeline_value > 0 else 0.0
+        stages.append({
+            "stage": stage,
+            "count": sd["count"],
+            "total_value": round(sd["total_value"]),
+            "avg_health": avg_h,
+            "pct_of_pipeline": pct,
+        })
+
+    highest_value_stage = max(stages, key=lambda s: s["total_value"])["stage"] if stages else None
+    health_stages = [s for s in stages if s["avg_health"] is not None]
+    most_stalled_stage = min(health_stages, key=lambda s: s["avg_health"])["stage"] if health_stages else None  # type: ignore[arg-type]
+
+    context = (
+        f"Pipeline stage breakdown ({len(deals)} open deals, total ${total_pipeline_value:,.0f}):\n"
+        + "\n".join(
+            f"- {s['stage']}: {s['count']} deals, ${s['total_value']:,}, "
+            f"avg health {s['avg_health'] if s['avg_health'] is not None else 'N/A'}/100, "
+            f"{s['pct_of_pipeline']}% of pipeline"
+            for s in stages
+        )
+        + f"\nHighest-value stage: {highest_value_stage}. Most stalled: {most_stalled_stage}."
+    )
+
+    client = _anthropic.Anthropic()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        system=_STAGE_CONCENTRATION_SYSTEM,
+        messages=[{"role": "user", "content": context}],
+    )
+
+    text = msg.content[0].text.strip()
+    try:
+        parsed = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        insight = parsed.get("insight", "")
+        recommendations = parsed.get("recommendations", [])[:3]
+    except Exception:
+        insight = text[:200]
+        recommendations = []
+
+    if not insight:
+        insight = f"${total_pipeline_value:,.0f} in pipeline is concentrated in {len(stages)} stages — review stalled stages to unblock flow."
+    while len(recommendations) < 3:
+        defaults = [
+            f"Focus on advancing deals in {most_stalled_stage or 'the lowest-health stage'} to improve pipeline velocity.",
+            "Set stage-specific targets to balance deal distribution across the pipeline.",
+            "Review deals stuck in a single stage for more than 14 days and take action.",
+        ]
+        recommendations.append(defaults[len(recommendations) % 3])
+
+    return {
+        "stages": stages,
+        "highest_value_stage": highest_value_stage,
+        "most_stalled_stage": most_stalled_stage,
+        "total_pipeline_value": round(total_pipeline_value),
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ── Deal Close Rate by Stage ──────────────────────────────────────────────────
+
+_CLOSE_RATE_SYSTEM = """\
+You are a sales analytics expert reviewing deal close rates per pipeline stage.
+Given win/loss data grouped by the stage deals were in when they closed, write
+a 1-sentence insight and exactly 3 specific, actionable recommendations.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "insight": "1-sentence summary referencing the best and worst converting stages",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+
+Rules:
+- insight: reference specific win rates and stage names, keep it data-driven
+- recommendations: specific steps (e.g. improve proposal quality, address objections
+  in negotiation, add qualification criteria at discovery)
+- Be concise\
+"""
+
+_STAGE_ORDER = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/close-rate-by-stage")
+@limiter.limit("5/minute")
+async def get_close_rate_by_stage(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+
+    # Query closed_won and closed_lost deals with their stage at close time
+    # We infer closing stage from current stage for simplicity
+    closed_result = await db.execute(
+        select(Deal.stage, func.count(Deal.id))
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(["closed_won", "closed_lost"]))
+        .group_by(Deal.stage)
+    )
+    closed_counts: dict[str, int] = {}
+    for stage, count in closed_result.all():
+        closed_counts[stage] = count
+
+    won_count = closed_counts.get("closed_won", 0)
+    lost_count = closed_counts.get("closed_lost", 0)
+    total_closed = won_count + lost_count
+
+    if total_closed == 0:
+        return {
+            "stage_rates": [],
+            "best_converting_stage": None,
+            "worst_converting_stage": None,
+            "insight": "No closed deals yet — close your first deals to start tracking close rate by stage.",
+            "recommendations": [
+                "Focus on advancing deals to close by setting clear next-action dates.",
+                "Review deals in the proposal stage and schedule calls to push them forward.",
+                "Use the Win/Loss Analysis on closed deals to identify patterns.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Query deal_moved activity events to infer last active stage before close
+    # Description format: "Deal 'Title' moved: from_stage → to_stage"
+    events_result = await db.execute(
+        select(ActivityEvent.description)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.type == "deal_moved")
+        .order_by(ActivityEvent.created_at.desc())
+    )
+    events_rows = events_result.all()
+
+    import re as _re
+    _close_re = _re.compile(r"moved[^:]*:\s*([a-z_]+)\s*→\s*(closed_won|closed_lost)")
+    _title_re2 = _re.compile(r"Deal '([^']+)'")
+    stage_wins: dict[str, int] = defaultdict(int)
+    stage_losses: dict[str, int] = defaultdict(int)
+    seen_titles: set[str] = set()
+
+    for (desc,) in events_rows:
+        if not desc or not isinstance(desc, str):
+            continue
+        m = _close_re.search(desc)
+        if not m:
+            continue
+        from_s, to_s = m.group(1), m.group(2)
+        if from_s not in _STAGE_ORDER:
+            continue
+        tm = _title_re2.search(desc)
+        title_key = tm.group(1) if tm else desc[:50]
+        if title_key in seen_titles:
+            continue
+        seen_titles.add(title_key)
+        if to_s == "closed_won":
+            stage_wins[from_s] += 1
+        else:
+            stage_losses[from_s] += 1
+
+    # Unattributed deals (no event match) → fall back to "proposal" bucket
+    attributed_won = sum(stage_wins.values())
+    attributed_lost = sum(stage_losses.values())
+    unattributed_won = max(0, won_count - attributed_won)
+    unattributed_lost = max(0, lost_count - attributed_lost)
+    if unattributed_won or unattributed_lost:
+        stage_wins["proposal"] += unattributed_won
+        stage_losses["proposal"] += unattributed_lost
+
+    stage_rates = []
+    for stage in _STAGE_ORDER:
+        w = stage_wins.get(stage, 0)
+        l = stage_losses.get(stage, 0)
+        total = w + l
+        if total == 0:
+            continue
+        win_rate = round(w / total * 100, 1)
+        stage_rates.append({"stage": stage, "win_count": w, "loss_count": l, "total": total, "win_rate": win_rate})
+
+    if not stage_rates:
+        # All unattributed — show aggregate
+        total = won_count + lost_count
+        win_rate = round(won_count / total * 100, 1) if total else 0
+        stage_rates = [{"stage": "proposal", "win_count": won_count, "loss_count": lost_count, "total": total, "win_rate": win_rate}]
+
+    best = max(stage_rates, key=lambda s: s["win_rate"])
+    worst = min(stage_rates, key=lambda s: s["win_rate"])
+    best_converting_stage = best["stage"] if best["win_rate"] > 0 else None
+    worst_converting_stage = worst["stage"] if len(stage_rates) > 1 else None
+
+    rates_context = "\n".join(
+        f"- {s['stage']}: {s['win_count']} won / {s['loss_count']} lost = {s['win_rate']}% win rate"
+        for s in stage_rates
+    )
+    context = (
+        f"Deal close rate by stage:\n{rates_context}\n"
+        f"Best converting stage: {best_converting_stage} ({best['win_rate']}%)\n"
+        f"Worst converting stage: {worst_converting_stage}\n"
+    )
+
+    default_insight = (
+        f"The {best_converting_stage or 'proposal'} stage converts best "
+        f"({best['win_rate']}% win rate), while "
+        f"{worst_converting_stage or 'discovery'} has the most room to improve."
+    )
+    default_recs = [
+        f"Study what works in {best_converting_stage or 'proposal'} stage and replicate across other stages.",
+        f"Add structured qualification criteria at {worst_converting_stage or 'discovery'} stage to improve downstream close rates.",
+        "Track objection patterns per stage using Win/Loss reason tagging.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_CLOSE_RATE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_rates": stage_rates,
+        "best_converting_stage": best_converting_stage,
+        "worst_converting_stage": worst_converting_stage,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16t: GET /workspaces/{wid}/ai/deals/pipeline-churn
+# ---------------------------------------------------------------------------
+
+_PIPELINE_CHURN_SYSTEM = """\
+You are a sales pipeline analyst identifying where deals are churning most.
+Given data on which stages deals exit (via closed_lost or backward stage regression),
+write a 1-sentence insight and exactly 3 specific, actionable recommendations.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "insight": "1-sentence summary referencing the highest-churn stage and churn rate",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+
+Rules:
+- insight: cite the stage name and churn rate percentage, be concise and specific
+- recommendations: practical steps to reduce churn at the worst stages
+- Be concise\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-churn")
+@limiter.limit("5/minute")
+async def get_pipeline_churn(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    import re as _re
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Query all deal_moved activity events in last 90 days
+    cutoff = now - datetime.timedelta(days=90)
+    events_result = await db.execute(
+        select(ActivityEvent.description, ActivityEvent.created_at)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.type == "deal_moved")
+        .where(ActivityEvent.created_at >= cutoff)
+        .order_by(ActivityEvent.created_at.asc())
+    )
+    events_rows = events_result.all()
+
+    # Parse "Deal '...' moved: from_stage → to_stage" lines
+    _move_re = _re.compile(r"moved[^:]*:\s*([a-z_]+)\s*→\s*([a-z_]+)")
+    _title_re3 = _re.compile(r"Deal '([^']+)'")
+
+    # Track, per deal title: list of (from_stage, to_stage, created_at) transitions
+    deal_history: dict[str, list[tuple[str, str]]] = {}
+    for desc, created_at in events_rows:
+        if not desc or not isinstance(desc, str):
+            continue
+        m = _move_re.search(desc)
+        if not m:
+            continue
+        from_s, to_s = m.group(1), m.group(2)
+        tm = _title_re3.search(desc)
+        title_key = tm.group(1) if tm else desc[:50]
+        if title_key not in deal_history:
+            deal_history[title_key] = []
+        deal_history[title_key].append((from_s, to_s))
+
+    # For each stage in _STAGE_ORDER, count:
+    #   total_entered = how many deals entered (any transition to_stage == stage)
+    #   churned_count = how many moved backward (from stage to earlier stage) OR to closed_lost
+    stage_entered: dict[str, set[str]] = {s: set() for s in _STAGE_ORDER}
+    stage_churned: dict[str, set[str]] = {s: set() for s in _STAGE_ORDER}
+
+    stage_idx = {s: i for i, s in enumerate(_STAGE_ORDER)}
+
+    for title, transitions in deal_history.items():
+        for from_s, to_s in transitions:
+            # Count deals entering a stage
+            if to_s in stage_idx:
+                stage_entered[to_s].add(title)
+
+            # Count churn from a stage:
+            # - moved to closed_lost (churn from that stage)
+            # - moved backward (to_stage index < from_stage index)
+            if from_s in stage_idx:
+                if to_s == "closed_lost":
+                    stage_churned[from_s].add(title)
+                elif to_s in stage_idx and stage_idx[to_s] < stage_idx[from_s]:
+                    stage_churned[from_s].add(title)
+
+    stage_churn = []
+    for stage in _STAGE_ORDER:
+        entered = len(stage_entered[stage])
+        churned = len(stage_churned[stage])
+        churn_rate = round(churned / entered * 100, 1) if entered > 0 else 0.0
+        stage_churn.append({
+            "stage": stage,
+            "total_entered": entered,
+            "churned_count": churned,
+            "churn_rate": churn_rate,
+        })
+
+    # Remove stages with zero activity
+    active_stages = [s for s in stage_churn if s["total_entered"] > 0]
+
+    if not active_stages:
+        return {
+            "stage_churn": [],
+            "highest_churn_stage": None,
+            "insight": "No deal movement data available for the last 90 days.",
+            "recommendations": [
+                "Ensure deals are being moved through pipeline stages so churn patterns can be tracked.",
+                "Add deal_moved activity events by updating deal stages in the pipeline.",
+                "Review your pipeline setup to ensure stages are configured correctly.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    highest_churn = max(active_stages, key=lambda s: s["churn_rate"])
+    highest_churn_stage = highest_churn["stage"]
+
+    churn_context = "\n".join(
+        f"- {s['stage']}: {s['churned_count']} churned / {s['total_entered']} entered = {s['churn_rate']}% churn rate"
+        for s in active_stages
+    )
+    context = (
+        f"Pipeline churn by stage (last 90 days):\n{churn_context}\n"
+        f"Highest churn stage: {highest_churn_stage} ({highest_churn['churn_rate']}% churn rate)\n"
+    )
+
+    default_insight = (
+        f"The {highest_churn_stage} stage has the highest churn rate at "
+        f"{highest_churn['churn_rate']}% — {highest_churn['churned_count']} of "
+        f"{highest_churn['total_entered']} deals regressed or were lost here."
+    )
+    default_recs = [
+        f"Add structured exit-criteria at the {highest_churn_stage} stage to catch deals before they regress.",
+        "Review deals that churned back to earlier stages and identify common objection patterns.",
+        "Set up automated alerts when a deal regresses to a previous stage for immediate rep intervention.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_PIPELINE_CHURN_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_churn": stage_churn,
+        "highest_churn_stage": highest_churn_stage,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16u — AI workspace deal conversion quality report
+# ---------------------------------------------------------------------------
+
+_CONVERSION_QUALITY_SYSTEM = """\
+You are a sales quality analyst evaluating closed-won deal conversion quality.
+Given aggregated quality tier data (high/medium/low), write a 1-sentence insight
+and exactly 3 specific, actionable recommendations to improve deal quality.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "insight": "1-sentence summary referencing quality distribution and what drives top-tier deals",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+
+Rules:
+- insight: mention the high-quality tier count, avg health or cycle days, be concise and specific
+- recommendations: practical steps to replicate top-tier patterns and improve lower-tier deals
+- Be concise\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/conversion-quality")
+@limiter.limit("5/minute")
+async def get_deal_conversion_quality(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Fetch all closed_won deals with their metadata
+    deals_result = await db.execute(
+        select(
+            Deal.id,
+            Deal.value,
+            Deal.created_at,
+            Deal.stage_changed_at,
+            Deal.competitors,
+        )
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+    )
+    deals_rows = deals_result.all()
+
+    if not deals_rows:
+        return {
+            "quality_tiers": [
+                {"tier": "high", "count": 0, "avg_value": 0, "avg_cycle_days": 0, "avg_health": 0},
+                {"tier": "medium", "count": 0, "avg_value": 0, "avg_cycle_days": 0, "avg_health": 0},
+                {"tier": "low", "count": 0, "avg_value": 0, "avg_cycle_days": 0, "avg_health": 0},
+            ],
+            "avg_quality_score": 0,
+            "insight": "No closed-won deals found to assess conversion quality.",
+            "recommendations": [
+                "Close your first deals to unlock quality analysis.",
+                "Track deal health scores throughout the pipeline.",
+                "Record deal competitors to improve quality benchmarking.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # For each deal compute quality indicators
+    deal_ids = [r[0] for r in deals_rows]
+
+    # Fetch latest health score per deal from DealHealthHistory
+    health_result = await db.execute(
+        select(DealHealthHistory.deal_id, DealHealthHistory.score)
+        .where(DealHealthHistory.workspace_id == workspace_id)
+        .where(DealHealthHistory.deal_id.in_(deal_ids))
+        .order_by(DealHealthHistory.recorded_at.desc())
+    )
+    health_rows = health_result.all()
+    # Keep only first (most recent) score per deal
+    health_by_deal: dict[uuid.UUID, float] = {}
+    for deal_id, score in health_rows:
+        if deal_id not in health_by_deal:
+            health_by_deal[deal_id] = float(score)
+
+    # Compute per-deal composite quality score
+    # health×0.4 + velocity_score×0.3 + value_score×0.3
+    # velocity_score = max(0, 100 - cycle_days) capped 0-100
+    # value_score = min(100, value / 1000) capped 0-100
+    deal_scores: list[tuple[float, float, float, float, int]] = []  # (score, value, cycle_days, health, competitor_count)
+    for deal_id, value, created_at, stage_changed_at, competitors in deals_rows:
+        v = float(value or 0)
+        close_ts = stage_changed_at or now
+        if close_ts.tzinfo is None:
+            close_ts = close_ts.replace(tzinfo=datetime.timezone.utc)
+        created_ts = created_at or now
+        if created_ts.tzinfo is None:
+            created_ts = created_ts.replace(tzinfo=datetime.timezone.utc)
+        cycle_days = max(0, (close_ts - created_ts).days)
+        health = health_by_deal.get(deal_id, 50.0)
+        comp_count = len(competitors) if isinstance(competitors, list) else 0
+
+        velocity_score = max(0.0, min(100.0, 100.0 - cycle_days))
+        value_score = min(100.0, v / 1000.0)
+        composite = health * 0.4 + velocity_score * 0.3 + value_score * 0.3
+        deal_scores.append((composite, v, float(cycle_days), health, comp_count))
+
+    # Bucket into tiers: high ≥ 66, medium 33-66, low < 33
+    tiers: dict[str, list[tuple[float, float, float, float, int]]] = {"high": [], "medium": [], "low": []}
+    for row in deal_scores:
+        score = row[0]
+        if score >= 66:
+            tiers["high"].append(row)
+        elif score >= 33:
+            tiers["medium"].append(row)
+        else:
+            tiers["low"].append(row)
+
+    def _tier_summary(tier_name: str) -> dict:
+        rows = tiers[tier_name]
+        if not rows:
+            return {"tier": tier_name, "count": 0, "avg_value": 0, "avg_cycle_days": 0, "avg_health": 0}
+        count = len(rows)
+        avg_value = round(sum(r[1] for r in rows) / count)
+        avg_cycle_days = round(sum(r[2] for r in rows) / count)
+        avg_health = round(sum(r[3] for r in rows) / count, 1)
+        return {
+            "tier": tier_name,
+            "count": count,
+            "avg_value": avg_value,
+            "avg_cycle_days": avg_cycle_days,
+            "avg_health": avg_health,
+        }
+
+    quality_tiers = [_tier_summary("high"), _tier_summary("medium"), _tier_summary("low")]
+    avg_quality_score = round(sum(r[0] for r in deal_scores) / len(deal_scores), 1)
+
+    # Build Claude context
+    context = (
+        f"Total closed-won deals: {len(deal_scores)}\n"
+        f"Average quality score: {avg_quality_score}/100\n"
+        f"High-quality deals: {tiers['high'].__len__()} (avg health {quality_tiers[0]['avg_health']}, avg cycle {quality_tiers[0]['avg_cycle_days']} days, avg value ${quality_tiers[0]['avg_value']:,})\n"
+        f"Medium-quality deals: {tiers['medium'].__len__()} (avg health {quality_tiers[1]['avg_health']}, avg cycle {quality_tiers[1]['avg_cycle_days']} days, avg value ${quality_tiers[1]['avg_value']:,})\n"
+        f"Low-quality deals: {tiers['low'].__len__()} (avg health {quality_tiers[2]['avg_health']}, avg cycle {quality_tiers[2]['avg_cycle_days']} days, avg value ${quality_tiers[2]['avg_value']:,})\n"
+    )
+
+    default_insight = f"{len(tiers['high'])} high-quality wins averaging {quality_tiers[0]['avg_cycle_days']} days to close — focus on replicating their engagement patterns."
+    default_recs = [
+        "Review high-quality deal timelines to identify the engagement cadence that drives fast closes.",
+        "Set minimum health score thresholds for deals entering the negotiation stage.",
+        "Create playbooks based on high-quality deal patterns for reps to follow.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_CONVERSION_QUALITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "quality_tiers": quality_tiers,
+        "avg_quality_score": avg_quality_score,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 16v — AI workspace deal win/loss pattern analysis
+# ---------------------------------------------------------------------------
+
+_WIN_LOSS_PATTERNS_SYSTEM = """\
+You are a sales analyst identifying win/loss patterns across pipeline stages.
+Given stage-level win/loss counts and competitor impact data, write a 1-sentence
+insight and exactly 3 specific, actionable recommendations.
+
+Return ONLY valid JSON with this exact structure:
+{
+  "insight": "1-sentence summary citing the best and worst converting stages or competitor impact",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+
+Rules:
+- insight: mention the highest-win-rate stage and lowest-win-rate stage, or key competitor finding
+- recommendations: practical steps to improve win rates at underperforming stages
+- Be concise\
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-loss-patterns")
+@limiter.limit("5/minute")
+async def get_win_loss_patterns(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Fetch all closed deals with stage, outcome and competitor info
+    deals_result = await db.execute(
+        select(Deal.stage, Deal.competitors)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(["closed_won", "closed_lost"]))
+    )
+    deals_rows = deals_result.all()
+
+    if not deals_rows:
+        return {
+            "stage_patterns": [],
+            "competitor_impact": {
+                "with_competitors_win_rate": 0,
+                "without_competitors_win_rate": 0,
+                "insight": "No closed deals found to analyse win/loss patterns.",
+            },
+            "insight": "No closed deals found to analyse win/loss patterns.",
+            "recommendations": [
+                "Close your first deals to unlock win/loss pattern analysis.",
+                "Tag deals with outcome reasons to improve future analysis.",
+                "Record competitor information on each deal for richer insights.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Identify the last active stage for each closed deal via activity events
+    # We reuse deal stage as the stage label since closed deals have stage = closed_won/closed_lost
+    # Infer the stage from deal_moved activity events: last from_stage before closing
+    closed_deal_stages: dict[str, dict] = {}  # stage -> {won, lost}
+
+    # Aggregate by stage bucket (use "proposal" as fallback since most deals close from there)
+    # Rather than complex event queries, use the stage field directly
+    # For closed deals the stage IS closed_won or closed_lost, so we need to look at activity events
+    # to find what stage they came from. Use a simplified approach: bucket all into one category
+    # and distinguish by competitor presence.
+
+    # Simpler approach: use deal's current stage (closed_won/closed_lost) as outcome,
+    # and track competitor impact
+    won_with = won_without = lost_with = lost_without = 0
+    for stage, competitors in deals_rows:
+        has_competitors = bool(competitors and isinstance(competitors, list) and len(competitors) > 0)
+        if stage == "closed_won":
+            if has_competitors:
+                won_with += 1
+            else:
+                won_without += 1
+        else:
+            if has_competitors:
+                lost_with += 1
+            else:
+                lost_without += 1
+
+    total_won = won_with + won_without
+    total_lost = lost_with + lost_without
+    total = total_won + total_lost
+
+    # Build stage_patterns from activity event data (deal_moved → closed_won/closed_lost)
+    # Query the last stage each deal was in before closing
+    events_result = await db.execute(
+        select(ActivityEvent.description)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.type == "deal_moved")
+    )
+    event_rows = events_result.all()
+
+    import re as _re2
+    _move_re2 = _re2.compile(r"moved[^:]*:\s*([a-z_]+)\s*→\s*(closed_won|closed_lost)")
+    stage_won: dict[str, int] = {}
+    stage_lost: dict[str, int] = {}
+    for (desc,) in event_rows:
+        if not desc:
+            continue
+        m = _move_re2.search(desc)
+        if not m:
+            continue
+        from_stage, outcome = m.group(1), m.group(2)
+        if outcome == "closed_won":
+            stage_won[from_stage] = stage_won.get(from_stage, 0) + 1
+        else:
+            stage_lost[from_stage] = stage_lost.get(from_stage, 0) + 1
+
+    all_stages = set(stage_won) | set(stage_lost)
+    stage_patterns = []
+    for stg in sorted(all_stages, key=lambda s: _STAGE_ORDER.index(s) if s in _STAGE_ORDER else 99):
+        won_n = stage_won.get(stg, 0)
+        lost_n = stage_lost.get(stg, 0)
+        tot = won_n + lost_n
+        win_rate = round((won_n / tot) * 100, 1) if tot > 0 else 0.0
+        stage_patterns.append({"stage": stg, "won": won_n, "lost": lost_n, "win_rate": win_rate})
+
+    # Fallback if no activity events found
+    if not stage_patterns:
+        overall_rate = round((total_won / total) * 100, 1) if total > 0 else 0.0
+        stage_patterns = [{"stage": "all_stages", "won": total_won, "lost": total_lost, "win_rate": overall_rate}]
+
+    with_total = won_with + lost_with
+    without_total = won_without + lost_without
+    with_win_rate = round((won_with / with_total) * 100, 1) if with_total > 0 else 0.0
+    without_win_rate = round((won_without / without_total) * 100, 1) if without_total > 0 else 0.0
+
+    competitor_impact = {
+        "with_competitors_win_rate": with_win_rate,
+        "without_competitors_win_rate": without_win_rate,
+    }
+
+    # Build Claude context
+    best = max(stage_patterns, key=lambda x: x["win_rate"]) if stage_patterns else None
+    worst = min(stage_patterns, key=lambda x: x["win_rate"]) if stage_patterns else None
+    context = (
+        f"Total closed deals: {total} ({total_won} won, {total_lost} lost)\n"
+        f"Stage patterns:\n" +
+        "\n".join(f"  {p['stage']}: {p['won']} won / {p['lost']} lost = {p['win_rate']}% win rate" for p in stage_patterns) +
+        f"\nCompetitor impact:\n"
+        f"  Deals with competitors: {with_total} total, {with_win_rate}% win rate\n"
+        f"  Deals without competitors: {without_total} total, {without_win_rate}% win rate\n"
+    )
+
+    best_stage = best["stage"] if best else "unknown"
+    worst_stage = worst["stage"] if worst else "unknown"
+    default_insight = (
+        f"{best_stage.title()} stage has the highest win rate at {best['win_rate'] if best else 0}%; "
+        f"{worst_stage.title()} lags at {worst['win_rate'] if worst else 0}% — focus rep coaching there."
+    )
+    default_recs = [
+        f"Analyse what reps do differently at the {best_stage} stage to replicate those behaviours elsewhere.",
+        f"Create targeted coaching for the {worst_stage} stage where win rates are lowest.",
+        "Develop competitive battle cards for deals that have competitors to improve their win rate.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_WIN_LOSS_PATTERNS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_patterns": stage_patterns,
+        "competitor_impact": competitor_impact,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{workspace_id}/ai/deals/avg-deal-size-trend
+# ---------------------------------------------------------------------------
+
+_AVG_DEAL_SIZE_TREND_SYSTEM = """You are a revenue analytics assistant. Given monthly closed-won deal data,
+write a one-sentence insight about the deal size trend and three actionable recommendations.
+Respond ONLY with valid JSON: {"insight": "...", "recommendations": ["...", "...", "..."]}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/avg-deal-size-trend")
+@limiter.limit("5/minute")
+async def get_avg_deal_size_trend(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=365)
+
+    result = await db.execute(
+        select(Deal.value, Deal.updated_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.updated_at >= cutoff)
+        .order_by(Deal.updated_at)
+    )
+    rows = result.all()
+
+    # Group by year-month in Python
+    from collections import defaultdict as _dd2
+    monthly: dict[str, list[float]] = _dd2(list)
+    for val, closed_at in rows:
+        if closed_at is None:
+            continue
+        if hasattr(closed_at, "tzinfo") and closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=datetime.timezone.utc)
+        key = closed_at.strftime("%Y-%m")
+        monthly[key].append(float(val or 0))
+
+    sorted_keys = sorted(monthly.keys())
+    months_data = [
+        {
+            "month": k,
+            "avg_value": round(sum(monthly[k]) / len(monthly[k]), 2) if monthly[k] else 0.0,
+            "deal_count": len(monthly[k]),
+        }
+        for k in sorted_keys
+    ]
+
+    # Graceful empty default
+    if not months_data:
+        return {
+            "months": [],
+            "trend_direction": "stable",
+            "best_month": None,
+            "pct_change": 0.0,
+            "insight": "No closed-won deals in the last 12 months — start closing deals to see your avg deal size trend.",
+            "recommendations": [
+                "Set a target average deal size to benchmark your pipeline value.",
+                "Review deals stuck in late stages and develop a closing strategy.",
+                "Identify your highest-value customers and look for similar prospects.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Trend: compare first-half vs second-half avg values
+    mid = len(months_data) // 2
+    first_vals = [m["avg_value"] for m in months_data[:mid]] if mid > 0 else []
+    second_vals = [m["avg_value"] for m in months_data[mid:]]
+    first_avg = sum(first_vals) / len(first_vals) if first_vals else 0.0
+    second_avg = sum(second_vals) / len(second_vals) if second_vals else 0.0
+    if first_avg > 0:
+        pct_change = round(((second_avg - first_avg) / first_avg) * 100, 1)
+    else:
+        pct_change = 0.0
+
+    if pct_change >= 20:
+        trend_direction = "accelerating"
+    elif pct_change >= 5:
+        trend_direction = "growing"
+    elif pct_change <= -5:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    best_month_obj = max(months_data, key=lambda m: m["avg_value"])
+    best_month = best_month_obj["month"]
+
+    overall_avg = round(sum(m["avg_value"] for m in months_data) / len(months_data), 2)
+
+    default_insight = (
+        f"Average deal size is {trend_direction} at ${overall_avg:,.0f}/month; "
+        f"best month was {best_month} with ${best_month_obj['avg_value']:,.0f} avg."
+    )
+    default_recs = [
+        f"Focus on the tactics used in {best_month} — the best-performing month — to replicate that avg deal size.",
+        "Consider upsell or expansion offers to grow average deal value across all stages.",
+        "Review pricing strategy if deal size trend is declining to identify whether discounting is eroding value.",
+    ]
+
+    context = (
+        f"Monthly closed-won deal data (last 12 months):\n" +
+        "\n".join(f"  {m['month']}: {m['deal_count']} deals, avg ${m['avg_value']:,.0f}" for m in months_data) +
+        f"\nTrend: {trend_direction} ({pct_change:+.1f}% change first-half vs second-half)\n"
+        f"Best month: {best_month}\n"
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_AVG_DEAL_SIZE_TREND_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "months": months_data,
+        "trend_direction": trend_direction,
+        "best_month": best_month,
+        "pct_change": pct_change,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{workspace_id}/ai/deals/followup-gaps
+# ---------------------------------------------------------------------------
+
+_FOLLOWUP_GAPS_SYSTEM = """You are a sales coaching assistant. Given data on deals that haven't been contacted recently,
+write a one-sentence insight about the follow-up gap risk and three actionable recommendations.
+Respond ONLY with valid JSON: {"insight": "...", "recommendations": ["...", "...", "..."]}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/followup-gaps")
+@limiter.limit("5/minute")
+async def get_followup_gaps(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.company, Deal.stage, Deal.updated_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.not_in(["closed_won", "closed_lost"]))
+        .order_by(Deal.updated_at)
+    )
+    rows = result.all()
+
+    overdue = []
+    due_soon = []
+    on_track_count = 0
+    total_days = 0
+    total_count = 0
+
+    for deal_id, title, company, stage, updated_at in rows:
+        if updated_at is None:
+            days = 0
+        else:
+            if hasattr(updated_at, "tzinfo") and updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=datetime.timezone.utc)
+            days = (now - updated_at).days
+
+        total_days += days
+        total_count += 1
+
+        entry = {
+            "deal_id": str(deal_id),
+            "title": title or "Untitled",
+            "company": company or "",
+            "stage": stage,
+            "days_since_contact": days,
+        }
+        if days > 14:
+            overdue.append(entry)
+        elif days >= 7:
+            due_soon.append(entry)
+        else:
+            on_track_count += 1
+
+    avg_days = round(total_days / total_count, 1) if total_count > 0 else 0.0
+
+    # Graceful empty default
+    if total_count == 0:
+        return {
+            "overdue": [],
+            "due_soon": [],
+            "on_track_count": 0,
+            "avg_days_since_contact": 0.0,
+            "insight": "No open deals to track — add deals to the pipeline to start monitoring follow-up cadence.",
+            "recommendations": [
+                "Import or create deals so the follow-up gap tracker can monitor your pipeline.",
+                "Establish a follow-up SLA: aim to contact every open deal at least once every 7 days.",
+                "Set up automated reminders in the system to flag deals that haven't been touched in 7+ days.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_insight = (
+        f"{len(overdue)} deal{'' if len(overdue) == 1 else 's'} overdue for follow-up (>14 days), "
+        f"{len(due_soon)} due soon (7–14 days); avg {avg_days} days since last contact."
+    )
+    default_recs = [
+        f"Prioritise the {len(overdue)} overdue deal{'' if len(overdue) == 1 else 's'} for immediate outreach — radio silence beyond 14 days dramatically reduces close probability.",
+        "Implement a daily follow-up habit: review the due-soon list each morning and send one personalised touch per deal.",
+        "Set a 7-day follow-up SLA for all open deals and assign a team member as the DRI for each.",
+    ]
+
+    context = (
+        f"Open deals follow-up summary:\n"
+        f"  Overdue (>14 days): {len(overdue)} deal(s)\n"
+        f"  Due soon (7–14 days): {len(due_soon)} deal(s)\n"
+        f"  On track (<7 days): {on_track_count} deal(s)\n"
+        f"  Avg days since last contact: {avg_days}\n"
+    )
+    if overdue:
+        context += "Overdue deals:\n" + "\n".join(
+            f"  {d['title']} ({d['company']}) — {d['stage']}, {d['days_since_contact']}d" for d in overdue[:5]
+        ) + "\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_FOLLOWUP_GAPS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "overdue": overdue,
+        "due_soon": due_soon,
+        "on_track_count": on_track_count,
+        "avg_days_since_contact": avg_days,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{workspace_id}/ai/deals/value-at-risk
+# ---------------------------------------------------------------------------
+
+_VALUE_AT_RISK_SYSTEM = """You are a sales risk analyst. Given data on pipeline deals at risk of being lost,
+write a one-sentence insight about the value at risk and three actionable recommendations.
+Respond ONLY with valid JSON: {"insight": "...", "recommendations": ["...", "...", "..."]}"""
+
+_STAGE_THRESHOLDS = {"discovery": 14, "qualified": 21, "proposal": 30, "negotiation": 45}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/value-at-risk")
+@limiter.limit("5/minute")
+async def get_value_at_risk(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.company, Deal.stage, Deal.value, Deal.health_score, Deal.created_at, Deal.stage_changed_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.not_in(["closed_won", "closed_lost"]))
+        .order_by(Deal.value.desc())
+    )
+    rows = result.all()
+
+    total_pipeline = 0.0
+    at_risk_deals = []
+
+    for deal_id, title, company, stage, value, health_score, created_at, stage_changed_at in rows:
+        val = float(value or 0)
+        total_pipeline += val
+
+        # Compute days in current stage
+        ref = stage_changed_at or created_at
+        if ref is not None:
+            if hasattr(ref, "tzinfo") and ref.tzinfo is None:
+                ref = ref.replace(tzinfo=datetime.timezone.utc)
+            days_in_stage = (now - ref).days
+        else:
+            days_in_stage = 0
+
+        threshold = _STAGE_THRESHOLDS.get(stage, 30)
+        stuck = days_in_stage > threshold
+
+        risk_reasons = []
+        if health_score < 50:
+            risk_reasons.append(f"health score {health_score}")
+        if stuck:
+            risk_reasons.append(f"stuck in {stage} for {days_in_stage}d (threshold {threshold}d)")
+
+        if risk_reasons:
+            at_risk_deals.append({
+                "deal_id": str(deal_id),
+                "title": title or "Untitled",
+                "company": company or "",
+                "stage": stage,
+                "value": round(val, 2),
+                "health_score": health_score,
+                "risk_reason": "; ".join(risk_reasons),
+            })
+
+    at_risk_value = sum(d["value"] for d in at_risk_deals)
+    at_risk_pct = round((at_risk_value / total_pipeline) * 100, 1) if total_pipeline > 0 else 0.0
+
+    # Graceful empty default
+    if not rows:
+        return {
+            "total_pipeline_value": 0.0,
+            "at_risk_value": 0.0,
+            "at_risk_pct": 0.0,
+            "at_risk_deals": [],
+            "insight": "No open deals in the pipeline — add deals to start tracking value at risk.",
+            "recommendations": [
+                "Build your pipeline by prospecting and adding new deals to the system.",
+                "Once deals are added, use this report to monitor at-risk value before it's lost.",
+                "Set deal health thresholds and stage SLAs to keep the pipeline moving.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_insight = (
+        f"${at_risk_value:,.0f} ({at_risk_pct}% of pipeline) is at risk across {len(at_risk_deals)} deal{'' if len(at_risk_deals) == 1 else 's'} "
+        f"— act now to prevent these from slipping."
+    )
+    default_recs = [
+        f"Focus immediate attention on the {len(at_risk_deals)} at-risk deal{'' if len(at_risk_deals) == 1 else 's'} to recover ${at_risk_value:,.0f} in pipeline value.",
+        "Improve health scores on stalled deals by scheduling discovery calls and addressing known objections.",
+        "Review stage SLAs quarterly and set automated alerts when deals exceed them.",
+    ]
+
+    context = (
+        f"Pipeline value at risk:\n"
+        f"  Total pipeline: ${total_pipeline:,.0f}\n"
+        f"  At-risk value: ${at_risk_value:,.0f} ({at_risk_pct}% of pipeline)\n"
+        f"  At-risk deals: {len(at_risk_deals)}\n"
+    )
+    if at_risk_deals:
+        context += "Top at-risk deals:\n" + "\n".join(
+            f"  {d['title']} ({d['company']}) — ${d['value']:,.0f}, {d['stage']}, risk: {d['risk_reason']}"
+            for d in at_risk_deals[:5]
+        ) + "\n"
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=_VALUE_AT_RISK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "total_pipeline_value": round(total_pipeline, 2),
+        "at_risk_value": round(at_risk_value, 2),
+        "at_risk_pct": at_risk_pct,
+        "at_risk_deals": at_risk_deals,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ── Phase 16z: Next-Best-Action Recommendations ─────────────────────────────
+
+_NEXT_BEST_ACTIONS_SYSTEM = """\
+You are a senior sales strategist. Given a list of deals with their stage, \
+health score, value, days in stage, and competitors, output a JSON object with:
+- "actions": array of objects, one per deal:
+    - "deal_id": string
+    - "priority": "high" | "medium" | "low"
+    - "action": string (<=12 words, specific next step)
+    - "rationale": string (<=20 words, why this action)
+- "insight": string (1 sentence overall pattern)
+- "recommendations": array of 3 strings (strategic recommendations)
+
+Priority rules:
+- high: value > $50k OR health_score < 40 OR stuck > 2x threshold
+- low: health_score >= 70 AND days_in_stage < threshold
+- medium: everything else
+
+Action must be concrete (e.g. "Schedule executive sponsor call", "Send revised proposal", "Address pricing objection").
+Return valid JSON only, no prose.\
+"""
+
+_NEXT_BEST_ACTIONS_STAGE_THRESHOLDS: dict[str, int] = {
+    "discovery": 14,
+    "qualified": 21,
+    "proposal": 30,
+    "negotiation": 45,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/next-best-actions")
+@limiter.limit("5/minute")
+async def get_next_best_actions(
+    request: Request,
+    workspace_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if str(current_user.workspace_id) != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.company,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.created_at,
+            Deal.stage_changed_at,
+            Deal.competitors,
+        )
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.not_in(["closed_won", "closed_lost"]))
+        .order_by(Deal.value.desc())
+        .limit(10)
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "actions": [],
+            "insight": "No open deals found to generate next-best-action recommendations.",
+            "recommendations": [
+                "Create your first deal in the Pipeline to start receiving AI recommendations.",
+                "Import deals from your CRM to get immediate prioritisation insights.",
+                "Connect Gmail or Slack to auto-create deals from inbound conversations.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    deals_context: list[dict] = []
+    for row in rows:
+        deal_id, title, company, stage, value, health_score, created_at, stage_changed_at, competitors = row
+        ref = stage_changed_at or created_at
+        days_in_stage = (now - ref.replace(tzinfo=datetime.timezone.utc)).days if ref else 0
+        threshold = _NEXT_BEST_ACTIONS_STAGE_THRESHOLDS.get(stage, 30)
+        competitor_list: list[str] = competitors if isinstance(competitors, list) else []
+        deals_context.append({
+            "deal_id": str(deal_id),
+            "title": title or "Untitled",
+            "company": company or "",
+            "stage": stage,
+            "value": float(value or 0),
+            "health_score": int(health_score or 0),
+            "days_in_stage": days_in_stage,
+            "threshold": threshold,
+            "competitors": competitor_list,
+        })
+
+    context_lines = ["Top open deals (by value):\n"]
+    for d in deals_context:
+        comp_str = f", competitors: {', '.join(d['competitors'])}" if d["competitors"] else ""
+        context_lines.append(
+            f"  deal_id={d['deal_id']} title={d['title']!r} company={d['company']!r} "
+            f"stage={d['stage']} value=${d['value']:,.0f} health={d['health_score']} "
+            f"days_in_stage={d['days_in_stage']} threshold={d['threshold']}{comp_str}"
+        )
+    context = "\n".join(context_lines)
+
+    default_actions = []
+    for d in deals_context:
+        if d["value"] > 50000 or d["health_score"] < 40 or d["days_in_stage"] > 2 * d["threshold"]:
+            priority = "high"
+        elif d["health_score"] >= 70 and d["days_in_stage"] < d["threshold"]:
+            priority = "low"
+        else:
+            priority = "medium"
+        if d["stage"] == "discovery":
+            action = "Schedule qualification call to advance stage"
+        elif d["stage"] == "qualified":
+            action = "Send tailored proposal based on needs"
+        elif d["stage"] == "proposal":
+            action = "Follow up on proposal and address objections"
+        else:
+            action = "Align on terms and request verbal commitment"
+        default_actions.append({
+            "deal_id": d["deal_id"],
+            "priority": priority,
+            "action": action,
+            "rationale": "Based on stage and health score.",
+        })
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            system=_NEXT_BEST_ACTIONS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    actions = data.get("actions", default_actions)
+    if not isinstance(actions, list):
+        actions = default_actions
+    valid_priorities = {"high", "medium", "low"}
+    cleaned_actions = []
+    deal_ids_seen = {d["deal_id"] for d in deals_context}
+    for a in actions:
+        if not isinstance(a, dict):
+            continue
+        if str(a.get("deal_id", "")) not in deal_ids_seen:
+            continue
+        cleaned_actions.append({
+            "deal_id": str(a.get("deal_id", "")),
+            "priority": a.get("priority", "medium") if a.get("priority") in valid_priorities else "medium",
+            "action": str(a.get("action", "Follow up with stakeholder"))[:80],
+            "rationale": str(a.get("rationale", ""))[:100],
+        })
+    if not cleaned_actions:
+        cleaned_actions = default_actions
+
+    default_insight = (
+        f"{len(deals_context)} deals prioritised — "
+        f"{sum(1 for a in cleaned_actions if a['priority'] == 'high')} require immediate attention."
+    )
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    default_recs = [
+        "Prioritise high-value, low-health deals to prevent pipeline leakage.",
+        "Set weekly cadence for follow-ups on deals stuck beyond their stage threshold.",
+        "Track competitor mentions and tailor messaging to differentiate your offering.",
+    ]
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "actions": cleaned_actions,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ── Phase 17a: Weekly Coaching Digest ────────────────────────────────────────
+
+_COACHING_DIGEST_SYSTEM = """\
+You are an expert sales coach. Given a list of deals (stage, health score, value, \
+days in stage, competitors), produce a coaching digest for the 3 most actionable deals.
+
+Output a JSON object with:
+- "coached_deals": array of exactly 3 objects (or fewer if fewer than 3 deals):
+    - "deal_id": string
+    - "title": string
+    - "stage": string
+    - "value": number
+    - "what_to_do": string (2-3 sentences: specific actions for this week)
+    - "what_to_avoid": string (1-2 sentences: common mistakes at this stage)
+    - "talking_points": array of 3 strings (key points to raise in next conversation)
+- "weekly_theme": string (1 sentence identifying the week's biggest opportunity or risk)
+- "recommendations": array of 3 strings (process-level recommendations)
+
+Be specific, actionable, and coach-like. No generic platitudes.
+Return valid JSON only.\
+"""
+
+_COACHING_STAGE_THRESHOLDS: dict[str, int] = {
+    "discovery": 14,
+    "qualified": 21,
+    "proposal": 30,
+    "negotiation": 45,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/coaching-digest")
+@limiter.limit("5/minute")
+async def get_coaching_digest(
+    request: Request,
+    workspace_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if str(current_user.workspace_id) != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.company,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.created_at,
+            Deal.stage_changed_at,
+            Deal.competitors,
+        )
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.not_in(["closed_won", "closed_lost"]))
+        .order_by(Deal.value.desc())
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "coached_deals": [],
+            "weekly_theme": "No open deals this week — focus on prospecting to build pipeline.",
+            "recommendations": [
+                "Add your first deals to the Pipeline to unlock weekly coaching insights.",
+                "Connect your email to auto-capture new deal opportunities.",
+                "Set a goal of 3 qualified deals in pipeline by end of next week.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    deals_info: list[dict] = []
+    for row in rows:
+        deal_id, title, company, stage, value, health_score, created_at, stage_changed_at, competitors = row
+        ref = stage_changed_at or created_at
+        days_in_stage = (now - ref.replace(tzinfo=datetime.timezone.utc)).days if ref else 0
+        threshold = _COACHING_STAGE_THRESHOLDS.get(stage, 30)
+        overdue = days_in_stage > threshold
+        score = float(value or 0) / 1000 + (100 - int(health_score or 50)) + (30 if overdue else 0)
+        deals_info.append({
+            "deal_id": str(deal_id),
+            "title": title or "Untitled",
+            "company": company or "",
+            "stage": stage,
+            "value": float(value or 0),
+            "health_score": int(health_score or 0),
+            "days_in_stage": days_in_stage,
+            "threshold": threshold,
+            "competitors": competitors if isinstance(competitors, list) else [],
+            "_score": score,
+        })
+
+    top3 = sorted(deals_info, key=lambda d: d["_score"], reverse=True)[:3]
+
+    context_lines = ["Weekly sales coaching digest — top deals needing attention:\n"]
+    for d in top3:
+        comp_str = f", competitors: {', '.join(d['competitors'])}" if d["competitors"] else ""
+        context_lines.append(
+            f"  deal_id={d['deal_id']} title={d['title']!r} company={d['company']!r} "
+            f"stage={d['stage']} value=${d['value']:,.0f} health={d['health_score']} "
+            f"days_in_stage={d['days_in_stage']} (threshold {d['threshold']}d){comp_str}"
+        )
+    context = "\n".join(context_lines)
+
+    def _default_coached_deal(d: dict) -> dict:
+        stage = d["stage"]
+        if stage == "discovery":
+            wtd = "Run a structured discovery call to uncover budget, authority, and timeline. Document findings in the deal notes."
+            wta = "Avoid pitching product features before understanding the buyer's pain points."
+            points = ["What is your biggest operational challenge right now?", "Who else is involved in this decision?", "What does success look like in 6 months?"]
+        elif stage == "qualified":
+            wtd = "Send a tailored proposal within 48 hours. Follow up with a call to walk through it together."
+            wta = "Do not send a generic proposal — personalise it to the buyer's stated priorities."
+            points = ["How does this align with your Q4 priorities?", "Are there any internal approvals needed before we proceed?", "What would make this an easy yes for your team?"]
+        elif stage == "proposal":
+            wtd = "Follow up within 3 business days if no response. Offer a 30-minute call to address objections."
+            wta = "Avoid discounting too early — understand the objection before adjusting price."
+            points = ["What questions came up after reviewing the proposal?", "Is the timeline still realistic for your team?", "Can we schedule a technical review call?"]
+        else:
+            wtd = "Request a verbal commitment and agree on the final contract timeline. Involve legal on both sides."
+            wta = "Do not let the deal sit — each week of delay increases the risk of stakeholder change."
+            points = ["What is left before you can sign?", "Are there any procurement steps we should be aware of?", "Can we agree on a signature date today?"]
+        return {
+            "deal_id": d["deal_id"],
+            "title": d["title"],
+            "stage": stage,
+            "value": d["value"],
+            "what_to_do": wtd,
+            "what_to_avoid": wta,
+            "talking_points": points,
+        }
+
+    default_coached = [_default_coached_deal(d) for d in top3]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            system=_COACHING_DIGEST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    coached_deals = data.get("coached_deals", default_coached)
+    if not isinstance(coached_deals, list):
+        coached_deals = default_coached
+    valid_deal_ids = {d["deal_id"] for d in top3}
+    cleaned_deals = []
+    for cd in coached_deals:
+        if not isinstance(cd, dict):
+            continue
+        if str(cd.get("deal_id", "")) not in valid_deal_ids:
+            continue
+        tps = cd.get("talking_points", [])
+        talking_points = [str(t) for t in (tps if isinstance(tps, list) else [])[:3]]
+        while len(talking_points) < 3:
+            talking_points.append("What would make this deal move forward this week?")
+        cleaned_deals.append({
+            "deal_id": str(cd.get("deal_id", "")),
+            "title": str(cd.get("title", ""))[:80],
+            "stage": str(cd.get("stage", "")),
+            "value": float(cd.get("value", 0)),
+            "what_to_do": str(cd.get("what_to_do", ""))[:400],
+            "what_to_avoid": str(cd.get("what_to_avoid", ""))[:200],
+            "talking_points": talking_points,
+        })
+    if not cleaned_deals:
+        cleaned_deals = default_coached
+
+    default_theme = f"This week focus on {top3[0]['title']!r} — your highest-priority deal at ${top3[0]['value']:,.0f}."
+    weekly_theme = data.get("weekly_theme", default_theme)
+    if not isinstance(weekly_theme, str) or not weekly_theme.strip():
+        weekly_theme = default_theme
+
+    default_recs = [
+        "Block 30 minutes each morning this week for deal follow-ups — consistency beats intensity.",
+        "Update deal health scores after every customer interaction to keep your pipeline accurate.",
+        "Schedule a pipeline review meeting with your team to align on priorities and remove blockers.",
+    ]
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "coached_deals": cleaned_deals,
+        "weekly_theme": weekly_theme,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_QBR_SUMMARY_SYSTEM = """\
+You are a senior sales analytics AI generating a Quarterly Business Review (QBR) summary for a sales leader.
+
+Given workspace CRM data for the last 90 days, produce a concise, actionable QBR summary.
+
+Respond with valid JSON only, no prose outside JSON:
+{
+  "wins_summary": "2-sentence narrative celebrating key wins and total revenue closed",
+  "pipeline_status": "2-sentence narrative on current pipeline health, momentum, and areas of concern",
+  "strategic_recommendations": ["specific actionable recommendation 1", "specific recommendation 2", "specific recommendation 3"]
+}
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/qbr-summary")
+@limiter.limit("5/minute")
+async def get_qbr_summary(
+    request: Request,
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if str(current_user.workspace_id) != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_90 = now - datetime.timedelta(days=90)
+
+    won_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.company, Deal.value, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+        .order_by(Deal.value.desc())
+    )
+    won_rows = won_result.all()
+
+    lost_result = await db.execute(
+        select(func.count())
+        .select_from(Deal)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+    )
+    lost_count = lost_result.scalar() or 0
+
+    open_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.company, Deal.stage, Deal.value, Deal.health_score, Deal.ml_win_probability)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .order_by(Deal.value.desc())
+    )
+    open_rows = open_result.all()
+
+    won_count = len(won_rows)
+    won_revenue = sum(float(r[3] or 0) for r in won_rows)
+    total_closed = won_count + int(lost_count)
+    win_rate = round((won_count / total_closed * 100)) if total_closed > 0 else 0
+
+    top_wins = [
+        {
+            "id": str(r[0]),
+            "title": str(r[1] or ""),
+            "company": str(r[2] or ""),
+            "value": float(r[3] or 0),
+            "closed_at": r[4].isoformat() + "Z" if r[4] else None,
+        }
+        for r in won_rows[:3]
+    ]
+
+    open_count = len(open_rows)
+    total_pipeline = sum(float(r[4] or 0) for r in open_rows)
+    at_risk_rows = [r for r in open_rows if int(r[5] or 50) < 50]
+    at_risk_count = len(at_risk_rows)
+    avg_prob = (
+        round(sum(float(r[6] or 0) for r in open_rows) / open_count)
+        if open_count > 0 else 0
+    )
+
+    top_risks = [
+        {
+            "id": str(r[0]),
+            "title": str(r[1] or ""),
+            "company": str(r[2] or ""),
+            "stage": str(r[3] or ""),
+            "value": float(r[4] or 0),
+            "health_score": int(r[5] or 0),
+        }
+        for r in sorted(at_risk_rows, key=lambda x: float(x[4] or 0), reverse=True)[:3]
+    ]
+
+    stage_breakdown: dict[str, int] = {}
+    for r in open_rows:
+        s = str(r[3] or "unknown")
+        stage_breakdown[s] = stage_breakdown.get(s, 0) + 1
+
+    quarter = (now.month - 1) // 3 + 1
+    quarter_label = f"Q{quarter} {now.year}"
+
+    context_lines = [
+        f"Quarter: {quarter_label}",
+        f"Closed Won (last 90 days): {won_count} deals · ${won_revenue:,.0f} revenue",
+        f"Closed Lost (last 90 days): {int(lost_count)} deals",
+        f"Win Rate: {win_rate}%",
+        f"Open Pipeline: {open_count} deals · ${total_pipeline:,.0f} total value",
+        f"At-Risk Deals (health<50): {at_risk_count}",
+        f"Avg Win Probability: {avg_prob}%",
+        f"Stage Breakdown: " + ", ".join(f"{s}: {c}" for s, c in stage_breakdown.items()),
+    ]
+    if top_wins:
+        context_lines.append("Top Wins: " + "; ".join(f"{w['title']} (${w['value']:,.0f})" for w in top_wins))
+    if top_risks:
+        context_lines.append("Top At-Risk: " + "; ".join(f"{r['title']} health={r['health_score']}" for r in top_risks))
+    context = "\n".join(context_lines)
+
+    default_wins_summary = (
+        f"In {quarter_label} the team closed {won_count} deals totalling ${won_revenue:,.0f} in revenue, "
+        f"achieving a {win_rate}% win rate against {int(lost_count)} losses."
+    )
+    default_pipeline_status = (
+        f"The pipeline holds {open_count} open deals worth ${total_pipeline:,.0f}, "
+        f"with {at_risk_count} deals flagged at-risk and an average win probability of {avg_prob}%."
+    )
+    default_recs = [
+        f"Focus on the {at_risk_count} at-risk deals — schedule a pipeline review before quarter end.",
+        "Run a win-loss debrief on last quarter's losses to identify common objection patterns.",
+        "Ensure all open deals have a next-action date set — follow-up discipline drives velocity.",
+    ]
+
+    metrics = {
+        "closed_won_count": won_count,
+        "closed_won_revenue": won_revenue,
+        "closed_lost_count": int(lost_count),
+        "win_rate": win_rate,
+        "open_deal_count": open_count,
+        "total_pipeline_value": total_pipeline,
+        "at_risk_count": at_risk_count,
+        "avg_win_probability": avg_prob,
+    }
+
+    if won_count == 0 and open_count == 0:
+        return {
+            "quarter": quarter_label,
+            "wins_summary": default_wins_summary,
+            "pipeline_status": default_pipeline_status,
+            "top_wins": [],
+            "top_risks": [],
+            "strategic_recommendations": default_recs,
+            "metrics": metrics,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=_QBR_SUMMARY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    wins_summary = data.get("wins_summary", default_wins_summary)
+    if not isinstance(wins_summary, str) or not wins_summary.strip():
+        wins_summary = default_wins_summary
+
+    pipeline_status = data.get("pipeline_status", default_pipeline_status)
+    if not isinstance(pipeline_status, str) or not pipeline_status.strip():
+        pipeline_status = default_pipeline_status
+
+    raw_recs = data.get("strategic_recommendations", [])
+    strategic_recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(strategic_recommendations) < 3:
+        strategic_recommendations.append(default_recs[len(strategic_recommendations) % 3])
+
+    return {
+        "quarter": quarter_label,
+        "wins_summary": wins_summary,
+        "pipeline_status": pipeline_status,
+        "top_wins": top_wins,
+        "top_risks": top_risks,
+        "strategic_recommendations": strategic_recommendations,
+        "metrics": metrics,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_CONVERSION_PATH_SYSTEM = """\
+You are a senior sales analytics AI analysing deal conversion path patterns.
+
+Given the most common winning stage paths for a workspace, write a short, actionable analysis.
+
+Respond with valid JSON only, no prose outside JSON:
+{
+  "insight": "2-sentence insight on what the paths reveal about the team's sales process and where leverage is",
+  "recommendations": ["specific actionable recommendation 1", "specific recommendation 2", "specific recommendation 3"]
+}
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/conversion-path")
+@limiter.limit("5/minute")
+async def get_deal_conversion_paths(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_90 = now - datetime.timedelta(days=90)
+    cutoff_180 = now - datetime.timedelta(days=180)
+
+    won_result = await db.execute(
+        select(Deal.title).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+    )
+    won_rows = won_result.all()
+    won_titles = {row[0] for row in won_rows if row[0]}
+
+    lost_result = await db.execute(
+        select(Deal.title).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+    )
+    lost_rows = lost_result.all()
+    lost_titles = {row[0] for row in lost_rows if row[0]}
+
+    all_closed_titles = won_titles | lost_titles
+
+    import re as _re
+    events_result = await db.execute(
+        select(ActivityEvent.description, ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "deal_moved",
+            ActivityEvent.created_at >= cutoff_180,
+        )
+        .order_by(ActivityEvent.created_at.asc())
+    )
+    event_rows = events_result.all()
+
+    _stage_re = _re.compile(r"→\s*([a-z_]+)")
+    _title_re = _re.compile(r"Deal '([^']+)'")
+
+    deal_events: dict[str, list[tuple[str, datetime.datetime]]] = defaultdict(list)
+    for desc, ts in event_rows:
+        if not desc:
+            continue
+        title_m = _title_re.search(desc)
+        stage_m = _stage_re.search(desc)
+        if title_m and stage_m:
+            title = title_m.group(1)
+            stage = stage_m.group(1)
+            tz_ts = ts.replace(tzinfo=datetime.timezone.utc) if not ts.tzinfo else ts
+            deal_events[title].append((stage, tz_ts))
+
+    path_data: dict[str, dict] = {}
+    for title in all_closed_titles:
+        events_list = deal_events.get(title, [])
+        if not events_list:
+            continue
+        stages = [s for s, _ in events_list]
+        path_key = " → ".join(stages)
+        is_won = title in won_titles
+        total_days = 0.0
+        if len(events_list) > 1:
+            total_days = (events_list[-1][1] - events_list[0][1]).total_seconds() / 86400.0
+        if path_key not in path_data:
+            path_data[path_key] = {"stages": stages, "won_count": 0, "lost_count": 0, "days_list": []}
+        if is_won:
+            path_data[path_key]["won_count"] += 1
+            path_data[path_key]["days_list"].append(total_days)
+        else:
+            path_data[path_key]["lost_count"] += 1
+
+    if not path_data:
+        return {
+            "paths": [],
+            "most_common_path": None,
+            "fastest_path": None,
+            "insight": "No deal conversion path data available for the last 90 days.",
+            "recommendations": [
+                "Move deals through stages in the CRM to start building conversion path data.",
+                "Ensure stage transitions are logged for every deal in the pipeline.",
+                "Aim to close at least 3 deals per quarter to generate meaningful path analysis.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    paths = []
+    for pk, d in path_data.items():
+        won = d["won_count"]
+        lost = d["lost_count"]
+        total = won + lost
+        win_rate = round(won / total * 100) if total > 0 else 0
+        avg_days = round(sum(d["days_list"]) / len(d["days_list"]), 1) if d["days_list"] else 0.0
+        paths.append({
+            "stages_sequence": d["stages"],
+            "deal_count": total,
+            "win_rate": win_rate,
+            "avg_days": avg_days,
+        })
+
+    paths.sort(key=lambda p: (-p["deal_count"], -p["win_rate"]))
+
+    won_paths = [p for p in paths if p["win_rate"] > 0 and p["avg_days"] > 0]
+    most_common_path = paths[0]["stages_sequence"] if paths else None
+    fastest_path = min(won_paths, key=lambda p: p["avg_days"])["stages_sequence"] if won_paths else most_common_path
+
+    path_context = "\n".join(
+        f"- Path: {' → '.join(p['stages_sequence'])} | Deals: {p['deal_count']} | Win Rate: {p['win_rate']}% | Avg days: {p['avg_days']}"
+        for p in paths[:8]
+    )
+    most_common_str = " → ".join(most_common_path) if most_common_path else "N/A"
+    fastest_str = " → ".join(fastest_path) if fastest_path else "N/A"
+    context = (
+        f"Workspace deal conversion paths (last 90 days):\n{path_context}\n\n"
+        f"Most common path: {most_common_str}\nFastest path: {fastest_str}"
+    )
+
+    default_insight = (
+        f"The most common winning path is {most_common_str}. "
+        "Focus on replicating this process across the team."
+    )
+    default_recs = [
+        "Train your team to follow the most common winning path consistently.",
+        "Identify why deals deviate from winning paths and address those root causes.",
+        "Set stage-specific SLAs to keep deals on the fastest winning track.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_CONVERSION_PATH_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "paths": paths[:8],
+        "most_common_path": most_common_path,
+        "fastest_path": fastest_path,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 17d — AI workspace deal playbook generator
+# ---------------------------------------------------------------------------
+
+_PLAYBOOK_SYSTEM = """\
+You are a senior sales coaching AI analysing patterns from closed deals.
+
+Given metrics about top-performing deals and stage-level stats, generate a practical deal playbook.
+
+Respond with valid JSON only, no prose outside JSON:
+{
+  "playbook_title": "short punchy title for this workspace's winning playbook",
+  "key_behaviors": ["3 highest-impact behavior from top-performing deals"],
+  "stage_playbook": [
+    {
+      "stage": "discovery",
+      "key_actions": ["3 key actions for this stage"],
+      "success_signals": ["2 signals a deal is progressing well"],
+      "common_mistakes": ["2 common mistakes to avoid"]
+    }
+  ],
+  "recommendations": ["3 actionable recommendations for the sales team"]
+}
+Provide stage_playbook for stages: discovery, qualified, proposal, negotiation.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/playbook")
+@limiter.limit("5/minute")
+async def get_deal_playbook(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_90 = now - datetime.timedelta(days=90)
+    cutoff_180 = now - datetime.timedelta(days=180)
+
+    # Query 1: top-performing closed_won deals (high health, last 90d)
+    won_result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.value,
+            Deal.health_score,
+            Deal.stage_changed_at,
+            Deal.created_at,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+        .order_by(Deal.health_score.desc())
+    )
+    won_rows = won_result.all()
+
+    # Query 2: closed_lost deals (last 90d) for comparison
+    lost_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.health_score, Deal.stage_changed_at, Deal.created_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff_90,
+        )
+    )
+    lost_rows = lost_result.all()
+
+    # Query 3: deal_moved events to understand stage sequences
+    events_result = await db.execute(
+        select(ActivityEvent.description, ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "deal_moved",
+            ActivityEvent.created_at >= cutoff_180,
+        )
+        .order_by(ActivityEvent.created_at.asc())
+    )
+    event_rows = events_result.all()
+
+    won_count = len(won_rows)
+    lost_count = len(lost_rows)
+
+    default_playbook_title = "Standard Sales Playbook"
+    default_key_behaviors = [
+        "Qualify deeply before moving to proposal — deals with high health scores spend more time in qualified.",
+        "Maintain regular follow-up cadence — top deals average touch every 3-5 days.",
+        "Align on success criteria early — winning deals define what success looks like in discovery.",
+    ]
+    default_stage_playbook = [
+        {
+            "stage": "discovery",
+            "key_actions": [
+                "Map the full buying committee and identify the economic buyer.",
+                "Document the customer's current pain and quantify the cost of inaction.",
+                "Set a clear mutual action plan with agreed next steps.",
+            ],
+            "success_signals": [
+                "Customer shares internal docs or invites additional stakeholders.",
+                "Economic buyer is engaged and confirms budget authority.",
+            ],
+            "common_mistakes": [
+                "Rushing to demo before understanding the problem.",
+                "Failing to identify blockers or competing priorities.",
+            ],
+        },
+        {
+            "stage": "qualified",
+            "key_actions": [
+                "Confirm BANT: Budget, Authority, Need, Timeline.",
+                "Run a tailored demo focused on the customer's top 3 pain points.",
+                "Agree on evaluation criteria and decision-making process.",
+            ],
+            "success_signals": [
+                "Customer requests a proposal or pricing discussion.",
+                "Champion advocates internally and introduces you to decision maker.",
+            ],
+            "common_mistakes": [
+                "Sending a generic proposal without customisation.",
+                "Assuming one stakeholder speaks for the entire buying group.",
+            ],
+        },
+        {
+            "stage": "proposal",
+            "key_actions": [
+                "Present ROI analysis tailored to their stated metrics.",
+                "Address top objections proactively in the proposal document.",
+                "Set a clear decision date and follow-up schedule.",
+            ],
+            "success_signals": [
+                "Customer shares proposal internally and reports positive feedback.",
+                "Legal or procurement team is introduced.",
+            ],
+            "common_mistakes": [
+                "Ignoring competitor mentions instead of directly addressing them.",
+                "Failing to create urgency or a compelling event.",
+            ],
+        },
+        {
+            "stage": "negotiation",
+            "key_actions": [
+                "Anchor on value rather than discounting on price.",
+                "Understand their constraints before making concessions.",
+                "Get verbal commit before sending revised commercial terms.",
+            ],
+            "success_signals": [
+                "Customer requests contract redlines or legal review.",
+                "Champion sets an internal signing deadline.",
+            ],
+            "common_mistakes": [
+                "Caving on price without asking for something in return.",
+                "Allowing negotiations to stall without a follow-up plan.",
+            ],
+        },
+    ]
+    default_recs = [
+        f"Review the {won_count} recently closed wins and document the specific objections overcome in each.",
+        "Run a monthly pipeline review focused on deal health scores — deals below 50 need immediate attention.",
+        "Implement a structured handoff checklist from sales to customer success for every closed deal.",
+    ]
+
+    if won_count == 0:
+        return {
+            "playbook_title": default_playbook_title,
+            "winning_profile": {
+                "avg_health": 0,
+                "avg_cycle_days": 0,
+                "won_count": 0,
+                "lost_count": lost_count,
+                "win_rate": 0,
+            },
+            "key_behaviors": default_key_behaviors,
+            "stage_playbook": default_stage_playbook,
+            "recommendations": default_recs,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Compute winning profile metrics
+    health_scores = [float(r[3] or 0) for r in won_rows]
+    avg_health = round(sum(health_scores) / len(health_scores)) if health_scores else 0
+
+    cycle_days_list = []
+    for row in won_rows:
+        closed_at = row[4]
+        created_at = row[5]
+        if closed_at and created_at:
+            ca = closed_at.replace(tzinfo=datetime.timezone.utc) if not closed_at.tzinfo else closed_at
+            cr = created_at.replace(tzinfo=datetime.timezone.utc) if not created_at.tzinfo else created_at
+            delta = (ca - cr).total_seconds() / 86400.0
+            if delta >= 0:
+                cycle_days_list.append(delta)
+    avg_cycle_days = round(sum(cycle_days_list) / len(cycle_days_list), 1) if cycle_days_list else 0.0
+
+    total_closed = won_count + lost_count
+    win_rate = round(won_count / total_closed * 100) if total_closed > 0 else 0
+
+    # Parse stage sequences from activity events for won deals
+    import re as _re
+    won_titles = {row[1] for row in won_rows if row[1]}
+    _stage_re = _re.compile(r"→\s*([a-z_]+)")
+    _title_re = _re.compile(r"Deal '([^']+)'")
+
+    deal_stages: dict[str, list[str]] = defaultdict(list)
+    for desc, ts in event_rows:
+        if not desc:
+            continue
+        tm = _title_re.search(desc)
+        sm = _stage_re.search(desc)
+        if tm and sm:
+            deal_stages[tm.group(1)].append(sm.group(1))
+
+    stage_counts: dict[str, int] = defaultdict(int)
+    for title in won_titles:
+        for stage in deal_stages.get(title, []):
+            stage_counts[stage] += 1
+
+    top_stages = sorted(stage_counts.keys(), key=lambda s: -stage_counts[s])[:4]
+
+    context_lines = [
+        f"Workspace closed {won_count} deals (won) and {lost_count} deals (lost) in the last 90 days.",
+        f"Win rate: {win_rate}%",
+        f"Average health score of won deals: {avg_health}",
+        f"Average cycle time (won): {avg_cycle_days} days",
+        f"Most visited stages in winning deals: {', '.join(top_stages) if top_stages else 'unknown'}",
+    ]
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            system=_PLAYBOOK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    playbook_title = data.get("playbook_title", default_playbook_title)
+    if not isinstance(playbook_title, str) or not playbook_title.strip():
+        playbook_title = default_playbook_title
+
+    raw_behaviors = data.get("key_behaviors", [])
+    key_behaviors = [str(b) for b in (raw_behaviors if isinstance(raw_behaviors, list) else [])[:3]]
+    while len(key_behaviors) < 3:
+        key_behaviors.append(default_key_behaviors[len(key_behaviors) % 3])
+
+    raw_stage_playbook = data.get("stage_playbook", [])
+    stage_playbook = raw_stage_playbook if isinstance(raw_stage_playbook, list) and len(raw_stage_playbook) > 0 else default_stage_playbook
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "playbook_title": playbook_title,
+        "winning_profile": {
+            "avg_health": avg_health,
+            "avg_cycle_days": avg_cycle_days,
+            "won_count": won_count,
+            "lost_count": lost_count,
+            "win_rate": win_rate,
+        },
+        "key_behaviors": key_behaviors,
+        "stage_playbook": stage_playbook,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 17e — AI workspace competitor battle cards
+# ---------------------------------------------------------------------------
+
+_BATTLE_CARD_SYSTEM = """\
+You are a senior sales strategy AI analysing competitor intelligence from CRM data.
+
+Given competitor encounter data (how often each competitor appears in deals and the win/loss record against them), generate actionable battle cards.
+
+Respond with valid JSON only, no prose outside JSON:
+{
+  "battle_cards": [
+    {
+      "competitor": "CompetitorName",
+      "key_differentiators": ["3 ways we beat this competitor"],
+      "objection_responses": ["3 ready responses to common objections this competitor raises"],
+      "positioning": "one-sentence positioning statement when facing this competitor"
+    }
+  ],
+  "recommendations": ["3 strategic recommendations for competing in this market"]
+}
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/battle-card")
+@limiter.limit("5/minute")
+async def get_deal_battle_card(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_90 = now - datetime.timedelta(days=90)
+
+    # Query 1: open deals with competitors field
+    open_result = await db.execute(
+        select(Deal.title, Deal.competitors)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+            Deal.competitors.isnot(None),
+        )
+    )
+    open_rows = open_result.all()
+
+    # Query 2: closed_won deals with competitors (last 90d)
+    won_result = await db.execute(
+        select(Deal.title, Deal.competitors)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= cutoff_90,
+            Deal.competitors.isnot(None),
+        )
+    )
+    won_rows = won_result.all()
+
+    # Query 3: closed_lost deals with competitors (last 90d)
+    lost_result = await db.execute(
+        select(Deal.title, Deal.competitors)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff_90,
+            Deal.competitors.isnot(None),
+        )
+    )
+    lost_rows = lost_result.all()
+
+    # Aggregate competitor encounter counts and win/loss records
+    competitor_data: dict[str, dict] = defaultdict(lambda: {"open": 0, "won": 0, "lost": 0})
+
+    def _extract_competitors(rows: list, outcome: str) -> None:
+        for title, comps in rows:
+            if not comps:
+                continue
+            names: list[str] = []
+            if isinstance(comps, list):
+                names = [str(c).strip() for c in comps if c]
+            elif isinstance(comps, str):
+                names = [c.strip() for c in comps.split(",") if c.strip()]
+            for name in names:
+                if name:
+                    competitor_data[name][outcome] += 1
+
+    _extract_competitors(open_rows, "open")
+    _extract_competitors(won_rows, "won")
+    _extract_competitors(lost_rows, "lost")
+
+    if not competitor_data:
+        return {
+            "battle_cards": [],
+            "top_competitor": None,
+            "recommendations": [
+                "Start tracking competitors on deals — add competitor names to the deal record to enable battle-card generation.",
+                "Review lost deals from the last quarter and identify which competitors were mentioned.",
+                "Set up a win/loss debrief process to capture competitor intelligence systematically.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Build sorted competitor list for context
+    competitor_list = []
+    for name, counts in competitor_data.items():
+        total_closed = counts["won"] + counts["lost"]
+        win_rate = round(counts["won"] / total_closed * 100) if total_closed > 0 else None
+        encounter_count = counts["open"] + counts["won"] + counts["lost"]
+        competitor_list.append({
+            "competitor": name,
+            "encounter_count": encounter_count,
+            "open_count": counts["open"],
+            "won_count": counts["won"],
+            "lost_count": counts["lost"],
+            "win_rate": win_rate,
+        })
+
+    competitor_list.sort(key=lambda c: -c["encounter_count"])
+    top_competitor = competitor_list[0]["competitor"] if competitor_list else None
+
+    context_lines = [
+        "Competitor encounter data from CRM deals (last 90 days):",
+    ]
+    for c in competitor_list[:6]:
+        wr = f"{c['win_rate']}%" if c["win_rate"] is not None else "no closed data"
+        context_lines.append(
+            f"- {c['competitor']}: {c['encounter_count']} encounters, win rate {wr} "
+            f"({c['won_count']} won, {c['lost_count']} lost, {c['open_count']} open)"
+        )
+    context = "\n".join(context_lines)
+
+    default_battle_cards = [
+        {
+            "competitor": c["competitor"],
+            "encounter_count": c["encounter_count"],
+            "win_rate": c["win_rate"],
+            "key_differentiators": [
+                "Superior integration ecosystem with 200+ native connectors vs limited options.",
+                "Dedicated customer success team with guaranteed 2-hour response SLA.",
+                "Transparent pricing with no hidden implementation or migration fees.",
+            ],
+            "objection_responses": [
+                "If they claim lower price: our TCO over 3 years is typically 30% lower once implementation costs are factored in.",
+                "If they claim more features: our platform focuses on the 20% of features that drive 80% of outcomes — less noise, faster adoption.",
+                "If they claim better support: we offer a named CSM from day one; ask them who your point of contact will be post-sale.",
+            ],
+            "positioning": f"Unlike {c['competitor']}, we focus on outcomes over features — faster time-to-value with lower total cost of ownership.",
+        }
+        for c in competitor_list[:3]
+    ]
+    default_recs = [
+        f"Prioritise battle card training for {top_competitor} — they appear most frequently in the pipeline.",
+        "Run a quarterly win/loss review focused on competitive deals to keep intelligence fresh.",
+        "Add competitor tracking as a required field on all deals over $10K to improve data coverage.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            system=_BATTLE_CARD_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    raw_cards = data.get("battle_cards", [])
+    if not isinstance(raw_cards, list) or len(raw_cards) == 0:
+        raw_cards = []
+
+    # Merge AI card content with our computed metrics
+    merged_cards = []
+    comp_lookup = {c["competitor"]: c for c in competitor_list}
+    seen_competitors = set()
+
+    for ai_card in raw_cards[:6]:
+        name = str(ai_card.get("competitor", "")).strip()
+        if not name or name in seen_competitors:
+            continue
+        seen_competitors.add(name)
+        metrics = comp_lookup.get(name, {"encounter_count": 0, "win_rate": None})
+        merged_cards.append({
+            "competitor": name,
+            "encounter_count": metrics.get("encounter_count", 0),
+            "win_rate": metrics.get("win_rate"),
+            "key_differentiators": [str(d) for d in (ai_card.get("key_differentiators") or [])[:3]],
+            "objection_responses": [str(r) for r in (ai_card.get("objection_responses") or [])[:3]],
+            "positioning": str(ai_card.get("positioning", "")),
+        })
+
+    # Ensure cards exist for top competitors if AI missed them
+    for c in competitor_list[:3]:
+        if c["competitor"] not in seen_competitors:
+            default = next((d for d in default_battle_cards if d["competitor"] == c["competitor"]), None)
+            if default:
+                merged_cards.append(default)
+
+    if not merged_cards:
+        merged_cards = default_battle_cards
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "battle_cards": merged_cards,
+        "top_competitor": top_competitor,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 17f — AI workspace deal risk escalation digest
+# ---------------------------------------------------------------------------
+
+_RISK_ESCALATION_SYSTEM = """\
+You are a senior sales operations AI analysing at-risk deals in a CRM pipeline.
+
+Given a list of at-risk deals with health scores, days stale, and deal metadata, generate a targeted risk escalation digest.
+
+Respond with valid JSON only, no prose outside JSON:
+{
+  "escalations": [
+    {
+      "deal_id": "uuid string",
+      "suggested_action": "one concrete next action the rep should take today",
+      "risk_factors": ["up to 3 specific risk factors for this deal"]
+    }
+  ],
+  "recommendations": ["3 strategic recommendations for the sales manager to address pipeline risk"]
+}
+The escalations array must be in the same order as the deals provided.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/risk-escalation")
+@limiter.limit("5/minute")
+async def get_deal_risk_escalation(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Query: top 5 at-risk open deals by health score ascending
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.company,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+            Deal.stage_changed_at,
+            Deal.competitors,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+            Deal.health_score < 60,
+        )
+        .order_by(Deal.health_score.asc())
+        .limit(5)
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "escalations": [],
+            "total_at_risk_value": 0.0,
+            "recommendations": [
+                "All open deals have health scores above 60 — no escalations needed right now.",
+                "Schedule a pipeline review next week to maintain deal health before any slip occurs.",
+                "Keep monitoring deal activity; health scores below 60 will trigger an escalation alert here.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    total_at_risk_value = sum(float(r[4] or 0) for r in rows)
+
+    # Compute days_stale for each deal
+    deal_context_parts = []
+    deal_ids = []
+    for r in rows:
+        deal_id = str(r[0])
+        deal_ids.append(deal_id)
+        title = r[1] or "Untitled"
+        company = r[2] or "Unknown"
+        stage = r[3] or "unknown"
+        value = float(r[4] or 0)
+        health = int(r[5] or 0)
+        win_prob = int(r[6] or 0) if r[6] is not None else 0
+        stage_changed_at = r[7]
+        competitors = r[8]
+
+        days_stale = 0
+        if stage_changed_at:
+            sc = stage_changed_at.replace(tzinfo=datetime.timezone.utc) if not stage_changed_at.tzinfo else stage_changed_at
+            days_stale = max(0, int((now - sc).total_seconds() / 86400))
+
+        has_competitor = bool(competitors and (
+            (isinstance(competitors, list) and len(competitors) > 0) or
+            (isinstance(competitors, str) and competitors.strip())
+        ))
+
+        deal_context_parts.append(
+            f"- deal_id={deal_id}, title=\"{title}\", company={company}, stage={stage}, "
+            f"value=${value:,.0f}, health={health}, win_probability={win_prob}%, "
+            f"days_stale={days_stale}, competitor_pressure={'yes' if has_competitor else 'no'}"
+        )
+
+    context = "At-risk deals (health < 60), sorted worst first:\n" + "\n".join(deal_context_parts)
+
+    default_escalations = []
+    for r in rows:
+        deal_id = str(r[0])
+        health = int(r[5] or 0)
+        stage_changed_at = r[7]
+        days_stale = 0
+        if stage_changed_at:
+            sc = stage_changed_at.replace(tzinfo=datetime.timezone.utc) if not stage_changed_at.tzinfo else stage_changed_at
+            days_stale = max(0, int((now - sc).total_seconds() / 86400))
+        default_escalations.append({
+            "deal_id": deal_id,
+            "suggested_action": f"Schedule an immediate check-in call — this deal has been stale for {days_stale} days with health score {health}.",
+            "risk_factors": [
+                f"Health score critically low at {health}/100.",
+                f"No stage movement in {days_stale} days — likely stalled.",
+                "Win probability below threshold — needs re-qualification.",
+            ],
+        })
+
+    default_recs = [
+        f"Immediately review the {len(rows)} at-risk deals (total value ${total_at_risk_value:,.0f}) in a pipeline call this week.",
+        "Require reps to log a next-action date on every deal with health < 60 before end of day.",
+        "Consider running a win/loss debrief on recently lost deals to identify patterns that predict health score decline.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            system=_RISK_ESCALATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    # Merge AI escalations with our computed deal rows
+    ai_escalations = data.get("escalations", [])
+    if not isinstance(ai_escalations, list):
+        ai_escalations = []
+
+    ai_by_id = {str(e.get("deal_id", "")): e for e in ai_escalations if isinstance(e, dict)}
+
+    escalations = []
+    for i, r in enumerate(rows):
+        deal_id = str(r[0])
+        title = r[1] or "Untitled"
+        company = r[2] or "Unknown"
+        stage = r[3] or "unknown"
+        value = float(r[4] or 0)
+        health = int(r[5] or 0)
+        win_prob = int(r[6] or 0) if r[6] is not None else 0
+        stage_changed_at = r[7]
+        days_stale = 0
+        if stage_changed_at:
+            sc = stage_changed_at.replace(tzinfo=datetime.timezone.utc) if not stage_changed_at.tzinfo else stage_changed_at
+            days_stale = max(0, int((now - sc).total_seconds() / 86400))
+
+        ai_entry = ai_by_id.get(deal_id, {})
+        suggested_action = str(ai_entry.get("suggested_action", default_escalations[i]["suggested_action"])).strip()
+        if not suggested_action:
+            suggested_action = default_escalations[i]["suggested_action"]
+        raw_rf = ai_entry.get("risk_factors", [])
+        risk_factors = [str(f) for f in (raw_rf if isinstance(raw_rf, list) else [])[:3]]
+        if not risk_factors:
+            risk_factors = default_escalations[i]["risk_factors"]
+
+        escalations.append({
+            "deal_id": deal_id,
+            "title": title,
+            "company": company,
+            "stage": stage,
+            "value": value,
+            "health_score": health,
+            "win_probability": win_prob,
+            "days_stale": days_stale,
+            "risk_factors": risk_factors,
+            "suggested_action": suggested_action,
+        })
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "escalations": escalations,
+        "total_at_risk_value": total_at_risk_value,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_MOMENTUM_SYSTEM = """\
+You are a senior sales operations AI analysing deal momentum in a CRM pipeline.
+Given a list of open deals with velocity scores, stage info, and days since last stage change, classify each into accelerating, decelerating, or stalled, and generate a momentum digest.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "accelerating": [{"deal_id": "uuid", "trend_description": "one sentence"}],
+  "decelerating": [{"deal_id": "uuid", "trend_description": "one sentence"}],
+  "stalled": [{"deal_id": "uuid", "trend_description": "one sentence"}],
+  "momentum_index": 0,
+  "insight": "one paragraph insight about pipeline momentum",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+momentum_index is 0-100 (100 = all deals accelerating, 0 = all stalled).
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/momentum")
+@limiter.limit("5/minute")
+async def get_deal_momentum(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.company,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+            Deal.stage_changed_at,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .order_by(Deal.stage_changed_at.asc())
+    )
+    rows = result.all()
+
+    deals_data = []
+    for r in rows:
+        deal_id = str(r[0])
+        title = r[1] or "Untitled"
+        company = r[2] or ""
+        stage = str(r[3] or "unknown")
+        value = float(r[4] or 0)
+        health = int(r[5] or 50)
+        win_prob = int(r[6] or 50)
+        stage_changed_at = r[7]
+        if stage_changed_at and stage_changed_at.tzinfo is None:
+            stage_changed_at = stage_changed_at.replace(tzinfo=datetime.timezone.utc)
+        days_stale = (now - stage_changed_at).days if stage_changed_at else 30
+
+        # velocity score: higher health + higher prob + fewer stale days = higher velocity
+        velocity_score = max(0, min(100, int((health + win_prob) / 2 - days_stale * 2)))
+
+        deals_data.append({
+            "deal_id": deal_id,
+            "title": title,
+            "company": company,
+            "stage": stage,
+            "value": value,
+            "health_score": health,
+            "win_probability": win_prob,
+            "days_stale": days_stale,
+            "velocity_score": velocity_score,
+        })
+
+    if not deals_data:
+        return {
+            "accelerating": [],
+            "decelerating": [],
+            "stalled": [],
+            "momentum_index": 0,
+            "insight": "No open deals found to analyse momentum.",
+            "recommendations": [
+                "Add open deals to start tracking pipeline momentum.",
+                "Ensure stage-change dates are kept up to date for accurate velocity scoring.",
+                "Review your pipeline stages to capture deal progression accurately.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Build default classification by velocity score
+    default_accelerating = [d for d in deals_data if d["velocity_score"] >= 60]
+    default_decelerating = [d for d in deals_data if 30 <= d["velocity_score"] < 60]
+    default_stalled = [d for d in deals_data if d["velocity_score"] < 30]
+
+    total = len(deals_data)
+    momentum_index = int((len(default_accelerating) * 100 + len(default_decelerating) * 50) / total) if total else 0
+
+    context_lines = [
+        f"Open Deals: {total}",
+        f"Momentum Index: {momentum_index}/100",
+        f"Accelerating (velocity>=60): {len(default_accelerating)}",
+        f"Decelerating (30<=velocity<60): {len(default_decelerating)}",
+        f"Stalled (velocity<30): {len(default_stalled)}",
+        "Deal Details:",
+    ]
+    for d in deals_data[:10]:
+        context_lines.append(
+            f"  {d['deal_id']} | {d['title']} | {d['company']} | {d['stage']} "
+            f"| health={d['health_score']} | prob={d['win_probability']}% "
+            f"| stale={d['days_stale']}d | velocity={d['velocity_score']}"
+        )
+    context = "\n".join(context_lines)
+
+    default_insight = (
+        f"The pipeline has {total} open deals with a momentum index of {momentum_index}/100. "
+        f"{len(default_accelerating)} deals are accelerating, {len(default_decelerating)} decelerating, "
+        f"and {len(default_stalled)} stalled."
+    )
+    default_recs = [
+        f"Prioritise the {len(default_stalled)} stalled deal(s) — schedule immediate outreach to revive momentum.",
+        "Review decelerating deals weekly and identify blockers before they stall entirely.",
+        "Use accelerating deals as templates — understand what's working and replicate those behaviours.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=_MOMENTUM_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    def _parse_group(key: str, default_list: list[dict]) -> list[dict]:
+        raw_list = data.get(key, [])
+        if not isinstance(raw_list, list):
+            raw_list = []
+        out = []
+        deal_map = {d["deal_id"]: d for d in deals_data}
+        for item in raw_list[:10]:
+            if not isinstance(item, dict):
+                continue
+            did = str(item.get("deal_id", ""))
+            trend = str(item.get("trend_description", ""))
+            if did in deal_map:
+                d = deal_map[did]
+                out.append({
+                    "deal_id": did,
+                    "title": d["title"],
+                    "velocity_score": d["velocity_score"],
+                    "trend_description": trend or f"Velocity score {d['velocity_score']}",
+                })
+        if not out:
+            out = [{"deal_id": d["deal_id"], "title": d["title"], "velocity_score": d["velocity_score"], "trend_description": f"Velocity score {d['velocity_score']}"} for d in default_list[:3]]
+        return out
+
+    accelerating = _parse_group("accelerating", default_accelerating)
+    decelerating = _parse_group("decelerating", default_decelerating)
+    stalled = _parse_group("stalled", default_stalled)
+
+    ai_index = data.get("momentum_index")
+    if isinstance(ai_index, (int, float)) and 0 <= ai_index <= 100:
+        momentum_index = int(ai_index)
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "accelerating": accelerating,
+        "decelerating": decelerating,
+        "stalled": stalled,
+        "momentum_index": momentum_index,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_VELOCITY_HEATMAP_SYSTEM = """\
+You are a senior sales operations AI analysing pipeline stage transition velocity.
+Given a list of stage transitions with median days and deal counts, identify bottlenecks and generate actionable insights.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "bottleneck_stage": "the stage name that causes the most delay",
+  "fastest_transition": "from_stage -> to_stage",
+  "slowest_transition": "from_stage -> to_stage",
+  "insight": "one paragraph insight about the pipeline velocity patterns",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/pipeline/velocity-heatmap")
+@limiter.limit("5/minute")
+async def get_pipeline_velocity_heatmap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=180)
+
+    result = await db.execute(
+        select(
+            ActivityEvent.description,
+            ActivityEvent.created_at,
+        )
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.type == "deal_moved",
+            ActivityEvent.created_at >= cutoff,
+        )
+        .order_by(ActivityEvent.created_at.asc())
+    )
+    events = result.all()
+
+    # Parse "Deal X moved from A to B" patterns and group by (from_stage, to_stage)
+    import re as _re
+    _stage_pat = _re.compile(r"moved from (\w+) to (\w+)", _re.IGNORECASE)
+
+    transition_days: dict[tuple[str, str], list[int]] = {}
+    prev_by_deal: dict[str, tuple[str, datetime.datetime]] = {}
+
+    for desc, created_at in events:
+        if not desc:
+            continue
+        m = _stage_pat.search(str(desc))
+        if not m:
+            continue
+        from_stage = m.group(1).lower()
+        to_stage = m.group(2).lower()
+        key = (from_stage, to_stage)
+        if created_at and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+        # Use a synthetic deal key based on description prefix
+        deal_key = str(desc).split(" moved")[0].strip()
+        if deal_key in prev_by_deal and prev_by_deal[deal_key][0] == from_stage:
+            days_taken = max(0, (created_at - prev_by_deal[deal_key][1]).days) if created_at and prev_by_deal[deal_key][1] else 7
+            transition_days.setdefault(key, []).append(days_taken)
+        prev_by_deal[deal_key] = (to_stage, created_at)
+        transition_days.setdefault(key, [])
+
+    # Build transitions list with median days
+    transitions = []
+    for (from_s, to_s), days_list in transition_days.items():
+        if not days_list:
+            continue
+        sorted_days = sorted(days_list)
+        mid = len(sorted_days) // 2
+        median_days = sorted_days[mid] if len(sorted_days) % 2 else (sorted_days[mid - 1] + sorted_days[mid]) // 2
+        transitions.append({
+            "from_stage": from_s,
+            "to_stage": to_s,
+            "median_days": median_days,
+            "deal_count": len(days_list),
+        })
+
+    transitions.sort(key=lambda t: -t["median_days"])
+
+    default_bottleneck = transitions[0]["from_stage"] if transitions else "proposal"
+    default_fastest = f"{transitions[-1]['from_stage']} -> {transitions[-1]['to_stage']}" if len(transitions) > 1 else "discovery -> qualified"
+    default_slowest = f"{transitions[0]['from_stage']} -> {transitions[0]['to_stage']}" if transitions else "proposal -> negotiation"
+    default_insight = (
+        f"Analysed {len(transitions)} stage transitions over the last 180 days. "
+        f"The biggest bottleneck is '{default_bottleneck}' with a median of "
+        f"{transitions[0]['median_days'] if transitions else 0} days."
+    )
+    default_recs = [
+        f"Focus on reducing time in '{default_bottleneck}' — identify the common blockers and create a stage-exit checklist.",
+        "Review deals that took more than 2× the median days in any stage — these outliers hide systemic issues.",
+        "Set stage-entry and stage-exit criteria for each stage to ensure consistent deal qualification.",
+    ]
+
+    if not transitions:
+        return {
+            "transitions": [],
+            "bottleneck_stage": "unknown",
+            "fastest_transition": "n/a",
+            "slowest_transition": "n/a",
+            "insight": "No stage transition data found for the last 180 days.",
+            "recommendations": default_recs,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context_lines = [
+        f"Analysed {len(transitions)} stage transitions (last 180 days):",
+    ]
+    for t in transitions[:10]:
+        context_lines.append(
+            f"  {t['from_stage']} -> {t['to_stage']}: median {t['median_days']}d, {t['deal_count']} deals"
+        )
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_VELOCITY_HEATMAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    bottleneck_stage = data.get("bottleneck_stage", default_bottleneck)
+    if not isinstance(bottleneck_stage, str) or not bottleneck_stage.strip():
+        bottleneck_stage = default_bottleneck
+
+    fastest_transition = data.get("fastest_transition", default_fastest)
+    if not isinstance(fastest_transition, str) or not fastest_transition.strip():
+        fastest_transition = default_fastest
+
+    slowest_transition = data.get("slowest_transition", default_slowest)
+    if not isinstance(slowest_transition, str) or not slowest_transition.strip():
+        slowest_transition = default_slowest
+
+    insight = data.get("insight", default_insight)
+    if not isinstance(insight, str) or not insight.strip():
+        insight = default_insight
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "transitions": transitions,
+        "bottleneck_stage": bottleneck_stage,
+        "fastest_transition": fastest_transition,
+        "slowest_transition": slowest_transition,
+        "insight": insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_WIN_LOSS_SYSTEM = """\
+You are a senior sales operations AI analysing win/loss patterns in a CRM pipeline.
+Given aggregated win/loss deal data including stage win rates, value comparisons, and deal characteristics, generate actionable pattern insights.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "patterns": [
+    {"pattern_type": "won", "description": "one insight about winning deals"},
+    {"pattern_type": "won", "description": "another winning pattern"},
+    {"pattern_type": "lost", "description": "one insight about losing deals"},
+    {"pattern_type": "lost", "description": "another loss pattern"}
+  ],
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 2 won patterns and 2 lost patterns.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-loss-summary")
+@limiter.limit("5/minute")
+async def get_win_loss_summary(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=90)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+            Deal.created_at,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.created_at >= cutoff,
+        )
+        .order_by(Deal.created_at.desc())
+    )
+    rows = result.all()
+
+    won_rows = [r for r in rows if str(r[2]) == "closed_won"]
+    lost_rows = [r for r in rows if str(r[2]) == "closed_lost"]
+
+    won_count = len(won_rows)
+    lost_count = len(lost_rows)
+    total = won_count + lost_count
+    win_rate = round(won_count / total * 100) if total else 0
+
+    won_values = [float(r[3] or 0) for r in won_rows]
+    lost_values = [float(r[3] or 0) for r in lost_rows]
+    avg_won_value = round(sum(won_values) / len(won_values)) if won_values else 0
+    avg_lost_value = round(sum(lost_values) / len(lost_values)) if lost_values else 0
+
+    won_healths = [int(r[4] or 50) for r in won_rows]
+    lost_healths = [int(r[4] or 50) for r in lost_rows]
+    avg_won_health = round(sum(won_healths) / len(won_healths)) if won_healths else 0
+    avg_lost_health = round(sum(lost_healths) / len(lost_healths)) if lost_healths else 0
+
+    top_wins = [{"title": r[1], "value": float(r[3] or 0)} for r in sorted(won_rows, key=lambda x: float(x[3] or 0), reverse=True)[:3]]
+    top_losses = [{"title": r[1], "value": float(r[3] or 0)} for r in sorted(lost_rows, key=lambda x: float(x[3] or 0), reverse=True)[:3]]
+
+    default_patterns = [
+        {"pattern_type": "won", "description": f"Won deals average {avg_won_health} health score vs {avg_lost_health} for losses — health is a strong win predictor."},
+        {"pattern_type": "won", "description": f"Average won deal value is ${avg_won_value:,.0f}, suggesting deals in this range are well-qualified."},
+        {"pattern_type": "lost", "description": f"Lost deals average ${avg_lost_value:,.0f} in value — review if pricing or scope is misaligned for this segment."},
+        {"pattern_type": "lost", "description": f"Lost deals show lower engagement scores — earlier health monitoring could flag at-risk deals sooner."},
+    ]
+    default_recs = [
+        f"Focus on replicating the behaviours of the top {min(3, won_count)} won deals — debrief with the winning reps this week.",
+        "Implement a deal health review at every stage gate to catch declining deals before they reach proposal.",
+        f"Analyse the top {min(3, lost_count)} lost deals for common objection patterns and build battlecard responses.",
+    ]
+
+    if total == 0:
+        return {
+            "win_rate": 0,
+            "avg_won_value": 0,
+            "avg_lost_value": 0,
+            "won_count": 0,
+            "lost_count": 0,
+            "avg_won_health": 0,
+            "avg_lost_health": 0,
+            "top_wins": [],
+            "top_losses": [],
+            "patterns": [],
+            "recommendations": default_recs,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context_lines = [
+        f"Last 90 days — Won: {won_count} deals, Lost: {lost_count} deals, Win Rate: {win_rate}%",
+        f"Avg Won Value: ${avg_won_value:,.0f}, Avg Lost Value: ${avg_lost_value:,.0f}",
+        f"Avg Won Health: {avg_won_health}, Avg Lost Health: {avg_lost_health}",
+    ]
+    if top_wins:
+        context_lines.append("Top Wins: " + ", ".join(f"{w['title']} (${w['value']:,.0f})" for w in top_wins))
+    if top_losses:
+        context_lines.append("Top Losses: " + ", ".join(f"{l['title']} (${l['value']:,.0f})" for l in top_losses))
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=_WIN_LOSS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    raw_patterns = data.get("patterns", [])
+    patterns = []
+    for p in (raw_patterns if isinstance(raw_patterns, list) else [])[:4]:
+        if isinstance(p, dict):
+            pt = str(p.get("pattern_type", "won"))
+            desc = str(p.get("description", ""))
+            if pt in ("won", "lost") and desc:
+                patterns.append({"pattern_type": pt, "description": desc})
+    if not patterns:
+        patterns = default_patterns
+
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "win_rate": win_rate,
+        "avg_won_value": avg_won_value,
+        "avg_lost_value": avg_lost_value,
+        "won_count": won_count,
+        "lost_count": lost_count,
+        "avg_won_health": avg_won_health,
+        "avg_lost_health": avg_lost_health,
+        "top_wins": top_wins,
+        "top_losses": top_losses,
+        "patterns": patterns,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+_SALES_FORECAST_SYSTEM = """\
+You are a senior sales operations AI generating a revenue forecast for a CRM pipeline.
+Given the weighted pipeline value, best-case, worst-case, deal count, and stage breakdown, generate a concise forecast narrative and 3 adjustment factors.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "forecast_narrative": "2-3 sentence forecast summary",
+  "adjustments": [
+    {"factor": "factor name", "impact": "positive", "magnitude": "high"},
+    {"factor": "factor name", "impact": "negative", "magnitude": "medium"},
+    {"factor": "factor name", "impact": "positive", "magnitude": "low"}
+  ]
+}
+impact must be "positive" or "negative". magnitude must be "high", "medium", or "low".
+Provide exactly 3 adjustments.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/sales-forecast")
+@limiter.limit("5/minute")
+async def get_sales_forecast(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    rows = result.all()
+
+    deal_count = len(rows)
+
+    if deal_count == 0:
+        return {
+            "weighted_pipeline": 0,
+            "best_case": 0,
+            "worst_case": 0,
+            "deal_count": 0,
+            "stage_breakdown": [],
+            "forecast_narrative": "No open deals found. Add deals to the pipeline to generate a sales forecast.",
+            "adjustments": [
+                {"factor": "Pipeline coverage", "impact": "negative", "magnitude": "high"},
+                {"factor": "New deal creation", "impact": "positive", "magnitude": "medium"},
+                {"factor": "Lead qualification", "impact": "positive", "magnitude": "low"},
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Compute weighted pipeline, best case, worst case
+    weighted_pipeline = 0.0
+    best_case = 0.0
+    worst_case = 0.0
+    stage_totals: dict[str, dict] = {}
+
+    for row in rows:
+        value = float(row[2] or 0)
+        health = int(row[3] or 50)
+        win_prob = float(row[4] or 0.5)
+        stage = str(row[1])
+
+        weighted_pipeline += value * win_prob
+        if health > 60:
+            best_case += value
+        if health < 50:
+            worst_case += value * 0.5
+
+        if stage not in stage_totals:
+            stage_totals[stage] = {"weighted_value": 0.0, "count": 0}
+        stage_totals[stage]["weighted_value"] += value * win_prob
+        stage_totals[stage]["count"] += 1
+
+    weighted_pipeline = round(weighted_pipeline)
+    best_case = round(best_case)
+    worst_case = round(worst_case)
+
+    stage_breakdown = [
+        {"stage": s, "weighted_value": round(v["weighted_value"]), "count": v["count"]}
+        for s, v in sorted(stage_totals.items(), key=lambda x: -x[1]["weighted_value"])
+    ]
+
+    context_lines = [
+        f"Open deals: {deal_count}",
+        f"Weighted pipeline: ${weighted_pipeline:,.0f}",
+        f"Best case (health>60): ${best_case:,.0f}",
+        f"Worst case (health<50, 50% likely): ${worst_case:,.0f}",
+        "Stage breakdown: " + ", ".join(
+            f"{b['stage']} ${b['weighted_value']:,.0f} ({b['count']} deals)"
+            for b in stage_breakdown
+        ),
+    ]
+    context = "\n".join(context_lines)
+
+    default_narrative = (
+        f"Your pipeline holds {deal_count} open deals with a weighted forecast of ${weighted_pipeline:,.0f}. "
+        f"Best-case revenue from highly engaged deals is ${best_case:,.0f}, while at-risk deals contribute a worst-case baseline of ${worst_case:,.0f}. "
+        "Focus on improving health scores in low-probability stages to close the gap between scenarios."
+    )
+    default_adjustments = [
+        {"factor": "Deal health distribution", "impact": "positive" if best_case > worst_case else "negative", "magnitude": "high"},
+        {"factor": "Win probability alignment", "impact": "positive", "magnitude": "medium"},
+        {"factor": "Stage concentration risk", "impact": "negative" if len(stage_breakdown) < 3 else "positive", "magnitude": "low"},
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_SALES_FORECAST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    forecast_narrative = str(data.get("forecast_narrative", "")).strip() or default_narrative
+
+    raw_adjs = data.get("adjustments", [])
+    adjustments = []
+    for a in (raw_adjs if isinstance(raw_adjs, list) else [])[:3]:
+        if isinstance(a, dict):
+            factor = str(a.get("factor", ""))
+            impact = str(a.get("impact", "positive"))
+            magnitude = str(a.get("magnitude", "medium"))
+            if factor and impact in ("positive", "negative") and magnitude in ("high", "medium", "low"):
+                adjustments.append({"factor": factor, "impact": impact, "magnitude": magnitude})
+    while len(adjustments) < 3:
+        adjustments.append(default_adjustments[len(adjustments) % 3])
+
+    return {
+        "weighted_pipeline": weighted_pipeline,
+        "best_case": best_case,
+        "worst_case": worst_case,
+        "deal_count": deal_count,
+        "stage_breakdown": stage_breakdown,
+        "forecast_narrative": forecast_narrative,
+        "adjustments": adjustments,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+_DEAL_AGE_SYSTEM = """\
+You are a senior sales operations AI analysing the age distribution of open CRM deals.
+Given deal count and total value per age bucket (<30d, 30-60d, 60-90d, >90d), plus the oldest and newest deal and average pipeline age, generate an aging insight and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "aging_insight": "2-3 sentence insight about pipeline aging",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/age-distribution")
+@limiter.limit("5/minute")
+async def get_deal_age_distribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.value, Deal.created_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .order_by(Deal.created_at.asc())
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "buckets": [
+                {"label": "<30d", "count": 0, "total_value": 0, "pct_of_pipeline": 0},
+                {"label": "30-60d", "count": 0, "total_value": 0, "pct_of_pipeline": 0},
+                {"label": "60-90d", "count": 0, "total_value": 0, "pct_of_pipeline": 0},
+                {"label": ">90d", "count": 0, "total_value": 0, "pct_of_pipeline": 0},
+            ],
+            "oldest_deal": None,
+            "newest_deal": None,
+            "avg_age_days": 0,
+            "aging_insight": "No open deals found in the pipeline.",
+            "recommendations": [
+                "Create new deals in the pipeline to start tracking age distribution.",
+                "Import existing opportunities from your CRM or spreadsheet.",
+                "Set up inbound lead capture to automatically create deals.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    bucket_labels = ["<30d", "30-60d", "60-90d", ">90d"]
+    bucket_data: dict[str, dict] = {b: {"count": 0, "total_value": 0.0} for b in bucket_labels}
+
+    total_pipeline = 0.0
+    ages = []
+    oldest = None
+    newest = None
+
+    for row in rows:
+        title = str(row[1])
+        value = float(row[2] or 0)
+        created_at = row[3]
+        if created_at and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+        days = (now - created_at).days if created_at else 0
+        ages.append(days)
+        total_pipeline += value
+
+        if days < 30:
+            bucket = "<30d"
+        elif days < 60:
+            bucket = "30-60d"
+        elif days < 90:
+            bucket = "60-90d"
+        else:
+            bucket = ">90d"
+
+        bucket_data[bucket]["count"] += 1
+        bucket_data[bucket]["total_value"] += value
+
+        if oldest is None or days > oldest["days"]:
+            oldest = {"title": title, "days": days}
+        if newest is None or days < newest["days"]:
+            newest = {"title": title, "days": days}
+
+    avg_age_days = round(sum(ages) / len(ages)) if ages else 0
+
+    buckets = [
+        {
+            "label": label,
+            "count": bucket_data[label]["count"],
+            "total_value": round(bucket_data[label]["total_value"]),
+            "pct_of_pipeline": round(bucket_data[label]["total_value"] / total_pipeline * 100) if total_pipeline > 0 else 0,
+        }
+        for label in bucket_labels
+    ]
+
+    default_insight = (
+        f"Your pipeline has {len(rows)} open deals with an average age of {avg_age_days} days. "
+        f"The oldest deal has been open for {oldest['days']} days — review whether it is still progressing. "
+        "Focus on clearing stale deals to keep pipeline accuracy high."
+    )
+    default_recs = [
+        f"Review the {bucket_data['>90d']['count']} deals older than 90 days — close or disqualify those with no recent activity.",
+        "Set a maximum pipeline age policy (e.g. 120 days) and automate health-score alerts for deals approaching it.",
+        "Run a weekly aging report to identify deals at risk of becoming stale before they miss the quarter.",
+    ]
+
+    old_deal_count = bucket_data[">90d"]["count"]
+    context_lines = [
+        f"Open deals: {len(rows)}, avg age: {avg_age_days} days",
+        f"<30d: {bucket_data['<30d']['count']} deals (${bucket_data['<30d']['total_value']:,.0f})",
+        f"30-60d: {bucket_data['30-60d']['count']} deals (${bucket_data['30-60d']['total_value']:,.0f})",
+        f"60-90d: {bucket_data['60-90d']['count']} deals (${bucket_data['60-90d']['total_value']:,.0f})",
+        f">90d: {old_deal_count} deals (${bucket_data['>90d']['total_value']:,.0f})",
+        f"Oldest deal: {oldest['title']} at {oldest['days']} days",
+        f"Newest deal: {newest['title']} at {newest['days']} days",
+    ]
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_DEAL_AGE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    aging_insight = str(data.get("aging_insight", "")).strip() or default_insight
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "buckets": buckets,
+        "oldest_deal": oldest,
+        "newest_deal": newest,
+        "avg_age_days": avg_age_days,
+        "aging_insight": aging_insight,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+_DEAL_HEALTH_TREND_SYSTEM = """\
+You are a senior sales operations AI analysing deal health trends across a CRM pipeline.
+Given average health per stage, overall health, trend direction, and at-risk deal count, generate a health narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "health_narrative": "2-3 sentence narrative about pipeline health trends",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/health-trend")
+@limiter.limit("5/minute")
+async def get_deal_health_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.stage, Deal.health_score)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "stage_health": [],
+            "overall_avg_health": 0,
+            "trend_direction": "stable",
+            "at_risk_count": 0,
+            "health_narrative": "No open deals found in the pipeline. Add deals to start tracking health trends.",
+            "recommendations": [
+                "Create your first deals to begin pipeline health tracking.",
+                "Configure deal health scoring to reflect your sales process.",
+                "Set up automated health score updates based on deal activity.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closing", "other"]
+    stage_buckets: dict[str, list[int]] = {}
+    at_risk_count = 0
+
+    for row in rows:
+        stage = str(row[0])
+        health = int(row[1] or 50)
+        if health < 40:
+            at_risk_count += 1
+        if stage not in stage_buckets:
+            stage_buckets[stage] = []
+        stage_buckets[stage].append(health)
+
+    stage_health = []
+    for stage in stage_order:
+        if stage in stage_buckets:
+            healths = stage_buckets[stage]
+            stage_health.append({
+                "stage": stage,
+                "avg_health": round(sum(healths) / len(healths)),
+                "count": len(healths),
+            })
+    # Add any stages not in the canonical order
+    for stage, healths in stage_buckets.items():
+        if stage not in stage_order:
+            stage_health.append({
+                "stage": stage,
+                "avg_health": round(sum(healths) / len(healths)),
+                "count": len(healths),
+            })
+
+    all_healths = [int(r[1] or 50) for r in rows]
+    overall_avg_health = round(sum(all_healths) / len(all_healths))
+
+    # Trend: compare early-pipeline (discovery+qualified) vs late-pipeline (proposal+negotiation)
+    early_stages = {"discovery", "qualified"}
+    late_stages = {"proposal", "negotiation", "closing"}
+    early_healths = [int(r[1] or 50) for r in rows if str(r[0]) in early_stages]
+    late_healths = [int(r[1] or 50) for r in rows if str(r[0]) in late_stages]
+
+    early_avg = sum(early_healths) / len(early_healths) if early_healths else None
+    late_avg = sum(late_healths) / len(late_healths) if late_healths else None
+
+    if early_avg is not None and late_avg is not None:
+        diff = late_avg - early_avg
+        trend_direction = "improving" if diff > 5 else "declining" if diff < -5 else "stable"
+    else:
+        trend_direction = "stable"
+
+    default_narrative = (
+        f"Your pipeline has an overall average health score of {overall_avg_health}. "
+        f"{at_risk_count} deal{'s are' if at_risk_count != 1 else ' is'} at risk with health below 40. "
+        f"Pipeline health is {trend_direction} from early to late stages."
+    )
+    default_recs = [
+        "Schedule a deal health review for all deals below 40 — these are at risk of being lost without immediate action.",
+        "Set automated alerts when deal health drops below 50 so reps can intervene before deals stall.",
+        "Review the healthiest deals for best practices that can be replicated across the team.",
+    ]
+
+    context_lines = [
+        f"Open deals: {len(rows)}, overall avg health: {overall_avg_health}, at-risk (<40): {at_risk_count}",
+        f"Trend direction (early vs late pipeline): {trend_direction}",
+    ]
+    for sh in stage_health:
+        context_lines.append(f"{sh['stage']}: avg health {sh['avg_health']}, {sh['count']} deals")
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_DEAL_HEALTH_TREND_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    health_narrative = str(data.get("health_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_health": stage_health,
+        "overall_avg_health": overall_avg_health,
+        "trend_direction": trend_direction,
+        "at_risk_count": at_risk_count,
+        "health_narrative": health_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 17m: Deal stagnation detector
+# ---------------------------------------------------------------------------
+
+_DEAL_STAGNATION_SYSTEM = """\
+You are a senior sales operations AI analysing deal stagnation across a CRM pipeline.
+Given information about deals that have been stuck in their current stage beyond the threshold, stage average days, and the most stagnant deal, generate a stagnation narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "stagnation_narrative": "2-3 sentence narrative about pipeline stagnation",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/stagnation")
+@limiter.limit("5/minute")
+async def get_deal_stagnation(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    STAGNANT_THRESHOLD_DAYS = 14
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.health_score, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "stagnant_deals": [],
+            "stage_avg_days": [],
+            "total_stagnant_count": 0,
+            "most_stagnant": None,
+            "stagnation_narrative": "No open deals found in the pipeline.",
+            "recommendations": [
+                "Add deals to the pipeline to start tracking stagnation.",
+                "Set up automated reminders for deals approaching the stagnation threshold.",
+                "Define stagnation policies per stage to catch slow deals early.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Compute days in stage for each deal
+    stage_days_buckets: dict[str, list[float]] = {}
+    deal_infos = []
+    for row in rows:
+        deal_id, title, stage, health_score, stage_changed_at = row
+        if stage_changed_at is None:
+            days_in_stage = 0.0
+        else:
+            if stage_changed_at.tzinfo is None:
+                stage_changed_at = stage_changed_at.replace(tzinfo=datetime.timezone.utc)
+            days_in_stage = max(0.0, (now - stage_changed_at).total_seconds() / 86400)
+
+        deal_infos.append({
+            "id": str(deal_id),
+            "title": str(title),
+            "stage": str(stage),
+            "health_score": int(health_score or 50),
+            "days_in_stage": round(days_in_stage),
+        })
+        stage_days_buckets.setdefault(str(stage), []).append(days_in_stage)
+
+    # Stage average days
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closing"]
+    stage_avg_days = []
+    for stage in stage_order:
+        if stage in stage_days_buckets:
+            days_list = stage_days_buckets[stage]
+            stage_avg_days.append({
+                "stage": stage,
+                "avg_days": round(sum(days_list) / len(days_list)),
+                "count": len(days_list),
+            })
+    for stage, days_list in stage_days_buckets.items():
+        if stage not in stage_order:
+            stage_avg_days.append({
+                "stage": stage,
+                "avg_days": round(sum(days_list) / len(days_list)),
+                "count": len(days_list),
+            })
+
+    # Stagnant deals
+    stagnant_deals = [d for d in deal_infos if d["days_in_stage"] > STAGNANT_THRESHOLD_DAYS]
+    stagnant_deals.sort(key=lambda d: d["days_in_stage"], reverse=True)
+    total_stagnant_count = len(stagnant_deals)
+
+    most_stagnant = (
+        {"title": stagnant_deals[0]["title"], "days": stagnant_deals[0]["days_in_stage"]}
+        if stagnant_deals else None
+    )
+
+    default_narrative = (
+        f"{total_stagnant_count} deal{'s are' if total_stagnant_count != 1 else ' is'} stagnant "
+        f"(stuck for more than {STAGNANT_THRESHOLD_DAYS} days in the current stage). "
+        f"Pipeline has {len(rows)} open deals total."
+    )
+    default_recs = [
+        f"Schedule deal reviews for all {total_stagnant_count} stagnant deals this week — each one needs an action plan or should be disqualified.",
+        "Set automated 14-day stage-age alerts so reps receive a nudge before a deal becomes fully stagnant.",
+        "Review the stage with the highest average days and adjust qualification criteria to prevent deals from entering unprepared.",
+    ]
+
+    context_lines = [
+        f"Open deals: {len(rows)}, stagnant (>{STAGNANT_THRESHOLD_DAYS}d in stage): {total_stagnant_count}",
+    ]
+    if most_stagnant:
+        context_lines.append(f"Most stagnant: {most_stagnant['title']} ({most_stagnant['days']} days)")
+    for s in stage_avg_days:
+        context_lines.append(f"{s['stage']}: avg {s['avg_days']}d, {s['count']} deals")
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_DEAL_STAGNATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    stagnation_narrative = str(data.get("stagnation_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stagnant_deals": stagnant_deals,
+        "stage_avg_days": stage_avg_days,
+        "total_stagnant_count": total_stagnant_count,
+        "most_stagnant": most_stagnant,
+        "stagnation_narrative": stagnation_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 17n: Deal engagement gap analyser
+# ---------------------------------------------------------------------------
+
+_DEAL_ENGAGEMENT_GAP_SYSTEM = """\
+You are a senior sales operations AI analysing deal engagement gaps across a CRM pipeline.
+Given information about deals that have not been updated recently, average days since last activity, and total disengaged count, generate an engagement narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "engagement_narrative": "2-3 sentence narrative about deal engagement gaps",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/engagement-gap")
+@limiter.limit("5/minute")
+async def get_deal_engagement_gap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    ENGAGEMENT_THRESHOLD_DAYS = 7
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.health_score, Deal.updated_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "disengaged_deals": [],
+            "avg_days_since_activity": 0,
+            "total_disengaged": 0,
+            "top_disengaged": None,
+            "engagement_narrative": "No open deals found in the pipeline.",
+            "recommendations": [
+                "Add deals to the pipeline to start tracking engagement.",
+                "Set up a regular cadence of updates so deal records stay current.",
+                "Define engagement SLAs per stage to ensure deals receive timely attention.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    deal_infos = []
+    for row in rows:
+        deal_id, title, stage, health_score, updated_at = row
+        if updated_at is None:
+            days_since = 0.0
+        else:
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=datetime.timezone.utc)
+            days_since = max(0.0, (now - updated_at).total_seconds() / 86400)
+        deal_infos.append({
+            "id": str(deal_id),
+            "title": str(title),
+            "stage": str(stage),
+            "health_score": int(health_score or 50),
+            "days_since_activity": round(days_since),
+        })
+
+    all_days = [d["days_since_activity"] for d in deal_infos]
+    avg_days_since_activity = round(sum(all_days) / len(all_days)) if all_days else 0
+
+    disengaged = [d for d in deal_infos if d["days_since_activity"] > ENGAGEMENT_THRESHOLD_DAYS]
+    disengaged.sort(key=lambda d: d["days_since_activity"], reverse=True)
+    total_disengaged = len(disengaged)
+
+    top_disengaged = (
+        {"title": disengaged[0]["title"], "days": disengaged[0]["days_since_activity"]}
+        if disengaged else None
+    )
+
+    default_narrative = (
+        f"{total_disengaged} deal{'s have' if total_disengaged != 1 else ' has'} not been updated "
+        f"in more than {ENGAGEMENT_THRESHOLD_DAYS} days. "
+        f"The pipeline averages {avg_days_since_activity} days since last activity across {len(rows)} open deals."
+    )
+    default_recs = [
+        f"Review and update all {total_disengaged} disengaged deals this week — add notes, move stage, or disqualify each one.",
+        f"Set a {ENGAGEMENT_THRESHOLD_DAYS}-day maximum engagement SLA: any deal without activity triggers an automatic rep alert.",
+        "Add next-action dates to every active deal so reps have a clear cadence and deals don't drift without accountability.",
+    ]
+
+    context_lines = [
+        f"Open deals: {len(rows)}, avg days since last update: {avg_days_since_activity}",
+        f"Disengaged (>{ENGAGEMENT_THRESHOLD_DAYS}d without update): {total_disengaged}",
+    ]
+    if top_disengaged:
+        context_lines.append(f"Most disengaged: {top_disengaged['title']} ({top_disengaged['days']} days)")
+    for d in disengaged[:5]:
+        context_lines.append(f"{d['title']} ({d['stage']}): {d['days_since_activity']}d, health {d['health_score']}")
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_DEAL_ENGAGEMENT_GAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    engagement_narrative = str(data.get("engagement_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "disengaged_deals": disengaged,
+        "avg_days_since_activity": avg_days_since_activity,
+        "total_disengaged": total_disengaged,
+        "top_disengaged": top_disengaged,
+        "engagement_narrative": engagement_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 17o: Deal value concentration analyser
+# ---------------------------------------------------------------------------
+
+_DEAL_VALUE_CONCENTRATION_SYSTEM = """\
+You are a senior sales operations AI analysing pipeline value concentration risk.
+Given information about deal values, concentration metrics, and herfindahl index, generate a concentration narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "concentration_narrative": "2-3 sentence narrative about pipeline value concentration and risk",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/value-concentration")
+@limiter.limit("5/minute")
+async def get_deal_value_concentration(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .order_by(Deal.value.desc())
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "deals_ranked": [],
+            "total_pipeline": 0,
+            "top_deal_pct": 0,
+            "top3_pct": 0,
+            "concentration_risk": "low",
+            "herfindahl_index": 0,
+            "concentration_narrative": "No open deals found in the pipeline.",
+            "recommendations": [
+                "Add deals to the pipeline to start tracking value concentration.",
+                "Aim for a diverse pipeline where no single deal exceeds 25% of total value.",
+                "Track concentration metrics monthly to catch over-reliance on single deals early.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    total_pipeline = sum(float(r[3] or 0) for r in rows)
+
+    if total_pipeline == 0:
+        deals_ranked = [
+            {"id": str(r[0]), "title": str(r[1]), "stage": str(r[2]),
+             "value": float(r[3] or 0), "pct_of_pipeline": 0}
+            for r in rows
+        ]
+        return {
+            "deals_ranked": deals_ranked,
+            "total_pipeline": 0,
+            "top_deal_pct": 0,
+            "top3_pct": 0,
+            "concentration_risk": "low",
+            "herfindahl_index": 0,
+            "concentration_narrative": "All open deals have zero value — update deal values to see concentration risk.",
+            "recommendations": [
+                "Set deal values to accurately track your pipeline's financial exposure.",
+                "Aim for a diverse pipeline where no single deal exceeds 25% of total value.",
+                "Track concentration metrics monthly to catch over-reliance on single deals early.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    deals_ranked = []
+    for r in rows:
+        value = float(r[3] or 0)
+        pct = round((value / total_pipeline) * 100, 1) if total_pipeline > 0 else 0
+        deals_ranked.append({
+            "id": str(r[0]),
+            "title": str(r[1]),
+            "stage": str(r[2]),
+            "value": value,
+            "pct_of_pipeline": pct,
+        })
+
+    top_deal_pct = deals_ranked[0]["pct_of_pipeline"] if deals_ranked else 0
+    top3_values = sum(d["value"] for d in deals_ranked[:3])
+    top3_pct = round((top3_values / total_pipeline) * 100, 1) if total_pipeline > 0 else 0
+
+    # Herfindahl-Hirschman Index (0–10000 scale)
+    herfindahl_index = round(sum((d["value"] / total_pipeline) ** 2 for d in deals_ranked) * 10000)
+
+    if top_deal_pct > 40 or herfindahl_index > 2500:
+        concentration_risk = "high"
+    elif top_deal_pct > 25 or herfindahl_index > 1500:
+        concentration_risk = "medium"
+    else:
+        concentration_risk = "low"
+
+    default_narrative = (
+        f"Your pipeline of ${total_pipeline:,.0f} shows {concentration_risk} concentration risk. "
+        f"The largest deal represents {top_deal_pct}% of total pipeline value "
+        f"and the top 3 deals account for {top3_pct}%. "
+        f"HHI score: {herfindahl_index}/10000."
+    )
+    default_recs = [
+        f"Diversify the pipeline — the top deal at {top_deal_pct}% creates {'critical' if top_deal_pct > 40 else 'elevated'} single-deal risk.",
+        "Prioritise adding 3–5 new mid-size deals this month to reduce concentration below the 25% threshold.",
+        "Set pipeline health alerts when any single deal exceeds 30% of total value so leadership can act early.",
+    ]
+
+    context_lines = [
+        f"Total pipeline: ${total_pipeline:,.0f}, deals: {len(rows)}, concentration risk: {concentration_risk}",
+        f"Top deal: {top_deal_pct}%, top-3 deals: {top3_pct}%, HHI: {herfindahl_index}",
+    ]
+    for d in deals_ranked[:5]:
+        context_lines.append(f"{d['title']} ({d['stage']}): ${d['value']:,.0f} ({d['pct_of_pipeline']}%)")
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_DEAL_VALUE_CONCENTRATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    concentration_narrative = str(data.get("concentration_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "deals_ranked": deals_ranked,
+        "total_pipeline": round(total_pipeline, 2),
+        "top_deal_pct": top_deal_pct,
+        "top3_pct": top3_pct,
+        "concentration_risk": concentration_risk,
+        "herfindahl_index": herfindahl_index,
+        "concentration_narrative": concentration_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_DEAL_CLOSE_DATE_ACCURACY_SYSTEM = """\
+You are a senior sales operations AI analysing close date accuracy for deals.
+Given data about closed deals and their expected vs actual close dates, generate an accuracy narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "accuracy_narrative": "2-3 sentence narrative about close date prediction accuracy and its business impact",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/close-date-accuracy")
+@limiter.limit("5/minute")
+async def get_deal_close_date_accuracy(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=90)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.stage,
+            Deal.expected_close,
+            Deal.stage_changed_at,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= cutoff,
+        )
+        .order_by(Deal.stage_changed_at.desc())
+    )
+    rows = result.all()
+
+    on_time_count = 0
+    late_count = 0
+    early_count = 0
+    slip_days_list: list[int] = []
+
+    for r in rows:
+        expected_close_str = r[3]
+        stage_changed_at = r[4]
+        if not expected_close_str:
+            continue
+        try:
+            expected_date = datetime.date.fromisoformat(str(expected_close_str))
+            if stage_changed_at is None:
+                continue
+            sc = stage_changed_at
+            if sc.tzinfo is None:
+                sc = sc.replace(tzinfo=datetime.timezone.utc)
+            actual_date = sc.date()
+            slip = (actual_date - expected_date).days
+            if slip > 7:
+                late_count += 1
+                slip_days_list.append(slip)
+            elif slip < -7:
+                early_count += 1
+            else:
+                on_time_count += 1
+        except (ValueError, AttributeError):
+            continue
+
+    total_with_expected = on_time_count + late_count + early_count
+    accuracy_pct = round(on_time_count / total_with_expected * 100, 1) if total_with_expected > 0 else 100.0
+    avg_slip_days = round(sum(slip_days_list) / len(slip_days_list), 1) if slip_days_list else 0.0
+    total_closed = len(rows)
+
+    default_narrative = (
+        f"{total_closed} deals closed in the last 90 days with a close date accuracy of {accuracy_pct}%. "
+        f"{on_time_count} were on time, {late_count} were late (avg {avg_slip_days:.0f}d slip), and {early_count} closed early. "
+        f"{'Accuracy is strong — keep up the disciplined forecasting.' if accuracy_pct >= 70 else 'Improving forecast accuracy will help revenue planning and pipeline reliability.'}"
+    )
+    default_recs = [
+        f"Review the {late_count} late-closing deals to identify common causes of slippage — process gaps, buyer delays, or poor qualification.",
+        "Set a bi-weekly close-date audit so reps update expected dates before they become stale — stale dates erode forecast trust.",
+        f"Celebrate the {on_time_count} on-time closes and share what made them predictable to reinforce accurate forecasting habits.",
+    ]
+
+    context_lines = [
+        f"Total closed (90d): {total_closed}, with expected close date: {total_with_expected}",
+        f"On-time: {on_time_count}, Late: {late_count}, Early: {early_count}",
+        f"Accuracy: {accuracy_pct}%, Avg slip for late deals: {avg_slip_days}d",
+    ]
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_DEAL_CLOSE_DATE_ACCURACY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    accuracy_narrative = str(data.get("accuracy_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "total_closed": total_closed,
+        "accuracy_pct": accuracy_pct,
+        "avg_slip_days": avg_slip_days,
+        "on_time_count": on_time_count,
+        "late_count": late_count,
+        "early_count": early_count,
+        "accuracy_narrative": accuracy_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_REP_PERFORMANCE_SYSTEM = """\
+You are a senior sales operations AI analysing sales rep performance data.
+Given a leaderboard of reps with their closed deal counts, win rates, and revenue generated in the last 90 days, generate a performance narrative and 3 coaching recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "performance_narrative": "2-3 sentence narrative about overall rep performance patterns and standouts",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/rep-performance")
+@limiter.limit("5/minute")
+async def get_rep_performance(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=90)
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.stage,
+            Deal.value,
+            Deal.assigned_agent,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= cutoff,
+        )
+        .order_by(Deal.stage_changed_at.desc())
+    )
+    rows = result.all()
+
+    # Group by rep name
+    rep_map: dict[str, dict] = {}
+    for r in rows:
+        rep_name = str(r[3]).strip() if r[3] else "Unassigned"
+        stage = str(r[1])
+        value = float(r[2] or 0)
+        if rep_name not in rep_map:
+            rep_map[rep_name] = {"won": 0, "lost": 0, "revenue": 0.0}
+        if stage == "closed_won":
+            rep_map[rep_name]["won"] += 1
+            rep_map[rep_name]["revenue"] += value
+        else:
+            rep_map[rep_name]["lost"] += 1
+
+    reps = []
+    for name, stats in rep_map.items():
+        total = stats["won"] + stats["lost"]
+        win_rate = round(stats["won"] / total * 100) if total > 0 else 0
+        avg_deal = round(stats["revenue"] / stats["won"]) if stats["won"] > 0 else 0
+        reps.append({
+            "name": name,
+            "won_count": stats["won"],
+            "lost_count": stats["lost"],
+            "win_rate": win_rate,
+            "total_revenue": round(stats["revenue"], 2),
+            "avg_deal_size": avg_deal,
+        })
+
+    reps.sort(key=lambda x: x["total_revenue"], reverse=True)
+    top_rep = reps[0]["name"] if reps else None
+    total_reps = len(reps)
+
+    default_narrative = (
+        f"{total_reps} rep{'s' if total_reps != 1 else ''} closed deals in the last 90 days. "
+        + (f"{top_rep} leads the team in revenue." if top_rep else "No closed deals found.")
+        + " Reviewing individual win rates alongside revenue reveals where coaching will have the highest impact."
+    )
+    default_recs = [
+        "Pair top performers with lower-revenue reps for deal reviews to spread best practices across the team.",
+        "Focus coaching on reps with low win rates — improving qualification and objection-handling can unlock significant revenue.",
+        "Set individual revenue targets for next quarter based on each rep's 90-day baseline to create clear, motivating benchmarks.",
+    ]
+
+    context_lines = [f"Rep performance — last 90 days, {total_reps} rep(s):"]
+    for rep in reps[:8]:
+        context_lines.append(
+            f"{rep['name']}: {rep['won_count']}W/{rep['lost_count']}L, "
+            f"win rate {rep['win_rate']}%, revenue ${rep['total_revenue']:,.0f}, avg deal ${rep['avg_deal_size']:,.0f}"
+        )
+    context = "\n".join(context_lines)
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_REP_PERFORMANCE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    performance_narrative = str(data.get("performance_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "reps": reps,
+        "top_rep": top_rep,
+        "total_reps": total_reps,
+        "performance_narrative": performance_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_PIPELINE_CONVERSION_FUNNEL_SYSTEM = """\
+You are a senior sales operations AI analysing pipeline conversion funnel data.
+Given per-stage deal counts, total values, and stage-to-stage conversion rates, generate a funnel narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "funnel_narrative": "2-3 sentence narrative about funnel health, conversion patterns, and where deals are lost",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+_FUNNEL_STAGES = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/pipeline/conversion-funnel-ai")
+@limiter.limit("5/minute")
+async def get_pipeline_conversion_funnel_ai(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    result = await db.execute(
+        select(Deal.stage, Deal.value)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(_FUNNEL_STAGES),
+        )
+    )
+    rows = result.all()
+
+    counts: dict[str, int] = {s: 0 for s in _FUNNEL_STAGES}
+    values: dict[str, float] = {s: 0.0 for s in _FUNNEL_STAGES}
+    for r in rows:
+        stage = str(r[0])
+        if stage in counts:
+            counts[stage] += 1
+            values[stage] += float(r[1] or 0)
+
+    stages = []
+    weakest_stage: str | None = None
+    best_stage: str | None = None
+    min_rate = 101.0
+    max_rate = -1.0
+
+    for i, stage in enumerate(_FUNNEL_STAGES):
+        if i < len(_FUNNEL_STAGES) - 1:
+            next_stage = _FUNNEL_STAGES[i + 1]
+            conversion_rate = (
+                round(counts[next_stage] / counts[stage] * 100, 1)
+                if counts[stage] > 0
+                else None
+            )
+            if conversion_rate is not None:
+                if conversion_rate < min_rate:
+                    min_rate = conversion_rate
+                    weakest_stage = stage
+                if conversion_rate > max_rate:
+                    max_rate = conversion_rate
+                    best_stage = stage
+        else:
+            conversion_rate = None
+
+        stages.append({
+            "stage": stage,
+            "deal_count": counts[stage],
+            "total_value": round(values[stage], 2),
+            "conversion_rate": conversion_rate,
+        })
+
+    context_lines = ["Pipeline conversion funnel (active deals):"]
+    for s in stages:
+        cr = f"{s['conversion_rate']}% → next" if s["conversion_rate"] is not None else "final stage"
+        context_lines.append(f"{s['stage']}: {s['deal_count']} deals, ${s['total_value']:,.0f} value, conversion: {cr}")
+    if weakest_stage:
+        context_lines.append(f"Weakest conversion: {weakest_stage} ({min_rate}%)")
+    if best_stage:
+        context_lines.append(f"Best conversion: {best_stage} ({max_rate}%)")
+    context = "\n".join(context_lines)
+
+    total = sum(counts.values())
+    default_narrative = (
+        f"The pipeline has {total} active deals across {len([s for s in stages if s['deal_count'] > 0])} stages. "
+        + (f"The weakest conversion point is {weakest_stage} at {min_rate}% — this is where the most deals are being lost." if weakest_stage else "No conversion data available yet.")
+        + " Addressing the top bottleneck will have the greatest impact on revenue."
+    )
+    default_recs = [
+        f"Focus coaching on the {weakest_stage} → next-stage transition — this is where the most deals are stalling." if weakest_stage else "Build out each stage with more qualified deals to generate meaningful conversion data.",
+        "Review entry criteria for each stage to ensure deals are correctly qualified before advancing — stage pollution skews conversion metrics.",
+        "Set conversion rate targets per stage (e.g. ≥60%) and review weekly with the team to create accountability and early alerts.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_PIPELINE_CONVERSION_FUNNEL_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    funnel_narrative = str(data.get("funnel_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stages": stages,
+        "weakest_stage": weakest_stage,
+        "best_stage": best_stage,
+        "funnel_narrative": funnel_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_DEAL_SCORE_DISTRIBUTION_SYSTEM = """\
+You are a senior sales operations AI analysing deal scoring distribution across a pipeline.
+Given win probability bucket counts and health score bucket counts, generate a scoring narrative and 3 recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "scoring_narrative": "2-3 sentence narrative about the overall deal scoring health and key risk areas",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/score-distribution")
+@limiter.limit("5/minute")
+async def get_deal_score_distribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    closed_stages = {"closed_won", "closed_lost"}
+    rows_result = await db.execute(
+        select(Deal.ml_win_probability, Deal.health_score).where(
+            Deal.workspace_id == workspace_id,
+            ~Deal.stage.in_(closed_stages),
+        )
+    )
+    rows = rows_result.all()
+
+    win_prob_ranges = [
+        ("0-20", 0, 20),
+        ("21-40", 21, 40),
+        ("41-60", 41, 60),
+        ("61-80", 61, 80),
+        ("81-100", 81, 100),
+    ]
+    win_prob_counts: dict[str, int] = {r[0]: 0 for r in win_prob_ranges}
+
+    health_labels = [
+        ("healthy", 70, 101),
+        ("at_risk", 40, 70),
+        ("critical", 0, 40),
+    ]
+    health_counts: dict[str, int] = {h[0]: 0 for h in health_labels}
+
+    total_win_prob = 0.0
+    total_health = 0.0
+    win_prob_n = 0
+    health_n = 0
+    high_confidence_count = 0
+    critical_count = 0
+
+    for win_prob, health in rows:
+        wp = float(win_prob) if win_prob is not None else 0.0
+        hs = float(health) if health is not None else 0.0
+
+        for label, lo, hi in win_prob_ranges:
+            if lo <= wp <= hi:
+                win_prob_counts[label] += 1
+                break
+
+        for label, lo, hi in health_labels:
+            if lo <= hs < hi:
+                health_counts[label] += 1
+                break
+
+        total_win_prob += wp
+        win_prob_n += 1
+        total_health += hs
+        health_n += 1
+
+        if wp > 70:
+            high_confidence_count += 1
+        if hs < 40:
+            critical_count += 1
+
+    avg_win_prob = round(total_win_prob / win_prob_n, 1) if win_prob_n else 0.0
+    avg_health_score = round(total_health / health_n, 1) if health_n else 0.0
+
+    win_prob_buckets = [{"range": r[0], "count": win_prob_counts[r[0]]} for r in win_prob_ranges]
+    health_buckets = [{"label": h[0], "count": health_counts[h[0]]} for h in health_labels]
+
+    context_lines = [
+        f"Win probability buckets: " + ", ".join(f"{r['range']}%: {r['count']} deals" for r in win_prob_buckets),
+        f"Health score buckets: " + ", ".join(f"{h['label']}: {h['count']} deals" for h in health_buckets),
+        f"Average win probability: {avg_win_prob}%",
+        f"Average health score: {avg_health_score}",
+        f"High confidence deals (win_prob>70): {high_confidence_count}",
+        f"Critical health deals (health<40): {critical_count}",
+    ]
+    context = "\n".join(context_lines)
+
+    total_deals = win_prob_n
+    default_narrative = (
+        f"The pipeline contains {total_deals} open deals with an average win probability of {avg_win_prob}% "
+        f"and average health score of {avg_health_score}. "
+        + (f"There are {critical_count} critically unhealthy deals that require immediate attention." if critical_count else "Overall deal health is strong.")
+    )
+    default_recs = [
+        f"Prioritise the {critical_count} critical-health deals — low health scores strongly predict churn and loss." if critical_count else "Maintain deal hygiene by reviewing health scores weekly and addressing any drops promptly.",
+        f"Nurture the {high_confidence_count} high-confidence deals (win_prob>70%) to close — these represent your most reliable near-term revenue." if high_confidence_count else "Focus on building more deals into the high-confidence tier through disciplined qualification.",
+        "Use score distributions to set rep-level targets: aim for fewer than 20% of deals in the 0-20% win probability bucket.",
+    ]
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_DEAL_SCORE_DISTRIBUTION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    scoring_narrative = str(data.get("scoring_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "win_prob_buckets": win_prob_buckets,
+        "health_buckets": health_buckets,
+        "avg_win_prob": avg_win_prob,
+        "avg_health_score": avg_health_score,
+        "high_confidence_count": high_confidence_count,
+        "critical_count": critical_count,
+        "scoring_narrative": scoring_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+
+_WIN_FACTORS_SYSTEM = """\
+You are a senior sales operations AI analysing what drives deal wins and losses.
+Given aggregate data about won vs lost deals, generate a win factors narrative and 3 actionable recommendations.
+Respond with valid JSON only, no prose outside JSON:
+{
+  "win_factors_narrative": "2-3 sentence narrative about the key patterns differentiating won deals from lost ones",
+  "recommendations": ["rec1", "rec2", "rec3"]
+}
+Provide exactly 3 recommendations.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-factors")
+@limiter.limit("5/minute")
+async def get_deal_win_factors(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(days=90)
+
+    rows_result = await db.execute(
+        select(Deal.stage, Deal.value, Deal.health_score, Deal.ml_win_probability).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= cutoff,
+        )
+    )
+    rows = rows_result.all()
+
+    won_values: list[float] = []
+    lost_values: list[float] = []
+    won_health: list[float] = []
+    lost_health: list[float] = []
+    won_prob: list[float] = []
+    lost_prob: list[float] = []
+
+    for stage, value, health, win_prob in rows:
+        v = float(value or 0)
+        h = float(health or 0)
+        p = float(win_prob or 0)
+        if stage == "closed_won":
+            won_values.append(v)
+            won_health.append(h)
+            won_prob.append(p)
+        else:
+            lost_values.append(v)
+            lost_health.append(h)
+            lost_prob.append(p)
+
+    def avg(lst: list[float]) -> float:
+        return round(sum(lst) / len(lst), 1) if lst else 0.0
+
+    won_count = len(won_values)
+    lost_count = len(lost_values)
+    total = won_count + lost_count
+    overall_win_rate = round(won_count / total * 100, 1) if total else 0.0
+
+    avg_won_value = avg(won_values)
+    avg_lost_value = avg(lost_values)
+    avg_won_health = avg(won_health)
+    avg_lost_health = avg(lost_health)
+    avg_won_prob = avg(won_prob)
+    avg_lost_prob = avg(lost_prob)
+
+    health_delta = round(avg_won_health - avg_lost_health, 1)
+    prob_delta = round(avg_won_prob - avg_lost_prob, 1)
+    value_delta = round(avg_won_value - avg_lost_value, 2)
+
+    context = (
+        f"Last 90 days: {won_count} won, {lost_count} lost, overall win rate {overall_win_rate}%\n"
+        f"Won deals — avg value ${avg_won_value:,.0f}, avg health {avg_won_health}, avg win_prob {avg_won_prob}%\n"
+        f"Lost deals — avg value ${avg_lost_value:,.0f}, avg health {avg_lost_health}, avg win_prob {avg_lost_prob}%\n"
+        f"Health delta (won − lost): {health_delta}, win_prob delta: {prob_delta}%, value delta: ${value_delta:,.0f}"
+    )
+
+    default_narrative = (
+        f"Over the last 90 days {won_count} deals were won and {lost_count} lost (win rate {overall_win_rate}%). "
+        f"Won deals had {'higher' if health_delta >= 0 else 'lower'} health scores by {abs(health_delta)} points "
+        f"and {'higher' if prob_delta >= 0 else 'lower'} win probability by {abs(prob_delta)}% compared to lost deals. "
+        + ("Improving deal health earlier in the cycle is the clearest lever for better outcomes." if health_delta > 10 else "")
+    )
+    default_recs = [
+        f"Focus on raising health scores early — won deals averaged {avg_won_health} vs {avg_lost_health} for lost deals, a {health_delta}-point gap." if health_delta > 0 else "Work on both health and engagement to build a clearer win profile.",
+        f"Target deals where win probability reaches ≥{int(avg_won_prob)}% before advancing to proposal stage — this matches your historical win profile.",
+        "Run a post-mortem on each lost deal within 1 week of close to capture fresh insight on what tipped the outcome.",
+    ]
+
+    if not rows:
+        return {
+            "won_count": 0,
+            "lost_count": 0,
+            "overall_win_rate": 0.0,
+            "avg_won_value": 0.0,
+            "avg_lost_value": 0.0,
+            "avg_won_health": 0.0,
+            "avg_lost_health": 0.0,
+            "avg_won_prob": 0.0,
+            "avg_lost_prob": 0.0,
+            "health_delta": 0.0,
+            "prob_delta": 0.0,
+            "win_factors_narrative": "No closed deals in the last 90 days to analyse.",
+            "recommendations": default_recs,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_WIN_FACTORS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    win_factors_narrative = str(data.get("win_factors_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "won_count": won_count,
+        "lost_count": lost_count,
+        "overall_win_rate": overall_win_rate,
+        "avg_won_value": avg_won_value,
+        "avg_lost_value": avg_lost_value,
+        "avg_won_health": avg_won_health,
+        "avg_lost_health": avg_lost_health,
+        "avg_won_prob": avg_won_prob,
+        "avg_lost_prob": avg_lost_prob,
+        "health_delta": health_delta,
+        "prob_delta": prob_delta,
+        "win_factors_narrative": win_factors_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 17u – Contact Engagement Heatmap
+# ---------------------------------------------------------------------------
+
+_ENGAGEMENT_HEATMAP_SYSTEM = """\
+You are a senior sales operations AI analysing contact engagement patterns.
+Given hourly and daily activity event counts for the last 90 days, identify
+optimal outreach timing windows and engagement trends.
+Respond with a JSON object containing exactly two keys:
+  "engagement_narrative": one paragraph (2-3 sentences) summarising timing patterns,
+  "recommendations": array of exactly 3 actionable strings about optimal outreach timing.
+Output only valid JSON with no markdown fences.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/engagement-heatmap")
+@limiter.limit("5/minute")
+async def get_contact_engagement_heatmap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    import datetime as _dt
+    now = _dt.datetime.now(timezone.utc)
+    cutoff = now - _dt.timedelta(days=90)
+
+    result = await db.execute(
+        select(ActivityEvent.created_at)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.created_at >= cutoff)
+    )
+    rows = result.all()
+
+    hour_counts: dict[int, int] = {h: 0 for h in range(24)}
+    day_counts: dict[str, int] = {d: 0 for d in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]}
+    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    for (created_at,) in rows:
+        if created_at is None:
+            continue
+        if hasattr(created_at, "tzinfo") and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        hour_counts[created_at.hour] += 1
+        day_counts[day_names[created_at.weekday()]] += 1
+
+    total_events = sum(hour_counts.values())
+
+    peak_hour = max(hour_counts, key=lambda h: hour_counts[h]) if total_events > 0 else 9
+    peak_day = max(day_counts, key=lambda d: day_counts[d]) if total_events > 0 else "Tuesday"
+
+    hour_buckets = [{"hour": h, "count": hour_counts[h]} for h in range(24)]
+    day_buckets = [{"day": d, "count": day_counts[d]} for d in day_names]
+
+    default_narrative = (
+        f"Peak engagement occurs at hour {peak_hour}:00 UTC on {peak_day}s. "
+        "Scheduling outreach during these windows can improve response rates. "
+        "Consider aligning automated follow-ups with these high-activity periods."
+    )
+    default_recs = [
+        f"Schedule outreach emails to send at {peak_hour}:00 UTC for maximum engagement.",
+        f"Prioritise {peak_day} as your primary outreach day based on activity patterns.",
+        "Set automated follow-up sequences to trigger during peak engagement windows.",
+    ]
+
+    context = (
+        f"Workspace contact engagement over the last 90 days.\n"
+        f"Total activity events: {total_events}\n"
+        f"Peak hour (UTC): {peak_hour}:00 ({hour_counts[peak_hour]} events)\n"
+        f"Peak day: {peak_day} ({day_counts[peak_day]} events)\n"
+        f"Hour distribution: {json.dumps(hour_buckets)}\n"
+        f"Day distribution: {json.dumps(day_buckets)}\n"
+        "Provide an engagement_narrative and 3 recommendations about optimal outreach timing."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_ENGAGEMENT_HEATMAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    engagement_narrative = str(data.get("engagement_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "hour_buckets": hour_buckets,
+        "day_buckets": day_buckets,
+        "peak_hour": peak_hour,
+        "peak_day": peak_day,
+        "total_events": total_events,
+        "engagement_narrative": engagement_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 17v – Deal Velocity Analysis
+# ---------------------------------------------------------------------------
+
+_DEAL_VELOCITY_SYSTEM = """\
+You are a senior sales operations AI analysing deal velocity and pipeline speed.
+Given stage dwell times and close durations for won deals, identify bottlenecks
+and opportunities to accelerate the pipeline.
+Respond with a JSON object containing exactly two keys:
+  "velocity_narrative": one paragraph (2-3 sentences) summarising velocity patterns,
+  "recommendations": array of exactly 3 actionable strings about accelerating pipeline.
+Output only valid JSON with no markdown fences.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/velocity")
+@limiter.limit("5/minute")
+async def get_deal_velocity(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    import datetime as _dt
+    now = _dt.datetime.now(timezone.utc)
+    cutoff = now - _dt.timedelta(days=180)
+
+    result = await db.execute(
+        select(Deal.created_at, Deal.stage_changed_at, Deal.value)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.stage_changed_at >= cutoff)
+    )
+    rows = result.all()
+
+    total_won = len(rows)
+    days_to_close_list: list[float] = []
+    for (created_at, stage_changed_at, value) in rows:
+        if created_at is None or stage_changed_at is None:
+            continue
+        if hasattr(created_at, "tzinfo") and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        if hasattr(stage_changed_at, "tzinfo") and stage_changed_at.tzinfo is None:
+            stage_changed_at = stage_changed_at.replace(tzinfo=timezone.utc)
+        delta = (stage_changed_at - created_at).total_seconds() / 86400.0
+        if delta >= 0:
+            days_to_close_list.append(delta)
+
+    avg_days_to_close = round(sum(days_to_close_list) / len(days_to_close_list), 1) if days_to_close_list else 0.0
+    fastest_close_days = round(min(days_to_close_list), 1) if days_to_close_list else 0.0
+    slowest_close_days = round(max(days_to_close_list), 1) if days_to_close_list else 0.0
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation", "closed_won"]
+    stage_avg_days = avg_days_to_close / len(stage_order) if avg_days_to_close > 0 else 0.0
+    stage_dwell_times = [
+        {"stage": s, "avg_days": round(stage_avg_days, 1)}
+        for s in stage_order
+    ]
+
+    default_narrative = (
+        f"Won deals averaged {avg_days_to_close} days from creation to close across {total_won} deals. "
+        f"The fastest close took {fastest_close_days} days while the slowest took {slowest_close_days} days. "
+        "Focus on reducing time spent in early stages to compress the overall cycle."
+    )
+    default_recs = [
+        f"Target a close cycle under {round(avg_days_to_close * 0.8, 0):.0f} days — 20% faster than your {avg_days_to_close}-day average.",
+        "Introduce a qualification scorecard at discovery to cut low-probability deals earlier.",
+        "Set automatic reminders when a deal stalls in any stage beyond your average dwell time.",
+    ]
+
+    context = (
+        f"Won deals velocity analysis for the last 180 days.\n"
+        f"Total won deals analysed: {total_won}\n"
+        f"Average days to close: {avg_days_to_close}\n"
+        f"Fastest close: {fastest_close_days} days\n"
+        f"Slowest close: {slowest_close_days} days\n"
+        f"Estimated stage dwell times: {json.dumps(stage_dwell_times)}\n"
+        "Provide a velocity_narrative and 3 recommendations about accelerating pipeline."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_VELOCITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    velocity_narrative = str(data.get("velocity_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "avg_days_to_close": avg_days_to_close,
+        "stage_dwell_times": stage_dwell_times,
+        "fastest_close_days": fastest_close_days,
+        "slowest_close_days": slowest_close_days,
+        "total_won_deals_analysed": total_won,
+        "velocity_narrative": velocity_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 17w – Top Contact Opportunities
+# ---------------------------------------------------------------------------
+
+_TOP_OPPORTUNITIES_SYSTEM = """\
+You are a senior sales operations AI identifying high-value contact opportunities.
+Given a ranked list of contacts by pipeline opportunity score, highlight who to
+prioritise and why.
+Respond with a JSON object containing exactly two keys:
+  "opportunities_narrative": one paragraph (2-3 sentences) summarising the top opportunities,
+  "recommendations": array of exactly 3 actionable strings about prioritising contacts.
+Output only valid JSON with no markdown fences.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/top-opportunities")
+@limiter.limit("5/minute")
+async def get_top_contact_opportunities(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    import datetime as _dt
+    now = _dt.datetime.now(timezone.utc)
+    cutoff = now - _dt.timedelta(days=90)
+
+    closed_stages = {"closed_won", "closed_lost"}
+
+    result = await db.execute(
+        select(
+            Deal.contact_id,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+            Deal.stage,
+        )
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.notin_(list(closed_stages)))
+        .where(Deal.contact_id.isnot(None))
+        .where(Deal.created_at >= cutoff)
+    )
+    deal_rows = result.all()
+
+    contact_agg: dict[uuid.UUID, dict] = {}
+    for (contact_id, value, health, win_prob, stage) in deal_rows:
+        if contact_id is None:
+            continue
+        if contact_id not in contact_agg:
+            contact_agg[contact_id] = {
+                "deal_count": 0,
+                "total_value": 0.0,
+                "health_scores": [],
+                "win_probs": [],
+                "stages": [],
+            }
+        agg = contact_agg[contact_id]
+        agg["deal_count"] += 1
+        agg["total_value"] += float(value or 0)
+        if health is not None:
+            agg["health_scores"].append(float(health))
+        if win_prob is not None:
+            agg["win_probs"].append(float(win_prob))
+        agg["stages"].append(stage or "unknown")
+
+    if not contact_agg:
+        return {
+            "top_contacts": [],
+            "opportunities_narrative": "No open deals with associated contacts found in the last 90 days.",
+            "recommendations": [
+                "Ensure deals are linked to contacts to enable opportunity scoring.",
+                "Create new deals for your most engaged contacts to build pipeline.",
+                "Review contacts without associated deals and qualify them for outreach.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    contact_ids = list(contact_agg.keys())
+    contact_result = await db.execute(
+        select(Contact.id, Contact.name)
+        .where(Contact.workspace_id == workspace_id)
+        .where(Contact.id.in_(contact_ids))
+    )
+    contact_names = {row.id: (row.name or "Unknown") for row in contact_result.all()}
+
+    scored: list[dict] = []
+    max_value = max((d["total_value"] for d in contact_agg.values()), default=1.0) or 1.0
+
+    for cid, agg in contact_agg.items():
+        avg_prob = sum(agg["win_probs"]) / len(agg["win_probs"]) if agg["win_probs"] else 50.0
+        avg_health = sum(agg["health_scores"]) / len(agg["health_scores"]) if agg["health_scores"] else 50.0
+        norm_value = agg["total_value"] / max_value
+        opportunity_score = round((avg_prob / 100.0) * 0.5 * norm_value * 100.0 + avg_prob * 0.3 + avg_health * 0.2, 1)
+        top_stage = agg["stages"][0] if agg["stages"] else "unknown"
+        scored.append({
+            "contact_id": str(cid),
+            "name": contact_names.get(cid, "Unknown"),
+            "deal_count": agg["deal_count"],
+            "total_pipeline_value": round(agg["total_value"], 2),
+            "avg_win_prob": round(avg_prob, 1),
+            "avg_health": round(avg_health, 1),
+            "top_stage": top_stage,
+            "opportunity_score": opportunity_score,
+        })
+
+    scored.sort(key=lambda x: x["opportunity_score"], reverse=True)
+    top_contacts = scored[:5]
+
+    default_narrative = (
+        f"The top opportunity is {top_contacts[0]['name']} with "
+        f"${top_contacts[0]['total_pipeline_value']:,.0f} in pipeline and "
+        f"{top_contacts[0]['avg_win_prob']:.0f}% average win probability. "
+        "Focus outreach on the highest-scoring contacts to maximise near-term revenue. "
+        "Deals with high win probability but moderate health scores are the quickest wins."
+    ) if top_contacts else "No opportunities found."
+    default_recs = [
+        f"Prioritise outreach to {top_contacts[0]['name']} — highest opportunity score with {top_contacts[0]['avg_win_prob']:.0f}% win probability.",
+        "Schedule weekly pipeline reviews for all top-5 contacts to keep deals progressing.",
+        "Assign your best-performing rep to contacts with high opportunity scores but lower health scores.",
+    ] if top_contacts else [
+        "Link deals to contacts to enable opportunity scoring.",
+        "Create deals for engaged contacts to build pipeline.",
+        "Review and qualify contacts without active deals.",
+    ]
+
+    context = (
+        f"Top contact opportunities ranked by pipeline score.\n"
+        f"Top 5 contacts:\n"
+        + "\n".join(
+            f"  {i+1}. {c['name']}: score={c['opportunity_score']}, "
+            f"deals={c['deal_count']}, value=${c['total_pipeline_value']:,.0f}, "
+            f"win_prob={c['avg_win_prob']}%, health={c['avg_health']}, stage={c['top_stage']}"
+            for i, c in enumerate(top_contacts)
+        )
+        + "\nProvide an opportunities_narrative and 3 recommendations about prioritising contacts."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_TOP_OPPORTUNITIES_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    opportunities_narrative = str(data.get("opportunities_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "top_contacts": top_contacts,
+        "opportunities_narrative": opportunities_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+_LTV_SYSTEM = """\
+You are a senior customer success AI specialising in lifetime value analysis.
+You will receive a summary of contact LTV data (closed revenue + weighted pipeline).
+Return ONLY a valid JSON object with keys:
+  "ltv_narrative": string — 2-3 sentence insight about LTV distribution and growth patterns
+  "recommendations": list of exactly 3 actionable strings for nurturing high-LTV accounts
+No markdown, no extra keys.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/lifetime-value")
+@limiter.limit("5/minute")
+async def get_ai_contact_lifetime_value(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    # Fetch all contacts in workspace
+    contact_rows = (await db.execute(
+        select(Contact.id, Contact.name).where(Contact.workspace_id == workspace_id)
+    )).all()
+
+    # Fetch all deals for workspace (closed_won + open) with value and win_prob
+    deal_rows = (await db.execute(
+        select(Deal.contact_id, Deal.stage, Deal.value, Deal.ml_win_probability)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id.isnot(None),
+        )
+    )).all()
+
+    # Aggregate per contact
+    contact_map: dict = {row.id: row.name for row in contact_rows}
+    agg: dict = {}  # contact_id -> {closed_won_revenue, pipeline_value, won, total}
+
+    for row in deal_rows:
+        cid = row.contact_id
+        if cid not in agg:
+            agg[cid] = {"closed_won_revenue": 0.0, "pipeline_value": 0.0, "won": 0, "total": 0, "win_probs": []}
+        val = float(row.value or 0)
+        prob = float(row.ml_win_probability or 50.0)
+        agg[cid]["total"] += 1
+        if row.stage == "closed_won":
+            agg[cid]["closed_won_revenue"] += val
+            agg[cid]["won"] += 1
+        elif row.stage not in ("closed_lost",):
+            agg[cid]["pipeline_value"] += val
+            agg[cid]["win_probs"].append(prob)
+
+    results: list[dict] = []
+    for cid, data in agg.items():
+        avg_prob = sum(data["win_probs"]) / len(data["win_probs"]) if data["win_probs"] else 0.0
+        weighted_pipeline = data["pipeline_value"] * avg_prob / 100.0
+        estimated_ltv = data["closed_won_revenue"] + weighted_pipeline
+        win_rate = round(data["won"] / data["total"] * 100, 1) if data["total"] else 0.0
+        results.append({
+            "contact_id": str(cid),
+            "name": contact_map.get(cid, "Unknown"),
+            "closed_won_revenue": round(data["closed_won_revenue"], 2),
+            "pipeline_value": round(data["pipeline_value"], 2),
+            "win_rate": win_rate,
+            "estimated_ltv": round(estimated_ltv, 2),
+        })
+
+    results.sort(key=lambda x: x["estimated_ltv"], reverse=True)
+    top_contacts = results[:10]
+
+    if not top_contacts:
+        return {
+            "top_contacts": [],
+            "avg_ltv": 0.0,
+            "total_ltv_potential": 0.0,
+            "ltv_narrative": "No contact deal data found.",
+            "recommendations": [
+                "Link deals to contacts to enable LTV tracking.",
+                "Close won deals to start building historical LTV data.",
+                "Assign open deals to contacts for weighted LTV calculation.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    avg_ltv = round(sum(r["estimated_ltv"] for r in results) / len(results), 2)
+    total_ltv_potential = round(sum(r["estimated_ltv"] for r in results), 2)
+
+    default_narrative = (
+        f"Top contact by LTV is {top_contacts[0]['name']} with an estimated "
+        f"${top_contacts[0]['estimated_ltv']:,.0f} (${top_contacts[0]['closed_won_revenue']:,.0f} won + "
+        f"${top_contacts[0]['pipeline_value']:,.0f} weighted pipeline). "
+        f"Average estimated LTV across {len(results)} contacts is ${avg_ltv:,.0f}. "
+        "Focus retention and expansion efforts on the highest-LTV accounts."
+    )
+    default_recs = [
+        f"Prioritise executive business reviews with {top_contacts[0]['name']} to protect and grow your highest-LTV relationship.",
+        "Identify upsell opportunities for contacts with high closed-won revenue but low pipeline value.",
+        "Assign dedicated account managers to the top 3 LTV contacts to accelerate deal progression.",
+    ]
+
+    context = (
+        f"Contact lifetime value analysis.\n"
+        f"Total contacts with deals: {len(results)}, avg LTV: ${avg_ltv:,.0f}, total LTV potential: ${total_ltv_potential:,.0f}.\n"
+        f"Top 5 contacts by estimated LTV:\n"
+        + "\n".join(
+            f"  {i+1}. {c['name']}: est_ltv=${c['estimated_ltv']:,.0f}, "
+            f"won=${c['closed_won_revenue']:,.0f}, pipeline=${c['pipeline_value']:,.0f}, "
+            f"win_rate={c['win_rate']}%"
+            for i, c in enumerate(top_contacts[:5])
+        )
+        + "\nProvide a ltv_narrative and 3 recommendations for nurturing high-LTV accounts."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_LTV_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data_json = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    ltv_narrative = str(data_json.get("ltv_narrative", "")).strip() or default_narrative
+    raw_recs = data_json.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "top_contacts": top_contacts,
+        "avg_ltv": avg_ltv,
+        "total_ltv_potential": total_ltv_potential,
+        "ltv_narrative": ltv_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+_REACTIVATION_SYSTEM = """\
+You are a senior sales AI specialising in win-back and reactivation strategy.
+You will receive a list of closed-lost deals ranked by reactivation potential.
+Return ONLY a valid JSON object with keys:
+  "reactivation_narrative": string — 2-3 sentence insight about the reactivation opportunity
+  "recommendations": list of exactly 3 actionable strings for re-engaging these lost deals
+No markdown, no extra keys.
+"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/reactivation-candidates")
+@limiter.limit("5/minute")
+async def get_ai_deal_reactivation_candidates(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=365)
+
+    rows = (await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.stage,
+            Deal.value,
+            Deal.health_score,
+            Deal.ml_win_probability,
+            Deal.stage_changed_at,
+        )
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff,
+        )
+        .order_by(Deal.value.desc())
+    )).all()
+
+    if not rows:
+        return {
+            "candidates": [],
+            "reactivation_narrative": "No closed-lost deals in the last 12 months to reactivate.",
+            "recommendations": [
+                "Keep working on active pipeline to generate future reactivation opportunities.",
+                "Document loss reasons on deals to improve win/loss analysis.",
+                "Set follow-up reminders on closed-lost deals for 90 days post-close.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    max_value = max(float(r.value or 0) for r in rows) or 1.0
+
+    candidates = []
+    for row in rows:
+        val = float(row.value or 0)
+        prob = float(row.ml_win_probability or 50.0)
+        health = float(row.health_score or 50.0)
+        norm_value = val / max_value
+        reactivation_score = round(norm_value * 0.4 + (prob / 100.0) * 0.4 + (health / 100.0) * 0.2, 3)
+        days_since_close = (now - row.stage_changed_at.replace(tzinfo=timezone.utc)).days if row.stage_changed_at else 0
+        candidates.append({
+            "deal_id": str(row.id),
+            "title": row.title or "Untitled",
+            "stage": row.stage,
+            "value": round(val, 2),
+            "days_since_close": days_since_close,
+            "reactivation_score": reactivation_score,
+            "win_probability": round(prob, 1),
+        })
+
+    candidates.sort(key=lambda x: x["reactivation_score"], reverse=True)
+    top5 = candidates[:5]
+
+    default_narrative = (
+        f"Top reactivation candidate is '{top5[0]['title']}' with a score of "
+        f"{top5[0]['reactivation_score']:.2f} — valued at ${top5[0]['value']:,.0f} and "
+        f"closed {top5[0]['days_since_close']} days ago. "
+        "Re-engaging high-value recently-lost deals is the fastest path to recovering pipeline. "
+        "Focus on deals lost within 90 days with win probabilities above 50%."
+    ) if top5 else "No candidates found."
+    default_recs = [
+        f"Re-engage '{top5[0]['title']}' immediately — highest reactivation score with ${top5[0]['value']:,.0f} in potential value.",
+        "Send a personalised check-in email to top reactivation candidates referencing specific objections from the original deal.",
+        "Offer a limited-time incentive or updated proposal to deals closed 60–90 days ago with high reactivation scores.",
+    ] if top5 else [
+        "Document loss reasons to improve future reactivation targeting.",
+        "Set 90-day follow-up reminders on all newly closed-lost deals.",
+        "Review competitor activity for recently lost deals to identify re-engagement windows.",
+    ]
+
+    context = (
+        f"Deal reactivation candidates from the last 12 months.\n"
+        f"Total closed-lost deals: {len(rows)}, top 5 by reactivation score:\n"
+        + "\n".join(
+            f"  {i+1}. '{c['title']}': score={c['reactivation_score']:.2f}, "
+            f"value=${c['value']:,.0f}, days_since_close={c['days_since_close']}, "
+            f"win_prob={c['win_probability']}%"
+            for i, c in enumerate(top5)
+        )
+        + "\nProvide a reactivation_narrative and 3 recommendations for re-engaging these deals."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_REACTIVATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    reactivation_narrative = str(data.get("reactivation_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "candidates": top5,
+        "reactivation_narrative": reactivation_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+_PIPELINE_GAP_SYSTEM = """\
+You are a senior sales operations AI specialising in pipeline health and capacity planning.
+You will receive a pipeline gap analysis comparing actual deal counts against targets per stage.
+Return ONLY a valid JSON object with keys:
+  "pipeline_gap_narrative": string — 2-3 sentence insight about the pipeline gaps and their revenue impact
+  "recommendations": list of exactly 3 actionable strings for filling critical pipeline gaps
+No markdown, no extra keys.
+"""
+
+_STAGE_TARGETS = {
+    "discovery": 10,
+    "qualified": 7,
+    "proposal": 5,
+    "negotiation": 3,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-gap")
+@limiter.limit("5/minute")
+async def get_ai_deal_pipeline_gap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    rows = (await db.execute(
+        select(Deal.stage, func.count(Deal.id).label("cnt"))
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(list(_STAGE_TARGETS.keys())),
+        )
+        .group_by(Deal.stage)
+    )).all()
+
+    actual_counts = {row.stage: row.cnt for row in rows}
+
+    stage_gaps = []
+    total_gap_count = 0
+    most_understocked_stage = None
+    worst_gap = -1
+
+    for stage, target in _STAGE_TARGETS.items():
+        actual = actual_counts.get(stage, 0)
+        gap = target - actual
+        gap_pct = round(gap / target * 100, 1) if target else 0.0
+        total_gap_count += max(gap, 0)
+        if gap > worst_gap:
+            worst_gap = gap
+            most_understocked_stage = stage
+        stage_gaps.append({
+            "stage": stage,
+            "actual_count": actual,
+            "expected_count": target,
+            "gap": gap,
+            "gap_pct": gap_pct,
+        })
+
+    if not any(s["actual_count"] > 0 for s in stage_gaps):
+        return {
+            "stage_gaps": stage_gaps,
+            "most_understocked_stage": most_understocked_stage or "discovery",
+            "total_gap_count": total_gap_count,
+            "pipeline_gap_narrative": "No active deals found in the pipeline. Immediate top-of-funnel activity is required to build pipeline across all stages.",
+            "recommendations": [
+                "Launch an outbound prospecting campaign to fill the discovery stage immediately.",
+                "Schedule discovery calls with at least 10 new prospects this week.",
+                "Review and reactivate any closed-lost deals from the last 90 days for pipeline recovery.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_narrative = (
+        f"The pipeline has a total gap of {total_gap_count} deals across all stages, with "
+        f"'{most_understocked_stage}' being the most understocked "
+        f"({actual_counts.get(most_understocked_stage, 0)} actual vs {_STAGE_TARGETS.get(most_understocked_stage, 0)} target). "
+        "Understocking in early stages will compound into revenue shortfalls 30–90 days from now. "
+        "Focus new business activity on filling the top-of-funnel gaps first."
+    )
+    default_recs = [
+        f"Immediately increase prospecting activity to fill the '{most_understocked_stage}' stage gap — this is your critical bottleneck.",
+        "Set weekly stage-fill targets for each rep and review progress in Monday pipeline meetings.",
+        "Re-evaluate deal qualification criteria — if late-stage gaps are larger, the qualification bar may be too high.",
+    ]
+
+    context = (
+        f"Pipeline gap analysis for workspace.\n"
+        f"Total deal gap: {total_gap_count} deals. Most understocked: '{most_understocked_stage}'.\n"
+        f"Stage breakdown:\n"
+        + "\n".join(
+            f"  {s['stage']}: actual={s['actual_count']}, target={s['expected_count']}, "
+            f"gap={s['gap']} ({s['gap_pct']}%)"
+            for s in stage_gaps
+        )
+        + "\nProvide a pipeline_gap_narrative and 3 recommendations for filling gaps."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_PIPELINE_GAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    pipeline_gap_narrative = str(data.get("pipeline_gap_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_gaps": stage_gaps,
+        "most_understocked_stage": most_understocked_stage,
+        "total_gap_count": total_gap_count,
+        "pipeline_gap_narrative": pipeline_gap_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_HEATMAP_SYSTEM = """\
+You are a senior sales analytics AI specialising in pipeline conversion and closure probability analysis.
+Given a 4×3 heatmap of open deals grouped by stage and win-probability tier, identify patterns,
+concentration risks, and actions to improve conversion rates.
+Return ONLY valid JSON with keys: heatmap_narrative (string, 2-3 sentences) and
+recommendations (list of exactly 3 strings). No markdown, no prose outside the JSON.
+"""
+
+_WIN_PROB_TIERS = [
+    ("low", 0, 40),
+    ("mid", 40, 70),
+    ("high", 70, 101),
+]
+_HEATMAP_STAGES = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/closure-probability-heatmap")
+@limiter.limit("5/minute")
+async def get_ai_deal_closure_probability_heatmap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    stmt = (
+        select(Deal.stage, Deal.value, Deal.ml_win_probability)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(_HEATMAP_STAGES),
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+
+    cells: dict[tuple[str, str], list[float]] = {}
+    for stage in _HEATMAP_STAGES:
+        for tier_name, _, _ in _WIN_PROB_TIERS:
+            cells[(stage, tier_name)] = []
+
+    for row in rows:
+        stage = row.stage
+        win_prob = float(row.ml_win_probability or 0)
+        value = float(row.value or 0)
+        for tier_name, lo, hi in _WIN_PROB_TIERS:
+            if lo <= win_prob < hi:
+                if (stage, tier_name) in cells:
+                    cells[(stage, tier_name)].append(value)
+                break
+
+    cell_list = []
+    hotspot_stage = "proposal"
+    hotspot_tier = "high"
+    hotspot_weight = -1.0
+    for stage in _HEATMAP_STAGES:
+        for tier_name, _, _ in _WIN_PROB_TIERS:
+            vals = cells[(stage, tier_name)]
+            total_val = sum(vals)
+            avg_val = total_val / len(vals) if vals else 0
+            tier_prob_mid = {"low": 20.0, "mid": 55.0, "high": 85.0}[tier_name]
+            weighted = total_val * (tier_prob_mid / 100)
+            cell_list.append({
+                "stage": stage,
+                "win_prob_tier": tier_name,
+                "deal_count": len(vals),
+                "avg_value": round(avg_val, 2),
+                "total_value": round(total_val, 2),
+            })
+            if weighted > hotspot_weight:
+                hotspot_weight = weighted
+                hotspot_stage = stage
+                hotspot_tier = tier_name
+
+    if not rows:
+        return {
+            "cells": cell_list,
+            "hotspot_stage": hotspot_stage,
+            "hotspot_tier": hotspot_tier,
+            "heatmap_narrative": "No open deals found in the pipeline. Build top-of-funnel activity to populate the heatmap.",
+            "recommendations": [
+                "Launch prospecting campaigns to generate discovery-stage deals.",
+                "Review closed-lost deals for reactivation opportunities.",
+                "Set weekly deal-creation targets per rep to accelerate pipeline growth.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_narrative = (
+        f"The hotspot cell is '{hotspot_stage}' stage with '{hotspot_tier}' win-probability deals — "
+        "this is where your highest weighted pipeline value is concentrated. "
+        "Focus acceleration and closing activities here to maximise near-term revenue."
+    )
+    default_recs = [
+        f"Prioritise '{hotspot_stage}/{hotspot_tier}' deals in weekly pipeline reviews — they carry the highest weighted value.",
+        "For low-tier deals stalled in late stages, schedule executive-level calls to accelerate or disqualify.",
+        "Move mid-tier proposal deals to high-tier by addressing the top objection; use AI Deal Coach for tailored scripts.",
+    ]
+
+    total_deals = len(rows)
+    context = (
+        f"Closure probability heatmap for workspace. {total_deals} open deals.\n"
+        f"Hotspot: {hotspot_stage}/{hotspot_tier} (highest weighted value).\n"
+        "Cell breakdown (stage, tier, count, avg_value):\n"
+        + "\n".join(
+            f"  {c['stage']}/{c['win_prob_tier']}: {c['deal_count']} deals, avg ${c['avg_value']:,.0f}"
+            for c in cell_list if c["deal_count"] > 0
+        )
+        + "\nProvide heatmap_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_HEATMAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    heatmap_narrative = str(data.get("heatmap_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "cells": cell_list,
+        "hotspot_stage": hotspot_stage,
+        "hotspot_tier": hotspot_tier,
+        "heatmap_narrative": heatmap_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_SCORE_RECENCY_SYSTEM = """\
+You are a senior CRM analyst specialising in contact engagement strategy.
+Given a 3×3 heatmap of contacts grouped by lead-score tier and recency of last update,
+identify patterns, at-risk segments, and prioritised actions to improve engagement.
+Return ONLY valid JSON with keys: engagement_narrative (string, 2-3 sentences) and
+recommendations (list of exactly 3 strings). No markdown, no prose outside the JSON.
+"""
+
+_SR_SCORE_TIERS = [("low", 0, 40), ("mid", 40, 70), ("high", 70, 101)]
+_SR_RECENCY_TIERS = [("active", 0, 31), ("idle", 31, 91), ("dormant", 91, 99999)]
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/score-recency-heatmap")
+@limiter.limit("5/minute")
+async def get_ai_contact_score_recency_heatmap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    stmt = (
+        select(Contact.id, Contact.ml_score, Contact.updated_at, Contact.revenue)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    cells: dict[tuple[str, str], list[float]] = {}
+    for st, _, _ in _SR_SCORE_TIERS:
+        for rt, _, _ in _SR_RECENCY_TIERS:
+            cells[(st, rt)] = []
+
+    for row in rows:
+        ml = row.ml_score or {}
+        score = float(ml.get("value", 50) if isinstance(ml, dict) else 50)
+        revenue = float(row.revenue or 0)
+        days_since = (now - row.updated_at.replace(tzinfo=timezone.utc)).days if row.updated_at else 999
+
+        score_tier = "mid"
+        for tier_name, lo, hi in _SR_SCORE_TIERS:
+            if lo <= score < hi:
+                score_tier = tier_name
+                break
+
+        recency_tier = "dormant"
+        for tier_name, lo, hi in _SR_RECENCY_TIERS:
+            if lo <= days_since < hi:
+                recency_tier = tier_name
+                break
+
+        cells[(score_tier, recency_tier)].append(revenue)
+
+    cell_list = []
+    at_risk_score_tier = "high"
+    at_risk_recency_tier = "dormant"
+    at_risk_score = -1.0
+    for st, _, _ in _SR_SCORE_TIERS:
+        for rt, _, _ in _SR_RECENCY_TIERS:
+            vals = cells[(st, rt)]
+            total_rev = sum(vals)
+            avg_rev = total_rev / len(vals) if vals else 0
+            cell_list.append({
+                "score_tier": st,
+                "recency_tier": rt,
+                "contact_count": len(vals),
+                "avg_revenue": round(avg_rev, 2),
+                "total_revenue": round(total_rev, 2),
+            })
+            if st == "high" and rt in ("idle", "dormant") and total_rev > at_risk_score:
+                at_risk_score = total_rev
+                at_risk_score_tier = st
+                at_risk_recency_tier = rt
+
+    if not rows:
+        return {
+            "cells": cell_list,
+            "at_risk_score_tier": at_risk_score_tier,
+            "at_risk_recency_tier": at_risk_recency_tier,
+            "engagement_narrative": "No contacts found in this workspace. Start building your contact base to enable engagement analysis.",
+            "recommendations": [
+                "Import your existing contacts via CSV to populate the heatmap immediately.",
+                "Connect Gmail or Slack to automatically ingest contact activity and update scores.",
+                "Set up lead scoring rules so new contacts are classified from day one.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    total_contacts = len(rows)
+    at_risk_cell = next(
+        (c for c in cell_list if c["score_tier"] == at_risk_score_tier and c["recency_tier"] == at_risk_recency_tier),
+        None,
+    )
+    at_risk_count = at_risk_cell["contact_count"] if at_risk_cell else 0
+
+    default_narrative = (
+        f"Your at-risk segment is '{at_risk_score_tier}' scored contacts that are '{at_risk_recency_tier}' — "
+        f"{at_risk_count} contact(s) with strong signals but no recent engagement. "
+        "Re-engaging these contacts now is the highest-ROI activity: they already trust you and have demonstrated fit."
+    )
+    default_recs = [
+        f"Immediately reach out to the {at_risk_count} high-score {at_risk_recency_tier} contacts — personalised outreach based on their last interaction will have the highest conversion rate.",
+        "Set up automated re-engagement sequences for idle high-score contacts to prevent them from going dormant.",
+        "Review low-score active contacts: if they're engaging but scoring low, check whether the scoring model needs recalibration.",
+    ]
+
+    context = (
+        f"Contact engagement heatmap for workspace. {total_contacts} total contacts.\n"
+        f"At-risk segment: {at_risk_score_tier}/{at_risk_recency_tier} ({at_risk_count} contacts).\n"
+        "Cell breakdown (score_tier, recency_tier, count, avg_revenue):\n"
+        + "\n".join(
+            f"  {c['score_tier']}/{c['recency_tier']}: {c['contact_count']} contacts, avg rev ${c['avg_revenue']:,.0f}"
+            for c in cell_list if c["contact_count"] > 0
+        )
+        + "\nProvide engagement_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_SCORE_RECENCY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    engagement_narrative = str(data.get("engagement_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "cells": cell_list,
+        "at_risk_score_tier": at_risk_score_tier,
+        "at_risk_recency_tier": at_risk_recency_tier,
+        "engagement_narrative": engagement_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_VELOCITY_ANOMALY_SYSTEM = """\
+You are a senior sales operations AI specialising in pipeline velocity and deal progression.
+Given a list of deals that are significantly stalled relative to their stage average,
+identify root causes and prioritised coaching actions to unblock them.
+Return ONLY valid JSON with keys: anomaly_narrative (string, 2-3 sentences) and
+recommendations (list of exactly 3 strings). No markdown, no prose outside the JSON.
+"""
+
+_STAGE_AVG_DAYS = {
+    "discovery": 7,
+    "qualified": 14,
+    "proposal": 10,
+    "negotiation": 12,
+}
+_ANOMALY_THRESHOLD = 2.0
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/velocity-anomalies")
+@limiter.limit("5/minute")
+async def get_ai_deal_velocity_anomalies(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    active_stages = list(_STAGE_AVG_DAYS.keys())
+    stmt = (
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability, Deal.stage_changed_at, Deal.created_at)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(active_stages),
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+
+    anomalies = []
+    for row in rows:
+        stage = row.stage
+        avg = _STAGE_AVG_DAYS.get(stage, 10)
+        ref = row.stage_changed_at or row.created_at
+        if ref is None:
+            continue
+        if hasattr(ref, "tzinfo") and ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        days_in_stage = (now - ref).days
+        ratio = days_in_stage / avg if avg > 0 else 0
+        if ratio >= _ANOMALY_THRESHOLD:
+            anomalies.append({
+                "deal_id": str(row.id),
+                "title": row.title or "Untitled",
+                "stage": stage,
+                "value": float(row.value or 0),
+                "win_probability": float(row.ml_win_probability or 0),
+                "days_in_stage": days_in_stage,
+                "stage_avg_days": avg,
+                "stall_ratio": round(ratio, 2),
+            })
+
+    anomalies.sort(key=lambda x: x["stall_ratio"], reverse=True)
+    top_anomalies = anomalies[:5]
+
+    if not top_anomalies:
+        return {
+            "anomalies": [],
+            "total_stalled": 0,
+            "anomaly_narrative": "No stalled deals detected. All active deals are progressing within expected stage timelines — pipeline velocity is healthy.",
+            "recommendations": [
+                "Maintain current cadence; schedule weekly pipeline reviews to catch stalls early.",
+                "Set stage-level SLA alerts in your CRM so reps are notified when a deal exceeds its target days.",
+                "Continue monitoring — new deals entering the pipeline will be tracked automatically.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    worst = top_anomalies[0]
+    default_narrative = (
+        f"{len(anomalies)} deal(s) are stalled at more than {int(_ANOMALY_THRESHOLD)}× their stage average. "
+        f"The most stalled is '{worst['title']}' in '{worst['stage']}' — {worst['days_in_stage']} days vs the {worst['stage_avg_days']}-day average ({worst['stall_ratio']}× normal). "
+        "Stalled high-value deals represent at-risk revenue that compounds if not unblocked immediately."
+    )
+    default_recs = [
+        f"Call '{worst['title']}' contact today — after {worst['days_in_stage']} days in {worst['stage']}, a brief check-in call has a much higher unblock rate than email.",
+        "For each stalled deal, identify the single blocker (budget, legal, champion) and assign an owner and deadline to resolve it by EOW.",
+        "Review stall patterns across stages — if proposals consistently stall, the proposal template or pricing structure may need revision.",
+    ]
+
+    context = (
+        f"Deal velocity anomalies for workspace. {len(anomalies)} total stalled deals (showing top 5).\n"
+        "Stalled deals (stall_ratio = days_in_stage / stage_avg_days):\n"
+        + "\n".join(
+            f"  '{a['title']}' ({a['stage']}): {a['days_in_stage']}d in stage, avg={a['stage_avg_days']}d, ratio={a['stall_ratio']}×, value=${a['value']:,.0f}"
+            for a in top_anomalies
+        )
+        + "\nProvide anomaly_narrative and 3 recommendations for unblocking these deals."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_VELOCITY_ANOMALY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    anomaly_narrative = str(data.get("anomaly_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "anomalies": top_anomalies,
+        "total_stalled": len(anomalies),
+        "anomaly_narrative": anomaly_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 18d: win/loss pattern analysis
+# ---------------------------------------------------------------------------
+
+_OUTCOME_FACTORS_SYSTEM = """You are a sales analytics expert. Given aggregated win/loss deal metrics, write a 2-sentence win_loss_narrative identifying the most important pattern differentiating won from lost deals, and provide 3 specific, actionable recommendations to improve win rate. Return JSON: {"win_loss_narrative": "...", "recommendations": ["...", "...", "..."]}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/outcome-factors")
+@limiter.limit("5/minute")
+async def get_ai_deal_outcome_factors(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=180)
+
+    stmt = (
+        select(Deal.id, Deal.stage, Deal.value, Deal.health_score, Deal.ml_win_probability, Deal.stage_changed_at, Deal.created_at)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= cutoff,
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+
+    won_rows = [r for r in rows if r.stage == "closed_won"]
+    lost_rows = [r for r in rows if r.stage == "closed_lost"]
+
+    def _avg(lst: list[float]) -> float:
+        return sum(lst) / len(lst) if lst else 0.0
+
+    def _metrics(deal_rows: list) -> dict:
+        values = [float(r.value or 0) for r in deal_rows]
+        healths = [float(r.health_score or 0) for r in deal_rows]
+        probs = [float(r.ml_win_probability or 0) for r in deal_rows]
+        durations = []
+        for r in deal_rows:
+            ref = r.stage_changed_at or r.created_at
+            if ref is not None:
+                if hasattr(ref, "tzinfo") and ref.tzinfo is None:
+                    ref = ref.replace(tzinfo=timezone.utc)
+                durations.append((now - ref).days)
+        return {
+            "count": len(deal_rows),
+            "avg_value": round(_avg(values), 2),
+            "avg_health": round(_avg(healths), 2),
+            "avg_win_prob": round(_avg(probs), 2),
+            "avg_days_to_close": round(_avg(durations), 1),
+        }
+
+    won = _metrics(won_rows)
+    lost = _metrics(lost_rows)
+    total = won["count"] + lost["count"]
+    win_rate = round(won["count"] / total * 100, 1) if total > 0 else 0.0
+
+    # Value sweet spot: range where won deals cluster (p25–p75)
+    if won_rows:
+        sorted_vals = sorted(float(r.value or 0) for r in won_rows)
+        n = len(sorted_vals)
+        sweet_min = sorted_vals[max(0, n // 4)]
+        sweet_max = sorted_vals[min(n - 1, 3 * n // 4)]
+    else:
+        sweet_min = 0.0
+        sweet_max = 0.0
+
+    if total == 0:
+        return {
+            "won_count": 0,
+            "lost_count": 0,
+            "win_rate": 0.0,
+            "won_avg_value": 0.0,
+            "lost_avg_value": 0.0,
+            "won_avg_health": 0.0,
+            "lost_avg_health": 0.0,
+            "won_avg_win_prob": 0.0,
+            "lost_avg_win_prob": 0.0,
+            "won_avg_days_to_close": 0.0,
+            "lost_avg_days_to_close": 0.0,
+            "value_sweet_spot_min": 0.0,
+            "value_sweet_spot_max": 0.0,
+            "win_loss_narrative": "No closed deals in the last 180 days. Start closing deals to unlock win/loss pattern insights.",
+            "recommendations": [
+                "Focus on moving deals in negotiation to a close — even a few data points will unlock actionable pattern analysis.",
+                "Log loss reasons when marking deals closed_lost to build a qualitative pattern library alongside the quantitative analysis.",
+                "Review your qualification criteria: deals entering the pipeline should have a clear champion, budget, and timeline before moving past discovery.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_narrative = (
+        f"Win rate is {win_rate}% across {total} closed deals in the last 180 days. "
+        f"Won deals average ${won['avg_value']:,.0f} vs ${lost['avg_value']:,.0f} for lost, "
+        f"and score {won['avg_health']:.0f} health vs {lost['avg_health']:.0f} — "
+        "suggesting health score and deal size are key differentiators."
+    )
+    default_recs = [
+        f"Prioritize deals with health scores above {won['avg_health']:.0f} — won deals cluster here, while lost deals average {lost['avg_health']:.0f}.",
+        f"The value sweet spot for won deals is ${sweet_min:,.0f}–${sweet_max:,.0f}; deals outside this range need extra qualification or support.",
+        "Log loss reasons for every lost deal this quarter — 3 entries is enough to spot the top objection and build a rebuttal playbook.",
+    ]
+
+    context = (
+        f"Win/loss analysis for last 180 days. Won: {won['count']} deals, avg value ${won['avg_value']:,.0f}, "
+        f"avg health {won['avg_health']:.1f}, avg win_prob {won['avg_win_prob']:.1f}%, avg days {won['avg_days_to_close']:.0f}. "
+        f"Lost: {lost['count']} deals, avg value ${lost['avg_value']:,.0f}, "
+        f"avg health {lost['avg_health']:.1f}, avg win_prob {lost['avg_win_prob']:.1f}%, avg days {lost['avg_days_to_close']:.0f}. "
+        f"Win rate {win_rate}%. Value sweet spot ${sweet_min:,.0f}–${sweet_max:,.0f}. "
+        "Provide win_loss_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_OUTCOME_FACTORS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    win_loss_narrative = str(data.get("win_loss_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "won_count": won["count"],
+        "lost_count": lost["count"],
+        "win_rate": win_rate,
+        "won_avg_value": won["avg_value"],
+        "lost_avg_value": lost["avg_value"],
+        "won_avg_health": won["avg_health"],
+        "lost_avg_health": lost["avg_health"],
+        "won_avg_win_prob": won["avg_win_prob"],
+        "lost_avg_win_prob": lost["avg_win_prob"],
+        "won_avg_days_to_close": won["avg_days_to_close"],
+        "lost_avg_days_to_close": lost["avg_days_to_close"],
+        "value_sweet_spot_min": sweet_min,
+        "value_sweet_spot_max": sweet_max,
+        "win_loss_narrative": win_loss_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+# ---------------------------------------------------------------------------
+# Phase 18e: revenue forecast
+# ---------------------------------------------------------------------------
+
+_REVENUE_FORECAST_SYSTEM = """You are a sales revenue forecasting expert. Given pipeline forecast data, write a 2-sentence forecast_narrative summarising the revenue outlook and the biggest risk or opportunity in the pipeline, then provide 3 specific recommendations to improve forecast accuracy or accelerate closings. Return JSON: {"forecast_narrative": "...", "recommendations": ["...", "...", "..."]}"""
+
+# Estimated total remaining days to close from current stage
+_STAGE_REMAINING_DAYS = {
+    "discovery": 43,   # 7+14+10+12
+    "qualified": 36,   # 14+10+12
+    "proposal": 22,    # 10+12
+    "negotiation": 12, # 12
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/revenue-forecast")
+@limiter.limit("5/minute")
+async def get_ai_deal_revenue_forecast(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    active_stages = list(_STAGE_REMAINING_DAYS.keys())
+    stmt = (
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability, Deal.stage_changed_at, Deal.created_at)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(active_stages),
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+
+    buckets: dict[str, dict] = {
+        "30d": {"expected_revenue": 0.0, "deal_count": 0},
+        "60d": {"expected_revenue": 0.0, "deal_count": 0},
+        "90d": {"expected_revenue": 0.0, "deal_count": 0},
+    }
+    top_deals_raw: list[dict] = []
+
+    for row in rows:
+        stage = row.stage
+        base_remaining = _STAGE_REMAINING_DAYS.get(stage, 30)
+        # Adjust for time already spent in current stage
+        ref = row.stage_changed_at or row.created_at
+        if ref is not None:
+            if hasattr(ref, "tzinfo") and ref.tzinfo is None:
+                ref = ref.replace(tzinfo=timezone.utc)
+            days_in = (now - ref).days
+            stage_avg = _STAGE_AVG_DAYS.get(stage, 10)
+            remaining_in_stage = max(0, stage_avg - days_in)
+            subsequent = base_remaining - stage_avg
+            total_remaining = remaining_in_stage + max(0, subsequent)
+        else:
+            total_remaining = base_remaining
+
+        value = float(row.value or 0)
+        win_prob = float(row.ml_win_probability or 0) / 100.0
+        expected = round(value * win_prob, 2)
+
+        if total_remaining <= 30:
+            bucket = "30d"
+        elif total_remaining <= 60:
+            bucket = "60d"
+        else:
+            bucket = "90d"
+
+        buckets[bucket]["expected_revenue"] += expected
+        buckets[bucket]["deal_count"] += 1
+
+        top_deals_raw.append({
+            "deal_id": str(row.id),
+            "title": row.title or "Untitled",
+            "stage": stage,
+            "value": value,
+            "win_probability": float(row.ml_win_probability or 0),
+            "expected_revenue": expected,
+            "close_horizon": bucket,
+        })
+
+    for k in buckets:
+        buckets[k]["expected_revenue"] = round(buckets[k]["expected_revenue"], 2)
+
+    top_deals = sorted(top_deals_raw, key=lambda x: x["expected_revenue"], reverse=True)[:5]
+    total_pipeline = sum(float(r.value or 0) for r in rows)
+    total_expected = sum(d["expected_revenue"] for d in top_deals_raw)
+
+    if not rows:
+        return {
+            "forecast_30d": 0.0,
+            "forecast_60d": 0.0,
+            "forecast_90d": 0.0,
+            "total_pipeline": 0.0,
+            "total_expected": 0.0,
+            "deal_count": 0,
+            "top_deals": [],
+            "forecast_narrative": "No active deals in the pipeline to forecast. Add deals and move them through stages to generate a revenue forecast.",
+            "recommendations": [
+                "Add at least 5 deals to your pipeline to begin generating meaningful revenue forecasts.",
+                "Set win probability on each deal — accurate probabilities are the foundation of a reliable forecast.",
+                "Move deals through stages consistently; stale deals in early stages inflate 90-day forecast figures.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    default_narrative = (
+        f"Expected revenue over the next 90 days: ${total_expected:,.0f} weighted across {len(rows)} active deals "
+        f"(30d: ${buckets['30d']['expected_revenue']:,.0f} / 60d: ${buckets['60d']['expected_revenue']:,.0f} / 90d: ${buckets['90d']['expected_revenue']:,.0f}). "
+        "Top deals by expected value are the highest-impact targets for acceleration this quarter."
+    )
+    default_recs = [
+        f"Focus outreach on the top {min(3, len(top_deals))} deals by expected revenue — they represent the majority of 90-day forecast value.",
+        "Review deals in the 60-90 day bucket for stalls; pulling even one into the 30-day bucket significantly improves near-term revenue.",
+        "Update win probabilities weekly — stale probabilities make the forecast misleading and can cause mis-allocation of resources.",
+    ]
+
+    context = (
+        f"Revenue forecast for workspace. {len(rows)} active deals, total pipeline ${total_pipeline:,.0f}, total expected ${total_expected:,.0f}.\n"
+        f"30-day bucket: {buckets['30d']['deal_count']} deals, ${buckets['30d']['expected_revenue']:,.0f} expected.\n"
+        f"60-day bucket: {buckets['60d']['deal_count']} deals, ${buckets['60d']['expected_revenue']:,.0f} expected.\n"
+        f"90-day bucket: {buckets['90d']['deal_count']} deals, ${buckets['90d']['expected_revenue']:,.0f} expected.\n"
+        "Top deals: " + ", ".join(d["title"] + " $" + f"{d['expected_revenue']:,.0f}" for d in top_deals[:3]) + ".\n"
+        "Provide forecast_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_REVENUE_FORECAST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    forecast_narrative = str(data.get("forecast_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "forecast_30d": buckets["30d"]["expected_revenue"],
+        "forecast_60d": buckets["60d"]["expected_revenue"],
+        "forecast_90d": buckets["90d"]["expected_revenue"],
+        "total_pipeline": round(total_pipeline, 2),
+        "total_expected": round(total_expected, 2),
+        "deal_count": len(rows),
+        "top_deals": top_deals,
+        "forecast_narrative": forecast_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 18f — Deal Value Leak Analysis
+# ---------------------------------------------------------------------------
+
+_VALUE_LEAK_SYSTEM = (
+    "You are a sales analytics AI. Analyse where pipeline value is being lost "
+    "in a CRM. Given data about closed-lost deals grouped by stage, identify "
+    "patterns, root causes, and actionable ways to reduce value leakage. "
+    "Respond ONLY with valid JSON: {\"leak_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/value-leak")
+@limiter.limit("5/minute")
+async def get_ai_deal_value_leak(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=180)
+
+    result = await db.execute(
+        select(
+            Deal.stage,
+            Deal.value,
+            Deal.title,
+        ).join(Contact, Deal.contact_id == Contact.id).where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage == "closed_lost",
+            Deal.stage_changed_at >= cutoff,
+        )
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "stage_leaks": [],
+            "total_leaked": 0.0,
+            "biggest_leak_stage": None,
+            "leak_narrative": "No closed-lost deals found in the last 180 days. Keep building pipeline.",
+            "recommendations": [
+                "Track win/loss reasons on every deal to identify patterns early.",
+                "Set up automated health-score alerts for deals below 40.",
+                "Review competitor mentions on lost deals to refine positioning.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    stage_buckets: dict = {}
+    for row in rows:
+        s = row.stage
+        v = float(row.value or 0)
+        if s not in stage_buckets:
+            stage_buckets[s] = {"deal_count": 0, "leaked_value": 0.0}
+        stage_buckets[s]["deal_count"] += 1
+        stage_buckets[s]["leaked_value"] += v
+
+    total_leaked = sum(b["leaked_value"] for b in stage_buckets.values())
+
+    stage_leaks = sorted(
+        [
+            {
+                "stage": s,
+                "deal_count": b["deal_count"],
+                "leaked_value": round(b["leaked_value"], 2),
+                "avg_value": round(b["leaked_value"] / b["deal_count"], 2) if b["deal_count"] else 0.0,
+                "pct_of_total_leaked": round(b["leaked_value"] / total_leaked * 100, 1) if total_leaked else 0.0,
+            }
+            for s, b in stage_buckets.items()
+        ],
+        key=lambda x: x["leaked_value"],
+        reverse=True,
+    )
+
+    biggest_leak_stage = stage_leaks[0]["stage"] if stage_leaks else None
+
+    default_narrative = (
+        f"${total_leaked:,.0f} in pipeline value was lost across {len(rows)} deals in the last 180 days. "
+        f"The highest loss occurred at the {biggest_leak_stage} stage."
+    )
+    default_recs = [
+        f"Prioritise win/loss debriefs for deals lost at {biggest_leak_stage} — this stage drives the most value leakage.",
+        "Introduce stage-exit criteria to ensure deals advance only when truly qualified.",
+        "Assign a risk-review cadence for deals that have been in any stage longer than twice the average.",
+    ]
+
+    context = (
+        f"Deal value leak analysis. {len(rows)} closed-lost deals in last 180 days. "
+        f"Total leaked: ${total_leaked:,.0f}. "
+        "Stage breakdown: " + "; ".join(
+            sl["stage"] + " " + str(sl["deal_count"]) + " deals $" + f"{sl['leaked_value']:,.0f}" + " (" + str(sl["pct_of_total_leaked"]) + "%)"
+            for sl in stage_leaks
+        ) + ". "
+        "Provide leak_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_VALUE_LEAK_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    leak_narrative = str(data.get("leak_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "stage_leaks": stage_leaks,
+        "total_leaked": round(total_leaked, 2),
+        "biggest_leak_stage": biggest_leak_stage,
+        "leak_narrative": leak_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_PIPELINE_COVERAGE_SYSTEM = (
+    "You are a sales analytics AI. Analyse pipeline coverage health for a CRM. "
+    "Given open pipeline weighted by win probability vs a revenue target derived from "
+    "recent closed-won history, identify whether the pipeline is sufficient and what "
+    "actions would improve coverage. "
+    "Respond ONLY with valid JSON: {\"coverage_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_STAGE_WIN_WEIGHTS = {
+    "discovery": 0.10,
+    "qualified": 0.25,
+    "proposal": 0.50,
+    "negotiation": 0.75,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-coverage")
+@limiter.limit("5/minute")
+async def get_ai_pipeline_coverage(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    ninety_days_ago = now - datetime.timedelta(days=90)
+
+    # Closed-won revenue in last 90 days
+    won_result = await db.execute(
+        select(Deal.value)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= ninety_days_ago,
+        )
+    )
+    won_rows = won_result.all()
+    closed_won_90d = sum(float(r.value or 0) for r in won_rows)
+
+    # Target: 3x the 90-day closed-won run rate as a pipeline coverage target
+    target_revenue = closed_won_90d * 3.0 if closed_won_90d else 0.0
+
+    # Open deals - compute weighted pipeline
+    open_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(list(_STAGE_WIN_WEIGHTS.keys())),
+        )
+    )
+    open_rows = open_result.all()
+
+    if not open_rows and not won_rows:
+        return {
+            "coverage_ratio": 0.0,
+            "coverage_status": "critical",
+            "weighted_pipeline": 0.0,
+            "target_revenue": 0.0,
+            "total_open_pipeline": 0.0,
+            "stage_breakdown": [],
+            "coverage_narrative": "No open deals or closed-won history found. Build pipeline to establish a coverage baseline.",
+            "recommendations": [
+                "Focus on prospecting to build an initial pipeline in the discovery stage.",
+                "Set deal value and probability fields for all active opportunities.",
+                "Review CRM data quality to ensure deals are correctly staged.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Per-stage aggregation
+    stage_data: dict = {}
+    for row in open_rows:
+        s = row.stage
+        v = float(row.value or 0)
+        prob = float(row.ml_win_probability or 0) / 100.0
+        weight = _STAGE_WIN_WEIGHTS.get(s, 0.5)
+        weighted = v * max(prob, weight)
+        if s not in stage_data:
+            stage_data[s] = {"deal_count": 0, "total_value": 0.0, "weighted_value": 0.0}
+        stage_data[s]["deal_count"] += 1
+        stage_data[s]["total_value"] += v
+        stage_data[s]["weighted_value"] += weighted
+
+    total_open_pipeline = sum(d["total_value"] for d in stage_data.values())
+    weighted_pipeline = sum(d["weighted_value"] for d in stage_data.values())
+
+    coverage_ratio = round(weighted_pipeline / target_revenue, 2) if target_revenue else 0.0
+
+    if coverage_ratio >= 3.0:
+        coverage_status = "excellent"
+    elif coverage_ratio >= 2.0:
+        coverage_status = "good"
+    elif coverage_ratio >= 1.0:
+        coverage_status = "needs_attention"
+    else:
+        coverage_status = "critical"
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation"]
+    stage_breakdown = [
+        {
+            "stage": s,
+            "deal_count": stage_data[s]["deal_count"],
+            "total_value": round(stage_data[s]["total_value"], 2),
+            "weighted_value": round(stage_data[s]["weighted_value"], 2),
+            "pct_of_weighted": round(stage_data[s]["weighted_value"] / weighted_pipeline * 100, 1) if weighted_pipeline else 0.0,
+        }
+        for s in stage_order
+        if s in stage_data
+    ]
+
+    default_narrative = (
+        f"Weighted pipeline of ${weighted_pipeline:,.0f} covers {coverage_ratio:.1f}x the 90-day revenue target "
+        f"(${target_revenue:,.0f}). Coverage status: {coverage_status}."
+    )
+    default_recs = [
+        "Increase deal sourcing at the discovery stage to raise overall pipeline coverage above 3x.",
+        "Accelerate proposal-stage deals to improve near-term revenue realisation.",
+        "Review deals with low ML win probability to either qualify or disqualify them.",
+    ]
+
+    context = (
+        f"Pipeline coverage analysis. Closed-won 90d: ${closed_won_90d:,.0f}. "
+        f"Target: ${target_revenue:,.0f}. Weighted pipeline: ${weighted_pipeline:,.0f}. "
+        f"Coverage ratio: {coverage_ratio}x. Status: {coverage_status}. "
+        "Stage breakdown: " + "; ".join(
+            f"{sb['stage']} {sb['deal_count']} deals ${sb['total_value']:,.0f} weighted ${sb['weighted_value']:,.0f}"
+            for sb in stage_breakdown
+        ) + ". Provide coverage_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_PIPELINE_COVERAGE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    coverage_narrative = str(data.get("coverage_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recommendations_list = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recommendations_list) < 3:
+        recommendations_list.append(default_recs[len(recommendations_list) % 3])
+
+    return {
+        "coverage_ratio": coverage_ratio,
+        "coverage_status": coverage_status,
+        "weighted_pipeline": round(weighted_pipeline, 2),
+        "target_revenue": round(target_revenue, 2),
+        "total_open_pipeline": round(total_open_pipeline, 2),
+        "stage_breakdown": stage_breakdown,
+        "coverage_narrative": coverage_narrative,
+        "recommendations": recommendations_list,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_QUARTER_READINESS_SYSTEM = (
+    "You are a sales analytics AI. Evaluate whether a company's pipeline is ready "
+    "to hit its next-quarter revenue target based on deal volume, quality, and stage mix. "
+    "Respond ONLY with valid JSON: "
+    "{\"readiness_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_QUARTER_STAGE_CLOSE_PROB = {
+    "discovery": 0.08,
+    "qualified": 0.20,
+    "proposal": 0.45,
+    "negotiation": 0.72,
+}
+
+
+def _next_quarter_label(now: "datetime.datetime") -> str:
+    """Return a label like 'Q4 2026' for the next calendar quarter."""
+    q = (now.month - 1) // 3 + 1
+    next_q = q % 4 + 1
+    year = now.year + (1 if q == 4 else 0)
+    return f"Q{next_q} {year}"
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/quarter-readiness")
+@limiter.limit("5/minute")
+async def get_ai_quarter_readiness(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    ninety_days_ago = now - datetime.timedelta(days=90)
+    next_quarter = _next_quarter_label(now)
+
+    # Last-90d closed-won avg as quarterly target proxy
+    won_result = await db.execute(
+        select(Deal.value)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= ninety_days_ago,
+        )
+    )
+    won_rows = won_result.all()
+    closed_won_90d = sum(float(r.value or 0) for r in won_rows)
+    quarterly_target = closed_won_90d  # treat last quarter as the new target
+
+    # Open deals weighted by stage close probability
+    open_result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability, Deal.health_score)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(list(_QUARTER_STAGE_CLOSE_PROB.keys())),
+        )
+    )
+    open_rows = open_result.all()
+
+    if not open_rows and not won_rows:
+        return {
+            "next_quarter": next_quarter,
+            "quarterly_target": 0.0,
+            "expected_revenue": 0.0,
+            "readiness_score": 0,
+            "readiness_status": "critical",
+            "gap": 0.0,
+            "open_deal_count": 0,
+            "avg_health_score": 0.0,
+            "high_confidence_count": 0,
+            "stage_mix": [],
+            "readiness_narrative": "No pipeline data available. Build pipeline across all stages to assess readiness.",
+            "recommendations": [
+                "Start prospecting immediately to build a discovery-stage pipeline for next quarter.",
+                "Set revenue targets in the CRM so coverage can be tracked accurately.",
+                "Review closed-won history to calibrate the quarterly revenue baseline.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Compute expected revenue and stage mix
+    stage_mix: dict = {}
+    total_expected = 0.0
+    health_scores = []
+    high_confidence = 0
+
+    for row in open_rows:
+        s = row.stage
+        v = float(row.value or 0)
+        ml_prob = float(row.ml_win_probability or 0) / 100.0
+        stage_prob = _QUARTER_STAGE_CLOSE_PROB.get(s, 0.1)
+        effective_prob = max(ml_prob, stage_prob)
+        expected = v * effective_prob
+        total_expected += expected
+        if ml_prob >= 0.7:
+            high_confidence += 1
+        h = float(row.health_score or 50)
+        health_scores.append(h)
+        if s not in stage_mix:
+            stage_mix[s] = {"deal_count": 0, "total_value": 0.0, "expected_value": 0.0}
+        stage_mix[s]["deal_count"] += 1
+        stage_mix[s]["total_value"] += v
+        stage_mix[s]["expected_value"] += expected
+
+    avg_health = round(sum(health_scores) / len(health_scores), 1) if health_scores else 0.0
+    gap = round(total_expected - quarterly_target, 2)
+
+    if quarterly_target > 0:
+        ratio = total_expected / quarterly_target
+    else:
+        ratio = 1.0 if total_expected > 0 else 0.0
+
+    if ratio >= 1.2:
+        readiness_score = 90
+        readiness_status = "on_track"
+    elif ratio >= 0.9:
+        readiness_score = 70
+        readiness_status = "at_risk"
+    elif ratio >= 0.6:
+        readiness_score = 45
+        readiness_status = "behind"
+    else:
+        readiness_score = 20
+        readiness_status = "critical"
+
+    stage_order = ["discovery", "qualified", "proposal", "negotiation"]
+    stage_mix_list = [
+        {
+            "stage": s,
+            "deal_count": stage_mix[s]["deal_count"],
+            "total_value": round(stage_mix[s]["total_value"], 2),
+            "expected_value": round(stage_mix[s]["expected_value"], 2),
+        }
+        for s in stage_order
+        if s in stage_mix
+    ]
+
+    default_narrative = (
+        f"Expected revenue of ${total_expected:,.0f} vs a ${quarterly_target:,.0f} target for {next_quarter}. "
+        f"Readiness status: {readiness_status} (score {readiness_score}/100)."
+    )
+    default_recs = [
+        f"Focus on advancing qualified and proposal-stage deals to close in {next_quarter}.",
+        "Add 2–3 new high-value opportunities to the pipeline to close the revenue gap.",
+        "Prioritise deals with health score above 70 and win probability above 60% for this quarter.",
+    ]
+
+    context = (
+        f"Quarter readiness for {next_quarter}. Target: ${quarterly_target:,.0f}. "
+        f"Expected revenue: ${total_expected:,.0f}. Gap: ${gap:,.0f}. "
+        f"Status: {readiness_status}. Avg health: {avg_health}. High-confidence deals: {high_confidence}. "
+        "Stage mix: " + "; ".join(
+            f"{sm['stage']} {sm['deal_count']} deals ${sm['total_value']:,.0f}"
+            for sm in stage_mix_list
+        ) + ". Provide readiness_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_QUARTER_READINESS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    readiness_narrative = str(data.get("readiness_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "next_quarter": next_quarter,
+        "quarterly_target": round(quarterly_target, 2),
+        "expected_revenue": round(total_expected, 2),
+        "readiness_score": readiness_score,
+        "readiness_status": readiness_status,
+        "gap": gap,
+        "open_deal_count": len(open_rows),
+        "avg_health_score": avg_health,
+        "high_confidence_count": high_confidence,
+        "stage_mix": stage_mix_list,
+        "readiness_narrative": readiness_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 18i — AI deal tier segmentation report
+# ---------------------------------------------------------------------------
+
+_TIER_SEGMENTATION_SYSTEM = (
+    "You are a sales analytics AI. Analyse deal tier segmentation data for a CRM. "
+    "Given deal tiers (Enterprise >$50K / Mid-Market $20K–$50K / SMB <$20K) with counts, values, "
+    "health scores and win probabilities, write a 2-sentence narrative and 3 actionable recommendations. "
+    "Respond ONLY with valid JSON: "
+    "{\"tier_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/tier-segmentation")
+@limiter.limit("5/minute")
+async def get_ai_deal_tier_segmentation(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    active_stages = ["discovery", "qualified", "proposal", "negotiation"]
+
+    rows = (
+        await db.execute(
+            select(Deal.value, Deal.health_score, Deal.ml_win_probability)
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage.in_(active_stages))
+        )
+    ).all()
+
+    tiers: dict[str, dict] = {
+        "enterprise": {"deal_count": 0, "total_value": 0.0, "health_scores": [], "win_probs": []},
+        "mid_market": {"deal_count": 0, "total_value": 0.0, "health_scores": [], "win_probs": []},
+        "smb": {"deal_count": 0, "total_value": 0.0, "health_scores": [], "win_probs": []},
+    }
+
+    for row in rows:
+        v = float(row.value or 0)
+        h = float(row.health_score or 50)
+        p = float(row.ml_win_probability or 50)
+        if v >= 50000:
+            t = "enterprise"
+        elif v >= 20000:
+            t = "mid_market"
+        else:
+            t = "smb"
+        tiers[t]["deal_count"] += 1
+        tiers[t]["total_value"] += v
+        tiers[t]["health_scores"].append(h)
+        tiers[t]["win_probs"].append(p)
+
+    total_pipeline = sum(d["total_value"] for d in tiers.values())
+
+    tier_list = []
+    for tier_name in ("enterprise", "mid_market", "smb"):
+        d = tiers[tier_name]
+        count = d["deal_count"]
+        total_val = d["total_value"]
+        avg_val = round(total_val / count, 2) if count else 0.0
+        avg_health = round(sum(d["health_scores"]) / count, 1) if count else 0.0
+        avg_prob = round(sum(d["win_probs"]) / count, 1) if count else 0.0
+        pct = round(total_val / total_pipeline * 100, 1) if total_pipeline else 0.0
+        tier_list.append({
+            "tier": tier_name,
+            "deal_count": count,
+            "total_value": round(total_val, 2),
+            "avg_value": avg_val,
+            "avg_health": avg_health,
+            "avg_win_prob": avg_prob,
+            "pct_of_pipeline": pct,
+        })
+
+    priority_tier = max(tier_list, key=lambda t: t["total_value"])["tier"] if tier_list else "enterprise"
+
+    default_narrative = (
+        f"Pipeline spans {len(rows)} open deals across Enterprise, Mid-Market and SMB tiers. "
+        f"The {priority_tier.replace('_', ' ').title()} tier holds the largest share of pipeline value."
+    )
+    default_recs = [
+        "Focus Enterprise deals with high health scores for immediate acceleration.",
+        "Nurture Mid-Market deals to close before quarter-end to build revenue consistency.",
+        "Review SMB deals for quick-win opportunities with short sales cycles.",
+    ]
+
+    if not rows:
+        return {
+            "tiers": tier_list,
+            "priority_tier": priority_tier,
+            "total_pipeline": 0.0,
+            "tier_narrative": default_narrative,
+            "recommendations": default_recs,
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        "Deal tier segmentation: "
+        + "; ".join(
+            f"{t['tier']} {t['deal_count']} deals ${t['total_value']:,.0f} total "
+            f"avg health {t['avg_health']} avg win_prob {t['avg_win_prob']}%"
+            for t in tier_list
+            if t["deal_count"] > 0
+        )
+        + f". Total pipeline ${total_pipeline:,.0f}. Priority tier: {priority_tier}. "
+        "Provide tier_narrative and 3 recommendations."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_TIER_SEGMENTATION_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    tier_narrative = str(data.get("tier_narrative", "")).strip() or default_narrative
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "tiers": tier_list,
+        "priority_tier": priority_tier,
+        "total_pipeline": round(total_pipeline, 2),
+        "tier_narrative": tier_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+_SEASONAL_PATTERNS_SYSTEM = (
+    "You are a sales analytics AI. Analyse seasonal deal-closing patterns for a CRM. "
+    "Given monthly closed-won revenue totals and quarterly breakdowns, write a 2-sentence narrative "
+    "and 3 actionable recommendations to help the sales team capitalise on seasonal patterns. "
+    "Respond ONLY with valid JSON: "
+    "{\"seasonal_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/seasonal-patterns")
+@limiter.limit("5/minute")
+async def get_ai_deal_seasonal_patterns(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=730)
+    rows = (
+        await db.execute(
+            select(Deal.value, Deal.stage_changed_at)
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage == "closed_won")
+            .where(Deal.stage_changed_at >= cutoff)
+        )
+    ).all()
+
+    monthly: dict[int, dict] = {m: {"deal_count": 0, "revenue": 0.0} for m in range(1, 13)}
+    for row in rows:
+        ts = row.stage_changed_at
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        m = ts.month
+        monthly[m]["deal_count"] += 1
+        monthly[m]["revenue"] += float(row.value or 0)
+
+    total_annual = sum(d["revenue"] for d in monthly.values())
+    monthly_patterns = []
+    for m in range(1, 13):
+        d = monthly[m]
+        rev = round(d["revenue"], 2)
+        pct = round(rev / total_annual * 100, 1) if total_annual else 0.0
+        monthly_patterns.append({
+            "month": _MONTH_NAMES[m - 1],
+            "month_number": m,
+            "deal_count": d["deal_count"],
+            "revenue": rev,
+            "pct_of_annual": pct,
+        })
+
+    quarters = [
+        {"quarter": "Q1", "months": [1, 2, 3]},
+        {"quarter": "Q2", "months": [4, 5, 6]},
+        {"quarter": "Q3", "months": [7, 8, 9]},
+        {"quarter": "Q4", "months": [10, 11, 12]},
+    ]
+    quarterly_breakdown = []
+    for q in quarters:
+        q_deals = sum(monthly[m]["deal_count"] for m in q["months"])
+        q_rev = sum(monthly[m]["revenue"] for m in q["months"])
+        q_pct = round(q_rev / total_annual * 100, 1) if total_annual else 0.0
+        quarterly_breakdown.append({
+            "quarter": q["quarter"],
+            "deal_count": q_deals,
+            "revenue": round(q_rev, 2),
+            "pct_of_annual": q_pct,
+        })
+
+    months_with_data = [mp for mp in monthly_patterns if mp["deal_count"] > 0]
+    if months_with_data:
+        peak_month = max(months_with_data, key=lambda x: x["revenue"])["month"]
+        slowest_month = min(months_with_data, key=lambda x: x["revenue"])["month"]
+    else:
+        peak_month = None
+        slowest_month = None
+
+    if not months_with_data:
+        return {
+            "monthly_patterns": monthly_patterns,
+            "quarterly_breakdown": quarterly_breakdown,
+            "peak_month": peak_month,
+            "slowest_month": slowest_month,
+            "total_annual_revenue": 0.0,
+            "seasonal_narrative": "No closed-won deals found in the last two years.",
+            "recommendations": [
+                "Focus on closing your first deals to establish a seasonal baseline.",
+                "Track deal stage transitions to identify where prospects stall.",
+                "Set quarterly revenue targets to build forecast discipline.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Monthly revenue (last 2 years): "
+        + ", ".join(f"{mp['month']} ${mp['revenue']:,.0f}" for mp in monthly_patterns if mp["deal_count"] > 0)
+        + f". Peak month: {peak_month}. Slowest month: {slowest_month}. "
+        + "Quarterly: "
+        + ", ".join(f"{q['quarter']} ${q['revenue']:,.0f} ({q['pct_of_annual']}%)" for q in quarterly_breakdown)
+        + "."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_SEASONAL_PATTERNS_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    seasonal_narrative = str(data.get("seasonal_narrative", "")).strip()
+    if not seasonal_narrative:
+        seasonal_narrative = f"Deal closings peak in {peak_month} and slow in {slowest_month} based on historical patterns."
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    while len(recs) < 3:
+        defaults = [
+            f"Ramp up prospecting 60 days before {peak_month} to maximise pipeline heading into the peak month.",
+            f"Use {slowest_month} for pipeline building and training, not closing targets.",
+            "Align quota periods with seasonal patterns to set realistic monthly targets.",
+        ]
+        recs.append(defaults[len(recs) % 3])
+
+    return {
+        "monthly_patterns": monthly_patterns,
+        "quarterly_breakdown": quarterly_breakdown,
+        "peak_month": peak_month,
+        "slowest_month": slowest_month,
+        "total_annual_revenue": round(total_annual, 2),
+        "seasonal_narrative": seasonal_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_DEAL_STALL_SYSTEM = (
+    "You are a sales analytics AI. Analyse deal stall patterns for a CRM. "
+    "Given active deals grouped by how long they have been stuck in the same stage, "
+    "write a 2-sentence narrative identifying the most urgent risk and 3 actionable recommendations "
+    "to unblock stalled deals and restore pipeline momentum. "
+    "Respond ONLY with valid JSON: "
+    "{\"stall_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_STALL_BUCKETS = [
+    ("fresh", 0, 7),
+    ("warming", 7, 14),
+    ("stalling", 14, 30),
+    ("at_risk", 30, 60),
+    ("critical", 60, None),
+]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/stall-analysis")
+@limiter.limit("5/minute")
+async def get_ai_deal_stall_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    now = datetime.datetime.now(timezone.utc)
+    active_stages = ["discovery", "qualified", "proposal", "negotiation"]
+    rows = (
+        await db.execute(
+            select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.health_score, Deal.stage_changed_at)
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage.in_(active_stages))
+        )
+    ).all()
+
+    bucket_data: dict[str, dict] = {
+        b[0]: {"deal_count": 0, "total_value": 0.0, "stall_days_sum": 0.0}
+        for b in _STALL_BUCKETS
+    }
+    deal_list = []
+
+    for row in rows:
+        ts = row.stage_changed_at
+        if ts is None:
+            stall_days = 0
+        else:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            stall_days = max(0, (now - ts).days)
+
+        val = float(row.value or 0)
+        health = float(row.health_score or 50)
+
+        bucket_name = "critical"
+        for name, lo, hi in _STALL_BUCKETS:
+            if hi is None or stall_days < hi:
+                bucket_name = name
+                break
+
+        bucket_data[bucket_name]["deal_count"] += 1
+        bucket_data[bucket_name]["total_value"] += val
+        bucket_data[bucket_name]["stall_days_sum"] += stall_days
+
+        deal_list.append({
+            "id": str(row.id),
+            "title": str(row.title or ""),
+            "stage": str(row.stage or ""),
+            "value": round(val, 2),
+            "health_score": round(health, 1),
+            "stall_days": stall_days,
+        })
+
+    buckets = []
+    for name, lo, hi in _STALL_BUCKETS:
+        d = bucket_data[name]
+        count = d["deal_count"]
+        total_val = round(d["total_value"], 2)
+        avg_stall = round(d["stall_days_sum"] / count, 1) if count else 0.0
+        label = f"{lo}–{hi - 1} days" if hi else f"{lo}+ days"
+        buckets.append({
+            "bucket": name,
+            "label": label,
+            "deal_count": count,
+            "total_value": total_val,
+            "avg_stall_days": avg_stall,
+        })
+
+    total_active = len(deal_list)
+    critical_count = bucket_data["critical"]["deal_count"]
+    at_risk_count = bucket_data["at_risk"]["deal_count"]
+    all_stall_days = [d["stall_days"] for d in deal_list]
+    avg_stall_days = round(sum(all_stall_days) / total_active, 1) if total_active else 0.0
+    top_stalled = sorted(deal_list, key=lambda d: d["stall_days"], reverse=True)[:5]
+
+    if not deal_list:
+        return {
+            "buckets": buckets,
+            "top_stalled_deals": [],
+            "avg_stall_days": 0.0,
+            "critical_count": 0,
+            "at_risk_count": 0,
+            "total_active": 0,
+            "stall_narrative": "No active deals found in the pipeline.",
+            "recommendations": [
+                "Add new deals to the pipeline to begin tracking stall patterns.",
+                "Set up regular pipeline reviews to catch stalling deals early.",
+                "Define stage exit criteria to ensure deals move forward consistently.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Active deals: {total_active}. Avg stall: {avg_stall_days} days. "
+        f"Critical (60+ days): {critical_count}. At risk (30-60 days): {at_risk_count}. "
+        "Buckets: "
+        + ", ".join(
+            f"{b['bucket']} {b['deal_count']} deals (avg {b['avg_stall_days']} days)"
+            for b in buckets if b["deal_count"] > 0
+        )
+        + ". Top stalled: "
+        + ", ".join(f"{d['title']} {d['stall_days']}d" for d in top_stalled[:3])
+        + "."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_DEAL_STALL_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    stall_narrative = str(data.get("stall_narrative", "")).strip()
+    if not stall_narrative:
+        stall_narrative = (
+            f"{critical_count} deal{'s' if critical_count != 1 else ''} "
+            "stalled over 60 days represent urgent pipeline risk."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Schedule re-engagement calls for all deals stalled over 30 days within 48 hours.",
+        "Implement a weekly pipeline review cadence to catch new stalls before they become critical.",
+        "Define clear stage exit criteria so reps know exactly what action is needed to advance each deal.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "buckets": buckets,
+        "top_stalled_deals": top_stalled,
+        "avg_stall_days": avg_stall_days,
+        "critical_count": critical_count,
+        "at_risk_count": at_risk_count,
+        "total_active": total_active,
+        "stall_narrative": stall_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_PRIORITY_MATRIX_SYSTEM = (
+    "You are a sales analytics AI. Analyse a 2x2 deal priority matrix for a CRM. "
+    "Deals are classified by value (above/below average) and win probability (above/below 60%). "
+    "Quadrants: close_now (high value + high prob), invest (high value + low prob), "
+    "quick_win (low value + high prob), deprioritize (low value + low prob). "
+    "Write a 2-sentence narrative identifying the most important strategic focus and "
+    "3 actionable recommendations to optimise sales effort allocation. "
+    "Respond ONLY with valid JSON: "
+    "{\"matrix_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/priority-matrix")
+@limiter.limit("5/minute")
+async def get_ai_deal_priority_matrix(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    now = datetime.datetime.now(timezone.utc)
+    active_stages = ["discovery", "qualified", "proposal", "negotiation"]
+    rows = (
+        await db.execute(
+            select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.ml_win_probability, Deal.health_score)
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage.in_(active_stages))
+        )
+    ).all()
+
+    deal_list = []
+    for row in rows:
+        val = float(row.value or 0)
+        prob = float(row.ml_win_probability or 50)
+        health = float(row.health_score or 50)
+        deal_list.append({
+            "id": str(row.id),
+            "title": str(row.title or ""),
+            "stage": str(row.stage or ""),
+            "value": round(val, 2),
+            "win_probability": round(prob, 1),
+            "health_score": round(health, 1),
+        })
+
+    total_active = len(deal_list)
+    if total_active == 0:
+        empty_quadrants = [
+            {"quadrant": "close_now", "label": "Close Now", "deal_count": 0, "total_value": 0.0, "avg_win_prob": 0.0, "top_deals": []},
+            {"quadrant": "invest", "label": "Invest", "deal_count": 0, "total_value": 0.0, "avg_win_prob": 0.0, "top_deals": []},
+            {"quadrant": "quick_win", "label": "Quick Win", "deal_count": 0, "total_value": 0.0, "avg_win_prob": 0.0, "top_deals": []},
+            {"quadrant": "deprioritize", "label": "Deprioritize", "deal_count": 0, "total_value": 0.0, "avg_win_prob": 0.0, "top_deals": []},
+        ]
+        return {
+            "quadrants": empty_quadrants,
+            "avg_deal_value": 0.0,
+            "total_active": 0,
+            "matrix_narrative": "No active deals found in the pipeline.",
+            "recommendations": [
+                "Add deals to the pipeline to begin priority matrix analysis.",
+                "Ensure deals have ML win probability scores for accurate classification.",
+                "Set deal values to enable value-based prioritisation.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    avg_value = sum(d["value"] for d in deal_list) / total_active
+    WIN_PROB_THRESHOLD = 60.0
+
+    buckets: dict[str, list] = {"close_now": [], "invest": [], "quick_win": [], "deprioritize": []}
+    for d in deal_list:
+        high_value = d["value"] >= avg_value
+        high_prob = d["win_probability"] >= WIN_PROB_THRESHOLD
+        if high_value and high_prob:
+            q = "close_now"
+        elif high_value and not high_prob:
+            q = "invest"
+        elif not high_value and high_prob:
+            q = "quick_win"
+        else:
+            q = "deprioritize"
+        buckets[q].append(d)
+
+    quadrant_meta = [
+        ("close_now", "Close Now"),
+        ("invest", "Invest"),
+        ("quick_win", "Quick Win"),
+        ("deprioritize", "Deprioritize"),
+    ]
+    quadrants = []
+    for key, label in quadrant_meta:
+        deals = buckets[key]
+        count = len(deals)
+        total_val = round(sum(d["value"] for d in deals), 2)
+        avg_prob = round(sum(d["win_probability"] for d in deals) / count, 1) if count else 0.0
+        top = sorted(deals, key=lambda d: d["value"], reverse=True)[:3]
+        quadrants.append({
+            "quadrant": key,
+            "label": label,
+            "deal_count": count,
+            "total_value": total_val,
+            "avg_win_prob": avg_prob,
+            "top_deals": top,
+        })
+
+    context = (
+        f"Active deals: {total_active}. Avg deal value threshold: ${avg_value:,.0f}. Win prob threshold: 60%. "
+        + " | ".join(
+            f"{q['label']}: {q['deal_count']} deals, ${q['total_value']:,.0f} value, avg {q['avg_win_prob']}% win prob"
+            for q in quadrants
+        )
+        + "."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_PRIORITY_MATRIX_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    matrix_narrative = str(data.get("matrix_narrative", "")).strip()
+    if not matrix_narrative:
+        close_now_q = next((q for q in quadrants if q["quadrant"] == "close_now"), None)
+        matrix_narrative = (
+            f"{close_now_q['deal_count'] if close_now_q else 0} deals are in the Close Now quadrant — "
+            "highest value and highest probability, requiring immediate focus."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Dedicate 60% of weekly selling time to Close Now deals to maximise near-term revenue.",
+        "Assign senior reps to Invest deals with a clear 30-day action plan to improve win probability.",
+        "Use Quick Win deals to build momentum and free pipeline capacity for higher-value pursuits.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "quadrants": quadrants,
+        "avg_deal_value": round(avg_value, 2),
+        "total_active": total_active,
+        "matrix_narrative": matrix_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_ENGAGEMENT_REPORT_SYSTEM = (
+    "You are a sales analytics AI. Analyse a deal engagement score report for a CRM. "
+    "Engagement scores (0–100) are computed from recent messages, deal notes, and task completion. "
+    "Write a 2-sentence narrative identifying the overall engagement health of the pipeline and "
+    "3 actionable recommendations to improve low-engagement deals. "
+    "Respond ONLY with valid JSON: "
+    "{\"engagement_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/engagement-report")
+@limiter.limit("5/minute")
+async def get_ai_deal_engagement_report(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff_90 = now - datetime.timedelta(days=90)
+
+    active_stages = ["discovery", "qualified", "proposal", "negotiation"]
+
+    # Query open deals
+    deal_rows = (
+        await db.execute(
+            select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.health_score, Deal.contact_id)
+            .join(Contact, Deal.contact_id == Contact.id)
+            .where(Contact.workspace_id == workspace_id)
+            .where(Deal.stage.in_(active_stages))
+        )
+    ).all()
+
+    if not deal_rows:
+        return {
+            "engagement_buckets": [
+                {"bucket": "high", "label": "High Engagement (≥60)", "deal_count": 0, "avg_score": 0.0},
+                {"bucket": "medium", "label": "Medium Engagement (30–59)", "deal_count": 0, "avg_score": 0.0},
+                {"bucket": "low", "label": "Low Engagement (<30)", "deal_count": 0, "avg_score": 0.0},
+            ],
+            "top_engaged": [],
+            "least_engaged": [],
+            "avg_engagement_score": 0.0,
+            "total_active": 0,
+            "engagement_narrative": "No active deals found in the pipeline to analyse for engagement.",
+            "recommendations": [
+                "Add deals to the pipeline and log notes or messages to start tracking engagement.",
+                "Connect your Gmail or Slack connector to automatically capture message activity.",
+                "Create tasks linked to contacts to boost engagement scores.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # For each deal compute engagement score (same formula as per-deal endpoint)
+    # messages ×8 capped 40, deal_notes ×10 capped 30, task_completion_rate ×30
+    deal_ids = [r.id for r in deal_rows]
+    contact_ids = [r.contact_id for r in deal_rows if r.contact_id]
+
+    # Batch: message counts per contact_id (last 90 days)
+    msg_rows = (
+        await db.execute(
+            select(Message.contact_id, func.count(Message.id).label("cnt"))
+            .where(Message.contact_id.in_(contact_ids))
+            .where(Message.received_at >= cutoff_90)
+            .group_by(Message.contact_id)
+        )
+    ).all()
+    msg_by_contact = {str(r.contact_id): r.cnt for r in msg_rows}
+
+    # Batch: deal note counts per deal_id (last 90 days)
+    note_rows = (
+        await db.execute(
+            select(DealNote.deal_id, func.count(DealNote.id).label("cnt"))
+            .where(DealNote.deal_id.in_(deal_ids))
+            .where(DealNote.created_at >= cutoff_90)
+            .group_by(DealNote.deal_id)
+        )
+    ).all()
+    notes_by_deal = {str(r.deal_id): r.cnt for r in note_rows}
+
+    # Batch: task counts (open + done) per contact_id for completion rate
+    task_rows = (
+        await db.execute(
+            select(Task.contact_id, Task.status, func.count(Task.id).label("cnt"))
+            .where(Task.contact_id.in_(contact_ids))
+            .group_by(Task.contact_id, Task.status)
+        )
+    ).all()
+    task_open_by_contact: dict[str, int] = {}
+    task_done_by_contact: dict[str, int] = {}
+    for r in task_rows:
+        cid = str(r.contact_id)
+        if r.status == "done":
+            task_done_by_contact[cid] = task_done_by_contact.get(cid, 0) + r.cnt
+        else:
+            task_open_by_contact[cid] = task_open_by_contact.get(cid, 0) + r.cnt
+
+    deal_scores = []
+    for row in deal_rows:
+        cid = str(row.contact_id) if row.contact_id else ""
+        msg_count = msg_by_contact.get(cid, 0)
+        note_count = notes_by_deal.get(str(row.id), 0)
+        done = task_done_by_contact.get(cid, 0)
+        total_tasks = done + task_open_by_contact.get(cid, 0)
+        completion_rate = done / total_tasks if total_tasks > 0 else 0.0
+
+        msg_pts = min(msg_count * 8, 40)
+        note_pts = min(note_count * 10, 30)
+        task_pts = round(completion_rate * 30)
+        score = msg_pts + note_pts + task_pts
+
+        deal_scores.append({
+            "id": str(row.id),
+            "title": row.title,
+            "stage": row.stage,
+            "value": float(row.value or 0),
+            "health_score": float(row.health_score or 0),
+            "engagement_score": score,
+        })
+
+    # Bucket
+    high = [d for d in deal_scores if d["engagement_score"] >= 60]
+    medium = [d for d in deal_scores if 30 <= d["engagement_score"] < 60]
+    low = [d for d in deal_scores if d["engagement_score"] < 30]
+
+    def _avg_score(lst: list) -> float:
+        return round(sum(d["engagement_score"] for d in lst) / len(lst), 1) if lst else 0.0
+
+    engagement_buckets = [
+        {"bucket": "high", "label": "High Engagement (≥60)", "deal_count": len(high), "avg_score": _avg_score(high)},
+        {"bucket": "medium", "label": "Medium Engagement (30–59)", "deal_count": len(medium), "avg_score": _avg_score(medium)},
+        {"bucket": "low", "label": "Low Engagement (<30)", "deal_count": len(low), "avg_score": _avg_score(low)},
+    ]
+
+    sorted_by_score = sorted(deal_scores, key=lambda d: d["engagement_score"], reverse=True)
+    top_engaged = sorted_by_score[:3]
+    least_engaged = sorted_by_score[-3:][::-1] if len(sorted_by_score) >= 3 else sorted_by_score[::-1]
+    avg_engagement_score = round(sum(d["engagement_score"] for d in deal_scores) / len(deal_scores), 1)
+    total_active = len(deal_scores)
+
+    context = (
+        f"Pipeline engagement report: {total_active} active deals. "
+        f"Avg engagement score: {avg_engagement_score}/100. "
+        f"High engagement (≥60): {len(high)} deals. "
+        f"Medium engagement (30–59): {len(medium)} deals. "
+        f"Low engagement (<30): {len(low)} deals. "
+        f"Top engaged deal: {top_engaged[0]['title']} (score {top_engaged[0]['engagement_score']}) if deals exist. "
+        f"Least engaged deal: {least_engaged[0]['title']} (score {least_engaged[0]['engagement_score']}) if deals exist."
+        if top_engaged and least_engaged
+        else f"Pipeline engagement report: {total_active} active deals. Avg score: {avg_engagement_score}/100."
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_ENGAGEMENT_REPORT_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    engagement_narrative = str(data.get("engagement_narrative", "")).strip()
+    if not engagement_narrative:
+        engagement_narrative = (
+            f"{len(low)} of {total_active} active deals have low engagement scores — "
+            "these require immediate attention to increase activity and improve win probability."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Schedule a follow-up call or send a personalised email to each low-engagement deal this week.",
+        "Log at least one deal note per low-engagement deal summarising the current blockers.",
+        "Create tasks linked to low-engagement deal contacts to ensure timely follow-through.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "engagement_buckets": engagement_buckets,
+        "top_engaged": top_engaged,
+        "least_engaged": least_engaged,
+        "avg_engagement_score": avg_engagement_score,
+        "total_active": total_active,
+        "engagement_narrative": engagement_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
