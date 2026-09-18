@@ -54,9 +54,11 @@ export const module0Setup: TourModule = {
       whyThisExists:
         "Your workspace is the container for every contact, deal, message, and agent action. The name is how your team will recognize it.",
       prerequisiteCheck: {
-        label: "You're on the first step of the wizard.",
-        verify: present('[data-tour="workspace-name"]'),
-        nudge: "This step lives on the wizard's first screen — if you've moved on, tap Back in the wizard.",
+        // No soft-verify here: the field unmounts as soon as the wizard advances
+        // past naming, so a `present()` check would flip to a misleading "tap
+        // Back" nudge the moment the user (correctly) moves on. Keep it a plain,
+        // neutral hint.
+        label: "Name your workspace on the wizard's first screen.",
       },
       anchor: { selector: '[data-tour="workspace-name"]', placement: "bottom", padding: 6 },
       actionGuidance:
@@ -69,7 +71,10 @@ export const module0Setup: TourModule = {
         verify: () => {
           if (typeof document === "undefined") return false;
           const input = document.querySelector<HTMLInputElement>('[data-tour="workspace-name"]');
-          return !!input && input.value.trim().length > 0;
+          // If the field is gone, the wizard has already advanced past naming —
+          // treat the step as done rather than falsely reporting it empty.
+          if (!input) return true;
+          return input.value.trim().length > 0;
         },
         nudge: "The name field still looks empty — add a name in the wizard, then continue. (You can proceed regardless.)",
       },
