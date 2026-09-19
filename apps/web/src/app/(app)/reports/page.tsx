@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle, UserPlus,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -803,6 +803,11 @@ export default function ReportsPage() {
   const [commFreq, setCommFreq] = useState<AICommFreqData | null>(null);
   const [commFreqLoading, setCommFreqLoading] = useState(false);
   const [commFreqOpen, setCommFreqOpen] = useState(true);
+  type AIAcquisitionWeek = { week_start: string; new_contacts: number };
+  type AIAcquisitionData = { weekly_acquisition: AIAcquisitionWeek[]; total_new_contacts: number; avg_per_week: number; growth_rate: number; trend_direction: string; peak_week: string; peak_count: number; acquisition_narrative: string; recommendations: string[]; generated_at: string };
+  const [acquisitionRate, setAcquisitionRate] = useState<AIAcquisitionData | null>(null);
+  const [acquisitionRateLoading, setAcquisitionRateLoading] = useState(false);
+  const [acquisitionRateOpen, setAcquisitionRateOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -964,6 +969,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPipelineRiskScore("demo-workspace-1", "demo-token").then(setPipelineRiskScore).catch(() => {}).finally(() => setPipelineRiskScoreLoading(false));
       setCommFreqLoading(true);
       apiClient.getAIContactCommunicationFrequency("demo-workspace-1", "demo-token").then(setCommFreq).catch(() => {}).finally(() => setCommFreqLoading(false));
+      setAcquisitionRateLoading(true);
+      apiClient.getAIContactAcquisitionRate("demo-workspace-1", "demo-token").then(setAcquisitionRate).catch(() => {}).finally(() => setAcquisitionRateLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1129,6 +1136,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPipelineRiskScore(workspaceId, session.access_token).then(setPipelineRiskScore).catch(() => {}).finally(() => setPipelineRiskScoreLoading(false));
       setCommFreqLoading(true);
       apiClient.getAIContactCommunicationFrequency(workspaceId, session.access_token).then(setCommFreq).catch(() => {}).finally(() => setCommFreqLoading(false));
+      setAcquisitionRateLoading(true);
+      apiClient.getAIContactAcquisitionRate(workspaceId, session.access_token).then(setAcquisitionRate).catch(() => {}).finally(() => setAcquisitionRateLoading(false));
     });
   }, []);
 
@@ -2230,6 +2239,27 @@ export default function ReportsPage() {
         if (!session) { setCommFreqLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCommFreqLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAcquisitionRate = () => {
+    setAcquisitionRateLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactAcquisitionRate(wid, tok)
+        .then(setAcquisitionRate)
+        .catch(() => {})
+        .finally(() => setAcquisitionRateLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAcquisitionRateLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAcquisitionRateLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -9952,6 +9982,95 @@ export default function ReportsPage() {
             <div className="p-6 text-center text-zinc-500 text-sm">No contacts found to analyse communication frequency.</div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load communication frequency analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 19b: Contact Acquisition Rate */}
+      <Card className="border-zinc-800">
+        <button
+          className="w-full flex items-center justify-between p-4 hover:bg-zinc-800/30 transition-colors"
+          onClick={() => setAcquisitionRateOpen(o => !o)}
+        >
+          <div className="flex items-center gap-3">
+            <UserPlus className="h-4 w-4 text-teal-400" />
+            <span className="font-semibold text-sm text-zinc-100">Contact Acquisition Rate</span>
+            {acquisitionRate && (
+              <span className={cn(
+                "text-xs px-2 py-0.5 rounded-full font-medium",
+                acquisitionRate.trend_direction === 'accelerating' ? "bg-emerald-500/20 text-emerald-300" :
+                acquisitionRate.trend_direction === 'growing' ? "bg-teal-500/20 text-teal-300" :
+                acquisitionRate.trend_direction === 'stable' ? "bg-zinc-700 text-zinc-300" :
+                "bg-rose-500/20 text-rose-300"
+              )}>
+                {acquisitionRate.trend_direction} · {acquisitionRate.growth_rate > 0 ? '+' : ''}{acquisitionRate.growth_rate}%
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="text-xs flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700 transition-colors"
+              onClick={(e) => { e.stopPropagation(); regenerateAcquisitionRate(); }}
+              disabled={acquisitionRateLoading}
+            >
+              <RefreshCw className={cn("h-3 w-3", acquisitionRateLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            {acquisitionRateOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </button>
+        {acquisitionRateOpen && (
+          acquisitionRateLoading && !acquisitionRate ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analysing contact acquisition…</div>
+          ) : acquisitionRate ? (
+            <div className={cn("p-4 space-y-4", acquisitionRateLoading && "opacity-40")}>
+              {/* Stat grid */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total New (12 wks)</p>
+                  <p className="text-xl font-bold text-teal-300">{acquisitionRate.total_new_contacts}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg per Week</p>
+                  <p className="text-xl font-bold text-zinc-100">{acquisitionRate.avg_per_week}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Peak Week Count</p>
+                  <p className="text-xl font-bold text-amber-300">{acquisitionRate.peak_count}</p>
+                </div>
+              </div>
+              {/* Line chart */}
+              <div className="h-40">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={acquisitionRate.weekly_acquisition} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <XAxis dataKey="week_start" tick={{ fontSize: 10, fill: '#71717a' }} tickFormatter={(v: string) => v.slice(5)} />
+                    <YAxis tick={{ fontSize: 10, fill: '#71717a' }} />
+                    <Tooltip
+                      contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 12 }}
+                      formatter={(v: number) => [v, 'New contacts']}
+                      labelFormatter={(l: string) => `Week of ${l}`}
+                    />
+                    <ReferenceLine y={acquisitionRate.avg_per_week} stroke="#14b8a6" strokeDasharray="4 2" label={{ value: 'avg', fontSize: 10, fill: '#14b8a6' }} />
+                    <Line type="monotone" dataKey="new_contacts" stroke="#14b8a6" strokeWidth={2} dot={{ r: 3, fill: '#14b8a6' }} activeDot={{ r: 5 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              {/* Narrative */}
+              <p className="text-xs text-zinc-400 italic">{acquisitionRate.acquisition_narrative}</p>
+              {/* Recommendations */}
+              <ul className="space-y-1">
+                {acquisitionRate.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(acquisitionRate.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact acquisition rate analysis.</div>
           )
         )}
       </Card>

@@ -7110,5 +7110,34 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/communication-frequency`, {}, token)
   },
+
+  async getAIContactAcquisitionRate(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const now = new Date()
+      const weeks = Array.from({ length: 12 }, (_, i) => {
+        const d = new Date(now)
+        d.setDate(d.getDate() - d.getDay() + 1 - (11 - i) * 7)
+        const counts = [2, 1, 3, 0, 2, 4, 5, 3, 2, 6, 4, 7]
+        return { week_start: d.toISOString().slice(0, 10), new_contacts: counts[i] }
+      })
+      return Promise.resolve({
+        weekly_acquisition: weeks,
+        total_new_contacts: 39,
+        avg_per_week: 3.25,
+        growth_rate: 42.9,
+        trend_direction: 'growing',
+        peak_week: weeks[11].week_start,
+        peak_count: 7,
+        acquisition_narrative: 'Your contact base grew by 39 new contacts over the last 12 weeks, with a 42.9% acceleration in the most recent 6 weeks compared to the prior 6. The upward trend in acquisition suggests your outreach efforts are gaining momentum.',
+        recommendations: [
+          'Double down on the channels driving the recent surge — review which sources produced the 7 contacts added in the peak week and replicate that effort.',
+          'Set a weekly acquisition target of 5+ new contacts to sustain the current growth trajectory into next quarter.',
+          'Ensure all new contacts are enriched within 48 hours by configuring auto-enrich on your connector settings.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/acquisition-rate`, {}, token)
+  },
 }
 
