@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle, UserPlus,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle, UserPlus, Building2,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -808,6 +808,11 @@ export default function ReportsPage() {
   const [acquisitionRate, setAcquisitionRate] = useState<AIAcquisitionData | null>(null);
   const [acquisitionRateLoading, setAcquisitionRateLoading] = useState(false);
   const [acquisitionRateOpen, setAcquisitionRateOpen] = useState(true);
+  type AIConcentrationCompany = { company: string; contact_count: number; pct_of_total: number };
+  type AICompanyConcentrationData = { companies: AIConcentrationCompany[]; total_contacts: number; unique_companies: number; avg_contacts_per_company: number; concentration_risk: string; top_company: string; concentration_narrative: string; recommendations: string[]; generated_at: string };
+  const [companyConcentration, setCompanyConcentration] = useState<AICompanyConcentrationData | null>(null);
+  const [companyConcentrationLoading, setCompanyConcentrationLoading] = useState(false);
+  const [companyConcentrationOpen, setCompanyConcentrationOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -971,6 +976,8 @@ export default function ReportsPage() {
       apiClient.getAIContactCommunicationFrequency("demo-workspace-1", "demo-token").then(setCommFreq).catch(() => {}).finally(() => setCommFreqLoading(false));
       setAcquisitionRateLoading(true);
       apiClient.getAIContactAcquisitionRate("demo-workspace-1", "demo-token").then(setAcquisitionRate).catch(() => {}).finally(() => setAcquisitionRateLoading(false));
+      setCompanyConcentrationLoading(true);
+      apiClient.getAIContactCompanyConcentration("demo-workspace-1", "demo-token").then(setCompanyConcentration).catch(() => {}).finally(() => setCompanyConcentrationLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1138,6 +1145,8 @@ export default function ReportsPage() {
       apiClient.getAIContactCommunicationFrequency(workspaceId, session.access_token).then(setCommFreq).catch(() => {}).finally(() => setCommFreqLoading(false));
       setAcquisitionRateLoading(true);
       apiClient.getAIContactAcquisitionRate(workspaceId, session.access_token).then(setAcquisitionRate).catch(() => {}).finally(() => setAcquisitionRateLoading(false));
+      setCompanyConcentrationLoading(true);
+      apiClient.getAIContactCompanyConcentration(workspaceId, session.access_token).then(setCompanyConcentration).catch(() => {}).finally(() => setCompanyConcentrationLoading(false));
     });
   }, []);
 
@@ -2260,6 +2269,27 @@ export default function ReportsPage() {
         if (!session) { setAcquisitionRateLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAcquisitionRateLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateCompanyConcentration = () => {
+    setCompanyConcentrationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactCompanyConcentration(wid, tok)
+        .then(setCompanyConcentration)
+        .catch(() => {})
+        .finally(() => setCompanyConcentrationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCompanyConcentrationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCompanyConcentrationLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -10071,6 +10101,95 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact acquisition rate analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Contact Company Concentration */}
+      <Card className="overflow-hidden">
+        <div
+          className="flex items-center gap-3 p-4 cursor-pointer select-none"
+          onClick={() => setCompanyConcentrationOpen(o => !o)}
+        >
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10">
+            <Building2 className="h-4 w-4 text-amber-400" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-zinc-100">Contact Company Concentration</p>
+            <p className="text-xs text-zinc-500">Top companies by contact count · concentration risk</p>
+          </div>
+          {companyConcentration && (
+            <span className={cn(
+              "rounded-full px-2 py-0.5 text-xs font-semibold",
+              companyConcentration.concentration_risk === 'high' ? "bg-rose-500/20 text-rose-300" :
+              companyConcentration.concentration_risk === 'medium' ? "bg-amber-500/20 text-amber-300" :
+              "bg-emerald-500/20 text-emerald-300"
+            )}>
+              {companyConcentration.concentration_risk} risk
+            </span>
+          )}
+          <button
+            className="rounded-md px-2 py-1 text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors flex items-center gap-1"
+            onClick={(e) => { e.stopPropagation(); regenerateCompanyConcentration(); }}
+            disabled={companyConcentrationLoading}
+          >
+            <RefreshCw className={cn("h-3 w-3", companyConcentrationLoading && "animate-spin")} />
+            Regenerate
+          </button>
+          {companyConcentrationOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </div>
+        {companyConcentrationOpen && (
+          companyConcentrationLoading && !companyConcentration ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analyzing company concentration…</div>
+          ) : companyConcentration ? (
+            <div className={cn("p-4 space-y-4", companyConcentrationLoading && "opacity-40")}>
+              {/* Stat row */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-zinc-800/50 p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Contacts</p>
+                  <p className="text-xl font-bold text-amber-300">{companyConcentration.total_contacts}</p>
+                </div>
+                <div className="rounded-lg bg-zinc-800/50 p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Unique Companies</p>
+                  <p className="text-xl font-bold text-zinc-100">{companyConcentration.unique_companies}</p>
+                </div>
+                <div className="rounded-lg bg-zinc-800/50 p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg per Company</p>
+                  <p className="text-xl font-bold text-zinc-100">{companyConcentration.avg_contacts_per_company}</p>
+                </div>
+              </div>
+              {/* Top companies horizontal bars */}
+              <div className="space-y-2">
+                {companyConcentration.companies.map((c, i) => (
+                  <div key={i} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-zinc-300 truncate max-w-[55%]">{c.company}</span>
+                      <span className="text-zinc-500 font-mono">{c.contact_count} · {c.pct_of_total.toFixed(1)}%</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full bg-zinc-800">
+                      <div
+                        className="h-1.5 rounded-full bg-amber-400"
+                        style={{ width: `${Math.min(100, c.pct_of_total)}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {/* Narrative */}
+              <p className="text-xs text-zinc-400 italic">{companyConcentration.concentration_narrative}</p>
+              {/* Recommendations */}
+              <ul className="space-y-1">
+                {companyConcentration.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(companyConcentration.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact company concentration analysis.</div>
           )
         )}
       </Card>

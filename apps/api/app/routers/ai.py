@@ -17785,3 +17785,140 @@ async def get_contact_acquisition_rate(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 19c: AI contact company concentration analysis
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/company-concentration")
+@limiter.limit("5/minute")
+async def get_contact_company_concentration(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    result = await db.execute(
+        select(Contact.company, Contact.email)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "companies": [],
+            "total_contacts": 0,
+            "unique_companies": 0,
+            "avg_contacts_per_company": 0.0,
+            "concentration_risk": "low",
+            "top_company": None,
+            "concentration_narrative": "No contacts found. Add contacts to see company concentration analysis.",
+            "recommendations": [
+                "Import your contacts to get started with company concentration analysis.",
+                "Connect Gmail or Slack to automatically capture contacts from your communications.",
+                "Diversify your contact base across multiple companies to reduce concentration risk.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Build company label: use company field if set, else derive from email domain
+    company_counts: dict[str, int] = {}
+    for row in rows:
+        if row.company and row.company.strip():
+            label = row.company.strip()
+        elif row.email and "@" in row.email:
+            domain = row.email.split("@")[1]
+            label = domain
+        else:
+            label = "Unknown"
+        company_counts[label] = company_counts.get(label, 0) + 1
+
+    total_contacts = len(rows)
+    unique_companies = len(company_counts)
+    avg_per_company = round(total_contacts / unique_companies, 2) if unique_companies else 0.0
+
+    sorted_companies = sorted(company_counts.items(), key=lambda x: x[1], reverse=True)
+    top5 = sorted_companies[:5]
+
+    top_company_name = top5[0][0] if top5 else None
+    top_company_count = top5[0][1] if top5 else 0
+    top_pct = round(top_company_count / total_contacts * 100, 1) if total_contacts else 0.0
+
+    if top_pct >= 30:
+        concentration_risk = "high"
+    elif top_pct >= 20:
+        concentration_risk = "medium"
+    else:
+        concentration_risk = "low"
+
+    companies = [
+        {
+            "company": name,
+            "contact_count": count,
+            "pct_of_total": round(count / total_contacts * 100, 1),
+        }
+        for name, count in top5
+    ]
+
+    context = (
+        f"Contact company concentration: total={total_contacts} contacts across {unique_companies} companies "
+        f"(avg {avg_per_company}/company). Top company='{top_company_name}' with {top_company_count} contacts "
+        f"({top_pct}% of total). Concentration risk={concentration_risk}. "
+        f"Top 5 companies: {', '.join(f'{n}({c})' for n, c in top5)}."
+    )
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence concentration_narrative explaining the company distribution and the risk/opportunity this presents. "
+        "Then provide exactly 3 short, actionable recommendations to manage or improve company concentration. "
+        'Respond ONLY with valid JSON: {"concentration_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    concentration_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        concentration_narrative = str(parsed.get("concentration_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        concentration_narrative = (
+            f"Your {total_contacts} contacts span {unique_companies} companies, averaging {avg_per_company} per company. "
+            f"The top company '{top_company_name}' accounts for {top_pct}% of contacts, representing a {concentration_risk} concentration risk."
+        )
+        recommendations = [
+            f"Diversify outreach beyond '{top_company_name}' to reduce dependency on a single account.",
+            "Target new companies in your ideal customer profile to broaden your contact base.",
+            "Review your pipeline to ensure deals are distributed across multiple accounts.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Regularly audit your contact base to maintain a healthy company diversity ratio.")
+
+    return {
+        "companies": companies,
+        "total_contacts": total_contacts,
+        "unique_companies": unique_companies,
+        "avg_contacts_per_company": avg_per_company,
+        "concentration_risk": concentration_risk,
+        "top_company": top_company_name,
+        "concentration_narrative": concentration_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
