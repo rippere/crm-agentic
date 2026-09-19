@@ -10044,12 +10044,12 @@ export default function ReportsPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={acquisitionRate.weekly_acquisition} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                    <XAxis dataKey="week_start" tick={{ fontSize: 10, fill: '#71717a' }} tickFormatter={(v: string) => v.slice(5)} />
+                    <XAxis dataKey="week_start" tick={{ fontSize: 10, fill: '#71717a' }} tickFormatter={(v: unknown) => String(v).slice(5)} />
                     <YAxis tick={{ fontSize: 10, fill: '#71717a' }} />
                     <Tooltip
                       contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 12 }}
-                      formatter={(v: number) => [v, 'New contacts']}
-                      labelFormatter={(l: string) => `Week of ${l}`}
+                      formatter={(v: unknown) => [Number(v), 'New contacts']}
+                      labelFormatter={(l: unknown) => `Week of ${String(l)}`}
                     />
                     <ReferenceLine y={acquisitionRate.avg_per_week} stroke="#14b8a6" strokeDasharray="4 2" label={{ value: 'avg', fontSize: 10, fill: '#14b8a6' }} />
                     <Line type="monotone" dataKey="new_contacts" stroke="#14b8a6" strokeWidth={2} dot={{ r: 3, fill: '#14b8a6' }} activeDot={{ r: 5 }} />
