@@ -7073,5 +7073,42 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-risk-score`, {}, token)
   },
+
+  async getAIContactCommunicationFrequency(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        frequency_buckets: [
+          { label: 'Daily (>1/day)', min_per_week: 7, contact_count: 3, pct: 6.4 },
+          { label: 'Frequent (3–7/week)', min_per_week: 3, contact_count: 8, pct: 17.0 },
+          { label: 'Regular (1–3/week)', min_per_week: 1, contact_count: 18, pct: 38.3 },
+          { label: 'Occasional (<1/week)', min_per_week: 0, contact_count: 12, pct: 25.5 },
+        ],
+        total_contacts: 47,
+        active_contacts: 41,
+        silent_contacts: 6,
+        most_active_contact: {
+          id: 'c-001',
+          name: 'Sarah Chen',
+          total_messages: 182,
+          messages_per_week: 14.2,
+        },
+        least_active_contact: {
+          id: 'c-023',
+          name: 'Marcus Webb',
+          total_messages: 1,
+          messages_per_week: 0.08,
+        },
+        avg_messages_per_week: 2.7,
+        communication_narrative: '41 of 47 contacts have had at least one message exchange in the last 90 days, with 11 showing daily or frequent engagement. 6 contacts have gone completely silent and represent the highest churn risk in the current portfolio.',
+        recommendations: [
+          'Prioritise outreach to the 6 silent contacts this week with a personalised re-engagement message referencing their last known deal or topic.',
+          'Create a nurture sequence for the 12 occasional contacts to bring them into the regular communication cadence over the next 30 days.',
+          'Study the top-3 daily communicators — their engagement patterns may reveal best-practice outreach timings and messaging styles you can replicate across the portfolio.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/communication-frequency`, {}, token)
+  },
 }
 

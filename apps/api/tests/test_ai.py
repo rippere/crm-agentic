@@ -8287,3 +8287,79 @@ async def test_pipeline_risk_score_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-risk-score")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 19a – AI contact communication frequency analysis
+# ---------------------------------------------------------------------------
+
+class FakeContactFreqRow:
+    def __init__(self, id, name, email):
+        self.id = id
+        self.name = name
+        self.email = email
+
+
+class FakeMsgCountRow:
+    def __init__(self, contact_id, msg_count):
+        self.contact_id = contact_id
+        self.msg_count = msg_count
+
+
+@pytest.mark.asyncio
+async def test_communication_frequency_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    cid_1 = uuid.uuid4()
+    cid_2 = uuid.uuid4()
+    cid_3 = uuid.uuid4()
+
+    contact_rows = [
+        FakeContactFreqRow(cid_1, "Alice Johnson", "alice@example.com"),
+        FakeContactFreqRow(cid_2, "Bob Smith", "bob@example.com"),
+        FakeContactFreqRow(cid_3, "Carol White", "carol@example.com"),
+    ]
+    # Alice: 91 msgs → 91/12.86 = 7.07/week → daily
+    # Bob: 26 msgs → 26/12.86 = 2.02/week → regular
+    # Carol: 0 msgs → silent
+    msg_count_rows = [
+        FakeMsgCountRow(cid_1, 91),
+        FakeMsgCountRow(cid_2, 26),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result(contact_rows),
+        _make_execute_result(msg_count_rows),
+    ])
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"communication_narrative": "Good frequency.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/communication-frequency")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_contacts"] == 3
+    assert body["active_contacts"] == 2
+    assert body["silent_contacts"] == 1
+    assert len(body["frequency_buckets"]) == 4
+    bucket_labels = [b["label"] for b in body["frequency_buckets"]]
+    assert "Daily (>1/day)" in bucket_labels
+    assert body["most_active_contact"]["name"] == "Alice Johnson"
+    assert body["most_active_contact"]["messages_per_week"] >= 7.0
+    assert "communication_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_communication_frequency_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/communication-frequency")
+    assert resp.status_code == 403

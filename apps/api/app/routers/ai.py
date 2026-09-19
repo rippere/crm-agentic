@@ -17475,3 +17475,163 @@ async def get_ai_deal_pipeline_risk_score(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Phase 19a – AI workspace contact communication frequency analysis
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/communication-frequency")
+@limiter.limit("5/minute")
+async def get_contact_communication_frequency(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    ninety_days_ago = now - datetime.timedelta(days=90)
+
+    contact_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.email)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    contact_rows = contact_result.all()
+
+    if not contact_rows:
+        return {
+            "frequency_buckets": [
+                {"label": "Daily (>1/day)", "min_per_week": 7, "contact_count": 0, "pct": 0.0},
+                {"label": "Frequent (3–7/week)", "min_per_week": 3, "contact_count": 0, "pct": 0.0},
+                {"label": "Regular (1–3/week)", "min_per_week": 1, "contact_count": 0, "pct": 0.0},
+                {"label": "Occasional (<1/week)", "min_per_week": 0, "contact_count": 0, "pct": 0.0},
+            ],
+            "total_contacts": 0,
+            "active_contacts": 0,
+            "silent_contacts": 0,
+            "most_active_contact": None,
+            "least_active_contact": None,
+            "avg_messages_per_week": 0.0,
+            "communication_narrative": "No contacts found in this workspace.",
+            "recommendations": [
+                "Add contacts to your CRM to start tracking communication frequency.",
+                "Connect a Gmail or Slack connector to automatically ingest messages.",
+                "Import your existing contacts via CSV to populate communication history.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    contact_ids = [row.id for row in contact_rows]
+    contact_map = {row.id: {"name": row.name or row.email or "Unknown", "email": row.email} for row in contact_rows}
+
+    msg_result = await db.execute(
+        select(Message.contact_id, func.count(Message.id).label("msg_count"))
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.contact_id.in_(contact_ids),
+            Message.received_at >= ninety_days_ago,
+        )
+        .group_by(Message.contact_id)
+    )
+    msg_rows = msg_result.all()
+    msg_counts: dict[uuid.UUID, int] = {row.contact_id: row.msg_count for row in msg_rows}
+
+    weeks = 90 / 7.0
+    contact_freq: list[dict] = []
+    for cid in contact_ids:
+        count = msg_counts.get(cid, 0)
+        per_week = round(count / weeks, 2)
+        contact_freq.append({
+            "id": str(cid),
+            "name": contact_map[cid]["name"],
+            "total_messages": count,
+            "messages_per_week": per_week,
+        })
+
+    contact_freq.sort(key=lambda x: x["messages_per_week"], reverse=True)
+
+    daily_count = sum(1 for c in contact_freq if c["messages_per_week"] >= 7)
+    frequent_count = sum(1 for c in contact_freq if 3 <= c["messages_per_week"] < 7)
+    regular_count = sum(1 for c in contact_freq if 1 <= c["messages_per_week"] < 3)
+    occasional_count = sum(1 for c in contact_freq if 0 < c["messages_per_week"] < 1)
+    silent_count = sum(1 for c in contact_freq if c["messages_per_week"] == 0)
+    total = len(contact_freq)
+    active_contacts_n = total - silent_count
+
+    def pct(n: int) -> float:
+        return round(n / total * 100, 1) if total > 0 else 0.0
+
+    frequency_buckets = [
+        {"label": "Daily (>1/day)", "min_per_week": 7, "contact_count": daily_count, "pct": pct(daily_count)},
+        {"label": "Frequent (3–7/week)", "min_per_week": 3, "contact_count": frequent_count, "pct": pct(frequent_count)},
+        {"label": "Regular (1–3/week)", "min_per_week": 1, "contact_count": regular_count, "pct": pct(regular_count)},
+        {"label": "Occasional (<1/week)", "min_per_week": 0, "contact_count": occasional_count, "pct": pct(occasional_count)},
+    ]
+
+    most_active = contact_freq[0] if contact_freq and contact_freq[0]["messages_per_week"] > 0 else None
+    least_active_with_msgs = [c for c in contact_freq if c["messages_per_week"] > 0]
+    least_active = least_active_with_msgs[-1] if least_active_with_msgs else None
+
+    all_per_week = [c["messages_per_week"] for c in contact_freq]
+    avg_per_week = round(sum(all_per_week) / len(all_per_week), 2) if all_per_week else 0.0
+
+    context = (
+        f"You are a sales analytics AI. Summarise communication frequency patterns for a sales team.\n"
+        f"Context: {total} total contacts. {active_contacts_n} active (messages in last 90 days), "
+        f"{silent_count} silent.\n"
+        f"Breakdown: {daily_count} daily (>1/day), {frequent_count} frequent (3-7/week), "
+        f"{regular_count} regular (1-3/week), {occasional_count} occasional (<1/week).\n"
+        f"Avg messages per week across all contacts: {avg_per_week:.1f}.\n"
+    )
+    if most_active:
+        context += f"Most active contact: '{most_active['name']}' ({most_active['messages_per_week']:.1f} msgs/week).\n"
+    context += (
+        "Write communication_narrative (2 sentences) and exactly 3 specific recommendations.\n"
+        'Respond ONLY with valid JSON: '
+        '{"communication_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        parsed = json.loads(raw)
+        communication_narrative = str(parsed.get("communication_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        communication_narrative = (
+            f"Of {total} contacts, {active_contacts_n} are actively engaged with an average of "
+            f"{avg_per_week:.1f} messages per week; {silent_count} have had no communication in the last 90 days."
+        )
+        recommendations = [
+            f"Re-engage the {silent_count} silent contacts with a personalised outreach this week.",
+            "Increase message frequency for occasional contacts to move them into the regular tier.",
+            "Review the top communicators to identify patterns that drive higher deal close rates.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Set follow-up reminders for low-frequency contacts to improve engagement.")
+
+    return {
+        "frequency_buckets": frequency_buckets,
+        "total_contacts": total,
+        "active_contacts": active_contacts_n,
+        "silent_contacts": silent_count,
+        "most_active_contact": most_active,
+        "least_active_contact": least_active,
+        "avg_messages_per_week": avg_per_week,
+        "communication_narrative": communication_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
