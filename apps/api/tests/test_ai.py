@@ -8421,3 +8421,60 @@ async def test_contact_acquisition_rate_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/acquisition-rate")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 19c: contact company concentration
+# ---------------------------------------------------------------------------
+
+class FakeContactCompanyRow:
+    def __init__(self, company, email):
+        self.company = company
+        self.email = email
+
+
+@pytest.mark.asyncio
+async def test_contact_company_concentration_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # 5 contacts: 3 from Acme Corp (60%), 1 from Beta Inc, 1 unknown domain
+    rows = [
+        FakeContactCompanyRow("Acme Corp", "alice@acme.com"),
+        FakeContactCompanyRow("Acme Corp", "bob@acme.com"),
+        FakeContactCompanyRow("Acme Corp", "carol@acme.com"),
+        FakeContactCompanyRow("Beta Inc", "dave@beta.io"),
+        FakeContactCompanyRow(None, "eve@gamma.com"),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"concentration_narrative": "High concentration.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/company-concentration")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_contacts"] == 5
+    assert body["unique_companies"] == 3  # Acme Corp, Beta Inc, gamma.com
+    assert body["concentration_risk"] == "high"  # Acme = 60%
+    assert body["top_company"] == "Acme Corp"
+    assert len(body["companies"]) == 3  # top 5 but only 3 exist
+    assert body["companies"][0]["company"] == "Acme Corp"
+    assert body["companies"][0]["contact_count"] == 3
+    assert body["companies"][0]["pct_of_total"] == 60.0
+    assert "concentration_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_company_concentration_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/company-concentration")
+    assert resp.status_code == 403

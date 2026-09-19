@@ -309,8 +309,10 @@ Phase 17 — AI Coaching & Playbook Intelligence
 
 - [2026-09-19] Phase 19b: AI workspace new contact acquisition rate — GET /workspaces/{id}/ai/contacts/acquisition-rate (Claude Haiku, 5/min; queries contacts created in last 12 weeks, groups into Mon-aligned weekly buckets, computes total_new_contacts, avg_per_week, growth_rate (second-half vs first-half comparison), trend_direction: accelerating/growing/stable/declining, peak_week; graceful empty default without Claude call); collapsible "Contact Acquisition Rate" card on /reports page (teal UserPlus icon, trend-direction badge with growth-rate chip, 3-col total/avg/peak stat grid, recharts LineChart with teal avg ReferenceLine, italic narrative, teal-dot recs, Regenerate button); getAIContactAcquisitionRate() in api-client with 39-contact 12-week growing-trend demo stub (avg 3.25/wk, +42.9% growth, peak 7 in most recent week); 2 new tests (structured-response 5-contacts 12-week list + peak_count=3 + 403 guard); 236 AI tests total; PR #189
 
+- [2026-09-19] Phase 19c: AI contact company concentration analysis — GET /workspaces/{id}/ai/contacts/company-concentration (Claude Haiku, 5/min; queries all contacts' company field + email, labels each contact by company if set else email domain else "Unknown", counts contacts per company, computes top 5 by count with pct_of_total, concentration_risk: high ≥30%/medium ≥20%/low else; graceful empty default without Claude call); collapsible "Contact Company Concentration" card on /reports page (amber Building2 icon, risk badge high/medium/low, 3-col total/unique/avg stat grid, horizontal progress bars per top-5 company with count+pct labels, italic narrative, teal-dot recs, Regenerate button); getAIContactCompanyConcentration() in api-client with 47-contact 18-company medium-risk demo stub (Acme Corp top at 25.5%); 2 new tests (structured-response 5-contacts 3-companies high-risk + 403 guard); 238 AI tests total; PR #190
+
 ## Next Task
-Phase 19c: placeholder for next session
+Phase 19d: placeholder for next session
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.

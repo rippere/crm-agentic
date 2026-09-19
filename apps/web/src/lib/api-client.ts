@@ -7139,5 +7139,32 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/acquisition-rate`, {}, token)
   },
+
+  async getAIContactCompanyConcentration(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        companies: [
+          { company: 'Acme Corporation', contact_count: 12, pct_of_total: 25.5 },
+          { company: 'Beta Dynamics', contact_count: 8, pct_of_total: 17.0 },
+          { company: 'Gamma Solutions', contact_count: 6, pct_of_total: 12.8 },
+          { company: 'Delta Labs', contact_count: 5, pct_of_total: 10.6 },
+          { company: 'Epsilon Inc', contact_count: 4, pct_of_total: 8.5 },
+        ],
+        total_contacts: 47,
+        unique_companies: 18,
+        avg_contacts_per_company: 2.61,
+        concentration_risk: 'medium',
+        top_company: 'Acme Corporation',
+        concentration_narrative: 'Your 47 contacts span 18 companies, with Acme Corporation accounting for 25.5% of your total contact base — indicating a medium concentration risk. Diversifying outreach across the remaining 17 companies will reduce dependency on a single account.',
+        recommendations: [
+          'Schedule quarterly business reviews with Acme Corporation to protect this high-concentration relationship from unexpected churn.',
+          'Run a targeted prospecting campaign to add 2–3 contacts each from the bottom 13 companies and reduce the top-company share below 20%.',
+          'Review your pipeline for Acme-linked deals — if more than 30% of pipeline value comes from one company, prioritise diversification immediately.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/company-concentration`, {}, token)
+  },
 }
 
