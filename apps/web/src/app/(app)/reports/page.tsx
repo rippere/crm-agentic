@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -797,6 +797,12 @@ export default function ReportsPage() {
   const [pipelineRiskScore, setPipelineRiskScore] = useState<AIPipelineRiskData | null>(null);
   const [pipelineRiskScoreLoading, setPipelineRiskScoreLoading] = useState(false);
   const [pipelineRiskScoreOpen, setPipelineRiskScoreOpen] = useState(true);
+  type AICommFreqBucket = { label: string; min_per_week: number; contact_count: number; pct: number };
+  type AICommFreqContact = { id: string; name: string; total_messages: number; messages_per_week: number };
+  type AICommFreqData = { frequency_buckets: AICommFreqBucket[]; total_contacts: number; active_contacts: number; silent_contacts: number; most_active_contact: AICommFreqContact | null; least_active_contact: AICommFreqContact | null; avg_messages_per_week: number; communication_narrative: string; recommendations: string[]; generated_at: string };
+  const [commFreq, setCommFreq] = useState<AICommFreqData | null>(null);
+  const [commFreqLoading, setCommFreqLoading] = useState(false);
+  const [commFreqOpen, setCommFreqOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -956,6 +962,8 @@ export default function ReportsPage() {
       apiClient.getAIDealEngagementReport("demo-workspace-1", "demo-token").then(setEngagementReport).catch(() => {}).finally(() => setEngagementReportLoading(false));
       setPipelineRiskScoreLoading(true);
       apiClient.getAIDealPipelineRiskScore("demo-workspace-1", "demo-token").then(setPipelineRiskScore).catch(() => {}).finally(() => setPipelineRiskScoreLoading(false));
+      setCommFreqLoading(true);
+      apiClient.getAIContactCommunicationFrequency("demo-workspace-1", "demo-token").then(setCommFreq).catch(() => {}).finally(() => setCommFreqLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1119,6 +1127,8 @@ export default function ReportsPage() {
       apiClient.getAIDealEngagementReport(workspaceId, session.access_token).then(setEngagementReport).catch(() => {}).finally(() => setEngagementReportLoading(false));
       setPipelineRiskScoreLoading(true);
       apiClient.getAIDealPipelineRiskScore(workspaceId, session.access_token).then(setPipelineRiskScore).catch(() => {}).finally(() => setPipelineRiskScoreLoading(false));
+      setCommFreqLoading(true);
+      apiClient.getAIContactCommunicationFrequency(workspaceId, session.access_token).then(setCommFreq).catch(() => {}).finally(() => setCommFreqLoading(false));
     });
   }, []);
 
@@ -2199,6 +2209,27 @@ export default function ReportsPage() {
         if (!session) { setPipelineRiskScoreLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setPipelineRiskScoreLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateCommFreq = () => {
+    setCommFreqLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactCommunicationFrequency(wid, tok)
+        .then(setCommFreq)
+        .catch(() => {})
+        .finally(() => setCommFreqLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCommFreqLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCommFreqLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -9811,6 +9842,116 @@ export default function ReportsPage() {
             <div className="p-6 text-center text-zinc-500 text-sm">No active deals to assess for pipeline risk.</div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the pipeline risk score.</div>
+          )
+        )}
+      </Card>
+
+      {/* Contact Communication Frequency */}
+      <Card className="overflow-hidden">
+        <div
+          className="flex items-center justify-between px-5 py-3 cursor-pointer hover:bg-zinc-800/40 transition-colors"
+          onClick={() => setCommFreqOpen((o) => !o)}
+        >
+          <div className="flex items-center gap-2">
+            <MessageCircle className="h-4 w-4 text-violet-400" />
+            <span className="text-sm font-semibold text-zinc-200">Contact Communication Frequency</span>
+            {commFreq && (
+              <span className={cn(
+                "text-xs px-2 py-0.5 rounded-full font-medium",
+                commFreq.silent_contacts > commFreq.active_contacts ? "bg-rose-500/20 text-rose-300" :
+                commFreq.avg_messages_per_week >= 3 ? "bg-emerald-500/20 text-emerald-300" :
+                "bg-amber-500/20 text-amber-300"
+              )}>
+                {commFreq.avg_messages_per_week.toFixed(1)} msgs/wk avg
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); regenerateCommFreq(); }}
+              className="text-xs text-zinc-400 hover:text-zinc-200 flex items-center gap-1 transition-colors"
+              disabled={commFreqLoading}
+            >
+              <RefreshCw className={cn("h-3 w-3", commFreqLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            {commFreqOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {commFreqOpen && (
+          commFreqLoading ? (
+            <div className="p-6 space-y-3">
+              {[...Array(4)].map((_, i) => <div key={i} className="h-4 bg-zinc-800 rounded animate-pulse" />)}
+            </div>
+          ) : commFreq && commFreq.total_contacts > 0 ? (
+            <div className="px-5 pb-5 space-y-4">
+              <div className="grid grid-cols-3 gap-3 pt-2">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-400">Total Contacts</p>
+                  <p className="text-lg font-bold text-zinc-100">{commFreq.total_contacts}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-400">Active (90d)</p>
+                  <p className="text-lg font-bold text-emerald-400">{commFreq.active_contacts}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-400">Silent</p>
+                  <p className="text-lg font-bold text-rose-400">{commFreq.silent_contacts}</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {commFreq.frequency_buckets.map((bucket, i) => {
+                  const colors = ['bg-emerald-500', 'bg-indigo-500', 'bg-amber-500', 'bg-zinc-500'];
+                  const textColors = ['text-emerald-400', 'text-indigo-400', 'text-amber-400', 'text-zinc-400'];
+                  return (
+                    <div key={i} className="flex items-center gap-3">
+                      <span className="text-xs text-zinc-400 w-36 flex-shrink-0">{bucket.label}</span>
+                      <div className="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
+                        <div
+                          className={cn("h-full rounded-full", colors[i])}
+                          style={{ width: `${bucket.pct}%` }}
+                        />
+                      </div>
+                      <span className={cn("text-xs font-mono w-16 text-right flex-shrink-0", textColors[i])}>
+                        {bucket.contact_count} ({bucket.pct}%)
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              {(commFreq.most_active_contact || commFreq.least_active_contact) && (
+                <div className="flex gap-3">
+                  {commFreq.most_active_contact && (
+                    <div className="flex-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+                      <p className="text-xs text-emerald-400 font-medium mb-1">Most Active</p>
+                      <p className="text-sm text-zinc-200 font-semibold">{commFreq.most_active_contact.name}</p>
+                      <p className="text-xs text-zinc-400">{commFreq.most_active_contact.messages_per_week.toFixed(1)} msgs/week · {commFreq.most_active_contact.total_messages} total</p>
+                    </div>
+                  )}
+                  {commFreq.least_active_contact && (
+                    <div className="flex-1 bg-zinc-800/50 border border-zinc-700/30 rounded-lg p-3">
+                      <p className="text-xs text-zinc-400 font-medium mb-1">Least Active</p>
+                      <p className="text-sm text-zinc-200 font-semibold">{commFreq.least_active_contact.name}</p>
+                      <p className="text-xs text-zinc-400">{commFreq.least_active_contact.messages_per_week.toFixed(2)} msgs/week · {commFreq.least_active_contact.total_messages} total</p>
+                    </div>
+                  )}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{commFreq.communication_narrative}</p>
+              <ul className="space-y-1">
+                {commFreq.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(commFreq.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : commFreq ? (
+            <div className="p-6 text-center text-zinc-500 text-sm">No contacts found to analyse communication frequency.</div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load communication frequency analysis.</div>
           )
         )}
       </Card>
