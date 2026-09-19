@@ -1,0 +1,263 @@
+{
+  "_source": "docs/betson/Burlington_Photo_Booth_Prospect_Master.xlsx sheet 'Master Prospects' (16 venues); transcribed by Inc 1 implementer per BUILD-SPEC §2.1.14.",
+  "_subscore_keys": [
+    "traffic",
+    "social_photo",
+    "group_dwell",
+    "brand_fit",
+    "placement_feasibility",
+    "year_round",
+    "contactability"
+  ],
+  "_weights": {
+    "traffic": 0.25,
+    "social_photo": 0.2,
+    "group_dwell": 0.15,
+    "brand_fit": 0.15,
+    "placement_feasibility": 0.1,
+    "year_round": 0.05,
+    "contactability": 0.1
+  },
+  "venues": [
+    {
+      "name": "Rí Rá Irish Pub",
+      "subscores": {
+        "traffic": 5.0,
+        "social_photo": 5.0,
+        "group_dwell": 5.0,
+        "brand_fit": 4.5,
+        "placement_feasibility": 4.5,
+        "year_round": 5.0,
+        "contactability": 5.0
+      },
+      "overall": 97.5,
+      "tier": "A+",
+      "contact_email": "riraburlington@rira.com"
+    },
+    {
+      "name": "ECHO, Leahy Center for Lake Champlain",
+      "subscores": {
+        "traffic": 4.5,
+        "social_photo": 5.0,
+        "group_dwell": 4.5,
+        "brand_fit": 5.0,
+        "placement_feasibility": 4.5,
+        "year_round": 5.0,
+        "contactability": 5.0
+      },
+      "overall": 95.0,
+      "tier": "A+",
+      "contact_email": "kvonderlinn@echovermont.org"
+    },
+    {
+      "name": "Burlington Beer Co.",
+      "subscores": {
+        "traffic": 4.5,
+        "social_photo": 4.5,
+        "group_dwell": 5.0,
+        "brand_fit": 5.0,
+        "placement_feasibility": 5.0,
+        "year_round": 5.0,
+        "contactability": 4.5
+      },
+      "overall": 94.5,
+      "tier": "A",
+      "contact_email": "joe@burlingtonbeercompany.com"
+    },
+    {
+      "name": "The Archives",
+      "subscores": {
+        "traffic": 4.0,
+        "social_photo": 5.0,
+        "group_dwell": 5.0,
+        "brand_fit": 5.0,
+        "placement_feasibility": 4.5,
+        "year_round": 5.0,
+        "contactability": 5.0
+      },
+      "overall": 94.0,
+      "tier": "A",
+      "contact_email": "michele@thearchivesbar.com"
+    },
+    {
+      "name": "Higher Ground",
+      "subscores": {
+        "traffic": 4.5,
+        "social_photo": 5.0,
+        "group_dwell": 4.5,
+        "brand_fit": 5.0,
+        "placement_feasibility": 4.5,
+        "year_round": 5.0,
+        "contactability": 4.5
+      },
+      "overall": 94.0,
+      "tier": "A",
+      "contact_email": "info@highergroundmusic.com"
+    },
+    {
+      "name": "Foam Brewers - Burlington",
+      "subscores": {
+        "traffic": 4.5,
+        "social_photo": 5.0,
+        "group_dwell": 5.0,
+        "brand_fit": 5.0,
+        "placement_feasibility": 4.0,
+        "year_round": 4.5,
+        "contactability": 4.0
+      },
+      "overall": 93.0,
+      "tier": "A",
+      "contact_email": "events@foambrewers.com"
+    },
+    {
+      "name": "Black Flannel Brewing & Distilling",
+      "subscores": {
+        "traffic": 4.0,
+        "social_photo": 4.5,
+        "group_dwell": 5.0,
+        "brand_fit": 5.0,
+        "placement_feasibility": 5.0,
+        "year_round": 5.0,
+        "contactability": 5.0
+      },
+      "overall": 93.0,
+      "tier": "A",
+      "contact_email": "neal@blackflannel.com"
+    },
+    {
+      "name": "Waterworks Food + Drink",
+      "subscores": {
+        "traffic": 4.5,
+        "social_photo": 4.5,
+        "group_dwell": 5.0,
+        "brand_fit": 5.0,
+        "placement_feasibility": 4.0,
+        "year_round": 5.0,
+        "contactability": 4.5
+      },
+      "overall": 92.5,
+      "tier": "A",
+      "contact_email": "info@waterworksvt.com"
+    },
+    {
+      "name": "The Harborvale, Autograph Collection",
+      "subscores": {
+        "traffic": 4.0,
+        "social_photo": 4.5,
+        "group_dwell": 5.0,
+        "brand_fit": 5.0,
+        "placement_feasibility": 4.5,
+        "year_round": 5.0,
+        "contactability": 5.0
+      },
+      "overall": 92.0,
+      "tier": "A",
+      "contact_email": "michell.j.langlais@marriott.com"
+    },
+    {
+      "name": "Farmhouse Tap & Grill",
+      "subscores": {
+        "traffic": 5.0,
+        "social_photo": 4.5,
+        "group_dwell": 5.0,
+        "brand_fit": 4.5,
+        "placement_feasibility": 4.0,
+        "year_round": 5.0,
+        "contactability": 3.5
+      },
+      "overall": 91.5,
+      "tier": "A",
+      "contact_email": null
+    },
+    {
+      "name": "Hotel Vermont",
+      "subscores": {
+        "traffic": 4.5,
+        "social_photo": 4.5,
+        "group_dwell": 5.0,
+        "brand_fit": 5.0,
+        "placement_feasibility": 4.5,
+        "year_round": 5.0,
+        "contactability": 3.5
+      },
+      "overall": 91.5,
+      "tier": "A",
+      "contact_email": "stay@hotelvt.com"
+    },
+    {
+      "name": "The Monkey House",
+      "subscores": {
+        "traffic": 4.0,
+        "social_photo": 5.0,
+        "group_dwell": 5.0,
+        "brand_fit": 4.5,
+        "placement_feasibility": 3.5,
+        "year_round": 5.0,
+        "contactability": 5.0
+      },
+      "overall": 90.5,
+      "tier": "A",
+      "contact_email": "ali.monkeyhouse@gmail.com"
+    },
+    {
+      "name": "Spirit of Ethan Allen",
+      "subscores": {
+        "traffic": 4.5,
+        "social_photo": 5.0,
+        "group_dwell": 4.5,
+        "brand_fit": 5.0,
+        "placement_feasibility": 2.5,
+        "year_round": 2.5,
+        "contactability": 4.0
+      },
+      "overall": 86.5,
+      "tier": "A-",
+      "contact_email": "spirit@soea.com"
+    },
+    {
+      "name": "Church Street Marketplace",
+      "subscores": {
+        "traffic": 5.0,
+        "social_photo": 5.0,
+        "group_dwell": 3.5,
+        "brand_fit": 5.0,
+        "placement_feasibility": 1.5,
+        "year_round": 2.5,
+        "contactability": 5.0
+      },
+      "overall": 86.0,
+      "tier": "A-",
+      "contact_email": "smcginnis@burlingtonvt.gov"
+    },
+    {
+      "name": "The Double E",
+      "subscores": {
+        "traffic": 3.5,
+        "social_photo": 4.5,
+        "group_dwell": 4.5,
+        "brand_fit": 4.5,
+        "placement_feasibility": 4.0,
+        "year_round": 4.0,
+        "contactability": 5.0
+      },
+      "overall": 84.5,
+      "tier": "B+",
+      "contact_email": "info@doubleevt.com"
+    },
+    {
+      "name": "Four Quarters Brewing",
+      "subscores": {
+        "traffic": 3.5,
+        "social_photo": 4.0,
+        "group_dwell": 4.5,
+        "brand_fit": 4.5,
+        "placement_feasibility": 4.0,
+        "year_round": 5.0,
+        "contactability": 5.0
+      },
+      "overall": 83.5,
+      "tier": "B+",
+      "contact_email": "fourquartersbrewing@gmail.com"
+    }
+  ]
+}

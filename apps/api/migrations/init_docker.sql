@@ -261,7 +261,7 @@ CREATE TABLE IF NOT EXISTS leads (
   company         TEXT,
   title           TEXT,
   source          TEXT NOT NULL DEFAULT 'import'
-                    CHECK (source IN ('import','manual','web','api','referral','event')),
+                    CHECK (source IN ('import','manual','web','api','referral','event','discovery')),
   stage           TEXT NOT NULL DEFAULT 'new'
                     CHECK (stage IN ('new','contacted','engaged','qualified','converted','lost')),
   score           INTEGER NOT NULL DEFAULT 0,
@@ -401,3 +401,31 @@ CREATE TABLE IF NOT EXISTS engagement_events (
 CREATE INDEX IF NOT EXISTS idx_engevents_lead ON engagement_events (workspace_id, lead_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_engevents_campaign ON engagement_events (workspace_id, campaign_id);
 CREATE INDEX IF NOT EXISTS idx_engevents_type ON engagement_events (workspace_id, type);
+
+-- ─── LEAD ENGINE — DISCOVERY (mirror of 024_lead_engine_discovery.sql) ────────
+-- discovery_runs (run bookkeeping for a long-running market-discovery job).
+-- The leads.source CHECK widening (+'discovery') is applied inline to the
+-- CREATE TABLE leads above rather than as an ALTER (Docker builds from empty).
+-- Docker path has no migration runner, so the same CREATE TABLE / CREATE INDEX
+-- DDL is mirrored here (RLS ENABLE / policy lines intentionally omitted).
+-- FK-safe create order: discovery_runs references only workspaces, defined above.
+
+CREATE TABLE IF NOT EXISTS discovery_runs (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  locality      TEXT NOT NULL,
+  provider      TEXT,
+  status        TEXT NOT NULL DEFAULT 'queued'
+                  CHECK (status IN ('queued','running','succeeded','partial','failed')),
+  params        JSONB NOT NULL DEFAULT '{}',
+  rubric        JSONB NOT NULL DEFAULT '{}',
+  stats         JSONB NOT NULL DEFAULT '{}',
+  job_id        TEXT,
+  error         TEXT,
+  started_at    TIMESTAMPTZ,
+  completed_at  TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_discovery_runs_ws_status  ON discovery_runs (workspace_id, status);
+CREATE INDEX IF NOT EXISTS idx_discovery_runs_ws_created ON discovery_runs (workspace_id, created_at DESC);

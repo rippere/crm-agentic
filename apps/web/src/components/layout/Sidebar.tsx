@@ -11,7 +11,7 @@ import {
   LayoutDashboard, Users, KanbanSquare, Bot, Settings,
   Zap, Inbox, CheckSquare, FolderOpen, Plug, Search,
   PhoneCall, ChevronsUpDown, LogOut, BarChart2, X, Activity, Target, HelpCircle,
-  Filter, Send, Workflow,
+  Filter, Send, Workflow, Sparkles,
 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 
@@ -78,6 +78,7 @@ const navGroups: NavGroup[] = [
     id: "intelligence",
     label: "Intelligence",
     items: [
+      { href: "/assistant", label: "Assistant", icon: Sparkles                 },
       { href: "/agents",   label: "Agents",   icon: Bot,         badge: "LIVE" },
       { href: "/inbox",    label: "Inbox",    icon: Inbox                       },
       { href: "/calls",    label: "Calls",    icon: PhoneCall                   },

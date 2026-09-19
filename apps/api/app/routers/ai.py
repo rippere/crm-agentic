@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import uuid
 from collections import Counter, defaultdict
 from datetime import timezone
@@ -51,13 +52,14 @@ class AIQueryResponse(BaseModel):
     answer: str
 
 
-async def answer_crm_query(query: str, workspace_id: uuid.UUID, db: AsyncSession) -> str:
-    """Answer a freeform CRM question with live workspace context.
+async def _build_workspace_snapshot(workspace_id: uuid.UUID, db: AsyncSession) -> str:
+    """Build the live workspace-context string Nova reasons over.
 
-    Shared by the POST /ai/query route and the /mcp `ask_crm` tool so both speak to
-    the same Nova system prompt + workspace snapshot. Raises on AI failure.
+    Extracted verbatim from ``answer_crm_query`` (no behavior change to
+    ``/ai/query``) so BOTH the single-shot Q&A path and the agentic chat loop
+    (``run_agent_turn``) prime the model with the same snapshot. Returns the
+    formatted ``context`` block (counts + top deals + recent activity).
     """
-    # Build workspace snapshot for context
     contact_count = await db.scalar(
         select(func.count()).where(Contact.workspace_id == workspace_id)
     ) or 0
@@ -104,6 +106,20 @@ async def answer_crm_query(query: str, workspace_id: uuid.UUID, db: AsyncSession
         )
         context += f"- Recent activity:\n{event_lines}\n"
 
+    return context
+
+
+async def answer_crm_query(query: str, workspace_id: uuid.UUID, db: AsyncSession) -> str:
+    """Answer a freeform CRM question with live workspace context.
+
+    Shared by the POST /ai/query route and the /mcp `ask_crm` tool so both speak to
+    the same Nova system prompt + workspace snapshot. Raises on AI failure.
+
+    This is the NON-agentic path (single shot, no tools). The `ask_crm` MCP tool
+    routes here — never into `run_agent_turn` — so there is no agentic recursion.
+    """
+    context = await _build_workspace_snapshot(workspace_id, db)
+
     client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -139,6 +155,300 @@ async def ai_query(
         ) from exc
 
     return AIQueryResponse(answer=answer)
+
+
+# ---------------------------------------------------------------------------
+# Agentic chat (Autonomous Lead Engine, Increment 1 slice) — bounded tool loop
+# ---------------------------------------------------------------------------
+#
+# POST /ai/chat is the operator-facing chatbot that can DRIVE actions, not just
+# answer questions. It runs a bounded Claude tool-use loop (MAX_TOOL_ITERS) over
+# the action_bus registry: the read-only NovaCRM MCP tools (list_contacts,
+# list_deals, stale_deals, pipeline_summary, ask_crm) plus the ONE actuating
+# action `discover_market` (registered through the bus, never mcp_server.TOOLS —
+# R10). Every tool call is dispatched through `action_bus.dispatch`, which clamps
+# actuating actions against the shared authority resolver (R11) and fails closed
+# (R12) — so an outward/actuating action resolves to `ask` and surfaces a
+# `needs_confirmation` prompt unless the operator has enabled autonomy.
+#
+# `workspace_id` ALWAYS comes from the URL + 403 guard and is passed into every
+# dispatch(...) — the model never supplies it. Recursion guard: `ask_crm` routes
+# to the NON-agentic `answer_crm_query`, and `run_agent_turn` / POST /ai/chat is
+# not registered as a tool, so the loop cannot re-enter itself.
+
+_logger = logging.getLogger(__name__)
+
+# Bounded tool-use iterations per chat turn — a hard ceiling on how many
+# tool round-trips the model may take before we return, so a misbehaving loop
+# can never run unbounded (spec §2.1.9).
+MAX_TOOL_ITERS = 6
+
+# TODO(execute): tune this system prompt against the live model — confirm it reliably
+# elicits a `discover_market` tool_use for "find leads in <place>/begin GTM" phrasings
+# and does NOT fire actuating actions for read-only questions (verify with test_ai_chat
+# + a live MODEL_SMART run).
+_AGENT_SYSTEM_PROMPT = """\
+You are Nova, the operator's AI assistant embedded in NovaCRM — an agentic CRM with \
+AI lead scoring, deal-health monitoring, and an autonomous outbound lead engine.
+
+You can BOTH answer questions about the workspace AND take actions via the provided \
+tools. Read tools (list_contacts, list_deals, stale_deals, pipeline_summary, ask_crm) \
+are safe to call whenever they help. The `discover_market` action starts a \
+market-discovery run that finds and scores prospective venues and loads them as leads — \
+use it when the operator asks to find leads/prospects in a place or to "begin GTM" there.
+
+Some actions require operator confirmation before they run; when a tool result says an \
+action needs confirmation, tell the operator plainly what you are about to do and ask them \
+to confirm, rather than retrying it. Keep replies concise and in plain prose (no markdown \
+headers). When you kick off a long-running run, tell the operator it is running and that \
+progress will appear shortly.\
+"""
+
+
+class ChatMessage(BaseModel):
+    """One turn of the chat transcript the client replays on each request."""
+
+    role: str  # 'user' | 'assistant'
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """POST /ai/chat body.
+
+    ``messages`` is the running transcript (the client is stateless-friendly and
+    replays it). ``confirm`` carries the name of an actuating action the operator
+    has approved — when set, that action is dispatched with ``confirmed=True`` so
+    it runs past the ``ask`` clamp (but never past the ``off`` kill switch).
+    """
+
+    messages: list[ChatMessage]
+    confirm: str | None = None
+
+
+class ChatActionOut(BaseModel):
+    """A single action the assistant invoked this turn, surfaced to the UI."""
+
+    name: str
+    actuating: bool
+    ok: bool
+    authority: str | None = None
+    needs_confirmation: bool = False
+    job_id: str | None = None
+    error: str | None = None
+    output: str | None = None
+
+
+class ChatResponse(BaseModel):
+    """POST /ai/chat response.
+
+    ``needs_confirmation`` + ``pending_action`` drive the Confirm button in the
+    chat panel: when set, the operator confirms by re-POSTing with
+    ``confirm=<pending_action>``. ``job_id`` is a dispatched run's Celery id the
+    browser polls via ``GET /jobs/{job_id}``.
+    """
+
+    answer: str
+    actions: list[ChatActionOut] = []
+    needs_confirmation: bool = False
+    pending_action: str | None = None
+    job_id: str | None = None
+
+
+def _content_blocks_to_dicts(content: list) -> list[dict]:
+    """Serialize an assistant response's content blocks back into request dicts.
+
+    The Messages API returns typed block objects; to continue a tool-use
+    conversation we must echo the assistant turn back as plain dicts. Only the
+    block kinds we produce/consume (``text``, ``tool_use``) are mapped; anything
+    else is skipped defensively.
+    """
+    out: list[dict] = []
+    for block in content:
+        btype = getattr(block, "type", None)
+        if btype == "text":
+            out.append({"type": "text", "text": getattr(block, "text", "")})
+        elif btype == "tool_use":
+            out.append(
+                {
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": dict(block.input or {}),
+                }
+            )
+    return out
+
+
+def _extract_text(content: list) -> str:
+    """Concatenate the text blocks of a response into one plain-prose string."""
+    parts = [getattr(b, "text", "") for b in content if getattr(b, "type", None) == "text"]
+    return "\n".join(p for p in parts if p).strip()
+
+
+async def run_agent_turn(
+    messages: list[ChatMessage],
+    workspace_id: uuid.UUID,
+    db: AsyncSession,
+    current_user: User,
+    *,
+    confirm: str | None = None,
+) -> ChatResponse:
+    """Run one bounded agentic chat turn over the action_bus tool registry.
+
+    Loops up to :data:`MAX_TOOL_ITERS`: ask the model (MODEL_SMART via the shared
+    client) with the workspace snapshot as system context and the registered
+    tools; dispatch each ``tool_use`` block through ``action_bus.dispatch`` (which
+    enforces the authority clamp for actuating actions); feed the results back;
+    repeat until the model stops requesting tools or the ceiling is hit.
+
+    If an actuating action resolves to ``ask`` (and was not confirmed), dispatch
+    returns ``needs_confirmation`` — we stop the loop and return a response the UI
+    renders as a Confirm prompt (no partial/unconfirmed side effect). Never raises
+    for a tool failure (the failure is reported back to the model as a tool
+    result); only an LLM/transport error propagates to the caller (mapped to 503).
+    """
+    # Import here so populating the actuating registry is best-effort and never
+    # blocks importing this router. action_bus registers the read tools at its own
+    # import; app.services.actions registers the actuating discover_market action.
+    from app.services import action_bus
+    from app.services.llm import MODEL_SMART, get_async_anthropic_client
+
+    try:
+        import app.services.actions  # noqa: F401 — self-registers actuating actions
+    except Exception as exc:  # noqa: BLE001 — read tools still work without it
+        _logger.warning("ai.chat could not load actuating actions: %s", exc)
+
+    client = get_async_anthropic_client()
+    tools = action_bus.tool_definitions()
+
+    snapshot = await _build_workspace_snapshot(workspace_id, db)
+    system = f"{_AGENT_SYSTEM_PROMPT}\n\n{snapshot}"
+
+    convo: list[dict] = [
+        {"role": m.role, "content": m.content}
+        for m in messages
+        if m.role in ("user", "assistant") and m.content
+    ]
+    if not convo:
+        raise ValueError("messages must contain at least one non-empty user turn")
+
+    actions_out: list[ChatActionOut] = []
+    job_id: str | None = None
+
+    for _ in range(MAX_TOOL_ITERS):
+        response = await client.messages.create(
+            model=MODEL_SMART,
+            max_tokens=1024,
+            system=system,
+            tools=tools,
+            messages=convo,
+        )
+
+        if response.stop_reason != "tool_use":
+            return ChatResponse(
+                answer=_extract_text(response.content) or "Done.",
+                actions=actions_out,
+                needs_confirmation=False,
+                job_id=job_id,
+            )
+
+        # Echo the assistant turn (its text + tool_use requests) back into convo.
+        convo.append({"role": "assistant", "content": _content_blocks_to_dicts(response.content)})
+
+        tool_results: list[dict] = []
+        for block in response.content:
+            if getattr(block, "type", None) != "tool_use":
+                continue
+
+            confirmed = confirm is not None and confirm == block.name
+            result = await action_bus.dispatch(
+                block.name,
+                dict(block.input or {}),
+                workspace_id,   # from the URL + 403 guard — never model-supplied
+                db,
+                current_user,
+                confirmed=confirmed,
+            )
+
+            actions_out.append(
+                ChatActionOut(
+                    name=result.action,
+                    actuating=result.actuating,
+                    ok=result.ok,
+                    authority=result.authority,
+                    needs_confirmation=result.needs_confirmation,
+                    job_id=result.job_id,
+                    error=result.error,
+                    output=result.as_text() if result.ok and not result.needs_confirmation else None,
+                )
+            )
+            if result.job_id:
+                job_id = result.job_id
+
+            if result.needs_confirmation:
+                # Stop before any side effect; surface a Confirm prompt to the UI.
+                answer = _extract_text(response.content) or (
+                    f"This will run '{result.action}'. Confirm to proceed."
+                )
+                return ChatResponse(
+                    answer=answer,
+                    actions=actions_out,
+                    needs_confirmation=True,
+                    pending_action=result.action,
+                    job_id=job_id,
+                )
+
+            tool_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result.as_text(),
+                    "is_error": not result.ok,
+                }
+            )
+
+        convo.append({"role": "user", "content": tool_results})
+
+    # Iteration ceiling hit without a final text answer.
+    return ChatResponse(
+        answer="I wasn't able to finish that within the allotted steps. Please refine the request.",
+        actions=actions_out,
+        needs_confirmation=False,
+        job_id=job_id,
+    )
+
+
+@router.post("/workspaces/{workspace_id}/ai/chat", response_model=ChatResponse)
+@limiter.limit("20/minute")
+async def ai_chat(
+    request: Request,
+    workspace_id: uuid.UUID,
+    body: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChatResponse:
+    """Operator chatbot with tool use — answers questions and drives actions.
+
+    ``workspace_id`` comes from the URL + this 403 guard and is threaded into
+    every ``dispatch(...)``; the model never supplies it. Actuating actions are
+    clamped by the shared authority resolver and fail closed (R11/R12).
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if not body.messages or not any(m.content.strip() for m in body.messages if m.content):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="messages cannot be empty")
+
+    try:
+        return await run_agent_turn(
+            body.messages, workspace_id, db, current_user, confirm=body.confirm
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — LLM/transport failure -> 503
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"AI unavailable: {exc}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
