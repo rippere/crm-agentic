@@ -8363,3 +8363,61 @@ async def test_communication_frequency_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/communication-frequency")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 19b: contact acquisition rate
+# ---------------------------------------------------------------------------
+
+class FakeContactCreatedRow:
+    def __init__(self, created_at):
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_contact_acquisition_rate_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    # 3 contacts created in the most-recent week, 2 contacts 3 weeks ago
+    recent_week_start = now - _dt.timedelta(days=now.weekday())
+    three_weeks_ago = now - _dt.timedelta(weeks=3)
+
+    created_dates = (
+        [FakeContactCreatedRow(recent_week_start + _dt.timedelta(hours=1))] * 3
+        + [FakeContactCreatedRow(three_weeks_ago + _dt.timedelta(hours=1))] * 2
+    )
+
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(created_dates))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"acquisition_narrative": "Contact growth is steady.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/acquisition-rate")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_new_contacts"] == 5
+    assert len(body["weekly_acquisition"]) == 12
+    assert body["avg_per_week"] == round(5 / 12, 2)
+    assert "trend_direction" in body
+    assert "peak_week" in body
+    assert body["peak_count"] == 3
+    assert "acquisition_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_acquisition_rate_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/acquisition-rate")
+    assert resp.status_code == 403

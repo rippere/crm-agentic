@@ -17635,3 +17635,153 @@ async def get_contact_communication_frequency(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 19b: AI workspace new contact acquisition rate
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/acquisition-rate")
+@limiter.limit("5/minute")
+async def get_contact_acquisition_rate(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    twelve_weeks_ago = now - datetime.timedelta(weeks=12)
+
+    result = await db.execute(
+        select(Contact.created_at)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Contact.created_at >= twelve_weeks_ago,
+        )
+    )
+    created_dates = [row.created_at for row in result.all()]
+
+    # Build 12 week slots (Mon-aligned)
+    def _week_start(dt: datetime.datetime) -> datetime.date:
+        d = dt.date() if hasattr(dt, "date") else dt
+        return d - datetime.timedelta(days=d.weekday())
+
+    week_counts: dict[datetime.date, int] = {}
+    for dt in created_dates:
+        ws = _week_start(dt)
+        week_counts[ws] = week_counts.get(ws, 0) + 1
+
+    # Generate all 12 week slots
+    current_week_start = _week_start(now)
+    weekly_acquisition = []
+    for i in range(11, -1, -1):
+        ws = current_week_start - datetime.timedelta(weeks=i)
+        weekly_acquisition.append({
+            "week_start": ws.isoformat(),
+            "new_contacts": week_counts.get(ws, 0),
+        })
+
+    total_new_contacts = sum(w["new_contacts"] for w in weekly_acquisition)
+    avg_per_week = round(total_new_contacts / 12, 2)
+
+    # Trend: compare first 6 weeks vs last 6 weeks
+    first_half = sum(w["new_contacts"] for w in weekly_acquisition[:6])
+    second_half = sum(w["new_contacts"] for w in weekly_acquisition[6:])
+    if first_half == 0 and second_half == 0:
+        growth_rate = 0.0
+        trend_direction = "stable"
+    elif first_half == 0:
+        growth_rate = 100.0
+        trend_direction = "accelerating"
+    else:
+        growth_rate = round(((second_half - first_half) / first_half) * 100, 1)
+        if growth_rate >= 20:
+            trend_direction = "accelerating"
+        elif growth_rate >= 5:
+            trend_direction = "growing"
+        elif growth_rate >= -5:
+            trend_direction = "stable"
+        else:
+            trend_direction = "declining"
+
+    peak_entry = max(weekly_acquisition, key=lambda x: x["new_contacts"])
+    peak_week = peak_entry["week_start"]
+    peak_count = peak_entry["new_contacts"]
+
+    if total_new_contacts == 0:
+        return {
+            "weekly_acquisition": weekly_acquisition,
+            "total_new_contacts": 0,
+            "avg_per_week": 0.0,
+            "growth_rate": 0.0,
+            "trend_direction": "stable",
+            "peak_week": peak_week,
+            "peak_count": 0,
+            "acquisition_narrative": "No new contacts were added in the last 12 weeks. Consider running outreach campaigns to grow your contact base.",
+            "recommendations": [
+                "Import existing contacts from your CRM or email provider.",
+                "Run a lead generation campaign targeting your ideal customer profile.",
+                "Connect your Gmail or Slack to automatically capture new contacts from communications.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"New contact acquisition over the last 12 weeks: total={total_new_contacts}, "
+        f"avg={avg_per_week}/week, growth_rate={growth_rate}% (first 6 weeks: {first_half}, "
+        f"last 6 weeks: {second_half}), trend={trend_direction}, peak week={peak_week} with {peak_count} contacts."
+    )
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence acquisition_narrative summarising the contact growth trend and its business implication. "
+        "Then provide exactly 3 short, actionable recommendations to improve or sustain the acquisition rate. "
+        'Respond ONLY with valid JSON: {"acquisition_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    acquisition_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        acquisition_narrative = str(parsed.get("acquisition_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        acquisition_narrative = (
+            f"Your workspace added {total_new_contacts} contacts over the last 12 weeks "
+            f"(avg {avg_per_week}/week), with a {trend_direction} trend ({growth_rate:+.1f}% growth)."
+        )
+        recommendations = [
+            "Schedule regular outreach campaigns to maintain a consistent acquisition rate.",
+            "Analyse which channels drive the most new contacts and double down on them.",
+            "Set a weekly contact acquisition target and track it in your dashboard.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Review your lead sources to identify untapped acquisition channels.")
+
+    return {
+        "weekly_acquisition": weekly_acquisition,
+        "total_new_contacts": total_new_contacts,
+        "avg_per_week": avg_per_week,
+        "growth_rate": growth_rate,
+        "trend_direction": trend_direction,
+        "peak_week": peak_week,
+        "peak_count": peak_count,
+        "acquisition_narrative": acquisition_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
