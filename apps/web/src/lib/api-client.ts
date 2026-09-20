@@ -7166,5 +7166,30 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/company-concentration`, {}, token)
   },
+
+  async getAIContactStatusDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        status_breakdown: [
+          { status: 'lead', count: 18, pct_of_total: 38.3, pipeline_value: 42000, won_revenue: 0 },
+          { status: 'prospect', count: 16, pct_of_total: 34.0, pipeline_value: 128500, won_revenue: 15000 },
+          { status: 'customer', count: 11, pct_of_total: 23.4, pipeline_value: 47000, won_revenue: 312000 },
+          { status: 'churned', count: 2, pct_of_total: 4.3, pipeline_value: 0, won_revenue: 28000 },
+        ],
+        total_contacts: 47,
+        lead_to_prospect_rate: 61.7,
+        prospect_to_customer_rate: 40.7,
+        highest_value_segment: 'customer',
+        distribution_narrative: 'Your funnel converts 61.7% of contacts to prospect stage, with prospects converting to customers at 40.7% — a healthy pipeline ratio. Customer contacts hold the most revenue at $312K won, underscoring the importance of retention and expansion efforts.',
+        recommendations: [
+          'Accelerate lead nurturing with AI-generated outreach sequences for the 18 stalled leads to improve lead-to-prospect conversion.',
+          'Deploy expansion playbooks for your 11 customers — upsell opportunities in this segment represent $47K in open pipeline.',
+          'Investigate the 2 churned contacts to identify preventable churn signals and strengthen your early-warning system.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/status-distribution`, {}, token)
+  },
 }
 

@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle, UserPlus, Building2,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle, UserPlus, Building2, PieChart,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -813,6 +813,11 @@ export default function ReportsPage() {
   const [companyConcentration, setCompanyConcentration] = useState<AICompanyConcentrationData | null>(null);
   const [companyConcentrationLoading, setCompanyConcentrationLoading] = useState(false);
   const [companyConcentrationOpen, setCompanyConcentrationOpen] = useState(true);
+  type AIStatusBreakdownItem = { status: string; count: number; pct_of_total: number; pipeline_value: number; won_revenue: number };
+  type AIStatusDistributionData = { status_breakdown: AIStatusBreakdownItem[]; total_contacts: number; lead_to_prospect_rate: number | null; prospect_to_customer_rate: number | null; highest_value_segment: string | null; distribution_narrative: string; recommendations: string[]; generated_at: string };
+  const [statusDistribution, setStatusDistribution] = useState<AIStatusDistributionData | null>(null);
+  const [statusDistributionLoading, setStatusDistributionLoading] = useState(false);
+  const [statusDistributionOpen, setStatusDistributionOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -978,6 +983,8 @@ export default function ReportsPage() {
       apiClient.getAIContactAcquisitionRate("demo-workspace-1", "demo-token").then(setAcquisitionRate).catch(() => {}).finally(() => setAcquisitionRateLoading(false));
       setCompanyConcentrationLoading(true);
       apiClient.getAIContactCompanyConcentration("demo-workspace-1", "demo-token").then(setCompanyConcentration).catch(() => {}).finally(() => setCompanyConcentrationLoading(false));
+      setStatusDistributionLoading(true);
+      apiClient.getAIContactStatusDistribution("demo-workspace-1", "demo-token").then(setStatusDistribution).catch(() => {}).finally(() => setStatusDistributionLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1147,6 +1154,8 @@ export default function ReportsPage() {
       apiClient.getAIContactAcquisitionRate(workspaceId, session.access_token).then(setAcquisitionRate).catch(() => {}).finally(() => setAcquisitionRateLoading(false));
       setCompanyConcentrationLoading(true);
       apiClient.getAIContactCompanyConcentration(workspaceId, session.access_token).then(setCompanyConcentration).catch(() => {}).finally(() => setCompanyConcentrationLoading(false));
+      setStatusDistributionLoading(true);
+      apiClient.getAIContactStatusDistribution(workspaceId, session.access_token).then(setStatusDistribution).catch(() => {}).finally(() => setStatusDistributionLoading(false));
     });
   }, []);
 
@@ -2290,6 +2299,27 @@ export default function ReportsPage() {
         if (!session) { setCompanyConcentrationLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setCompanyConcentrationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateStatusDistribution = () => {
+    setStatusDistributionLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactStatusDistribution(wid, tok)
+        .then(setStatusDistribution)
+        .catch(() => {})
+        .finally(() => setStatusDistributionLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setStatusDistributionLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setStatusDistributionLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -10190,6 +10220,108 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact company concentration analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 19d: Contact Status Distribution */}
+      <Card className="border-zinc-800/60 overflow-hidden">
+        <div
+          className="flex items-center gap-2 p-4 cursor-pointer select-none"
+          onClick={() => setStatusDistributionOpen((o) => !o)}
+        >
+          <PieChart className="h-4 w-4 text-cyan-400" />
+          <span className="font-semibold text-sm text-zinc-100">Contact Status Distribution</span>
+          {statusDistribution && (
+            <span className={cn(
+              "ml-1 rounded-full px-2 py-0.5 text-xs font-medium",
+              statusDistribution.highest_value_segment === "customer" ? "bg-emerald-500/20 text-emerald-300" :
+              statusDistribution.highest_value_segment === "prospect" ? "bg-indigo-500/20 text-indigo-300" :
+              "bg-zinc-500/20 text-zinc-300"
+            )}>
+              {statusDistribution.highest_value_segment} highest value
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+          {statusDistribution && (
+            <span className="text-xs text-zinc-500">{statusDistribution.total_contacts} contacts</span>
+          )}
+          <button
+            className="rounded-md px-2 py-1 text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors flex items-center gap-1"
+            onClick={(e) => { e.stopPropagation(); regenerateStatusDistribution(); }}
+            disabled={statusDistributionLoading}
+          >
+            <RefreshCw className={cn("h-3 w-3", statusDistributionLoading && "animate-spin")} />
+            Regenerate
+          </button>
+          {statusDistributionOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </div>
+        {statusDistributionOpen && (
+          statusDistributionLoading && !statusDistribution ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analyzing contact status distribution…</div>
+          ) : statusDistribution ? (
+            <div className={cn("p-4 space-y-4", statusDistributionLoading && "opacity-40")}>
+              {/* Status bars */}
+              <div className="space-y-3">
+                {statusDistribution.status_breakdown.map((item, i) => {
+                  const colorMap: Record<string, string> = {
+                    lead: 'bg-indigo-400',
+                    prospect: 'bg-amber-400',
+                    customer: 'bg-emerald-400',
+                    churned: 'bg-rose-400',
+                  };
+                  const barColor = colorMap[item.status] ?? 'bg-zinc-400';
+                  return (
+                    <div key={i} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300 capitalize font-medium">{item.status}</span>
+                        <span className="text-zinc-500 font-mono">
+                          {item.count} · {item.pct_of_total.toFixed(1)}%
+                          {item.won_revenue > 0 && <> · ${(item.won_revenue / 1000).toFixed(0)}K won</>}
+                          {item.pipeline_value > 0 && <> · ${(item.pipeline_value / 1000).toFixed(0)}K pipeline</>}
+                        </span>
+                      </div>
+                      <div className="h-2 w-full rounded-full bg-zinc-800">
+                        <div
+                          className={`h-2 rounded-full ${barColor}`}
+                          style={{ width: `${Math.min(100, item.pct_of_total)}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Conversion rates */}
+              {(statusDistribution.lead_to_prospect_rate !== null || statusDistribution.prospect_to_customer_rate !== null) && (
+                <div className="flex flex-wrap gap-2">
+                  {statusDistribution.lead_to_prospect_rate !== null && (
+                    <span className="rounded-full bg-indigo-500/15 px-3 py-1 text-xs text-indigo-300">
+                      Lead → Prospect: {statusDistribution.lead_to_prospect_rate}%
+                    </span>
+                  )}
+                  {statusDistribution.prospect_to_customer_rate !== null && (
+                    <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs text-emerald-300">
+                      Prospect → Customer: {statusDistribution.prospect_to_customer_rate}%
+                    </span>
+                  )}
+                </div>
+              )}
+              {/* Narrative */}
+              <p className="text-xs text-zinc-400 italic">{statusDistribution.distribution_narrative}</p>
+              {/* Recommendations */}
+              <ul className="space-y-1">
+                {statusDistribution.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(statusDistribution.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact status distribution analysis.</div>
           )
         )}
       </Card>
