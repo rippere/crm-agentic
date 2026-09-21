@@ -696,28 +696,72 @@ async def _run_reprocess(workspace_id: str) -> dict[str, Any]:
     from app.services.extraction import extract_tasks
     from app.services.sentiment import analyze_sentiment
 
+    from app.config import settings
+
     ws_uuid = uuid.UUID(workspace_id)
     SessionFactory = _get_async_session()
     processed = 0
     relevant_count = 0
     linked = 0
+    deferred = 0
+    truncated = False
+
+    # Token-safety bounds for this run (mirrors _run_sync's INGEST_* bounds).
+    # Reprocess fires up to 4 Claude calls per message (relevance + extract +
+    # sentiment + clarity), so an unbounded workspace scan is the same
+    # unbounded-fan-out shape as the ingest burn. The message cap is the primary
+    # ceiling; the per-run LLM budget is a backstop if that cap ever regresses.
+    max_messages = settings.REPROCESS_MAX_MESSAGES
+    llm_budget = settings.REPROCESS_MAX_LLM_CALLS
+    llm_calls = 0
 
     async with SessionFactory() as db:
         result = await db.execute(
-            select(Message).where(
+            select(Message)
+            .where(
                 Message.workspace_id == ws_uuid,
                 # Metadata-only rows have no body to enrich and no UI to appear
                 # in. Re-running the relevance LLM over them would spend a Haiku
                 # call per row to re-derive a verdict we already stored.
                 Message.graph_only.is_(False),
             )
+            # Oldest first so a truncated run makes deterministic forward progress
+            # and the deferred tail is a stable suffix picked up on the next run.
+            .order_by(Message.received_at.asc())
+            .limit(max_messages)
         )
         messages = list(result.scalars().all())
+
+        # Backstop to the SQL .limit() above: hitting the cap means more
+        # non-graph_only messages exist than one run will enrich. Trim and flag
+        # truncated so the remainder is deferred to the next run (never dropped).
+        if len(messages) >= max_messages:
+            logger.info(
+                "reprocess message_cap_reached workspace=%s cap=%d — "
+                "remainder deferred to next run",
+                workspace_id, max_messages,
+            )
+            messages = messages[:max_messages]
+            truncated = True
 
         for message in messages:
             sender_email = message.sender_email or ""
             body_plain = message.body_plain or ""
             subject = message.subject or ""
+
+            # Per-run LLM budget: refuse to start a message we can't fully enrich
+            # within budget. A message needs 1 relevance call (0 if the sender is
+            # a known automated pattern — pure heuristic) plus 3 enrich calls when
+            # it has a body. Defer the whole message rather than half-enriching it,
+            # so the next run repeats it cleanly (nothing is marked processed).
+            needed = 0 if _is_automated_sender(sender_email) else 1
+            if body_plain.strip():
+                needed += 3
+            if llm_calls + needed > llm_budget:
+                deferred += 1
+                truncated = True
+                continue
+            llm_calls += needed
 
             # Contact linking (link-only, never auto-create)
             if message.contact_id is None:
@@ -802,15 +846,25 @@ async def _run_reprocess(workspace_id: str) -> dict[str, Any]:
 
         await db.commit()
 
+    if deferred:
+        logger.info(
+            "reprocess llm_budget_reached workspace=%s budget=%d llm_calls=%d — "
+            "deferred %d message(s) to next run",
+            workspace_id, llm_budget, llm_calls, deferred,
+        )
+
     logger.info(
-        "reprocess complete workspace=%s processed=%d relevant=%d linked=%d",
-        workspace_id, processed, relevant_count, linked,
+        "reprocess complete workspace=%s processed=%d relevant=%d linked=%d "
+        "llm_calls=%d deferred=%d truncated=%s",
+        workspace_id, processed, relevant_count, linked, llm_calls, deferred, truncated,
     )
     return {
         "workspace_id": workspace_id,
         "processed": processed,
         "relevant": relevant_count,
         "linked": linked,
+        "deferred": deferred,
+        "truncated": truncated,
     }
 
 
