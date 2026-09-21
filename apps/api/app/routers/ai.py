@@ -19053,3 +19053,139 @@ async def get_contact_score_segmentation(
         "recommendations": recommendations2,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/cohort-analysis")
+@limiter.limit("5/minute")
+async def get_deal_cohort_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+
+    result = await db.execute(
+        select(Deal.id, Deal.value, Deal.stage, Deal.created_at, Deal.stage_changed_at).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.created_at.isnot(None),
+        )
+    )
+    rows = result.all()
+
+    def _quarter_label(dt: datetime.datetime) -> str:
+        q = (dt.month - 1) // 3 + 1
+        return f"Q{q} {dt.year}"
+
+    def _quarter_sort_key(label: str) -> tuple:
+        parts = label.split()
+        return (int(parts[1]), int(parts[0][1]))
+
+    if not rows:
+        return {
+            "cohorts": [],
+            "closing_quarters": [],
+            "chart_data": [],
+            "cohort_narrative": "No closed deals found to analyse cohorts.",
+            "recommendations": [
+                "Create deals in your CRM to start tracking cohort performance.",
+                "Ensure deal creation dates are recorded accurately.",
+                "Close your first deals to populate cohort data.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    cell: dict = defaultdict(lambda: {"won_revenue": 0.0, "won_count": 0, "lost_count": 0})
+    cohort_set: set = set()
+    closing_q_set: set = set()
+
+    for row in rows:
+        if not row.created_at:
+            continue
+        cohort_lbl = _quarter_label(row.created_at)
+        cohort_set.add(cohort_lbl)
+        close_dt = row.stage_changed_at or now
+        cq_lbl = _quarter_label(close_dt)
+        closing_q_set.add(cq_lbl)
+        if row.stage == "closed_won":
+            cell[(cohort_lbl, cq_lbl)]["won_revenue"] += float(row.value or 0)
+            cell[(cohort_lbl, cq_lbl)]["won_count"] += 1
+        else:
+            cell[(cohort_lbl, cq_lbl)]["lost_count"] += 1
+
+    cohorts_sorted = sorted(cohort_set, key=_quarter_sort_key)
+    closing_sorted = sorted(closing_q_set, key=_quarter_sort_key)
+
+    chart_data = []
+    for cq in closing_sorted:
+        entry: dict = {"closing_quarter": cq}
+        for cohort in cohorts_sorted:
+            entry[cohort] = round(cell[(cohort, cq)]["won_revenue"], 2)
+        chart_data.append(entry)
+
+    cohort_list = []
+    for cohort in cohorts_sorted:
+        won_rev = sum(cell[(cohort, cq)]["won_revenue"] for cq in closing_sorted)
+        won_n = sum(cell[(cohort, cq)]["won_count"] for cq in closing_sorted)
+        lost_n = sum(cell[(cohort, cq)]["lost_count"] for cq in closing_sorted)
+        total_n = won_n + lost_n
+        cohort_list.append({
+            "cohort": cohort,
+            "won_count": won_n,
+            "lost_count": lost_n,
+            "total_revenue": round(won_rev, 2),
+            "win_rate": round(won_n / total_n * 100, 1) if total_n else 0.0,
+        })
+
+    best = max(cohort_list, key=lambda c: c["total_revenue"]) if cohort_list else None
+    total_rev = sum(c["total_revenue"] for c in cohort_list)
+
+    cohort_summary = "; ".join(
+        f"{c['cohort']}: {c['won_count']} won, {c['lost_count']} lost, ${c['total_revenue']:,.0f} revenue, {c['win_rate']}% win rate"
+        for c in cohort_list
+    )
+
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"You are a CRM analyst. Analyse deal cohort performance.\n"
+                    f"Cohorts (by creation quarter): {cohort_summary}\n"
+                    f"Best cohort by revenue: {best['cohort'] if best else 'N/A'}\n"
+                    f"Total closed revenue: ${total_rev:,.0f}\n"
+                    f"Write 2 sentences identifying which acquisition cohort drives the most revenue "
+                    f"and whether recent cohorts are outperforming older ones."
+                ),
+            }],
+        )
+        cohort_narrative = msg.content[0].text.strip()
+    except Exception:
+        cohort_narrative = (
+            f"The {best['cohort']} cohort generates the most revenue with ${best['total_revenue']:,.0f} "
+            f"across {best['won_count']} closed-won deals."
+            if best else
+            "No cohort data available for narrative generation."
+        )
+
+    recommendations = [
+        f"Focus acquisition efforts on replicating conditions that made {best['cohort'] if best else 'your top cohort'} the strongest performer.",
+        "Analyse common deal characteristics from high-performing cohorts to identify repeatable success patterns.",
+        "Track newer cohorts monthly to detect performance changes early and adjust pipeline strategy.",
+    ]
+
+    return {
+        "cohorts": cohort_list,
+        "closing_quarters": closing_sorted,
+        "chart_data": chart_data,
+        "cohort_narrative": cohort_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
