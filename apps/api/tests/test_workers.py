@@ -386,6 +386,94 @@ async def test_draft_email_strips_plain_markdown_fence():
 
 
 # ---------------------------------------------------------------------------
+# followup_sequences._run_hitl — outer tenant-loop fan-out cap
+# ---------------------------------------------------------------------------
+
+
+def _hitl_session_factory(db):
+    factory = MagicMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=db)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    factory.return_value = ctx
+    return factory
+
+
+def _hitl_db(connectors: list, deal: MagicMock, contact: MagicMock) -> AsyncMock:
+    """Session whose connector scan yields `connectors` (same list drives both the
+    slack and gmail lookups, so the eligible intersection is every workspace),
+    whose deal scan yields one stale deal per workspace, whose recent-HITL dedupe
+    always misses, and whose contact lookup resolves an emailable contact."""
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
+
+    def _execute(stmt, *a, **kw):
+        result = MagicMock()
+        text = str(stmt)
+        if "FROM connectors" in text:
+            result.scalars.return_value.all.return_value = connectors
+        elif "FROM deals" in text:
+            result.scalars.return_value.all.return_value = [deal]
+        elif "FROM contacts" in text:
+            result.scalar_one_or_none.return_value = contact
+        else:  # activity_events recent-HITL dedupe → no recent send
+            result.scalar_one_or_none.return_value = None
+        return result
+
+    db.execute = AsyncMock(side_effect=_execute)
+    return db
+
+
+@pytest.mark.asyncio
+async def test_hitl_respects_workspace_cap(monkeypatch):
+    """One 'daily-hitl-followup' run drafts for at most FOLLOWUP_MAX_WORKSPACES,
+    no matter how many Slack+Gmail tenants are eligible — the guard that stops the
+    outer loop from fanning 5×(#tenants) Claude drafts across every workspace.
+    With the cap set to 2 and ten eligible workspaces (one stale deal each),
+    exactly two workspaces are drafted for and the run reports the remainder
+    deferred to a subsequent run (never dropped)."""
+    monkeypatch.setattr("app.config.settings.FOLLOWUP_MAX_WORKSPACES", 2)
+
+    connectors = []
+    for _ in range(10):
+        c = MagicMock()
+        c.workspace_id = uuid_mod.uuid4()
+        connectors.append(c)
+
+    deal = MagicMock()
+    deal.id = uuid_mod.uuid4()
+    deal.title = "Renewal"
+    deal.company = "Acme"
+    deal.stage = "proposal"
+    deal.contact_id = uuid_mod.uuid4()
+    deal.contact_name = "Alice"
+
+    contact = MagicMock()
+    contact.name = "Alice"
+    contact.email = "alice@acme.com"
+
+    db = _hitl_db(connectors, deal, contact)
+
+    draft = AsyncMock(return_value={"subject": "Re: Renewal", "body": "Circling back"})
+    slack = MagicMock()
+    slack.post_hitl_block = AsyncMock()
+
+    with patch("app.workers.followup_sequences._make_session",
+               return_value=_hitl_session_factory(db)), \
+         patch("app.workers.followup_sequences._draft_email", draft), \
+         patch("app.services.slack_client.SlackClient", return_value=slack):
+        from app.workers.followup_sequences import _run_hitl
+
+        result = await _run_hitl()
+
+    assert draft.await_count == 2, "Claude drafts fire only for cap-many workspaces"
+    assert result["hitl_sent"] == 2, "at most cap-many workspaces are processed per run"
+    assert result["workspaces_deferred"] == 8, "the remainder is deferred, not dropped"
+
+
+# ---------------------------------------------------------------------------
 # Beat dispatchers — enumerate all workspaces and fan out per-workspace tasks
 # ---------------------------------------------------------------------------
 

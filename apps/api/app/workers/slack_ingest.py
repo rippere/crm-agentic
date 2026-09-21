@@ -72,10 +72,20 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
     from app.models.message import Message
     from app.services.slack_client import SlackClient, SlackAuthError
     from app.workers.ingest import _link_contact, enrich_message
+    from app.config import settings
 
     SessionFactory = _get_async_session()
     new_count = 0
+    truncated = False
     enrich_ids: list[str] = []
+
+    # Token-safety bound for this sync. The hard message cap is the primary
+    # ceiling on enrich fan-out: one sync inserts + enqueues at most cap-many new
+    # messages, so a first sync of a busy workspace can never fan ~3 Claude calls
+    # per message across an entire history. Deferred messages are NOT stored, so
+    # the next sync re-fetches them (dedupe misses) and they enter the pipeline
+    # then — bounded per sync, never dropped.
+    max_messages = settings.SLACK_MAX_MESSAGES
 
     async with SessionFactory() as db:
         result = await db.execute(select(Connector).where(Connector.id == uuid.UUID(connector_id)))
@@ -171,6 +181,15 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 if dup.scalar_one_or_none() is not None:
                     continue
 
+                # Hard message cap: once this sync has taken cap-many NEW
+                # messages, stop inserting. The remainder is left unstored so the
+                # next sync re-fetches it (dedupe misses) and enqueues it then —
+                # this is the guard that stops a busy first sync from fanning
+                # ~3 Claude calls per message across an entire workspace history.
+                if new_count >= max_messages:
+                    truncated = True
+                    break
+
                 # Resolve sender email
                 sender_email: str | None = None
                 if slack_user_id:
@@ -217,10 +236,35 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 if text.strip():
                     enrich_ids.append(str(message.id))
 
+            # Stop walking further conversations once the message cap is hit.
+            if truncated:
+                logger.info(
+                    "slack_ingest message_cap_reached connector=%s cap=%d new=%d — "
+                    "remainder deferred to next sync (re-fetched via dedupe)",
+                    connector_id, max_messages, new_count,
+                )
+                break
+
         connector.last_sync = datetime.now(tz=timezone.utc)
         connector.message_count = (connector.message_count or 0) + new_count
         db.add(connector)
         await db.commit()
+
+    # Per-run LLM budget backstop: each enrich_message dispatch fans out ~3
+    # Claude calls (extract_tasks + analyze_sentiment + score_clarity). Cap the
+    # dispatch count so 3·enrich never exceeds the run budget. Under the default
+    # message cap (200 < 1000//3) this never trips — it exists so a message-cap
+    # regression can't turn into an unbounded token burn (mirrors ingest).
+    llm_budget = settings.SLACK_MAX_LLM_CALLS
+    max_enrich = llm_budget // 3
+    if len(enrich_ids) > max_enrich:
+        logger.warning(
+            "slack_ingest llm_budget_enrich connector=%s budget=%d — "
+            "capping enrich dispatch %d -> %d this sync",
+            connector_id, llm_budget, len(enrich_ids), max_enrich,
+        )
+        enrich_ids = enrich_ids[:max_enrich]
+        truncated = True
 
     # Off the critical path: enqueue per-message enrichment.
     enqueued = 0
@@ -232,10 +276,15 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
             logger.warning("slack_ingest enrich_enqueue_failed message_id=%s exc=%s", mid, exc)
 
     logger.info(
-        "slack_ingest complete connector=%s new=%d enqueued_enrich=%d",
-        connector_id, new_count, enqueued,
+        "slack_ingest complete connector=%s new=%d enqueued_enrich=%d truncated=%s",
+        connector_id, new_count, enqueued, truncated,
     )
-    return {"new_messages": new_count, "enqueued_enrich": enqueued, "connector_id": connector_id}
+    return {
+        "new_messages": new_count,
+        "enqueued_enrich": enqueued,
+        "truncated": truncated,
+        "connector_id": connector_id,
+    }
 
 
 @celery_app.task(name="app.workers.slack_ingest.process_slack_sync", bind=True)

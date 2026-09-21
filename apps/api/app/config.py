@@ -51,6 +51,28 @@ class Settings(BaseSettings):
     # (500 × 4 = 2000) so it never trips in normal operation, but bounds the
     # fan-out if the message cap ever regresses.
     REPROCESS_MAX_LLM_CALLS: int = 2500
+    # ── Slack-sync token-safety bounds ──────────────────────────────────────
+    # process_slack_sync walks up to 3×100 conversations and enqueues one
+    # enrich_message (≈3 Claude calls) per NEW non-duplicate text message. With
+    # no bound, the first sync of a busy workspace fans ~180k unbounded Claude
+    # calls (the Gmail-ingest bug's twin). Hard cap on how many new Slack
+    # messages a single sync inserts + enqueues, so one connect can never fan
+    # LLM calls across an entire workspace history. Deferred messages are NOT
+    # stored, so the next sync re-fetches them (dedupe misses) and they enter the
+    # pipeline then — bounded per sync, never dropped.
+    SLACK_MAX_MESSAGES: int = 200
+    # Backstop per-run ceiling on Claude calls for one Slack sync (each enrich
+    # dispatch ≈ 3 Claude calls). Sized above the SLACK_MAX_MESSAGES worst case
+    # (200×3 = 600) so it never trips in normal operation, but bounds the enrich
+    # fan-out if the message cap ever regresses (mirrors INGEST_MAX_LLM_CALLS).
+    SLACK_MAX_LLM_CALLS: int = 1000
+    # ── Followup-HITL fan-out bound ─────────────────────────────────────────
+    # The 'daily-hitl-followup' beat (09:00) drafts one Claude email per stale
+    # deal, inner-capped at .limit(5) deals/workspace but with no bound on the
+    # OUTER loop over all Slack+Gmail workspaces => 5×(#tenants) unbounded Claude
+    # drafts/day. Cap how many eligible workspaces one run drafts for; the rest
+    # are deferred to a subsequent run and log()'d, never dropped.
+    FOLLOWUP_MAX_WORKSPACES: int = 50
     REDIS_URL: str = "redis://localhost:6379/0"
     FRONTEND_URL: str = "http://localhost:3000"
     # Comma-separated additional allowed CORS origins (e.g. apex domain, old deploy URL).

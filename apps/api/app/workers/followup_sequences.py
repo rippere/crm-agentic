@@ -89,7 +89,25 @@ async def _run_hitl() -> dict[str, Any]:
 
         eligible_workspaces = set(slack_connectors) & set(gmail_connectors)
 
-        for ws_id in eligible_workspaces:
+        # Fan-out bound: the inner stale-deals loop is already .limit(5) per
+        # workspace, but this outer loop is unbounded in tenant count — with no
+        # cap it fires 5×(#eligible workspaces) Claude drafts every run. Cap how
+        # many workspaces one run drafts for; the remainder is deferred to a
+        # subsequent run and log()'d, never dropped. Sorted for a deterministic,
+        # stable prefix rather than nondeterministic set-iteration order.
+        max_workspaces = settings.FOLLOWUP_MAX_WORKSPACES
+        eligible_ordered = sorted(eligible_workspaces, key=str)
+        deferred_workspaces = 0
+        if len(eligible_ordered) > max_workspaces:
+            deferred_workspaces = len(eligible_ordered) - max_workspaces
+            logger.info(
+                "followup workspace_cap_reached eligible=%d cap=%d — deferring "
+                "%d workspace(s) to next run",
+                len(eligible_ordered), max_workspaces, deferred_workspaces,
+            )
+            eligible_ordered = eligible_ordered[:max_workspaces]
+
+        for ws_id in eligible_ordered:
             # Find stale deals
             deal_result = await db.execute(
                 select(Deal).where(
@@ -189,7 +207,7 @@ async def _run_hitl() -> dict[str, Any]:
 
         await db.commit()
 
-    return {"hitl_sent": processed}
+    return {"hitl_sent": processed, "workspaces_deferred": deferred_workspaces}
 
 
 @celery_app.task(name="app.workers.followup_sequences.check_stale_deals_hitl", bind=True)
