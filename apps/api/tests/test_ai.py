@@ -8864,3 +8864,98 @@ async def test_contact_win_loss_attribution_wrong_workspace_returns_403(app_clie
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/win-loss-attribution")
     assert resp.status_code == 403
+
+# ---------------------------------------------------------------------------
+# Phase 19i: AI contact task backlog
+# ---------------------------------------------------------------------------
+
+import datetime as _dt
+
+
+class FakeTaskRow:
+    def __init__(self, task_id, contact_id, due_date=None, created_at=None):
+        self.id = task_id
+        self.contact_id = contact_id
+        self.due_date = due_date
+        today = _dt.date.today()
+        self.created_at = created_at or _dt.datetime(today.year, today.month, today.day)
+
+
+class FakeContactForTask:
+    def __init__(self, contact_id, name, email):
+        self.id = contact_id
+        self.name = name
+        self.email = email
+
+
+class FakeTaskDealRow:
+    def __init__(self, contact_id, deal_value):
+        self.contact_id = contact_id
+        self.deal_value = deal_value
+
+
+@pytest.mark.asyncio
+async def test_contact_task_backlog_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    today = _dt.date.today()
+    past_due = today - _dt.timedelta(days=3)  # overdue
+    c1 = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    c2 = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
+    task_rows = [
+        FakeTaskRow(uuid.uuid4(), c1, due_date=past_due),  # overdue
+        FakeTaskRow(uuid.uuid4(), c1),  # current
+        FakeTaskRow(uuid.uuid4(), c2),  # current, no deal
+    ]
+    contact_rows = [
+        FakeContactForTask(c1, "Alice", "alice@example.com"),
+        FakeContactForTask(c2, "Bob", "bob@example.com"),
+    ]
+    deal_rows = [FakeTaskDealRow(c1, 5000)]
+
+    call_count = 0
+
+    def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_execute_result(task_rows)
+        if call_count == 2:
+            return _make_execute_result(contact_rows)
+        return _make_execute_result(deal_rows)
+
+    mock_db.execute = AsyncMock(side_effect=fake_execute)
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"task_narrative": "Backlog is growing.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/task-backlog")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_open_tasks"] == 3
+    assert body["total_overdue_tasks"] == 1
+    assert body["contacts_with_tasks"] == 2
+    assert body["contacts_with_overdue"] == 1
+    assert len(body["top_loaded"]) <= 5
+    alice = next(t for t in body["top_loaded"] if t["name"] == "Alice")
+    assert alice["task_count"] == 2
+    assert alice["overdue_count"] == 1
+    assert alice["deal_value"] == 5000.0
+    assert "task_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_task_backlog_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/task-backlog")
+    assert resp.status_code == 403
