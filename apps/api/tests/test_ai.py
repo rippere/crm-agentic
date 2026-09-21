@@ -8700,3 +8700,95 @@ async def test_contact_role_distribution_wrong_workspace_returns_403(app_client)
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/role-distribution")
     assert resp.status_code == 403
+
+# ---------------------------------------------------------------------------
+# Phase 19g: AI contact deal engagement analysis
+# ---------------------------------------------------------------------------
+
+class FakeContactEngagementRow:
+    def __init__(self, id, name, revenue=0, deal_count=0):
+        self.id = id
+        self.name = name
+        self.revenue = revenue
+        self.deal_count = deal_count
+
+
+class FakeDealEngagementRow:
+    def __init__(self, contact_id, stage, value):
+        self.contact_id = contact_id
+        self.stage = stage
+        self.value = value
+
+
+@pytest.mark.asyncio
+async def test_contact_deal_engagement_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import uuid as _uuid
+    cid1 = _uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001")
+    cid2 = _uuid.UUID("aaaaaaaa-0000-0000-0000-000000000002")
+    cid3 = _uuid.UUID("aaaaaaaa-0000-0000-0000-000000000003")
+    cid4 = _uuid.UUID("aaaaaaaa-0000-0000-0000-000000000004")
+
+    # 4 contacts: 1 untouched, 1 active, 1 engaged, 1 power
+    contact_rows = [
+        FakeContactEngagementRow(cid1, "Alice", revenue=0, deal_count=0),
+        FakeContactEngagementRow(cid2, "Bob", revenue=500, deal_count=1),
+        FakeContactEngagementRow(cid3, "Carol", revenue=1000, deal_count=2),
+        FakeContactEngagementRow(cid4, "Dave", revenue=5000, deal_count=4),
+    ]
+
+    deal_rows = [
+        FakeDealEngagementRow(cid2, "closed_won", 10000),
+        FakeDealEngagementRow(cid3, "closed_won", 8000),
+        FakeDealEngagementRow(cid3, "proposal", 5000),
+        FakeDealEngagementRow(cid4, "closed_won", 20000),
+        FakeDealEngagementRow(cid4, "closed_won", 15000),
+        FakeDealEngagementRow(cid4, "proposal", 7000),
+        FakeDealEngagementRow(cid4, "discovery", 3000),
+    ]
+
+    call_count = 0
+
+    def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_execute_result(contact_rows)
+        return _make_execute_result(deal_rows)
+
+    mock_db.execute = AsyncMock(side_effect=fake_execute)
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"engagement_narrative": "Strong power accounts.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/deal-engagement")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_contacts"] == 4
+    assert body["untouched_pct"] == 25.0
+    buckets = {b["bucket"]: b for b in body["buckets"]}
+    assert buckets["Untouched"]["count"] == 1
+    assert buckets["Active"]["count"] == 1
+    assert buckets["Engaged"]["count"] == 1
+    assert buckets["Power"]["count"] == 1
+    assert len(body["top_power_accounts"]) == 1
+    assert body["top_power_accounts"][0]["name"] == "Dave"
+    assert body["top_power_accounts"][0]["deal_count"] == 4
+    assert "engagement_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_deal_engagement_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/deal-engagement")
+    assert resp.status_code == 403

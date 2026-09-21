@@ -7216,5 +7216,33 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/role-distribution`, {}, token)
   },
+
+  async getAIContactDealEngagement(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        buckets: [
+          { bucket: 'Untouched', deal_range: '0', count: 12, pct_of_total: 25.5, total_won_revenue: 0, avg_won_revenue: 0 },
+          { bucket: 'Active', deal_range: '1', count: 18, pct_of_total: 38.3, total_won_revenue: 87500, avg_won_revenue: 4861 },
+          { bucket: 'Engaged', deal_range: '2–3', count: 11, pct_of_total: 23.4, total_won_revenue: 142000, avg_won_revenue: 12909 },
+          { bucket: 'Power', deal_range: '4+', count: 6, pct_of_total: 12.8, total_won_revenue: 218000, avg_won_revenue: 36333 },
+        ],
+        total_contacts: 47,
+        untouched_pct: 25.5,
+        top_power_accounts: [
+          { name: 'Pinnacle Systems', deal_count: 7, won_revenue: 82000 },
+          { name: 'Horizon Ltd', deal_count: 6, won_revenue: 64000 },
+          { name: 'Apex Corp', deal_count: 5, won_revenue: 48000 },
+        ],
+        engagement_narrative: '25.5% of contacts have no associated deals — a significant untapped pipeline. Power accounts (6 contacts with 4+ deals) drive the highest average revenue at $36.3K, making them ideal expansion targets.',
+        recommendations: [
+          'Assign discovery calls or automated sequences to the 12 untouched contacts to unlock pipeline.',
+          'Expand with Power accounts — Pinnacle Systems and Horizon Ltd have proven deal cadences and should receive proactive expansion outreach.',
+          'Upgrade Active (single-deal) contacts to Engaged by identifying cross-sell or upsell opportunities tied to their current deal.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/deal-engagement`, {}, token)
+  },
 }
 
