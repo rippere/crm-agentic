@@ -819,6 +819,12 @@ export default function ReportsPage() {
   const [statusDistributionLoading, setStatusDistributionLoading] = useState(false);
   const [statusDistributionOpen, setStatusDistributionOpen] = useState(true);
 
+  type AIRoleBreakdownItem = { role: string; count: number; pct_of_total: number; customer_count: number; customer_rate: number; avg_revenue: number };
+  type AIRoleDistributionData = { role_breakdown: AIRoleBreakdownItem[]; total_contacts: number; unknown_role_pct: number; top_converting_role: string | null; role_narrative: string; recommendations: string[]; generated_at: string };
+  const [roleDistribution, setRoleDistribution] = useState<AIRoleDistributionData | null>(null);
+  const [roleDistributionLoading, setRoleDistributionLoading] = useState(false);
+  const [roleDistributionOpen, setRoleDistributionOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -985,6 +991,8 @@ export default function ReportsPage() {
       apiClient.getAIContactCompanyConcentration("demo-workspace-1", "demo-token").then(setCompanyConcentration).catch(() => {}).finally(() => setCompanyConcentrationLoading(false));
       setStatusDistributionLoading(true);
       apiClient.getAIContactStatusDistribution("demo-workspace-1", "demo-token").then(setStatusDistribution).catch(() => {}).finally(() => setStatusDistributionLoading(false));
+      setRoleDistributionLoading(true);
+      apiClient.getAIContactRoleDistribution("demo-workspace-1", "demo-token").then(setRoleDistribution).catch(() => {}).finally(() => setRoleDistributionLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1156,6 +1164,8 @@ export default function ReportsPage() {
       apiClient.getAIContactCompanyConcentration(workspaceId, session.access_token).then(setCompanyConcentration).catch(() => {}).finally(() => setCompanyConcentrationLoading(false));
       setStatusDistributionLoading(true);
       apiClient.getAIContactStatusDistribution(workspaceId, session.access_token).then(setStatusDistribution).catch(() => {}).finally(() => setStatusDistributionLoading(false));
+      setRoleDistributionLoading(true);
+      apiClient.getAIContactRoleDistribution(workspaceId, session.access_token).then(setRoleDistribution).catch(() => {}).finally(() => setRoleDistributionLoading(false));
     });
   }, []);
 
@@ -2320,6 +2330,27 @@ export default function ReportsPage() {
         if (!session) { setStatusDistributionLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setStatusDistributionLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateRoleDistribution = () => {
+    setRoleDistributionLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactRoleDistribution(wid, tok)
+        .then(setRoleDistribution)
+        .catch(() => {})
+        .finally(() => setRoleDistributionLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setRoleDistributionLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setRoleDistributionLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -10322,6 +10353,85 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact status distribution analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 19f: Contact Role Distribution */}
+      <Card className="border-violet-500/15">
+        <button
+          className="w-full flex items-center gap-3 p-4 text-left hover:bg-zinc-800/40 transition-colors rounded-t-lg"
+          onClick={() => setRoleDistributionOpen((o) => !o)}
+        >
+          <Users className="h-4 w-4 text-violet-400 flex-shrink-0" />
+          <span className="font-medium text-sm text-zinc-200 flex-1">Contact Role Distribution</span>
+          {roleDistribution && roleDistribution.top_converting_role && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300">
+              {roleDistribution.top_converting_role} converts best
+            </span>
+          )}
+          {roleDistribution && (
+            <span className="text-xs text-zinc-500">{roleDistribution.total_contacts} contacts</span>
+          )}
+          <button
+            className="ml-2 p-1 rounded hover:bg-zinc-700 transition-colors text-zinc-400 hover:text-zinc-200"
+            onClick={(e) => { e.stopPropagation(); regenerateRoleDistribution(); }}
+            disabled={roleDistributionLoading}
+            title="Regenerate"
+          >
+            <RefreshCw className={cn("h-3 w-3", roleDistributionLoading && "animate-spin")} />
+          </button>
+          {roleDistributionOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+        {roleDistributionOpen && (
+          roleDistributionLoading && !roleDistribution ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analysing role distribution…</div>
+          ) : roleDistribution ? (
+            <div className={cn("p-4 space-y-4", roleDistributionLoading && "opacity-40")}>
+              <div className="space-y-2">
+                {roleDistribution.role_breakdown.map((item, i) => {
+                  const barColor = i === 0 ? "bg-violet-500" : i === 1 ? "bg-indigo-500" : i === 2 ? "bg-amber-500" : i === 3 ? "bg-teal-500" : "bg-zinc-500";
+                  return (
+                    <div key={item.role} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300 font-medium">{item.role}</span>
+                        <div className="flex items-center gap-2 text-zinc-500">
+                          <span>{item.count} contacts ({item.pct_of_total}%)</span>
+                          <span className="text-zinc-600">·</span>
+                          <span className={item.customer_rate >= 50 ? "text-emerald-400" : item.customer_rate >= 25 ? "text-amber-400" : "text-zinc-500"}>
+                            {item.customer_rate}% customer
+                          </span>
+                          {item.avg_revenue > 0 && (
+                            <>
+                              <span className="text-zinc-600">·</span>
+                              <span className="text-zinc-400">${item.avg_revenue.toLocaleString()} avg rev</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                        <div className={cn("h-full rounded-full transition-all", barColor)} style={{ width: `${item.pct_of_total}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {roleDistribution.unknown_role_pct > 0 && (
+                <p className="text-xs text-zinc-500">{roleDistribution.unknown_role_pct}% of contacts have no role data.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{roleDistribution.role_narrative}</p>
+              <ul className="space-y-1">
+                {roleDistribution.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-violet-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(roleDistribution.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact role distribution analysis.</div>
           )
         )}
       </Card>

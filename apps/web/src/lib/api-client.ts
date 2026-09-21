@@ -7191,5 +7191,30 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/status-distribution`, {}, token)
   },
+
+  async getAIContactRoleDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        role_breakdown: [
+          { role: 'CEO', count: 8, pct_of_total: 17.0, customer_count: 5, customer_rate: 62.5, avg_revenue: 8200 },
+          { role: 'Director', count: 11, pct_of_total: 23.4, customer_count: 4, customer_rate: 36.4, avg_revenue: 4100 },
+          { role: 'VP', count: 6, pct_of_total: 12.8, customer_count: 2, customer_rate: 33.3, avg_revenue: 5600 },
+          { role: 'Manager', count: 14, pct_of_total: 29.8, customer_count: 0, customer_rate: 0.0, avg_revenue: 800 },
+          { role: 'Engineer', count: 4, pct_of_total: 8.5, customer_count: 0, customer_rate: 0.0, avg_revenue: 0 },
+        ],
+        total_contacts: 47,
+        unknown_role_pct: 8.5,
+        top_converting_role: 'CEO',
+        role_narrative: 'CEOs represent your best-converting persona at 62.5%, driving the highest average revenue of $8.2K per contact. Directors and VPs also convert reliably, while Managers are your largest segment but remain at pre-conversion stage.',
+        recommendations: [
+          'Prioritise CEO outreach — they convert at 62.5% and generate the highest average revenue of $8.2K per contact.',
+          'Enrich the 4 contacts missing role data to unlock persona-based targeting and improve segmentation.',
+          'Build tailored nurture sequences for Director and VP contacts to bridge the gap to CEO-level conversion rates.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/role-distribution`, {}, token)
+  },
 }
 

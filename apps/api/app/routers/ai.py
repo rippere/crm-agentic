@@ -18095,3 +18095,306 @@ async def get_contact_status_distribution(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 19f: AI contact role distribution analysis
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/role-distribution")
+@limiter.limit("5/minute")
+async def get_contact_role_distribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    contacts_result = await db.execute(
+        select(Contact.role, Contact.status, Contact.revenue)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    contacts_rows = contacts_result.all()
+
+    if not contacts_rows:
+        return {
+            "role_breakdown": [],
+            "total_contacts": 0,
+            "unknown_role_pct": 0.0,
+            "top_converting_role": None,
+            "role_narrative": "No contacts found. Add contacts with role information to unlock role-based insights.",
+            "recommendations": [
+                "Import contacts and include job title/role data to enable role segmentation.",
+                "Ask prospects for their role during initial outreach to enrich your contact profiles.",
+                "Use role data to tailor messaging and improve conversion rates per persona.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    total_contacts = len(contacts_rows)
+
+    role_counts: dict[str, int] = defaultdict(int)
+    role_customer_counts: dict[str, int] = defaultdict(float)
+    role_revenue: dict[str, float] = defaultdict(float)
+
+    for row in contacts_rows:
+        role = (row.role or "").strip() or "Unknown"
+        role_counts[role] += 1
+        if row.status == "customer":
+            role_customer_counts[role] += 1
+        role_revenue[role] += float(row.revenue or 0)
+
+    unknown_count = role_counts.get("Unknown", 0)
+    unknown_role_pct = round(unknown_count / total_contacts * 100, 1) if total_contacts > 0 else 0.0
+
+    # Top 5 roles by count (excluding Unknown for ranking, then add Unknown at end if present)
+    known_roles = sorted(
+        [(r, c) for r, c in role_counts.items() if r != "Unknown"],
+        key=lambda x: x[1],
+        reverse=True,
+    )[:5]
+
+    breakdown = []
+    for role, count in known_roles:
+        pct = round(count / total_contacts * 100, 1)
+        customer_count = int(role_customer_counts.get(role, 0))
+        customer_rate = round(customer_count / count * 100, 1) if count > 0 else 0.0
+        breakdown.append({
+            "role": role,
+            "count": count,
+            "pct_of_total": pct,
+            "customer_count": customer_count,
+            "customer_rate": customer_rate,
+            "avg_revenue": round(role_revenue.get(role, 0) / count, 2) if count > 0 else 0.0,
+        })
+
+    # Top converting role (min 2 contacts)
+    top_converting_role = None
+    best_rate = -1.0
+    for entry in breakdown:
+        if entry["count"] >= 2 and entry["customer_rate"] > best_rate:
+            best_rate = entry["customer_rate"]
+            top_converting_role = entry["role"]
+
+    top_roles_summary = ", ".join(
+        f"{r['role']} ({r['count']}x, {r['customer_rate']}% customer rate)" for r in breakdown[:3]
+    )
+    context = (
+        f"Contact Role Distribution for a CRM workspace:\n"
+        f"- Total contacts: {total_contacts}\n"
+        f"- Contacts without role data: {unknown_count} ({unknown_role_pct}%)\n"
+        f"- Top roles: {top_roles_summary}\n"
+        f"- Best-converting role: {top_converting_role} ({best_rate:.1f}% customer rate)\n"
+    )
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence role_narrative explaining what the role distribution reveals about this team's "
+        "target personas and which roles are most valuable to pursue. "
+        "Then provide exactly 3 short actionable recommendations to improve role-based targeting. "
+        'Respond ONLY with valid JSON: {"role_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    role_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        role_narrative = str(parsed.get("role_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        top_role = breakdown[0]["role"] if breakdown else "Unknown"
+        role_narrative = (
+            f"The most common role in your contact base is '{top_role}', and the best-converting role is "
+            f"'{top_converting_role or top_role}' with a {best_rate:.1f}% customer conversion rate."
+        )
+        recommendations = [
+            f"Prioritise outreach to '{top_converting_role or top_role}' contacts as they convert most reliably.",
+            "Enrich contacts missing role data to improve persona-based segmentation and targeting.",
+            "Tailor follow-up sequences by role to address the specific pain points of each persona.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Regularly review role data to refine your ideal customer persona.")
+
+    return {
+        "role_breakdown": breakdown,
+        "total_contacts": total_contacts,
+        "unknown_role_pct": unknown_role_pct,
+        "top_converting_role": top_converting_role,
+        "role_narrative": role_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 19e: AI workspace contact revenue concentration
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/revenue-concentration")
+@limiter.limit("5/minute")
+async def get_contact_revenue_concentration(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    # Query all contacts in workspace
+    contacts_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.company, Contact.revenue)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    contact_rows = contacts_result.all()
+
+    if not contact_rows:
+        return {
+            "top_contacts": [],
+            "total_contacts": 0,
+            "total_revenue": 0.0,
+            "pareto_threshold": None,
+            "concentration_risk": "low",
+            "revenue_narrative": "No contacts found. Add contacts and log won deals to track revenue concentration.",
+            "recommendations": [
+                "Import existing contacts and tag them with won deal values to begin tracking revenue concentration.",
+                "Set revenue fields on your key accounts to enable accurate Pareto analysis.",
+                "Connect your deals pipeline to ensure closed-won revenue flows into contact profiles.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Query closed_won deal value per contact
+    won_result = await db.execute(
+        select(Deal.contact_id, func.sum(Deal.value).label("won_revenue"))
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .group_by(Deal.contact_id)
+    )
+    won_rows = won_result.all()
+    won_by_contact: dict[str, float] = {str(row.contact_id): float(row.won_revenue or 0) for row in won_rows}
+
+    # Build per-contact revenue list
+    contact_revenues: list[dict] = []
+    for row in contact_rows:
+        total_rev = float(row.revenue or 0) + won_by_contact.get(str(row.id), 0.0)
+        contact_revenues.append({
+            "contact_id": str(row.id),
+            "name": row.name or "Unknown",
+            "company": row.company or "",
+            "total_revenue": total_rev,
+        })
+
+    # Sort descending by revenue
+    contact_revenues.sort(key=lambda x: x["total_revenue"], reverse=True)
+
+    total_revenue = sum(c["total_revenue"] for c in contact_revenues)
+    total_contacts = len(contact_revenues)
+
+    # Add pct_of_total and cumulative_pct to top 10
+    top_10: list[dict] = []
+    cumulative = 0.0
+    for item in contact_revenues[:10]:
+        pct = round(item["total_revenue"] / total_revenue * 100, 1) if total_revenue > 0 else 0.0
+        cumulative += pct
+        top_10.append({**item, "pct_of_total": pct, "cumulative_pct": round(cumulative, 1)})
+
+    # Pareto threshold: % of contacts needed to reach 80% of revenue
+    pareto_count = 0
+    pareto_cum = 0.0
+    for c in contact_revenues:
+        pareto_count += 1
+        pareto_cum += c["total_revenue"]
+        if total_revenue > 0 and pareto_cum >= total_revenue * 0.8:
+            break
+    pareto_threshold = round(pareto_count / total_contacts * 100, 1) if total_contacts > 0 else None
+
+    # Concentration risk
+    if pareto_threshold is not None and pareto_threshold <= 20:
+        concentration_risk = "high"
+    elif pareto_threshold is not None and pareto_threshold <= 40:
+        concentration_risk = "medium"
+    else:
+        concentration_risk = "low"
+
+    top_name = contact_revenues[0]["name"] if contact_revenues else "N/A"
+    top_pct = top_10[0]["pct_of_total"] if top_10 else 0.0
+
+    context = (
+        f"Contact Revenue Concentration:\n"
+        f"- Total contacts: {total_contacts}\n"
+        f"- Total won revenue: ${total_revenue:,.0f}\n"
+        f"- Pareto threshold: {pareto_threshold}% of contacts generate 80% of revenue\n"
+        f"- Top contact: {top_name} ({top_pct}% of revenue)\n"
+        f"- Concentration risk: {concentration_risk}\n"
+    )
+
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence revenue_narrative explaining what this revenue concentration reveals "
+        "about the account portfolio's health and risk. "
+        "Provide exactly 3 short, actionable recommendations to diversify revenue and reduce concentration risk. "
+        'Respond ONLY with valid JSON: {"revenue_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    revenue_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        revenue_narrative = str(parsed.get("revenue_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        revenue_narrative = (
+            f"{pareto_threshold}% of your {total_contacts} contacts generate 80% of your ${total_revenue:,.0f} total revenue, "
+            f"indicating a {concentration_risk} concentration risk. "
+            f"Top contributor '{top_name}' alone accounts for {top_pct}% of revenue."
+        )
+        recommendations = [
+            f"Strengthen your relationship with top revenue contacts — schedule QBRs and expansion reviews.",
+            "Identify and invest in 5–10 high-potential mid-tier contacts to diversify your revenue base.",
+            "Set quarterly revenue growth targets for your top accounts to reduce concentration gradually.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Regularly review revenue concentration to maintain a healthy portfolio distribution.")
+
+    return {
+        "top_contacts": top_10,
+        "total_contacts": total_contacts,
+        "total_revenue": round(total_revenue, 2),
+        "pareto_threshold": pareto_threshold,
+        "concentration_risk": concentration_risk,
+        "revenue_narrative": revenue_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
