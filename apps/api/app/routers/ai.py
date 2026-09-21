@@ -18568,3 +18568,181 @@ async def get_contact_deal_engagement(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 19h: Contact Win/Loss Attribution
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/win-loss-attribution")
+@limiter.limit("5/minute")
+async def get_contact_win_loss_attribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    # Query contacts with closed_won or closed_lost deals
+    result = await db.execute(
+        select(Contact.id, Contact.name, Contact.company, Contact.ml_score, Deal.stage, Deal.value, Deal.ml_win_probability)
+        .join(Deal, Deal.contact_id == Contact.id)
+        .where(Contact.workspace_id == workspace_id)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(["closed_won", "closed_lost"]))
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "win_count": 0,
+            "loss_count": 0,
+            "win_rate": None,
+            "groups": [],
+            "top_won_contacts": [],
+            "top_lost_contacts": [],
+            "attribution_narrative": "No closed deals found. Close some deals to unlock win/loss attribution insights.",
+            "recommendations": [
+                "Begin tracking deal outcomes by moving deals to closed_won or closed_lost as they resolve.",
+                "Ensure win probability scores are set on deals before closing to enable accurate attribution.",
+                "Review open deals nearing closure and assign next actions to improve win rates.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Aggregate per contact
+    contact_info: dict[uuid.UUID, dict] = {}
+    for row in rows:
+        cid = row.id
+        if cid not in contact_info:
+            score = row.ml_score
+            win_prob = float((score.get("value", 50) if isinstance(score, dict) else 50)) if score else 50.0
+            contact_info[cid] = {
+                "name": row.name,
+                "company": row.company,
+                "avg_win_prob": win_prob,
+                "won_revenue": 0.0,
+                "lost_value": 0.0,
+                "won_count": 0,
+                "lost_count": 0,
+            }
+        val = float(row.value or 0)
+        if row.stage == "closed_won":
+            contact_info[cid]["won_revenue"] += val
+            contact_info[cid]["won_count"] += 1
+        else:
+            contact_info[cid]["lost_value"] += val
+            contact_info[cid]["lost_count"] += 1
+
+    # Classify into groups
+    groups: dict[str, list] = {"won_only": [], "lost_only": [], "mixed": [], "no_outcome": []}
+    for cid, info in contact_info.items():
+        if info["won_count"] > 0 and info["lost_count"] == 0:
+            groups["won_only"].append((cid, info))
+        elif info["lost_count"] > 0 and info["won_count"] == 0:
+            groups["lost_only"].append((cid, info))
+        elif info["won_count"] > 0 and info["lost_count"] > 0:
+            groups["mixed"].append((cid, info))
+
+    # Overall win/loss counts (deal-level)
+    total_won = sum(info["won_count"] for info in contact_info.values())
+    total_lost = sum(info["lost_count"] for info in contact_info.values())
+    win_rate = round(total_won / (total_won + total_lost) * 100, 1) if (total_won + total_lost) > 0 else None
+
+    # Build group summaries
+    group_order = ["won_only", "lost_only", "mixed"]
+    group_labels = {"won_only": "Won Only", "lost_only": "Lost Only", "mixed": "Mixed Outcomes"}
+    group_summary = []
+    for g in group_order:
+        members = groups[g]
+        if not members:
+            continue
+        count = len(members)
+        total_won_rev = sum(info["won_revenue"] for _, info in members)
+        total_lost_val = sum(info["lost_value"] for _, info in members)
+        avg_wp = round(sum(info["avg_win_prob"] for _, info in members) / count, 1) if count > 0 else 0.0
+        group_summary.append({
+            "group": g,
+            "group_label": group_labels[g],
+            "contact_count": count,
+            "total_won_revenue": round(total_won_rev, 2),
+            "total_lost_value": round(total_lost_val, 2),
+            "avg_win_prob": avg_wp,
+        })
+
+    # Top contacts
+    all_won = sorted(contact_info.items(), key=lambda x: -x[1]["won_revenue"])
+    all_lost = sorted(contact_info.items(), key=lambda x: -x[1]["lost_value"])
+    top_won = [
+        {"contact_id": str(cid), "name": info["name"], "company": info["company"],
+         "won_revenue": round(info["won_revenue"], 2), "won_count": info["won_count"]}
+        for cid, info in all_won[:3] if info["won_revenue"] > 0
+    ]
+    top_lost = [
+        {"contact_id": str(cid), "name": info["name"], "company": info["company"],
+         "lost_value": round(info["lost_value"], 2), "lost_count": info["lost_count"]}
+        for cid, info in all_lost[:3] if info["lost_value"] > 0
+    ]
+
+    # Claude Haiku narrative
+    context = (
+        f"Contact Win/Loss Attribution for a CRM workspace:\n"
+        f"- Total closed deals: {total_won + total_lost} ({total_won} won, {total_lost} lost)\n"
+        f"- Win rate: {win_rate}%\n"
+        f"- Won-only contacts: {len(groups['won_only'])}\n"
+        f"- Lost-only contacts: {len(groups['lost_only'])}\n"
+        f"- Mixed-outcome contacts: {len(groups['mixed'])}\n"
+    )
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence attribution_narrative explaining what the win/loss contact patterns reveal about sales effectiveness. "
+        "Then provide exactly 3 short, actionable recommendations to improve win rates and reduce losses. "
+        'Respond ONLY with valid JSON: {"attribution_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    attribution_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        attribution_narrative = str(parsed.get("attribution_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        attribution_narrative = (
+            f"Your team has a {win_rate}% win rate across {total_won + total_lost} closed deals, "
+            f"with {len(groups['won_only'])} contacts showing only wins and {len(groups['lost_only'])} showing only losses."
+        )
+        recommendations = [
+            "Study the characteristics of won-only contacts and replicate their engagement pattern with at-risk accounts.",
+            "Schedule loss review calls for lost-only contacts to identify common objections and improve future positioning.",
+            "Focus cross-sell and upsell efforts on mixed-outcome contacts, who have demonstrated both willingness and hesitation.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Track deal outcomes systematically to improve win/loss attribution accuracy over time.")
+
+    return {
+        "win_count": total_won,
+        "loss_count": total_lost,
+        "win_rate": win_rate,
+        "groups": group_summary,
+        "top_won_contacts": top_won,
+        "top_lost_contacts": top_lost,
+        "attribution_narrative": attribution_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
