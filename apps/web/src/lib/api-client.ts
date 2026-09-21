@@ -7244,5 +7244,38 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/deal-engagement`, {}, token)
   },
+
+  async getAIContactWinLossAttribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        win_count: 18,
+        loss_count: 9,
+        win_rate: 66.7,
+        groups: [
+          { group: 'won_only', group_label: 'Won Only', contact_count: 11, total_won_revenue: 285000, total_lost_value: 0, avg_win_prob: 74.3 },
+          { group: 'lost_only', group_label: 'Lost Only', contact_count: 6, total_won_revenue: 0, total_lost_value: 148000, avg_win_prob: 41.2 },
+          { group: 'mixed', group_label: 'Mixed Outcomes', contact_count: 5, total_won_revenue: 112000, total_lost_value: 67000, avg_win_prob: 62.5 },
+        ],
+        top_won_contacts: [
+          { contact_id: 'c1', name: 'Sarah Chen', company: 'Pinnacle Systems', won_revenue: 95000, won_count: 3 },
+          { contact_id: 'c2', name: 'Marcus Webb', company: 'Zephyr Corp', won_revenue: 72000, won_count: 2 },
+          { contact_id: 'c3', name: 'James Okafor', company: 'Acme Corp', won_revenue: 58000, won_count: 2 },
+        ],
+        top_lost_contacts: [
+          { contact_id: 'c4', name: 'Lena Fischer', company: 'Beta Inc', lost_value: 48000, lost_count: 2 },
+          { contact_id: 'c5', name: 'Tom Rivera', company: 'Delta LLC', lost_value: 35000, lost_count: 1 },
+          { contact_id: 'c6', name: 'Priya Nair', company: 'Gamma Ltd', lost_value: 28000, lost_count: 1 },
+        ],
+        attribution_narrative: 'At 66.7% win rate, your team excels with contacts like Sarah Chen and Marcus Webb, who show strong repeat purchasing behaviour across multiple deals. The 6 lost-only contacts cluster around lower win probabilities (avg 41.2%), suggesting a qualification gap that earlier discovery conversations could address.',
+        recommendations: [
+          'Replicate the engagement playbook used with won-only contacts — they share a 74.3% avg win probability, suggesting better qualification upfront.',
+          'Schedule loss review conversations with the 6 lost-only contacts to surface recurring objections and refine your positioning.',
+          'Invest in the 5 mixed-outcome contacts by analysing what differentiated their won deals from their lost ones.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/win-loss-attribution`, {}, token)
+  },
 }
 

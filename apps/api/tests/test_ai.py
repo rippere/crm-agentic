@@ -8792,3 +8792,75 @@ async def test_contact_deal_engagement_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/deal-engagement")
     assert resp.status_code == 403
+
+# ---------------------------------------------------------------------------
+# Phase 19h: Contact Win/Loss Attribution tests
+# ---------------------------------------------------------------------------
+
+class FakeWinLossContactRow:
+    """Row for win/loss attribution query: contact id, name, company, ml_score, stage, value, ml_win_probability."""
+    def __init__(self, cid: uuid.UUID, name: str | None, company: str | None, stage: str, value: float):
+        self.id = cid
+        self.name = name
+        self.company = company
+        self.ml_score = {"value": 70}
+        self.stage = stage
+        self.value = value
+        self.ml_win_probability = 70.0
+
+
+@pytest.mark.asyncio
+async def test_contact_win_loss_attribution_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    c1 = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    c2 = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    c3 = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    # c1: 2 won deals ($30K + $20K) → won_only
+    # c2: 1 lost deal ($40K) → lost_only
+    # c3: 1 won + 1 lost → mixed
+    rows = [
+        FakeWinLossContactRow(c1, "Alice Smith", "Acme", "closed_won", 30000),
+        FakeWinLossContactRow(c1, "Alice Smith", "Acme", "closed_won", 20000),
+        FakeWinLossContactRow(c2, "Bob Jones", "Beta", "closed_lost", 40000),
+        FakeWinLossContactRow(c3, "Carol Lee", "Gamma", "closed_won", 25000),
+        FakeWinLossContactRow(c3, "Carol Lee", "Gamma", "closed_lost", 15000),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"attribution_narrative": "Strong win pattern.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/win-loss-attribution")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # 3 won deals (c1×2 + c3×1), 2 lost deals (c2 + c3)
+    assert body["win_count"] == 3
+    assert body["loss_count"] == 2
+    assert body["win_rate"] == pytest.approx(60.0, abs=0.1)
+    groups = {g["group"]: g for g in body["groups"]}
+    assert groups["won_only"]["contact_count"] == 1  # c1
+    assert groups["lost_only"]["contact_count"] == 1  # c2
+    assert groups["mixed"]["contact_count"] == 1     # c3
+    assert groups["won_only"]["total_won_revenue"] == pytest.approx(50000.0, abs=0.01)
+    # top_won_contacts: c1 ($50K) > c3 ($25K)
+    assert len(body["top_won_contacts"]) == 2
+    assert body["top_won_contacts"][0]["won_revenue"] == pytest.approx(50000.0, abs=0.01)
+    assert "attribution_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_win_loss_attribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/win-loss-attribution")
+    assert resp.status_code == 403
