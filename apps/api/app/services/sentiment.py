@@ -14,7 +14,7 @@ from typing import Any
 
 import anthropic
 
-_client: anthropic.Anthropic | None = None
+from app.services.llm import get_anthropic
 
 SYSTEM_PROMPT = (
     "You are a sentiment analysis engine. Analyze the sentiment of the message provided. "
@@ -30,11 +30,8 @@ _DEFAULT_RESULT: dict[str, Any] = {
 
 
 def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        api_key = os.getenv("ANTHROPIC_API_KEY", "")
-        _client = anthropic.Anthropic(api_key=api_key)
-    return _client
+    # Delegates to the central factory so timeout + max_retries are bounded.
+    return get_anthropic()
 
 
 def analyze_sentiment(message_body: str) -> dict[str, Any]:
@@ -108,7 +105,7 @@ def score_weekly_sentiment(week_batches: list[tuple[str, list[str]]]) -> list[di
         sections.append(f"WEEK {week}: {combined}")
 
     try:
-        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+        client = get_anthropic()
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=512,

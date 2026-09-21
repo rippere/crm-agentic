@@ -13,6 +13,21 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+
+
+def _mk_anthropic() -> _anthropic.Anthropic:
+    """Anthropic client with bounded timeout + max_retries (see app/services/llm.py).
+
+    Kept in this module (rather than importing the shared factory) so the many
+    tests that patch ``app.routers.ai._anthropic.Anthropic`` still intercept
+    construction. Without the timeout the SDK retries with unbounded backoff on
+    rate-limit / credit-exhaustion and the request hangs.
+    """
+    return _anthropic.Anthropic(
+        api_key=settings.ANTHROPIC_API_KEY,
+        timeout=settings.ANTHROPIC_TIMEOUT,
+        max_retries=settings.ANTHROPIC_MAX_RETRIES,
+    )
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.limiter import limiter
@@ -104,7 +119,7 @@ async def answer_crm_query(query: str, workspace_id: uuid.UUID, db: AsyncSession
         )
         context += f"- Recent activity:\n{event_lines}\n"
 
-    client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    client = _mk_anthropic()
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=512,
@@ -244,7 +259,7 @@ async def generate_digest(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -344,7 +359,7 @@ async def deal_coaching(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
@@ -460,7 +475,7 @@ async def draft_outreach(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -582,7 +597,7 @@ async def pipeline_summary(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -680,7 +695,7 @@ async def pipeline_pulse(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=200,
@@ -794,7 +809,7 @@ async def suggest_contact_tasks(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -932,7 +947,7 @@ async def deal_win_loss_analysis(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -1079,7 +1094,7 @@ async def deal_risk_narrative(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -1262,7 +1277,7 @@ async def suggest_outreach_sequence(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -1407,7 +1422,7 @@ async def contact_relationship_health(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -1607,7 +1622,7 @@ async def contact_health_overview(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=60,
@@ -1743,7 +1758,7 @@ async def deal_momentum_check(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -1892,7 +1907,7 @@ async def deal_close_plan(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -2046,7 +2061,7 @@ async def contact_summary(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -2150,7 +2165,7 @@ async def compare_deals(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -2261,7 +2276,7 @@ async def triage_messages(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1024,
@@ -2411,7 +2426,7 @@ async def contact_reengagement_plan(
     context = "\n".join(lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1500,
@@ -2542,7 +2557,7 @@ async def deal_objection_handler(
         context += "Recent deal notes:\n" + "\n".join(f"- {n}" for n in notes)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1200,
@@ -2671,7 +2686,7 @@ async def deal_stakeholder_map(
         context += "\nRecent deal notes:\n" + "\n".join(f"- {n}" for n in notes)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1000,
@@ -2806,7 +2821,7 @@ async def deal_negotiation_script(
         context += "\nRecent deal notes:\n" + "\n".join(f"- {n}" for n in notes)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=800,
@@ -2944,7 +2959,7 @@ async def deal_sentiment_digest(
         context += "\nRecent contact messages: none available\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -3048,7 +3063,7 @@ async def draft_message_reply(
         context += "\nRecent deal notes:\n" + "\n".join(f"- {n}" for n in deal_notes)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=700,
@@ -3158,7 +3173,7 @@ async def contact_communication_style(
         context += "No recent messages available.\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -3308,7 +3323,7 @@ async def contact_lead_score_explanation(
         context += "\nNo recent messages available.\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=450,
@@ -3437,7 +3452,7 @@ async def deal_win_probability_explainer(
         context += "\nNo recent deal notes available.\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -3555,7 +3570,7 @@ async def prioritize_tasks(
     context = f"Today's date: {today}\n\nOpen tasks:\n" + "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=800,
@@ -3716,7 +3731,7 @@ async def pipeline_health_briefing(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -3862,7 +3877,7 @@ async def get_team_performance(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -4028,7 +4043,7 @@ async def deal_meeting_prep(
     context = "\n".join(context_parts)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -4235,7 +4250,7 @@ async def workspace_digest(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -4410,7 +4425,7 @@ async def contact_onboarding_checklist(
             context += f"  - {d.title or 'Untitled'} ({d.stage}, ${d.value or 0:,.0f})\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg_resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -4543,7 +4558,7 @@ async def deal_roi_projection(
             context += f"  - {body[:200]}\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -4679,7 +4694,7 @@ async def contact_growth_forecast(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
@@ -4821,7 +4836,7 @@ async def workspace_goal_tracker(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -4958,7 +4973,7 @@ async def workspace_competitive_landscape(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=700,
@@ -5096,7 +5111,7 @@ async def deal_followup_sequence(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=700,
@@ -5246,7 +5261,7 @@ async def deal_champion_risk(
             context += f"  - {body[:200]}\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -5372,7 +5387,7 @@ async def get_deal_competitive_response(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -5507,7 +5522,7 @@ async def deal_expansion_opportunity(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -5685,7 +5700,7 @@ async def contact_churn_risk(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
@@ -5847,7 +5862,7 @@ async def contact_deal_velocity_benchmark(
         )
 
         try:
-            client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+            client = _mk_anthropic()
             msg = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=150,
@@ -5981,7 +5996,7 @@ async def contact_deal_outcome_predictor(
     default_confidence = "high" if len(open_deals) >= 3 else ("medium" if len(open_deals) >= 2 else "low")
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -6132,7 +6147,7 @@ async def contact_deal_portfolio_overview(
     valid_health = {"strong", "at_risk", "mixed"}
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -6326,7 +6341,7 @@ async def contact_competitive_positioning(
     valid_strengths = {"strong", "moderate", "weak"}
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -6537,7 +6552,7 @@ async def contact_meeting_agenda(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -6715,7 +6730,7 @@ async def contact_communication_gap_analysis(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -6829,7 +6844,7 @@ async def contact_sentiment_trend(
     ])
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -6995,7 +7010,7 @@ async def contact_account_plan(
     }
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=700,
@@ -7145,7 +7160,7 @@ async def pipeline_narrative(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=800,
@@ -7290,7 +7305,7 @@ async def contact_health_summary(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -7437,7 +7452,7 @@ async def win_probability_calibration(
         context += f"  {bk['bucket_label']}: predicted {bk['predicted_avg']}% → actual {actual} ({bk['deal_count']} deals)\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -7575,7 +7590,7 @@ async def agent_performance_report(
         context += f"  {a['agent_name']}: {a['run_count']} runs, {a['success_rate']}% success ({a['failure_count']} failures)\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
@@ -7677,7 +7692,7 @@ async def contact_acquisition_funnel(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -7818,7 +7833,7 @@ async def contact_source_attribution(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -7984,7 +7999,7 @@ async def get_task_completion_trends(
         context += f"  {w['week_start']}: created={w['created']}, completed={w['completed']}, overdue={w['overdue']}, rate={w['completion_rate']}%\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -8123,7 +8138,7 @@ async def get_message_response_time_benchmark(
         )
     context = "\n".join(context_lines)
 
-    client = _anthropic.Anthropic()
+    client = _mk_anthropic()
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=300,
@@ -8283,7 +8298,7 @@ async def get_contact_engagement_benchmark(
     if bottom_contacts:
         context += f"Least engaged: {bottom_contacts[0]['name']} (score {bottom_contacts[0]['score']}).\n"
 
-    client = _anthropic.Anthropic()
+    client = _mk_anthropic()
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=300,
@@ -8413,7 +8428,7 @@ async def get_deals_negotiation_readiness(
         for r in deal_rows
     )
 
-    client = _anthropic.Anthropic()
+    client = _mk_anthropic()
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=600,
@@ -8574,7 +8589,7 @@ async def get_message_source_reliability(
         for s in sources
     )
 
-    client = _anthropic.Anthropic()
+    client = _mk_anthropic()
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=300,
@@ -8706,7 +8721,7 @@ async def get_stage_transition_analysis(
         for t in transitions[:10]
     )
 
-    client = _anthropic.Anthropic()
+    client = _mk_anthropic()
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=300,
@@ -8859,7 +8874,7 @@ async def get_revenue_trend_analysis(
         for r in monthly_trend
     )
 
-    client = _anthropic.Anthropic()
+    client = _mk_anthropic()
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=300,
@@ -9035,7 +9050,7 @@ async def get_contact_inactivity_risk(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -9189,7 +9204,7 @@ async def get_deals_pipeline_momentum(
     ]
 
     try:
-        client = _anthropic.Anthropic()
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -9365,7 +9380,7 @@ async def get_deals_age_risk(
         oldest = max(overdue_deals, key=lambda x: x["days_open"])
         context += f"Most overdue: '{oldest['title']}' at {oldest['days_open']} days open in {oldest['stage']} stage.\n"
 
-    client = _anthropic.Anthropic()
+    client = _mk_anthropic()
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=300,
@@ -9483,7 +9498,7 @@ async def top_performer_deals(
         f"- highest_confidence_probability: {top_by_confidence[0]['win_probability']}%"
     )
 
-    client = _anthropic.Anthropic()
+    client = _mk_anthropic()
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=300,
@@ -9609,7 +9624,7 @@ async def get_deal_stage_concentration(
         + f"\nHighest-value stage: {highest_value_stage}. Most stalled: {most_stalled_stage}."
     )
 
-    client = _anthropic.Anthropic()
+    client = _mk_anthropic()
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=300,
@@ -9801,7 +9816,7 @@ async def get_close_rate_by_stage(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=250,
@@ -9976,7 +9991,7 @@ async def get_pipeline_churn(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=250,
@@ -10161,7 +10176,7 @@ async def get_deal_conversion_quality(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=250,
@@ -10359,7 +10374,7 @@ async def get_win_loss_patterns(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=250,
@@ -10503,7 +10518,7 @@ async def get_avg_deal_size_trend(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=250,
@@ -10639,7 +10654,7 @@ async def get_followup_gaps(
         ) + "\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=250,
@@ -10783,7 +10798,7 @@ async def get_value_at_risk(
         ) + "\n"
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=250,
@@ -10945,7 +10960,7 @@ async def get_next_best_actions(
         })
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=800,
@@ -11143,7 +11158,7 @@ async def get_coaching_digest(
     default_coached = [_default_coached_deal(d) for d in top3]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1200,
@@ -11366,7 +11381,7 @@ async def get_qbr_summary(
         }
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
@@ -11558,7 +11573,7 @@ async def get_deal_conversion_paths(
     ]
 
     try:
-        client = _anthropic.Anthropic()
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -11823,7 +11838,7 @@ async def get_deal_playbook(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1000,
@@ -12030,7 +12045,7 @@ async def get_deal_battle_card(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1200,
@@ -12224,7 +12239,7 @@ async def get_deal_risk_escalation(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1000,
@@ -12424,7 +12439,7 @@ async def get_deal_momentum(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=700,
@@ -12610,7 +12625,7 @@ async def get_pipeline_velocity_heatmap(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -12768,7 +12783,7 @@ async def get_win_loss_summary(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -12933,7 +12948,7 @@ async def get_sales_forecast(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -13099,7 +13114,7 @@ async def get_deal_age_distribution(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
@@ -13248,7 +13263,7 @@ async def get_deal_health_trend(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
@@ -13404,7 +13419,7 @@ async def get_deal_stagnation(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
@@ -13540,7 +13555,7 @@ async def get_deal_engagement_gap(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
@@ -13698,7 +13713,7 @@ async def get_deal_value_concentration(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
@@ -13828,7 +13843,7 @@ async def get_deal_close_date_accuracy(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -13956,7 +13971,7 @@ async def get_rep_performance(
     context = "\n".join(context_lines)
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -14085,7 +14100,7 @@ async def get_pipeline_conversion_funnel_ai(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -14226,7 +14241,7 @@ async def get_deal_score_distribution(
     ]
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -14373,7 +14388,7 @@ async def get_deal_win_factors(
         }
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
@@ -14490,7 +14505,7 @@ async def get_contact_engagement_heatmap(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -14606,7 +14621,7 @@ async def get_deal_velocity(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -14779,7 +14794,7 @@ async def get_top_contact_opportunities(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -14924,7 +14939,7 @@ async def get_ai_contact_lifetime_value(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -15061,7 +15076,7 @@ async def get_ai_deal_reactivation_candidates(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -15191,7 +15206,7 @@ async def get_ai_deal_pipeline_gap(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -15337,7 +15352,7 @@ async def get_ai_deal_closure_probability_heatmap(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -15489,7 +15504,7 @@ async def get_ai_contact_score_recency_heatmap(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -15623,7 +15638,7 @@ async def get_ai_deal_velocity_anomalies(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -15770,7 +15785,7 @@ async def get_ai_deal_outcome_factors(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -15942,7 +15957,7 @@ async def get_ai_deal_revenue_forecast(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -16079,7 +16094,7 @@ async def get_ai_deal_value_leak(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -16246,7 +16261,7 @@ async def get_ai_pipeline_coverage(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -16442,7 +16457,7 @@ async def get_ai_quarter_readiness(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -16593,7 +16608,7 @@ async def get_ai_deal_tier_segmentation(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -16734,7 +16749,7 @@ async def get_ai_deal_seasonal_patterns(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -16903,7 +16918,7 @@ async def get_ai_deal_stall_analysis(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -17064,7 +17079,7 @@ async def get_ai_deal_priority_matrix(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -17262,7 +17277,7 @@ async def get_ai_deal_engagement_report(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        client = _mk_anthropic()  # TODO: add real credentials
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -17431,7 +17446,7 @@ async def get_ai_deal_pipeline_risk_score(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -17598,7 +17613,7 @@ async def get_contact_communication_frequency(
     )
 
     try:
-        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -17744,7 +17759,7 @@ async def get_contact_acquisition_rate(
     acquisition_narrative = ""
     recommendations: list[str] = []
     try:
-        client = _anthropic.Anthropic()
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -17882,7 +17897,7 @@ async def get_contact_company_concentration(
     concentration_narrative = ""
     recommendations: list[str] = []
     try:
-        client = _anthropic.Anthropic()
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -18056,7 +18071,7 @@ async def get_contact_status_distribution(
     distribution_narrative = ""
     recommendations: list[str] = []
     try:
-        client = _anthropic.Anthropic()
+        client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,

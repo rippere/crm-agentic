@@ -39,8 +39,8 @@ def _make_session() -> async_sessionmaker[AsyncSession]:
 
 
 async def _draft_email(deal_title: str, company: str, contact_name: str, stage: str) -> dict[str, str]:
-    import anthropic
-    client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    from app.services.llm import get_async_anthropic
+    client = get_async_anthropic()
     prompt = (
         f"You are a sales assistant. Write a brief, professional follow-up email for the deal "
         f'"{deal_title}" with {company}. The contact name is {contact_name or "there"} and '

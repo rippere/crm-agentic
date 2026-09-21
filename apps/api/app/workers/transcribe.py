@@ -56,10 +56,11 @@ def _transcribe_audio(path: str) -> tuple[str, float]:
 
 
 def _extract_with_claude(transcript: str) -> dict[str, Any]:
-    import anthropic
     import json
 
-    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    from app.services.llm import get_anthropic
+
+    client = get_anthropic()
     msg = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1024,

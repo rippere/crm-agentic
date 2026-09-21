@@ -698,7 +698,8 @@ async def compose_email(
     if body.tone:
         system_prompt += f" Write the email in a {body.tone} tone."
 
-    client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from app.services.llm import get_anthropic
+    client = get_anthropic()
     try:
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -1210,8 +1211,7 @@ async def pre_meeting_brief(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     from app.models.contact import Contact
-    from app.config import settings
-    import anthropic
+    from app.services.llm import get_async_anthropic
 
     contact_result = await db.execute(
         select(Contact).where(Contact.id == contact_id, Contact.workspace_id == workspace_id)
@@ -1233,7 +1233,7 @@ async def pre_meeting_brief(
         f"5) Watch-out signals. Keep it scannable and under 300 words."
     )
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    client = get_async_anthropic()
     message = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=600,

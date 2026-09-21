@@ -213,6 +213,29 @@ async def test_automated_senders_never_become_rows():
 
 
 @pytest.mark.asyncio
+async def test_ingest_respects_hard_message_cap(monkeypatch):
+    """One sync must process at most INGEST_MAX_MESSAGES, no matter how many the
+    mailbox returns — the guard that stops a connect from fanning LLM calls over
+    an entire multi-year mailbox. With the cap set to 3 and ten candidates
+    available, exactly three are fetched, stored and relevance-checked; the run
+    reports truncated so the remainder is picked up next sync (never dropped)."""
+    monkeypatch.setattr("app.config.settings.INGEST_MAX_MESSAGES", 3)
+
+    db = _mock_db()
+    msgs = [
+        _gmail_message(f"m{i}", sender=f"lead{i}@example.com", to="ben@novacrm.io")
+        for i in range(10)
+    ]
+    # Ten relevance verdicts offered; only cap-many may be consumed.
+    result = await _run(msgs, [True] * 10, db)
+
+    stored = _added_messages(db)
+    assert len(stored) == 3, "must persist no more than the hard message cap"
+    assert result["new_messages"] == 3, "at most cap-many messages enter the pipeline"
+    assert result["truncated"] is True, "hitting the cap must flag truncation, not drop silently"
+
+
+@pytest.mark.asyncio
 async def test_metadata_only_rows_are_not_enqueued_for_enrichment():
     """Relevance still gates Claude spend; only the drop was removed."""
     db = _mock_db()

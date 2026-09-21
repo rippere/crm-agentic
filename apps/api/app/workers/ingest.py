@@ -216,8 +216,8 @@ async def _is_deal_relevant_async(subject: str, sender: str, snippet: str) -> bo
     concurrently via asyncio.gather instead of blocking the worker on N
     sequential round-trips.
     """
-    import anthropic
-    client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    from app.services.llm import get_async_anthropic
+    client = get_async_anthropic()
     try:
         message = await client.messages.create(
             model="claude-haiku-4-5",
@@ -235,8 +235,8 @@ async def _is_deal_relevant_async(subject: str, sender: str, snippet: str) -> bo
 
 def _is_deal_relevant(subject: str, sender: str, snippet: str) -> bool:
     """Synchronous relevance pre-filter (used by the reprocess path)."""
-    import anthropic
-    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    from app.services.llm import get_anthropic
+    client = get_anthropic()
     try:
         message = client.messages.create(
             model="claude-haiku-4-5",
@@ -257,6 +257,21 @@ def _is_deal_relevant(subject: str, sender: str, snippet: str) -> bool:
 # return truncated=True instead of silently dropping the remainder (the next sync
 # resumes via dedupe). Tune via INGEST_MAX_PAGES (default 10 pages × 100 = 1000).
 _MAX_INGEST_PAGES = int(os.getenv("INGEST_MAX_PAGES", "10"))
+
+
+def _build_ingest_query(since_days: int) -> str:
+    """GMAIL_DEFAULT_QUERY narrowed to a recency window.
+
+    A hard message cap bounds *count*, but not *recency*: without a date filter a
+    first sync of a cap-many-message run could still be pulled from years-old
+    mail. Appending Gmail's ``newer_than:Nd`` keeps ingest to recent history.
+    ``since_days <= 0`` disables the window (unbounded history, opt-in).
+    """
+    from app.services.gmail_client import GMAIL_DEFAULT_QUERY
+
+    if since_days and since_days > 0:
+        return f"{GMAIL_DEFAULT_QUERY} newer_than:{since_days}d"
+    return GMAIL_DEFAULT_QUERY
 
 
 async def _run_sync(connector_id: str) -> dict[str, Any]:
@@ -282,19 +297,31 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
             logger.warning("ingest connector_not_found connector_id=%s", connector_id)
             return {"error": "Connector not found", "connector_id": connector_id}
 
+        from app.config import settings
+
         workspace_id = connector.workspace_id
         gmail = GmailClient(connector, db, google_client_id, google_client_secret)
 
+        # Token-safety bounds for this run. The hard message cap is the primary
+        # ceiling; the page cap and date window are complementary bounds.
+        max_messages = settings.INGEST_MAX_MESSAGES
+        ingest_query = _build_ingest_query(settings.INGEST_SINCE_DAYS)
+
         # Bounded pagination: walk pages until nextPageToken is exhausted OR the
-        # page cap is reached (then flag truncated). category:primary filter is
-        # applied inside GmailClient.
+        # page cap / hard message cap is reached (then flag truncated). The
+        # category:primary + recency filter is applied server-side via
+        # ingest_query. Stopping at max_messages means one run can never fan out
+        # LLM calls across an entire multi-year mailbox — the remainder is picked
+        # up on the next sync via dedupe, never silently dropped.
         page_token: str | None = None
         messages_to_process: list[str] = []
         pages_walked = 0
 
         while True:
             try:
-                listing = await gmail.list_messages(max_results=100, page_token=page_token)
+                listing = await gmail.list_messages(
+                    max_results=100, page_token=page_token, q=ingest_query
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "ingest list_messages_failed connector=%s page=%d exc=%s",
@@ -302,9 +329,19 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 )
                 break
             for stub in listing.get("messages", []):
+                if len(messages_to_process) >= max_messages:
+                    truncated = True
+                    break
                 messages_to_process.append(stub["id"])
             pages_walked += 1
             page_token = listing.get("nextPageToken")
+            if truncated:
+                logger.info(
+                    "ingest message_cap_reached connector=%s cap=%d collected=%d — "
+                    "remainder deferred to next sync",
+                    connector_id, max_messages, len(messages_to_process),
+                )
+                break
             if not page_token:
                 break
             if pages_walked >= _MAX_INGEST_PAGES:
@@ -388,6 +425,21 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 "direction": direction,
             })
 
+        # Per-run LLM budget: a backstop that bounds total Claude dispatches even
+        # if the message cap regresses. Relevance checks are counted first (1 call
+        # each); the remainder of the budget gates enrich fan-out below. Under the
+        # default message cap this never trips — it exists so a cap failure can't
+        # turn into an unbounded token burn.
+        llm_budget = settings.INGEST_MAX_LLM_CALLS
+        if len(candidates) > llm_budget:
+            logger.warning(
+                "ingest llm_budget_relevance connector=%s budget=%d candidates=%d — "
+                "skipping %d candidate(s) beyond budget this run",
+                connector_id, llm_budget, len(candidates), len(candidates) - llm_budget,
+            )
+            candidates = candidates[:llm_budget]
+            truncated = True
+
         # Stage 2: concurrent Claude Haiku relevance pre-filter (fanned out).
         relevance_flags: list[bool] = []
         if candidates:
@@ -397,6 +449,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
                 )
                 for c in candidates
             ])
+        relevance_calls = len(candidates)
 
         # Stage 3: insert every human message. Deal-relevant ones are stored in
         # full and enriched as before; the rest are stored METADATA-ONLY —
@@ -478,6 +531,20 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
         connector.message_count = (connector.message_count or 0) + new_count  # type: ignore[assignment]
         db.add(connector)
         await db.commit()
+
+    # Per-run LLM budget backstop, part 2: each enrich_message dispatch fans out
+    # ~3 Claude calls (extract_tasks + analyze_sentiment + score_clarity). Cap the
+    # dispatch count so relevance_calls + 3·enrich never exceeds the run budget.
+    remaining_budget = max(0, llm_budget - relevance_calls)
+    max_enrich = remaining_budget // 3
+    if len(enrich_ids) > max_enrich:
+        logger.warning(
+            "ingest llm_budget_enrich connector=%s budget=%d relevance_calls=%d — "
+            "capping enrich dispatch %d -> %d this run",
+            connector_id, llm_budget, relevance_calls, len(enrich_ids), max_enrich,
+        )
+        enrich_ids = enrich_ids[:max_enrich]
+        truncated = True
 
     # Off the critical path: enqueue per-message enrichment (tasks/clarity/
     # sentiment). Failures here must not fail the ingest itself.

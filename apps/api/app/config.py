@@ -14,6 +14,23 @@ class Settings(BaseSettings):
     SUPABASE_JWT_SECRET: str
     SECRET_KEY: str
     ANTHROPIC_API_KEY: str
+    # Bounds every Anthropic client (see app/services/llm.py). Without a request
+    # timeout the SDK retries with unbounded exponential backoff on rate-limit /
+    # credit-exhaustion and the calling task hangs ("enrichment times out").
+    ANTHROPIC_TIMEOUT: float = 30.0
+    ANTHROPIC_MAX_RETRIES: int = 2
+    # ── Ingest token-safety bounds ──────────────────────────────────────────
+    # Hard cap on how many Gmail messages a single sync run will process, so one
+    # ingest can never fan out LLM calls across an entire multi-year mailbox.
+    INGEST_MAX_MESSAGES: int = 200
+    # Only ingest mail newer than this many days (Gmail `newer_than:` filter),
+    # so connecting an account pulls recent history, not years of backlog.
+    INGEST_SINCE_DAYS: int = 30
+    # Backstop per-run ceiling on Claude calls (relevance checks + 3 per enrich
+    # dispatch). Sized above the INGEST_MAX_MESSAGES worst case (200 relevance +
+    # 200×3 enrich = 800) so it never trips in normal operation, but bounds the
+    # expensive enrich fan-out if the message cap ever regresses.
+    INGEST_MAX_LLM_CALLS: int = 1000
     REDIS_URL: str = "redis://localhost:6379/0"
     FRONTEND_URL: str = "http://localhost:3000"
     # Comma-separated additional allowed CORS origins (e.g. apex domain, old deploy URL).

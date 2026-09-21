@@ -81,8 +81,8 @@ async def _claude_enrich(
     if not messages:
         return {}
 
-    import anthropic as _anthropic
-    client = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    from app.services.llm import get_anthropic
+    client = get_anthropic()  # bounded timeout + max_retries (no more silent hangs)
     msgs_text = "\n".join(f"- {m[:200]}" for m in messages[:10])
     prompt = _ENRICH_PROMPT.format(
         name=name or "Unknown",
