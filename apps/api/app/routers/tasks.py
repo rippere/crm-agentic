@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -12,6 +12,19 @@ from app.models.user import User
 from app.models.task import Task
 
 router = APIRouter()
+
+# cc:-namespaced tasks are session-log follow-ups written by the vault flywheel
+# (SessionEnd hook). Without a due_date, carry-forward logic has nothing to sort
+# on and these follow-ups silently never resurface. Give them a conservative
+# one-week-out default at creation time; an explicit due_date always wins.
+CC_FOLLOWUP_PREFIX = "cc:"
+CC_FOLLOWUP_DEFAULT_DUE_DAYS = 7
+
+
+def _default_due_date_for_external_id(external_id: str | None) -> date | None:
+    if external_id and external_id.startswith(CC_FOLLOWUP_PREFIX):
+        return date.today() + timedelta(days=CC_FOLLOWUP_DEFAULT_DUE_DAYS)
+    return None
 
 
 class TaskResponse(BaseModel):
@@ -146,13 +159,16 @@ async def upsert_task_by_external(
     )
     task = result.scalar_one_or_none()
     if task is None:
+        due_date = body.due_date
+        if due_date is None:
+            due_date = _default_due_date_for_external_id(external_id)
         task = Task(
             workspace_id=workspace_id,
             external_id=external_id,
             title=body.title,
             description=body.description,
             status=body.status,
-            due_date=body.due_date,
+            due_date=due_date,
             project_id=body.project_id,
             contact_id=body.contact_id,
             deal_id=body.deal_id,
