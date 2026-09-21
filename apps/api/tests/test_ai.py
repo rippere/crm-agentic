@@ -8557,3 +8557,146 @@ async def test_contact_status_distribution_wrong_workspace_returns_403(app_clien
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/status-distribution")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 19e: AI contact revenue concentration
+# ---------------------------------------------------------------------------
+
+class FakeContactRevenueRow:
+    def __init__(self, id, name, company, revenue=0):
+        self.id = id
+        self.name = name
+        self.company = company
+        self.revenue = revenue
+
+
+class FakeWonDealRevRow:
+    def __init__(self, contact_id, won_revenue):
+        self.contact_id = contact_id
+        self.won_revenue = won_revenue
+
+
+@pytest.mark.asyncio
+async def test_contact_revenue_concentration_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import uuid as _uuid
+    c1_id = _uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    c2_id = _uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    c3_id = _uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    c4_id = _uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    c5_id = _uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+    # 5 contacts: c1=$80K revenue, others $5K each -> total $100K
+    # pareto: c1 alone ($80K) >= $80K (80% of $100K) -> pareto_count=1 -> threshold=20% -> high
+    contact_rows = [
+        FakeContactRevenueRow(c1_id, "Alice", "Acme", 80000),
+        FakeContactRevenueRow(c2_id, "Bob", "Beta", 5000),
+        FakeContactRevenueRow(c3_id, "Carol", "Gamma", 5000),
+        FakeContactRevenueRow(c4_id, "Dave", "Delta", 5000),
+        FakeContactRevenueRow(c5_id, "Eve", "Epsilon", 5000),
+    ]
+    won_rows = []  # no deals -- revenue comes from contact.revenue
+
+    call_count = 0
+
+    def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_execute_result(contact_rows)
+        return _make_execute_result(won_rows)
+
+    mock_db.execute = AsyncMock(side_effect=fake_execute)
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"revenue_narrative": "Concentrated.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/revenue-concentration")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_contacts"] == 5
+    assert body["total_revenue"] == 100000.0
+    assert body["pareto_threshold"] == 20.0
+    assert body["concentration_risk"] == "high"
+    assert len(body["top_contacts"]) == 5
+    assert body["top_contacts"][0]["name"] == "Alice"
+    assert body["top_contacts"][0]["pct_of_total"] == 80.0
+    assert "revenue_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_revenue_concentration_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("33333333-3333-3333-3333-333333333333")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/revenue-concentration")
+    assert resp.status_code == 403
+
+# ---------------------------------------------------------------------------
+# Phase 19f: AI contact role distribution
+# ---------------------------------------------------------------------------
+
+class FakeContactRoleRow:
+    def __init__(self, role, status, revenue=0):
+        self.role = role
+        self.status = status
+        self.revenue = revenue
+
+
+@pytest.mark.asyncio
+async def test_contact_role_distribution_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # 6 contacts across 3 roles
+    contact_rows = [
+        FakeContactRoleRow("CEO", "customer", 5000),
+        FakeContactRoleRow("CEO", "customer", 3000),
+        FakeContactRoleRow("Director", "prospect", 1000),
+        FakeContactRoleRow("Director", "lead", 0),
+        FakeContactRoleRow("Manager", "lead", 0),
+        FakeContactRoleRow(None, "lead", 0),  # unknown role
+    ]
+
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(contact_rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"role_narrative": "CEOs convert well.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/role-distribution")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_contacts"] == 6
+    # 1 unknown role contact → unknown_role_pct = 16.7%
+    assert body["unknown_role_pct"] == pytest.approx(16.7, abs=0.1)
+    ceo_entry = next(r for r in body["role_breakdown"] if r["role"] == "CEO")
+    assert ceo_entry["count"] == 2
+    assert ceo_entry["customer_count"] == 2
+    assert ceo_entry["customer_rate"] == 100.0
+    assert ceo_entry["avg_revenue"] == pytest.approx(4000.0, abs=0.1)
+    assert body["top_converting_role"] == "CEO"
+    assert "role_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_role_distribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/role-distribution")
+    assert resp.status_code == 403
