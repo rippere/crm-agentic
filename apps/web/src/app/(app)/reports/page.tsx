@@ -838,6 +838,12 @@ export default function ReportsPage() {
   const [winLossAttrLoading, setWinLossAttrLoading] = useState(false);
   const [winLossAttrOpen, setWinLossAttrOpen] = useState(true);
 
+  type AITaskBacklogContact = { id: string; name: string; email: string; task_count: number; overdue_count: number; deal_value: number };
+  type AITaskBacklogData = { total_open_tasks: number; total_overdue_tasks: number; contacts_with_tasks: number; contacts_with_overdue: number; top_loaded: AITaskBacklogContact[]; task_narrative: string; recommendations: string[]; generated_at: string };
+  const [taskBacklog, setTaskBacklog] = useState<AITaskBacklogData | null>(null);
+  const [taskBacklogLoading, setTaskBacklogLoading] = useState(false);
+  const [taskBacklogOpen, setTaskBacklogOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1010,6 +1016,8 @@ export default function ReportsPage() {
       apiClient.getAIContactDealEngagement("demo-workspace-1", "demo-token").then(setDealEngagement).catch(() => {}).finally(() => setDealEngagementLoading(false));
       setWinLossAttrLoading(true);
       apiClient.getAIContactWinLossAttribution("demo-workspace-1", "demo-token").then(setWinLossAttr).catch(() => {}).finally(() => setWinLossAttrLoading(false));
+      setTaskBacklogLoading(true);
+      apiClient.getAIContactTaskBacklog("demo-workspace-1", "demo-token").then(setTaskBacklog).catch(() => {}).finally(() => setTaskBacklogLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1187,6 +1195,8 @@ export default function ReportsPage() {
       apiClient.getAIContactDealEngagement(workspaceId, session.access_token).then(setDealEngagement).catch(() => {}).finally(() => setDealEngagementLoading(false));
       setWinLossAttrLoading(true);
       apiClient.getAIContactWinLossAttribution(workspaceId, session.access_token).then(setWinLossAttr).catch(() => {}).finally(() => setWinLossAttrLoading(false));
+      setTaskBacklogLoading(true);
+      apiClient.getAIContactTaskBacklog(workspaceId, session.access_token).then(setTaskBacklog).catch(() => {}).finally(() => setTaskBacklogLoading(false));
     });
   }, []);
 
@@ -2414,6 +2424,27 @@ export default function ReportsPage() {
         if (!session) { setWinLossAttrLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setWinLossAttrLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateTaskBacklog = () => {
+    setTaskBacklogLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactTaskBacklog(wid, tok)
+        .then(setTaskBacklog)
+        .catch(() => {})
+        .finally(() => setTaskBacklogLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setTaskBacklogLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setTaskBacklogLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -10673,6 +10704,110 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact win/loss attribution analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 19i: Contact Task Backlog */}
+      <Card className="border-orange-500/15">
+        <button
+          className="w-full flex items-center gap-3 p-4 text-left hover:bg-zinc-800/40 transition-colors rounded-t-lg"
+          onClick={() => setTaskBacklogOpen((o) => !o)}
+        >
+          <ClipboardList className="h-4 w-4 text-orange-400 flex-shrink-0" />
+          <span className="font-medium text-sm text-zinc-200 flex-1">Contact Task Backlog</span>
+          {taskBacklog && (
+            <span className={`text-xs px-2 py-0.5 rounded-full ${
+              taskBacklog.total_overdue_tasks === 0 ? "bg-emerald-500/20 text-emerald-300" :
+              taskBacklog.total_overdue_tasks <= 3 ? "bg-amber-500/20 text-amber-300" :
+              "bg-rose-500/20 text-rose-300"
+            }`}>
+              {taskBacklog.total_overdue_tasks} overdue
+            </span>
+          )}
+          {taskBacklog && (
+            <span className="text-xs text-zinc-500">{taskBacklog.total_open_tasks} open tasks</span>
+          )}
+          <button
+            className="ml-2 p-1 rounded hover:bg-zinc-700 transition-colors text-zinc-400 hover:text-zinc-200"
+            onClick={(e) => { e.stopPropagation(); regenerateTaskBacklog(); }}
+            disabled={taskBacklogLoading}
+            title="Regenerate"
+          >
+            <RefreshCw className={cn("h-3 w-3", taskBacklogLoading && "animate-spin")} />
+          </button>
+          {taskBacklogOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+        {taskBacklogOpen && (
+          taskBacklogLoading && !taskBacklog ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analysing contact task backlog…</div>
+          ) : taskBacklog ? (
+            <div className={cn("p-4 space-y-4", taskBacklogLoading && "opacity-40")}>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-zinc-800/50 p-3 text-center">
+                  <p className="text-lg font-semibold text-zinc-100">{taskBacklog.total_open_tasks}</p>
+                  <p className="text-xs text-zinc-500">Open Tasks</p>
+                </div>
+                <div className="rounded-lg bg-zinc-800/50 p-3 text-center">
+                  <p className={`text-lg font-semibold ${taskBacklog.total_overdue_tasks > 0 ? "text-rose-400" : "text-emerald-400"}`}>{taskBacklog.total_overdue_tasks}</p>
+                  <p className="text-xs text-zinc-500">Overdue</p>
+                </div>
+                <div className="rounded-lg bg-zinc-800/50 p-3 text-center">
+                  <p className="text-lg font-semibold text-zinc-100">{taskBacklog.contacts_with_tasks}</p>
+                  <p className="text-xs text-zinc-500">Contacts Loaded</p>
+                </div>
+              </div>
+              {taskBacklog.total_open_tasks > 0 && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-zinc-500">
+                    <span>Overdue rate</span>
+                    <span>{Math.round(taskBacklog.total_overdue_tasks / taskBacklog.total_open_tasks * 100)}%</span>
+                  </div>
+                  <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        taskBacklog.total_overdue_tasks / taskBacklog.total_open_tasks > 0.4 ? "bg-rose-500" :
+                        taskBacklog.total_overdue_tasks / taskBacklog.total_open_tasks > 0.2 ? "bg-amber-500" : "bg-emerald-500"
+                      }`}
+                      style={{ width: `${Math.round(taskBacklog.total_overdue_tasks / taskBacklog.total_open_tasks * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+              {taskBacklog.top_loaded.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">Most Loaded Contacts</p>
+                  {taskBacklog.top_loaded.map((c) => (
+                    <div key={c.id} className="flex items-center justify-between rounded-lg bg-zinc-800/40 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-zinc-200 truncate">{c.name}</p>
+                        <p className="text-xs text-zinc-500">{c.task_count} task{c.task_count !== 1 ? "s" : ""}{c.overdue_count > 0 ? ` · ${c.overdue_count} overdue` : ""}</p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {c.deal_value > 0 && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400">${c.deal_value.toLocaleString()}</span>
+                        )}
+                        <a href={`/contacts/${c.id}`} className="text-zinc-600 hover:text-zinc-300 transition-colors" title="View contact">
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{taskBacklog.task_narrative}</p>
+              <ul className="space-y-1">
+                {taskBacklog.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-orange-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(taskBacklog.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact task backlog analysis.</div>
           )
         )}
       </Card>

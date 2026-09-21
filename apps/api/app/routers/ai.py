@@ -18746,3 +18746,173 @@ async def get_contact_win_loss_attribution(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 19i: AI contact task backlog analysis
+# ---------------------------------------------------------------------------
+
+_TASK_BACKLOG_SYSTEM = (
+    "You are a CRM productivity expert. Analyse the contact task backlog data "
+    "and return a JSON object with exactly these keys:\n"
+    "- task_narrative: a 2-sentence observation about what the task backlog reveals "
+    "about the team's follow-up discipline and where deal risk may be accumulating\n"
+    "- recommendations: list of exactly 3 short, actionable recommendations to reduce the backlog\n"
+    "Return only valid JSON, no markdown."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/task-backlog")
+@limiter.limit("5/minute")
+async def get_contact_task_backlog(
+    request: Request,
+    workspace_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.utcnow()
+    today = datetime.date.today()
+    stale_cutoff = today - datetime.timedelta(days=14)
+
+    tasks_result = await db.execute(
+        select(Task.id, Task.contact_id, Task.due_date, Task.created_at)
+        .where(
+            Task.workspace_id == workspace_id,
+            Task.status == "open",
+            Task.contact_id.isnot(None),
+        )
+    )
+    open_tasks = tasks_result.all()
+
+    total_open_tasks = len(open_tasks)
+
+    if total_open_tasks == 0:
+        return {
+            "total_open_tasks": 0,
+            "total_overdue_tasks": 0,
+            "contacts_with_tasks": 0,
+            "contacts_with_overdue": 0,
+            "top_loaded": [],
+            "task_narrative": "No open tasks found. The team is fully up to date on follow-ups.",
+            "recommendations": [
+                "Create tasks after each contact interaction to maintain consistent follow-up.",
+                "Set due dates on all tasks to ensure timely action.",
+                "Use task assignments to distribute follow-up workload across the team.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    contact_task_counts: dict = defaultdict(int)
+    contact_overdue_counts: dict = defaultdict(int)
+    for task in open_tasks:
+        cid = task.contact_id
+        contact_task_counts[cid] += 1
+        is_overdue = (
+            (task.due_date is not None and task.due_date < today)
+            or (task.created_at is not None and task.created_at.date() < stale_cutoff)
+        )
+        if is_overdue:
+            contact_overdue_counts[cid] += 1
+
+    contacts_with_tasks = len(contact_task_counts)
+    total_overdue_tasks = sum(contact_overdue_counts.values())
+    contacts_with_overdue = sum(1 for v in contact_overdue_counts.values() if v > 0)
+
+    contact_ids = list(contact_task_counts.keys())
+
+    contacts_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.email)
+        .where(Contact.workspace_id == workspace_id, Contact.id.in_(contact_ids))
+    )
+    contact_map = {c.id: c for c in contacts_result.all()}
+
+    deal_values_result = await db.execute(
+        select(Deal.contact_id, func.sum(Deal.value).label("deal_value"))
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id.in_(contact_ids),
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        )
+        .group_by(Deal.contact_id)
+    )
+    deal_value_map: dict = {row.contact_id: float(row.deal_value or 0) for row in deal_values_result.all()}
+
+    sorted_contacts = sorted(
+        contact_ids,
+        key=lambda cid: (contact_overdue_counts.get(cid, 0), contact_task_counts.get(cid, 0)),
+        reverse=True,
+    )
+    top_loaded = [
+        {
+            "id": str(cid),
+            "name": contact_map[cid].name if cid in contact_map and contact_map[cid].name else (
+                contact_map[cid].email if cid in contact_map else "Unknown"
+            ),
+            "email": contact_map[cid].email if cid in contact_map and contact_map[cid].email else "",
+            "task_count": contact_task_counts[cid],
+            "overdue_count": contact_overdue_counts.get(cid, 0),
+            "deal_value": deal_value_map.get(cid, 0),
+        }
+        for cid in sorted_contacts[:5]
+    ]
+
+    context = (
+        f"Contact task backlog report:\n"
+        f"- Total open tasks linked to contacts: {total_open_tasks}\n"
+        f"- Overdue tasks (past due date or >14 days old): {total_overdue_tasks}\n"
+        f"- Unique contacts with open tasks: {contacts_with_tasks}\n"
+        f"- Contacts with at least one overdue task: {contacts_with_overdue}\n"
+        f"- Top loaded contact: {top_loaded[0]['name'] if top_loaded else 'N/A'} "
+        f"({top_loaded[0]['task_count'] if top_loaded else 0} tasks, "
+        f"{top_loaded[0]['overdue_count'] if top_loaded else 0} overdue)\n"
+    )
+
+    task_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_TASK_BACKLOG_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        task_narrative = str(parsed.get("task_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        overdue_pct = round(total_overdue_tasks / total_open_tasks * 100) if total_open_tasks else 0
+        task_narrative = (
+            f"There are {total_open_tasks} open tasks across {contacts_with_tasks} contacts, "
+            f"with {total_overdue_tasks} ({overdue_pct}%) overdue. "
+            f"{contacts_with_overdue} contact{'s' if contacts_with_overdue != 1 else ''} "
+            f"{'have' if contacts_with_overdue != 1 else 'has'} at least one overdue task requiring immediate attention."
+        )
+        recommendations = [
+            "Triage overdue tasks immediately — prioritise contacts with the highest open deal values.",
+            "Set a daily 15-minute task review habit to clear overdue items before they accumulate.",
+            "Use due dates on every new task to prevent unchecked backlog growth going forward.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Review and reassign stale tasks to keep the contact backlog manageable.")
+
+    return {
+        "total_open_tasks": total_open_tasks,
+        "total_overdue_tasks": total_overdue_tasks,
+        "contacts_with_tasks": contacts_with_tasks,
+        "contacts_with_overdue": contacts_with_overdue,
+        "top_loaded": top_loaded,
+        "task_narrative": task_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

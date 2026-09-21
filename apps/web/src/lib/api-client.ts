@@ -7277,5 +7277,31 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/win-loss-attribution`, {}, token)
   },
+
+  async getAIContactTaskBacklog(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        total_open_tasks: 23,
+        total_overdue_tasks: 8,
+        contacts_with_tasks: 14,
+        contacts_with_overdue: 6,
+        top_loaded: [
+          { id: 'c1', name: 'Sarah Chen', email: 'sarah.chen@acme.com', task_count: 5, overdue_count: 3, deal_value: 24000 },
+          { id: 'c2', name: 'Marcus Webb', email: 'm.webb@globex.com', task_count: 4, overdue_count: 2, deal_value: 18500 },
+          { id: 'c3', name: 'Priya Patel', email: 'priya@startup.io', task_count: 3, overdue_count: 1, deal_value: 9200 },
+          { id: 'c4', name: 'Jordan Ellis', email: 'j.ellis@corp.com', task_count: 3, overdue_count: 1, deal_value: 6700 },
+          { id: 'c5', name: 'Alex Kim', email: 'alex.kim@firm.co', task_count: 2, overdue_count: 1, deal_value: 3400 },
+        ],
+        task_narrative: 'Eight overdue tasks span six contacts with a combined open deal value of $61.8K, signalling a follow-up gap that threatens near-term pipeline. Sarah Chen and Marcus Webb account for five of the eight overdue items — prioritising these two contacts could recover the largest portion of at-risk revenue.',
+        recommendations: [
+          'Clear the 3 overdue tasks on Sarah Chen immediately — her $24K open deal is the single largest at-risk opportunity in the backlog.',
+          'Set recurring task reminders for Marcus Webb to prevent the 4-task pile-up from recurring after this sprint.',
+          'Enforce a due-date policy on all new contact tasks so overdue items surface before they stall deals.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/task-backlog`, {}, token)
+  },
 }
 
