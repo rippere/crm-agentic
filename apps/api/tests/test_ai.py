@@ -8478,3 +8478,82 @@ async def test_contact_company_concentration_wrong_workspace_returns_403(app_cli
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/company-concentration")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 19d: AI contact status distribution
+# ---------------------------------------------------------------------------
+
+class FakeContactStatusRow:
+    def __init__(self, status, revenue=0):
+        self.status = status
+        self.revenue = revenue
+
+class FakeStatusDealRow:
+    def __init__(self, status, stage, value):
+        self.status = status
+        self.stage = stage
+        self.value = value
+
+
+@pytest.mark.asyncio
+async def test_contact_status_distribution_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # 5 contacts: 2 leads, 2 prospects, 1 customer
+    contact_rows = [
+        FakeContactStatusRow("lead", 0),
+        FakeContactStatusRow("lead", 0),
+        FakeContactStatusRow("prospect", 500),
+        FakeContactStatusRow("prospect", 0),
+        FakeContactStatusRow("customer", 1000),
+    ]
+
+    deal_rows = [
+        FakeStatusDealRow("prospect", "proposal", 10000),
+        FakeStatusDealRow("customer", "closed_won", 25000),
+    ]
+
+    call_count = 0
+
+    def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_execute_result(contact_rows)
+        return _make_execute_result(deal_rows)
+
+    mock_db.execute = AsyncMock(side_effect=fake_execute)
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"distribution_narrative": "Healthy funnel.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/status-distribution")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_contacts"] == 5
+    assert len(body["status_breakdown"]) >= 3  # lead, prospect, customer at minimum
+    lead_entry = next(s for s in body["status_breakdown"] if s["status"] == "lead")
+    assert lead_entry["count"] == 2
+    assert lead_entry["pct_of_total"] == 40.0
+    assert "lead_to_prospect_rate" in body
+    assert "prospect_to_customer_rate" in body
+    assert body["prospect_to_customer_rate"] == 33.3  # 1 customer / (2 prospect + 1 customer)
+    assert body["highest_value_segment"] is not None
+    assert "distribution_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_status_distribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/status-distribution")
+    assert resp.status_code == 403

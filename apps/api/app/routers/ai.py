@@ -17922,3 +17922,176 @@ async def get_contact_company_concentration(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 19d: AI workspace contact status distribution
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/status-distribution")
+@limiter.limit("5/minute")
+async def get_contact_status_distribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    # Query all contacts with their status and revenue
+    contacts_result = await db.execute(
+        select(Contact.status, Contact.revenue)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    contacts_rows = contacts_result.all()
+
+    if not contacts_rows:
+        return {
+            "status_breakdown": [],
+            "total_contacts": 0,
+            "lead_to_prospect_rate": None,
+            "prospect_to_customer_rate": None,
+            "highest_value_segment": None,
+            "distribution_narrative": "No contacts found. Start by adding leads to your CRM.",
+            "recommendations": [
+                "Import your existing contacts to begin tracking status distributions.",
+                "Set up lead capture forms to automatically create contacts in the CRM.",
+                "Define your ICP (Ideal Customer Profile) to guide contact acquisition.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Aggregate by status
+    status_counts: dict[str, int] = defaultdict(int)
+    status_revenue: dict[str, float] = defaultdict(float)
+    for row in contacts_rows:
+        s = row.status or "lead"
+        status_counts[s] += 1
+        status_revenue[s] += float(row.revenue or 0)
+
+    total_contacts = sum(status_counts.values())
+
+    # Query pipeline value (open deals) and won revenue per contact status
+    # Join deals to contacts via contact_id
+    deals_result = await db.execute(
+        select(Contact.status, Deal.stage, Deal.value)
+        .join(Deal, Deal.contact_id == Contact.id)
+        .where(Contact.workspace_id == workspace_id)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.notin_(["closed_lost"]))
+    )
+    deals_rows = deals_result.all()
+
+    status_pipeline: dict[str, float] = defaultdict(float)
+    status_won: dict[str, float] = defaultdict(float)
+    for row in deals_rows:
+        s = row.status or "lead"
+        if row.stage == "closed_won":
+            status_won[s] += float(row.value or 0)
+        else:
+            status_pipeline[s] += float(row.value or 0)
+
+    # Build breakdown in canonical order
+    canonical_order = ["lead", "prospect", "customer", "churned"]
+    all_statuses = set(status_counts.keys()) | {"lead", "prospect", "customer"}
+    ordered_statuses = [s for s in canonical_order if s in all_statuses or s in canonical_order[:3]]
+
+    breakdown = []
+    for s in ordered_statuses:
+        count = status_counts.get(s, 0)
+        pct = round(count / total_contacts * 100, 1) if total_contacts > 0 else 0.0
+        breakdown.append({
+            "status": s,
+            "count": count,
+            "pct_of_total": pct,
+            "pipeline_value": round(status_pipeline.get(s, 0), 2),
+            "won_revenue": round(status_won.get(s, 0) + status_revenue.get(s, 0), 2),
+        })
+
+    # Conversion rates
+    lead_count = status_counts.get("lead", 0)
+    prospect_count = status_counts.get("prospect", 0)
+    customer_count = status_counts.get("customer", 0)
+    contacted_total = lead_count + prospect_count + customer_count
+
+    lead_to_prospect_rate = (
+        round((prospect_count + customer_count) / (lead_count + prospect_count + customer_count) * 100, 1)
+        if contacted_total > 0 else None
+    )
+    prospect_to_customer_rate = (
+        round(customer_count / (prospect_count + customer_count) * 100, 1)
+        if (prospect_count + customer_count) > 0 else None
+    )
+
+    # Highest value segment by total revenue (won + pipeline)
+    highest_value_segment = max(
+        ordered_statuses,
+        key=lambda s: status_won.get(s, 0) + status_pipeline.get(s, 0) + status_revenue.get(s, 0),
+        default=None,
+    ) if ordered_statuses else None
+
+    # Claude Haiku narrative
+    context = (
+        f"Contact Status Distribution for a CRM workspace:\n"
+        f"- Total contacts: {total_contacts}\n"
+        f"- Leads: {lead_count} ({round(lead_count/total_contacts*100, 1) if total_contacts else 0}%)\n"
+        f"- Prospects: {prospect_count} ({round(prospect_count/total_contacts*100, 1) if total_contacts else 0}%)\n"
+        f"- Customers: {customer_count} ({round(customer_count/total_contacts*100, 1) if total_contacts else 0}%)\n"
+        f"- Lead-to-prospect conversion: {lead_to_prospect_rate}%\n"
+        f"- Prospect-to-customer conversion: {prospect_to_customer_rate}%\n"
+        f"- Highest value segment: {highest_value_segment}\n"
+    )
+
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence distribution_narrative explaining what the contact status distribution "
+        "reveals about this sales funnel's health and efficiency. "
+        "Then provide exactly 3 short, actionable recommendations to improve conversion rates or grow the highest-value segment. "
+        'Respond ONLY with valid JSON: {"distribution_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    distribution_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        distribution_narrative = str(parsed.get("distribution_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        distribution_narrative = (
+            f"Your {total_contacts} contacts include {lead_count} leads, {prospect_count} prospects, "
+            f"and {customer_count} customers, with a prospect-to-customer rate of {prospect_to_customer_rate}%."
+        )
+        recommendations = [
+            "Focus nurturing efforts on prospects with the highest pipeline value to accelerate conversions.",
+            "Review stalled leads and assign follow-up tasks to reactivate dormant contacts.",
+            "Expand your customer success program to reduce churn and grow existing accounts.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Review your contact qualification criteria to improve funnel throughput.")
+
+    return {
+        "status_breakdown": breakdown,
+        "total_contacts": total_contacts,
+        "lead_to_prospect_rate": lead_to_prospect_rate,
+        "prospect_to_customer_rate": prospect_to_customer_rate,
+        "highest_value_segment": highest_value_segment,
+        "distribution_narrative": distribution_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

@@ -311,8 +311,10 @@ Phase 17 — AI Coaching & Playbook Intelligence
 
 - [2026-09-19] Phase 19c: AI contact company concentration analysis — GET /workspaces/{id}/ai/contacts/company-concentration (Claude Haiku, 5/min; queries all contacts' company field + email, labels each contact by company if set else email domain else "Unknown", counts contacts per company, computes top 5 by count with pct_of_total, concentration_risk: high ≥30%/medium ≥20%/low else; graceful empty default without Claude call); collapsible "Contact Company Concentration" card on /reports page (amber Building2 icon, risk badge high/medium/low, 3-col total/unique/avg stat grid, horizontal progress bars per top-5 company with count+pct labels, italic narrative, teal-dot recs, Regenerate button); getAIContactCompanyConcentration() in api-client with 47-contact 18-company medium-risk demo stub (Acme Corp top at 25.5%); 2 new tests (structured-response 5-contacts 3-companies high-risk + 403 guard); 238 AI tests total; PR #190
 
+- [2026-09-20] Phase 19d: AI contact status distribution analysis — GET /workspaces/{id}/ai/contacts/status-distribution (Claude Haiku, 5/min; queries all contacts by status lead/prospect/customer/churned, joins deals for pipeline_value + won_revenue per status, computes lead-to-prospect and prospect-to-customer conversion rates, identifies highest_value_segment; graceful empty-workspace default without Claude call); collapsible "Contact Status Distribution" card on /reports page (cyan PieChart icon, per-status horizontal bars with won-revenue and pipeline-value annotations, conversion rate chips, AI narrative, teal-dot recs, Regenerate button); getAIContactStatusDistribution() in api-client with 47-contact demo stub (18 leads/16 prospects/11 customers/2 churned, $312K won by customers); 2 new tests (structured-response math + 403 guard); 240 AI tests total; PR #191
+
 ## Next Task
-Phase 19d: placeholder for next session
+Phase 19e: placeholder for next session
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
