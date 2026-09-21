@@ -8959,3 +8959,57 @@ async def test_contact_task_backlog_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/task-backlog")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_contact_score_segmentation_returns_structured_response(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    def _make_contact(cid_hex, name, score_val, trend, revenue, deal_count):
+        row = MagicMock()
+        row.__iter__ = lambda s: iter([
+            uuid.UUID(cid_hex), name,
+            {"value": score_val, "label": "test", "trend": trend, "signals": []},
+            revenue, deal_count,
+        ])
+        row.__getitem__ = lambda s, i: [
+            uuid.UUID(cid_hex), name,
+            {"value": score_val, "label": "test", "trend": trend, "signals": []},
+            revenue, deal_count,
+        ][i]
+        return row
+
+    contacts = [
+        _make_contact("aa000000-0000-0000-0000-000000000001", "Alice", 85, "improving", 50000.0, 3),
+        _make_contact("aa000000-0000-0000-0000-000000000002", "Bob",   55, "stable",    20000.0, 1),
+        _make_contact("aa000000-0000-0000-0000-000000000003", "Carol", 20, "stable",     5000.0, 0),
+    ]
+    mock_result = MagicMock()
+    mock_result.fetchall.return_value = contacts
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/score-segmentation")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_contacts"] == 3
+    assert body["hot_count"] == 1
+    assert body["warm_count"] == 1
+    assert body["cold_count"] == 1
+    assert body["rising_trend_count"] == 1
+    assert len(body["tiers"]) == 3
+    assert body["top_hot_contacts"][0]["name"] == "Alice"
+    assert body["top_hot_contacts"][0]["score"] == 85
+    assert "score_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_score_segmentation_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("44444444-4444-4444-4444-444444444444")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/score-segmentation")
+    assert resp.status_code == 403

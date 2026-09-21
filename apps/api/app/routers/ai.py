@@ -18916,3 +18916,140 @@ async def get_contact_task_backlog(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/score-segmentation")
+@limiter.limit("5/minute")
+async def get_contact_score_segmentation(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    contacts_q = await db.execute(
+        select(Contact.id, Contact.name, Contact.ml_score, Contact.revenue, Contact.deal_count)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    contacts = contacts_q.fetchall()
+
+    hot, warm, cold = [], [], []
+    rising_trend_count = 0
+
+    for row in contacts:
+        cid, cname, ml_score, revenue, deal_count = row[0], row[1], row[2], row[3], row[4]
+        score_val = 0
+        trend = "stable"
+        if isinstance(ml_score, dict):
+            score_val = ml_score.get("value", 0) or 0
+            trend = ml_score.get("trend", "stable") or "stable"
+        if trend == "improving":
+            rising_trend_count += 1
+        entry = {
+            "contact_id": str(cid),
+            "name": cname or "",
+            "score": score_val,
+            "trend": trend,
+            "revenue": float(revenue or 0),
+            "deal_count": int(deal_count or 0),
+        }
+        if score_val >= 70:
+            hot.append(entry)
+        elif score_val >= 40:
+            warm.append(entry)
+        else:
+            cold.append(entry)
+
+    total_contacts = len(contacts)
+
+    def _tier_stats(tier_list: list, tier_key: str, tier_label: str) -> dict:
+        count = len(tier_list)
+        pct = round(count / total_contacts * 100, 1) if total_contacts else 0.0
+        revenues = [e["revenue"] for e in tier_list]
+        deals = [e["deal_count"] for e in tier_list]
+        avg_rev = round(sum(revenues) / count, 2) if count else 0.0
+        total_rev = round(sum(revenues), 2)
+        avg_deals = round(sum(deals) / count, 2) if count else 0.0
+        rising = sum(1 for e in tier_list if e["trend"] == "improving")
+        return {
+            "tier": tier_key,
+            "label": tier_label,
+            "count": count,
+            "pct_of_total": pct,
+            "avg_revenue": avg_rev,
+            "total_revenue": total_rev,
+            "avg_deals": avg_deals,
+            "rising_trend_count": rising,
+        }
+
+    tier_list = [
+        _tier_stats(hot, "hot", "Hot"),
+        _tier_stats(warm, "warm", "Warm"),
+        _tier_stats(cold, "cold", "Cold"),
+    ]
+
+    top_hot = sorted(hot, key=lambda x: x["score"], reverse=True)[:5]
+    top_hot_out = [
+        {"contact_id": e["contact_id"], "name": e["name"], "score": e["score"], "trend": e["trend"], "revenue": e["revenue"]}
+        for e in top_hot
+    ]
+
+    score_narrative = ""
+    recommendations2: list[str] = []
+
+    if total_contacts > 0:
+        hot_pct = round(len(hot) / total_contacts * 100, 1) if total_contacts else 0
+        try:
+            client = _anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            summary_prompt = (
+                f"Contact score segmentation: {len(hot)} hot ({hot_pct}%), {len(warm)} warm, {len(cold)} cold. "
+                f"{rising_trend_count} contacts have improving score trend. "
+                f"Top hot contact: {top_hot_out[0]['name'] if top_hot_out else 'N/A'} (score {top_hot_out[0]['score'] if top_hot_out else 0}). "
+                "Write a 2-sentence sales insight about this score distribution and urgency. "
+                "Then on a new line starting with 'RECOMMENDATIONS:' list exactly 3 numbered actionable recommendations."
+            )
+            ai_resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                messages=[{"role": "user", "content": summary_prompt}],
+            )
+            raw = ai_resp.content[0].text.strip()
+            if "RECOMMENDATIONS:" in raw:
+                parts = raw.split("RECOMMENDATIONS:", 1)
+                score_narrative = parts[0].strip()
+                rec_block = parts[1].strip()
+                for line in rec_block.splitlines():
+                    line = line.strip().lstrip("123456789.-) ").strip()
+                    if line:
+                        recommendations2.append(line)
+            else:
+                score_narrative = raw
+        except Exception:
+            pass
+
+    if not score_narrative:
+        hot_pct = round(len(hot) / total_contacts * 100, 1) if total_contacts else 0
+        score_narrative = (
+            f"{hot_pct}% of your contacts are hot leads with high ML scores. "
+            f"{rising_trend_count} contacts show an improving trend — prioritise these for proactive outreach."
+        )
+
+    while len(recommendations2) < 3:
+        recommendations2.append("Review and update ML score inputs regularly to keep segmentation accurate.")
+
+    return {
+        "tiers": tier_list,
+        "total_contacts": total_contacts,
+        "hot_count": len(hot),
+        "warm_count": len(warm),
+        "cold_count": len(cold),
+        "rising_trend_count": rising_trend_count,
+        "top_hot_contacts": top_hot_out,
+        "score_narrative": score_narrative,
+        "recommendations": recommendations2,
+        "generated_at": now.isoformat() + "Z",
+    }
