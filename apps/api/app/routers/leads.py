@@ -40,7 +40,7 @@ router = APIRouter()
 
 
 # ─── Literal sets — mirror the SQL CHECK constraints in 023_outbound_engagement ──
-LEAD_SOURCES = ("import", "manual", "web", "api", "referral", "event")
+LEAD_SOURCES = ("import", "manual", "web", "api", "referral", "event", "discovery")
 LEAD_STAGES = ("new", "contacted", "engaged", "qualified", "converted", "lost")
 
 

@@ -14,7 +14,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.limiter import limiter
-from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments, webhook_logs, leads, segments, sequences, campaigns, outreach
+from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments, webhook_logs, leads, segments, sequences, campaigns, outreach, discovery
 
 # ── Structured logging (JSON-like key=value to stdout) ───────────────────────
 _LOG_CONFIG: dict = {
@@ -151,6 +151,9 @@ app.include_router(segments.router, tags=["segments"])
 app.include_router(sequences.router, tags=["sequences"])
 app.include_router(campaigns.router, tags=["campaigns"])
 app.include_router(outreach.router, tags=["outreach"])
+# Autonomous Lead Engine — Increment 1 (Discovery). Namespaced under
+# /workspaces/{workspace_id}/discovery/...; static /runs before /runs/{run_id}.
+app.include_router(discovery.router, tags=["discovery"])
 
 
 @app.get("/health")
