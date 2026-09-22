@@ -825,6 +825,12 @@ export default function ReportsPage() {
   const [roleDistributionLoading, setRoleDistributionLoading] = useState(false);
   const [roleDistributionOpen, setRoleDistributionOpen] = useState(true);
 
+  type AIChurnRiskContact = { contact_id: string; name: string; company: string; revenue: number; days_since_last_contact: number | null; messages_last_90d: number; churn_risk_score: number; churn_risk_level: 'high' | 'medium' | 'low' };
+  type AIChurnRiskData = { at_risk_contacts: AIChurnRiskContact[]; total_customers: number; at_risk_count: number; avg_churn_risk_score: number; churn_narrative: string; recommendations: string[]; generated_at: string };
+  const [churnRisk, setChurnRisk] = useState<AIChurnRiskData | null>(null);
+  const [churnRiskLoading, setChurnRiskLoading] = useState(false);
+  const [churnRiskOpen, setChurnRiskOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -993,6 +999,8 @@ export default function ReportsPage() {
       apiClient.getAIContactStatusDistribution("demo-workspace-1", "demo-token").then(setStatusDistribution).catch(() => {}).finally(() => setStatusDistributionLoading(false));
       setRoleDistributionLoading(true);
       apiClient.getAIContactRoleDistribution("demo-workspace-1", "demo-token").then(setRoleDistribution).catch(() => {}).finally(() => setRoleDistributionLoading(false));
+      setChurnRiskLoading(true);
+      apiClient.getAIContactChurnRisk("demo-workspace-1", "demo-token").then(setChurnRisk).catch(() => {}).finally(() => setChurnRiskLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1166,6 +1174,8 @@ export default function ReportsPage() {
       apiClient.getAIContactStatusDistribution(workspaceId, session.access_token).then(setStatusDistribution).catch(() => {}).finally(() => setStatusDistributionLoading(false));
       setRoleDistributionLoading(true);
       apiClient.getAIContactRoleDistribution(workspaceId, session.access_token).then(setRoleDistribution).catch(() => {}).finally(() => setRoleDistributionLoading(false));
+      setChurnRiskLoading(true);
+      apiClient.getAIContactChurnRisk(workspaceId, session.access_token).then(setChurnRisk).catch(() => {}).finally(() => setChurnRiskLoading(false));
     });
   }, []);
 
@@ -2351,6 +2361,27 @@ export default function ReportsPage() {
         if (!session) { setRoleDistributionLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setRoleDistributionLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateChurnRisk = () => {
+    setChurnRiskLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactChurnRisk(wid, tok)
+        .then(setChurnRisk)
+        .catch(() => {})
+        .finally(() => setChurnRiskLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setChurnRiskLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setChurnRiskLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -10432,6 +10463,101 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact role distribution analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 19g: Contact Churn Risk */}
+      <Card className="border-rose-500/15">
+        <button
+          className="w-full flex items-center gap-3 p-4 text-left hover:bg-zinc-800/40 transition-colors rounded-t-lg"
+          onClick={() => setChurnRiskOpen((o) => !o)}
+        >
+          <UserX className="h-4 w-4 text-rose-400 flex-shrink-0" />
+          <span className="font-medium text-sm text-zinc-200 flex-1">Customer Churn Risk</span>
+          {churnRisk && churnRisk.at_risk_count > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300">
+              {churnRisk.at_risk_count} at risk
+            </span>
+          )}
+          {churnRisk && (
+            <span className="text-xs text-zinc-500">{churnRisk.total_customers} customers</span>
+          )}
+          <button
+            className="ml-2 p-1 rounded hover:bg-zinc-700 transition-colors text-zinc-400 hover:text-zinc-200"
+            onClick={(e) => { e.stopPropagation(); regenerateChurnRisk(); }}
+            disabled={churnRiskLoading}
+            title="Regenerate"
+          >
+            <RefreshCw className={cn("h-3 w-3", churnRiskLoading && "animate-spin")} />
+          </button>
+          {churnRiskOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+        {churnRiskOpen && (
+          churnRiskLoading && !churnRisk ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analysing customer churn risk…</div>
+          ) : churnRisk ? (
+            <div className={cn("p-4 space-y-4", churnRiskLoading && "opacity-40")}>
+              {/* Summary stats */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-zinc-800/60 p-3 text-center">
+                  <div className="text-lg font-semibold text-zinc-100">{churnRisk.total_customers}</div>
+                  <div className="text-xs text-zinc-500">Total customers</div>
+                </div>
+                <div className="rounded-lg bg-zinc-800/60 p-3 text-center">
+                  <div className="text-lg font-semibold text-rose-400">{churnRisk.at_risk_count}</div>
+                  <div className="text-xs text-zinc-500">At risk</div>
+                </div>
+                <div className="rounded-lg bg-zinc-800/60 p-3 text-center">
+                  <div className={cn("text-lg font-semibold", churnRisk.avg_churn_risk_score >= 60 ? "text-rose-400" : churnRisk.avg_churn_risk_score >= 35 ? "text-amber-400" : "text-emerald-400")}>
+                    {churnRisk.avg_churn_risk_score}
+                  </div>
+                  <div className="text-xs text-zinc-500">Avg risk score</div>
+                </div>
+              </div>
+              {/* Per-contact risk list */}
+              <div className="space-y-2">
+                {churnRisk.at_risk_contacts.map((c) => {
+                  const riskColor = c.churn_risk_level === "high" ? "bg-rose-500" : c.churn_risk_level === "medium" ? "bg-amber-500" : "bg-emerald-500";
+                  const badgeColor = c.churn_risk_level === "high" ? "bg-rose-500/20 text-rose-300" : c.churn_risk_level === "medium" ? "bg-amber-500/20 text-amber-300" : "bg-emerald-500/20 text-emerald-300";
+                  return (
+                    <div key={c.contact_id} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="text-zinc-300 font-medium">{c.name}</span>
+                          {c.company && <span className="text-zinc-500">· {c.company}</span>}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {c.days_since_last_contact !== null ? (
+                            <span className={cn("text-xs", c.days_since_last_contact > 60 ? "text-rose-400" : c.days_since_last_contact > 30 ? "text-amber-400" : "text-zinc-400")}>
+                              {c.days_since_last_contact}d ago
+                            </span>
+                          ) : (
+                            <span className="text-xs text-rose-400">never</span>
+                          )}
+                          <span className={cn("text-xs px-1.5 py-0.5 rounded", badgeColor)}>{c.churn_risk_level}</span>
+                        </div>
+                      </div>
+                      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                        <div className={cn("h-full rounded-full transition-all", riskColor)} style={{ width: `${c.churn_risk_score}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{churnRisk.churn_narrative}</p>
+              <ul className="space-y-1">
+                {churnRisk.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(churnRisk.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load customer churn risk analysis.</div>
           )
         )}
       </Card>
