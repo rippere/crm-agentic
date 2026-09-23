@@ -878,6 +878,11 @@ export default function ReportsPage() {
   const [nextActionOverdue, setNextActionOverdue] = useState<AIDealNextActionOverdueData | null>(null);
   const [nextActionOverdueLoading, setNextActionOverdueLoading] = useState(false);
   const [nextActionOverdueOpen, setNextActionOverdueOpen] = useState(true);
+
+  const [quarterlyForecast, setQuarterlyForecast] = useState<{ historical_actuals: { quarter: string; revenue: number }[]; projected_quarter: string; projected_revenue: number; weighted_forecast: number; total_pipeline_value: number; total_active_deals: number; avg_quarterly_revenue: number; confidence_score: number; deal_count_by_stage: Record<string, number>; forecast_narrative: string; recommendations: string[]; generated_at: string } | null>(null);
+  const [quarterlyForecastLoading, setQuarterlyForecastLoading] = useState(false);
+  const [quarterlyForecastOpen, setQuarterlyForecastOpen] = useState(true);
+
   type AIPipelineBalanceStage = { stage: string; actual_count: number; actual_pct: number; expected_pct: number; variance_pct: number };
   type AIPipelineBalanceValueTier = { tier: string; count: number; pct: number };
   type AIPipelineBalanceData = { stage_balance: AIPipelineBalanceStage[]; value_balance: AIPipelineBalanceValueTier[]; balance_score: number; most_imbalanced_stage: string | null; concentration_risk: string; total_pipeline_value: number; total_open_deals: number; balance_narrative: string; recommendations: string[]; generated_at: string };
@@ -1073,6 +1078,8 @@ export default function ReportsPage() {
       apiClient.getAIDealNextActionOverdue("demo-workspace-1", "demo-token").then(setNextActionOverdue).catch(() => {}).finally(() => setNextActionOverdueLoading(false));
       setPipelineBalanceLoading(true);
       apiClient.getAIDealPipelineBalance("demo-workspace-1", "demo-token").then(setPipelineBalance).catch(() => {}).finally(() => setPipelineBalanceLoading(false));
+      setQuarterlyForecastLoading(true);
+      apiClient.getAIDealQuarterlyForecast("demo-workspace-1", "demo-token").then(setQuarterlyForecast).catch(() => {}).finally(() => setQuarterlyForecastLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1266,6 +1273,8 @@ export default function ReportsPage() {
       apiClient.getAIDealNextActionOverdue(workspaceId, session.access_token).then(setNextActionOverdue).catch(() => {}).finally(() => setNextActionOverdueLoading(false));
       setPipelineBalanceLoading(true);
       apiClient.getAIDealPipelineBalance(workspaceId, session.access_token).then(setPipelineBalance).catch(() => {}).finally(() => setPipelineBalanceLoading(false));
+      setQuarterlyForecastLoading(true);
+      apiClient.getAIDealQuarterlyForecast(workspaceId, session.access_token).then(setQuarterlyForecast).catch(() => {}).finally(() => setQuarterlyForecastLoading(false));
     });
   }, []);
 
@@ -2661,6 +2670,27 @@ export default function ReportsPage() {
         if (!session) { setPipelineBalanceLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setPipelineBalanceLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateQuarterlyForecast = () => {
+    setQuarterlyForecastLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealQuarterlyForecast(wid, tok)
+        .then(setQuarterlyForecast)
+        .catch(() => {})
+        .finally(() => setQuarterlyForecastLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setQuarterlyForecastLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setQuarterlyForecastLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11629,6 +11659,102 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the pipeline balance report.</div>
+          )
+        )}
+      </Card>
+
+      {/* Quarterly Revenue Forecast */}
+      <Card className="border-violet-500/15">
+        <div className="flex items-center justify-between px-6 py-4 cursor-pointer select-none" onClick={() => setQuarterlyForecastOpen(o => !o)}>
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-violet-400" />
+            <span className="font-semibold text-zinc-100">Quarterly Revenue Forecast</span>
+            {quarterlyForecast && (
+              <>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${quarterlyForecast.confidence_score >= 70 ? 'bg-emerald-500/20 text-emerald-300' : quarterlyForecast.confidence_score >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                  {quarterlyForecast.confidence_score}/100 confidence
+                </span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-300 font-medium">
+                  {quarterlyForecast.projected_quarter}
+                </span>
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateQuarterlyForecast(); }} className="p-1 rounded hover:bg-zinc-700 transition-colors">
+              <RefreshCw className={`h-3 w-3 ${quarterlyForecastLoading ? 'animate-spin' : ''}`} />
+            </button>
+            {quarterlyForecastOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </div>
+        {quarterlyForecastOpen && (
+          quarterlyForecastLoading ? (
+            <div className="px-6 pb-6 text-sm text-zinc-500 animate-pulse">Loading quarterly forecast…</div>
+          ) : quarterlyForecast ? (
+            <div className="px-6 pb-6 space-y-4">
+              {/* Key metrics */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/60 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Projected {quarterlyForecast.projected_quarter}</p>
+                  <p className="text-xl font-bold text-violet-400">${(quarterlyForecast.projected_revenue / 1000).toFixed(0)}K</p>
+                </div>
+                <div className="bg-zinc-800/60 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Quarterly</p>
+                  <p className="text-xl font-bold text-zinc-200">${(quarterlyForecast.avg_quarterly_revenue / 1000).toFixed(0)}K</p>
+                </div>
+                <div className="bg-zinc-800/60 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Active Pipeline</p>
+                  <p className="text-xl font-bold text-zinc-200">${(quarterlyForecast.total_pipeline_value / 1000).toFixed(0)}K</p>
+                </div>
+              </div>
+              {/* AreaChart: historicals + projected */}
+              {quarterlyForecast.historical_actuals.length > 0 && (() => {
+                const chartData = [
+                  ...quarterlyForecast.historical_actuals.map((h: { quarter: string; revenue: number }) => ({ quarter: h.quarter, actual: h.revenue, projected: undefined as number | undefined })),
+                  { quarter: quarterlyForecast.projected_quarter, actual: undefined as number | undefined, projected: quarterlyForecast.projected_revenue },
+                ];
+                return (
+                  <div className="h-44">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                        <XAxis dataKey="quarter" tick={{ fill: '#a1a1aa', fontSize: 11 }} />
+                        <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}K`} tick={{ fill: '#a1a1aa', fontSize: 11 }} />
+                        <Tooltip
+                          contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 8 }}
+                          labelStyle={{ color: '#e4e4e7' }}
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          formatter={(value: any) => value != null ? [`$${(Number(value) / 1000).toFixed(0)}K`] : ['-']}
+                        />
+                        <Area type="monotone" dataKey="actual" stroke="#a78bfa" fill="#a78bfa22" strokeWidth={2} connectNulls={false} name="Actual" />
+                        <Area type="monotone" dataKey="projected" stroke="#6366f1" fill="#6366f122" strokeWidth={2} strokeDasharray="5 3" connectNulls={false} name="Projected" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                );
+              })()}
+              {/* Stage mix */}
+              <div className="grid grid-cols-4 gap-2">
+                {Object.entries(quarterlyForecast.deal_count_by_stage).map(([stage, count]) => (
+                  <div key={stage} className="bg-zinc-800/50 rounded-lg p-2 text-center">
+                    <p className="text-xs text-zinc-500 capitalize">{stage}</p>
+                    <p className="text-lg font-bold text-zinc-200">{String(count)}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="text-sm text-zinc-300 italic">{quarterlyForecast.forecast_narrative}</p>
+              <ul className="space-y-1">
+                {quarterlyForecast.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-violet-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(quarterlyForecast.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load quarterly revenue forecast.</div>
           )
         )}
       </Card>
