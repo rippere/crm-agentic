@@ -1234,11 +1234,42 @@ async def pre_meeting_brief(
     )
 
     client = get_async_anthropic()
-    message = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=600,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    try:
+        message = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except _anthropic.APIStatusError as exc:
+        # Anthropic returned a definite error (out-of-credits 400, auth 401,
+        # rate-limit 429, etc.). Surface a recoverable 503 with an actionable
+        # detail rather than an opaque 500 — mirrors compose_email so the brief
+        # UI can show "AI temporarily unavailable" instead of a generic crash.
+        # Error bodies nest the human message under `error.message`.
+        detail_msg = ""
+        err_body = getattr(exc, "body", None)
+        if isinstance(err_body, dict):
+            err = err_body.get("error")
+            if isinstance(err, dict):
+                detail_msg = str(err.get("message", ""))
+        logger.warning(
+            "pre_meeting_brief anthropic_error contact_id=%s status=%s message=%s",
+            contact_id,
+            getattr(exc, "status_code", "?"),
+            detail_msg or str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI briefing is temporarily unavailable. Please try again shortly, or check the Anthropic API credit balance.",
+        ) from exc
+    except _anthropic.APIError as exc:
+        # Connection/timeout errors that aren't a definite HTTP status.
+        logger.warning("pre_meeting_brief anthropic_conn_error contact_id=%s exc=%s", contact_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI briefing is temporarily unavailable. Please try again shortly.",
+        ) from exc
+
     brief_text = message.content[0].text
 
     return {

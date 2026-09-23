@@ -36,6 +36,20 @@ def _get_session() -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
+async def _safe_rollback(db: AsyncSession) -> None:
+    """Roll back, swallowing a rollback that itself raises.
+
+    If a check failed because PgBouncer dropped the connection mid-statement,
+    `rollback()` can raise too. Left unguarded that second exception escapes the
+    per-check `except` and skips the remaining checks — including the heartbeat,
+    defeating the liveness guarantee. Swallow it so each check stays isolated.
+    """
+    try:
+        await db.rollback()
+    except Exception:
+        logger.exception("pm_agent rollback failed")
+
+
 async def _run_health_check() -> dict[str, Any]:
     from app.models.activity_event import ActivityEvent
     from app.models.agent import Agent
@@ -47,83 +61,116 @@ async def _run_health_check() -> dict[str, Any]:
     issues: list[str] = []
     now = datetime.now(tz=timezone.utc)
 
+    # Pre-bound so the return never NameErrors if a check raises before assigning.
+    stuck_agents: list[Any] = []
+    connectors: list[Any] = []
+    projects: list[Any] = []
+
     async with SessionFactory() as db:
 
+        # Each check is isolated: it commits its own writes and, on failure,
+        # rolls back only its own partial work and records a `check_error:` issue
+        # so one bad row can no longer silently kill the whole watchdog. The
+        # heartbeat (check 4) is guarded independently so liveness is proven even
+        # when an earlier check throws.
+
         # 1. Agents stuck in 'processing'
-        result = await db.execute(select(Agent).where(Agent.status == "processing"))
-        stuck_agents = result.scalars().all()
-        for agent in stuck_agents:
-            updated = agent.updated_at
-            if updated.tzinfo is None:
-                updated = updated.replace(tzinfo=timezone.utc)
-            if now - updated > STUCK_AGENT_THRESHOLD:
-                agent.status = "error"  # type: ignore[assignment]
-                db.add(agent)
-                db.add(ActivityEvent(
-                    workspace_id=agent.workspace_id,
-                    type="pm_alert",
-                    agent_name="PM Agent",
-                    description=f"Agent '{agent.name}' stuck in processing >{STUCK_AGENT_THRESHOLD.seconds // 60}m — reset to error.",
-                    severity="error",
-                ))
-                issues.append(f"stuck_agent:{agent.name}")
-                logger.warning("pm_agent stuck_agent agent_id=%s name=%s", agent.id, agent.name)
+        try:
+            result = await db.execute(select(Agent).where(Agent.status == "processing"))
+            stuck_agents = result.scalars().all()
+            for agent in stuck_agents:
+                updated = agent.updated_at
+                if updated.tzinfo is None:
+                    updated = updated.replace(tzinfo=timezone.utc)
+                if now - updated > STUCK_AGENT_THRESHOLD:
+                    agent.status = "error"  # type: ignore[assignment]
+                    db.add(agent)
+                    db.add(ActivityEvent(
+                        workspace_id=agent.workspace_id,
+                        type="pm_alert",
+                        agent_name="PM Agent",
+                        description=f"Agent '{agent.name}' stuck in processing >{STUCK_AGENT_THRESHOLD.seconds // 60}m — reset to error.",
+                        severity="error",
+                    ))
+                    issues.append(f"stuck_agent:{agent.name}")
+                    logger.warning("pm_agent stuck_agent agent_id=%s name=%s", agent.id, agent.name)
+            await db.commit()
+        except Exception:
+            await _safe_rollback(db)
+            logger.exception("pm_agent health-check step failed: stuck_agents")
+            issues.append("check_error:stuck_agents")
 
         # 2. Stale connectors
-        result = await db.execute(select(Connector))
-        connectors = result.scalars().all()
-        for connector in connectors:
-            if connector.last_sync is None:
-                continue
-            last = connector.last_sync
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=timezone.utc)
-            if now - last > STALE_CONNECTOR_THRESHOLD:
-                db.add(ActivityEvent(
-                    workspace_id=connector.workspace_id,
-                    type="pm_alert",
-                    agent_name="PM Agent",
-                    description=f"{connector.service} connector hasn't synced in >{int(STALE_CONNECTOR_THRESHOLD.total_seconds() // 3600)}h. Last sync: {last.strftime('%Y-%m-%d %H:%M UTC')}",
-                    severity="warning",
-                ))
-                issues.append(f"stale_connector:{connector.service}")
-                logger.warning("pm_agent stale_connector service=%s workspace=%s", connector.service, connector.workspace_id)
+        try:
+            result = await db.execute(select(Connector))
+            connectors = result.scalars().all()
+            for connector in connectors:
+                if connector.last_sync is None:
+                    continue
+                last = connector.last_sync
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                if now - last > STALE_CONNECTOR_THRESHOLD:
+                    db.add(ActivityEvent(
+                        workspace_id=connector.workspace_id,
+                        type="pm_alert",
+                        agent_name="PM Agent",
+                        description=f"{connector.service} connector hasn't synced in >{int(STALE_CONNECTOR_THRESHOLD.total_seconds() // 3600)}h. Last sync: {last.strftime('%Y-%m-%d %H:%M UTC')}",
+                        severity="warning",
+                    ))
+                    issues.append(f"stale_connector:{connector.service}")
+                    logger.warning("pm_agent stale_connector service=%s workspace=%s", connector.service, connector.workspace_id)
+            await db.commit()
+        except Exception:
+            await _safe_rollback(db)
+            logger.exception("pm_agent health-check step failed: stale_connectors")
+            issues.append("check_error:stale_connectors")
 
         # 3. Projects with no tasks after 24h (nudge to add tasks)
-        result = await db.execute(select(Project))
-        projects = result.scalars().all()
-        for project in projects:
-            created = project.created_at
-            if created.tzinfo is None:
-                created = created.replace(tzinfo=timezone.utc)
-            if now - created < EMPTY_PROJECT_THRESHOLD:
-                continue
-            task_count_result = await db.execute(
-                select(func.count()).where(Task.project_id == project.id)
-            )
-            if task_count_result.scalar() == 0:
+        try:
+            result = await db.execute(select(Project))
+            projects = result.scalars().all()
+            for project in projects:
+                created = project.created_at
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                if now - created < EMPTY_PROJECT_THRESHOLD:
+                    continue
+                task_count_result = await db.execute(
+                    select(func.count()).where(Task.project_id == project.id)
+                )
+                if task_count_result.scalar() == 0:
+                    db.add(ActivityEvent(
+                        workspace_id=project.workspace_id,
+                        type="pm_alert",
+                        agent_name="PM Agent",
+                        description=f"Project '{project.name}' has no tasks yet. Add tasks to start tracking progress.",
+                        severity="info",
+                    ))
+                    issues.append(f"empty_project:{project.name}")
+            await db.commit()
+        except Exception:
+            await _safe_rollback(db)
+            logger.exception("pm_agent health-check step failed: empty_projects")
+            issues.append("check_error:empty_projects")
+
+        # 4. Heartbeat per workspace — ALWAYS emit so the activity feed proves liveness.
+        try:
+            result = await db.execute(select(Agent.workspace_id).distinct())
+            workspace_ids = [row[0] for row in result.all()]
+            for ws_id in workspace_ids:
                 db.add(ActivityEvent(
-                    workspace_id=project.workspace_id,
-                    type="pm_alert",
+                    workspace_id=ws_id,
+                    type="pm_heartbeat",
                     agent_name="PM Agent",
-                    description=f"Project '{project.name}' has no tasks yet. Add tasks to start tracking progress.",
-                    severity="info",
+                    description=f"Health check complete. {len(issues)} issue(s) detected.",
+                    severity="info" if not issues else "warning",
                 ))
-                issues.append(f"empty_project:{project.name}")
-
-        # 4. Heartbeat per workspace
-        result = await db.execute(select(Agent.workspace_id).distinct())
-        workspace_ids = [row[0] for row in result.all()]
-        for ws_id in workspace_ids:
-            db.add(ActivityEvent(
-                workspace_id=ws_id,
-                type="pm_heartbeat",
-                agent_name="PM Agent",
-                description=f"Health check complete. {len(issues)} issue(s) detected.",
-                severity="info" if not issues else "warning",
-            ))
-
-        await db.commit()
+            await db.commit()
+        except Exception:
+            await _safe_rollback(db)
+            logger.exception("pm_agent health-check step failed: heartbeat")
+            issues.append("check_error:heartbeat")
 
     return {
         "issues": issues,
