@@ -862,6 +862,12 @@ export default function ReportsPage() {
   const [scoreTierAnalysisLoading, setScoreTierAnalysisLoading] = useState(false);
   const [scoreTierAnalysisOpen, setScoreTierAnalysisOpen] = useState(true);
 
+  type AIDealCohortRow = { cohort: string; won_count: number; lost_count: number; total_revenue: number; win_rate: number };
+  type AIDealCohortData = { cohorts: AIDealCohortRow[]; closing_quarters: string[]; chart_data: Record<string, number | string>[]; cohort_narrative: string; recommendations: string[]; generated_at: string };
+  const [cohortAnalysis, setCohortAnalysis] = useState<AIDealCohortData | null>(null);
+  const [cohortAnalysisLoading, setCohortAnalysisLoading] = useState(false);
+  const [cohortAnalysisOpen, setCohortAnalysisOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1042,6 +1048,8 @@ export default function ReportsPage() {
       apiClient.getAIContactHealthScoreDistribution("demo-workspace-1", "demo-token").then(setHealthScoreDist).catch(() => {}).finally(() => setHealthScoreDistLoading(false));
       setScoreTierAnalysisLoading(true);
       apiClient.getAIContactScoreTierAnalysis("demo-workspace-1", "demo-token").then(setScoreTierAnalysis).catch(() => {}).finally(() => setScoreTierAnalysisLoading(false));
+      setCohortAnalysisLoading(true);
+      apiClient.getAIDealCohortAnalysis("demo-workspace-1", "demo-token").then(setCohortAnalysis).catch(() => {}).finally(() => setCohortAnalysisLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1227,6 +1235,8 @@ export default function ReportsPage() {
       apiClient.getAIContactHealthScoreDistribution(workspaceId, session.access_token).then(setHealthScoreDist).catch(() => {}).finally(() => setHealthScoreDistLoading(false));
       setScoreTierAnalysisLoading(true);
       apiClient.getAIContactScoreTierAnalysis(workspaceId, session.access_token).then(setScoreTierAnalysis).catch(() => {}).finally(() => setScoreTierAnalysisLoading(false));
+      setCohortAnalysisLoading(true);
+      apiClient.getAIDealCohortAnalysis(workspaceId, session.access_token).then(setCohortAnalysis).catch(() => {}).finally(() => setCohortAnalysisLoading(false));
     });
   }, []);
 
@@ -2538,6 +2548,27 @@ export default function ReportsPage() {
         if (!session) { setScoreTierAnalysisLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setScoreTierAnalysisLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateCohortAnalysis = () => {
+    setCohortAnalysisLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealCohortAnalysis(wid, tok)
+        .then(setCohortAnalysis)
+        .catch(() => {})
+        .finally(() => setCohortAnalysisLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCohortAnalysisLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCohortAnalysisLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11133,6 +11164,95 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact ML score tier analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Deal Cohort Analysis */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 cursor-pointer select-none" onClick={() => setCohortAnalysisOpen((o) => !o)}>
+          <div className="flex items-center gap-2">
+            <Layers className="h-4 w-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-zinc-100">Deal Cohort Analysis</span>
+            {cohortAnalysis && <span className="ml-1 rounded-full bg-indigo-500/15 px-2 py-0.5 text-xs text-indigo-300">{cohortAnalysis.cohorts.length} cohort{cohortAnalysis.cohorts.length !== 1 ? 's' : ''}</span>}
+            {cohortAnalysisLoading && <RefreshCw className="h-3.5 w-3.5 text-indigo-400 animate-spin" />}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors disabled:opacity-50"
+              disabled={cohortAnalysisLoading}
+              onClick={(e) => { e.stopPropagation(); regenerateCohortAnalysis(); }}
+            >
+              <RefreshCw className={`h-3 w-3 ${cohortAnalysisLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            {cohortAnalysisOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </div>
+        {cohortAnalysisOpen && (
+          cohortAnalysisLoading ? (
+            <div className="p-4 pt-0 space-y-3">
+              {[1,2,3].map((i) => <div key={i} className="h-6 rounded bg-zinc-800 animate-pulse" />)}
+            </div>
+          ) : cohortAnalysis ? (
+            <div className="p-4 pt-0 space-y-4">
+              {cohortAnalysis.chart_data.length > 0 && (() => {
+                const COHORT_COLORS = ['#6366F1', '#00C896', '#FBBF24', '#A78BFA', '#F43F5E', '#38BDF8'];
+                return (
+                  <div>
+                    <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Revenue by Closing Quarter (stacked by creation cohort)</h3>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart data={cohortAnalysis.chart_data} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                        <XAxis dataKey="closing_quarter" tick={{ fill: '#a1a1aa', fontSize: 11 }} />
+                        <YAxis tick={{ fill: '#a1a1aa', fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+                        <Tooltip formatter={(v) => typeof v === 'number' ? `$${v.toLocaleString()}` : v} contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 8 }} labelStyle={{ color: '#a1a1aa' }} />
+                        <Legend wrapperStyle={{ fontSize: 11, color: '#a1a1aa' }} />
+                        {cohortAnalysis.cohorts.map((c, i) => (
+                          <Bar key={c.cohort} dataKey={c.cohort} stackId="cohort" fill={COHORT_COLORS[i % COHORT_COLORS.length]} radius={i === cohortAnalysis.cohorts.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]} />
+                        ))}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                );
+              })()}
+              {cohortAnalysis.cohorts.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Cohort Summary</h3>
+                  <div className="space-y-1.5">
+                    {cohortAnalysis.cohorts.map((c) => (
+                      <div key={c.cohort} className="flex items-center justify-between rounded-md bg-zinc-800/50 px-3 py-2 text-sm">
+                        <span className="text-zinc-200 font-medium">{c.cohort}</span>
+                        <div className="flex items-center gap-4 text-xs text-zinc-400">
+                          <span>{c.won_count}W / {c.lost_count}L</span>
+                          <span className="text-emerald-400 font-medium">{c.win_rate}%</span>
+                          <span>${c.total_revenue.toLocaleString()}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {cohortAnalysis.cohort_narrative && (
+                <p className="text-sm text-zinc-400 italic">{cohortAnalysis.cohort_narrative}</p>
+              )}
+              {cohortAnalysis.recommendations.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Recommendations</h3>
+                  <ul className="space-y-1.5">
+                    {cohortAnalysis.recommendations.map((r, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                        <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="text-xs text-zinc-600">Generated {new Date(cohortAnalysis.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load deal cohort analysis.</div>
           )
         )}
       </Card>
