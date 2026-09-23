@@ -7535,5 +7535,31 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/quarterly-forecast`, {}, token)
   },
+
+  async getAIDealSizeWinRate(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        size_buckets: [
+          { label: '< $10K',        won_count: 4, lost_count: 6,  total_count: 10, win_rate: 40.0, avg_cycle_days: 12.5, total_revenue:  28000, avg_deal_value:  7000 },
+          { label: '$10K – $50K', won_count: 9, lost_count: 4,  total_count: 13, win_rate: 69.2, avg_cycle_days: 24.3, total_revenue: 270000, avg_deal_value: 30000 },
+          { label: '$50K – $100K', won_count: 5, lost_count: 3, total_count: 8,  win_rate: 62.5, avg_cycle_days: 41.8, total_revenue: 375000, avg_deal_value: 75000 },
+          { label: '$100K – $500K', won_count: 3, lost_count: 4, total_count: 7, win_rate: 42.9, avg_cycle_days: 68.2, total_revenue: 480000, avg_deal_value: 160000 },
+          { label: '> $500K',       won_count: 1, lost_count: 2,  total_count: 3,  win_rate: 33.3, avg_cycle_days: 120.0, total_revenue: 620000, avg_deal_value: 620000 },
+        ],
+        sweet_spot: '$10K – $50K',
+        total_won: 22,
+        total_lost: 19,
+        total_revenue: 1773000,
+        size_narrative: 'The $10K–$50K band delivers the best combination of win rate (69%) and deal value, making it the clear sweet spot. Deals above $100K show sharply declining win rates and extended cycle times, signalling qualification gaps at the higher end.',
+        recommendations: [
+          'Double down on $10K–$50K prospecting — a 69% win rate at $30K average is your highest-efficiency growth lever.',
+          'Introduce a deal desk review for any opportunity above $100K to tighten qualification and reduce wasted cycles.',
+          'Re-examine why sub-$10K deals close at only 40% — discount or repackage to shift those buyers into the $10K–$50K tier.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/size-win-rate`, {}, token)
+  },
 }
 

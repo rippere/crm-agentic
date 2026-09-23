@@ -20138,3 +20138,340 @@ async def get_ai_deal_quarterly_forecast(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_VELOCITY_SYSTEM = (
+    "You are a sales analytics AI. Analyse a CRM deal velocity report showing how quickly "
+    "deals progress through the pipeline, average stage age for active deals, and cycle-time "
+    "comparison between won and lost deals. "
+    "Write a 2-sentence narrative about pipeline velocity and where deals are stalling, "
+    "and 3 actionable recommendations to improve deal velocity. "
+    "Respond ONLY with valid JSON: "
+    "{\"velocity_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_VELOCITY_ACTIVE_STAGES = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/velocity")
+@limiter.limit("5/minute")
+async def get_ai_deal_velocity(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    # --- Active deals: compute age in current stage ---
+    active_result = await db.execute(
+        select(Deal.stage, Deal.stage_changed_at, Deal.value, Deal.title)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(_VELOCITY_ACTIVE_STAGES),
+        )
+    )
+    active_rows = active_result.all()
+
+    stage_ages: dict[str, list[float]] = {s: [] for s in _VELOCITY_ACTIVE_STAGES}
+    for row in active_rows:
+        changed = row.stage_changed_at
+        if changed is None:
+            continue
+        if hasattr(changed, "tzinfo") and changed.tzinfo is None:
+            changed = changed.replace(tzinfo=timezone.utc)
+        age_days = (now - changed).total_seconds() / 86400.0
+        if row.stage in stage_ages:
+            stage_ages[row.stage].append(age_days)
+
+    active_deals_by_stage = []
+    for stage in _VELOCITY_ACTIVE_STAGES:
+        ages = stage_ages[stage]
+        if not ages:
+            active_deals_by_stage.append({
+                "stage": stage, "count": 0,
+                "avg_age_days": 0.0, "max_age_days": 0.0, "stalled_count": 0,
+            })
+            continue
+        avg_age = statistics.mean(ages)
+        max_age = max(ages)
+        stall_threshold = avg_age * 2.0 if avg_age > 0 else float("inf")
+        stalled = sum(1 for a in ages if a > stall_threshold)
+        active_deals_by_stage.append({
+            "stage": stage,
+            "count": len(ages),
+            "avg_age_days": round(avg_age, 1),
+            "max_age_days": round(max_age, 1),
+            "stalled_count": stalled,
+        })
+
+    total_active = len(active_rows)
+    total_stalled = sum(s["stalled_count"] for s in active_deals_by_stage)
+
+    # --- Closed deals (last 180 days): cycle time won vs lost ---
+    cutoff = now - datetime.timedelta(days=180)
+    closed_result = await db.execute(
+        select(Deal.stage, Deal.created_at, Deal.updated_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.updated_at >= cutoff,
+        )
+    )
+    closed_rows = closed_result.all()
+
+    won_cycles: list[float] = []
+    lost_cycles: list[float] = []
+    for row in closed_rows:
+        if row.created_at is None or row.updated_at is None:
+            continue
+        created = row.created_at
+        updated = row.updated_at
+        if hasattr(created, "tzinfo") and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if hasattr(updated, "tzinfo") and updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        cycle = max(0.0, (updated - created).total_seconds() / 86400.0)
+        if row.stage == "closed_won":
+            won_cycles.append(cycle)
+        else:
+            lost_cycles.append(cycle)
+
+    avg_cycle_won = round(statistics.mean(won_cycles), 1) if won_cycles else 0.0
+    avg_cycle_lost = round(statistics.mean(lost_cycles), 1) if lost_cycles else 0.0
+    total_won = len(won_cycles)
+    total_lost = len(lost_cycles)
+
+    # --- AI narrative ---
+    won_cycle_str = f"{avg_cycle_won}d" if won_cycles else "no data"
+    lost_cycle_str = f"{avg_cycle_lost}d" if lost_cycles else "no data"
+    stage_summary = "; ".join(
+        f"{s['stage']} avg {s['avg_age_days']}d ({s['count']} deals)"
+        for s in active_deals_by_stage if s["count"] > 0
+    ) or "no active deals"
+
+    context = (
+        f"Deal velocity summary:\n"
+        f"Total active pipeline deals: {total_active}\n"
+        f"Total stalled deals (2x stage avg): {total_stalled}\n"
+        f"Stage ages: {stage_summary}\n"
+        f"Avg cycle time - won deals: {won_cycle_str} ({total_won} deals, last 180d)\n"
+        f"Avg cycle time - lost deals: {lost_cycle_str} ({total_lost} deals, last 180d)\n"
+    )
+
+    client = _mk_anthropic()
+    try:
+        resp = client.messages.create(
+            model=settings.CLAUDE_HAIKU_MODEL,
+            max_tokens=512,
+            system=_VELOCITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = resp.content[0].text.strip()
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    velocity_narrative = str(data.get("velocity_narrative", "")).strip()
+    if not velocity_narrative:
+        velocity_narrative = (
+            f"Pipeline has {total_active} active deals with {total_stalled} showing signs of stalling. "
+            f"Won deals close in {avg_cycle_won}d on average versus {avg_cycle_lost}d for lost deals."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    defaults = [
+        "Review stalled deals in their current stage and schedule follow-up actions within 48 hours.",
+        "Compare cycle time of won vs lost deals to identify at what stage losses accelerate.",
+        "Set stage-specific SLA alerts so reps are notified when a deal exceeds average stage age.",
+    ]
+    while len(recs) < 3:
+        recs.append(defaults[len(recs) % 3])
+
+    return {
+        "active_deals_by_stage": active_deals_by_stage,
+        "avg_cycle_days_won": avg_cycle_won,
+        "avg_cycle_days_lost": avg_cycle_lost,
+        "total_active": total_active,
+        "total_won_last_180d": total_won,
+        "total_lost_last_180d": total_lost,
+        "total_stalled": total_stalled,
+        "velocity_narrative": velocity_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20d: AI deal size vs win-rate analysis
+# ---------------------------------------------------------------------------
+
+_SIZE_WIN_RATE_SYSTEM = (
+    "You are a sales analytics AI. Analyse a CRM deal size vs win-rate report showing how "
+    "deal value range correlates with win rate and average cycle time. "
+    "Write a 2-sentence narrative identifying the optimal deal-size sweet spot and any "
+    "value bands with notably poor win rates, "
+    "and 3 actionable recommendations to improve deal-size strategy. "
+    "Respond ONLY with valid JSON: "
+    "{\"size_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_SIZE_BUCKETS = [
+    ("< $10K", 0, 10_000),
+    ("$10K – $50K", 10_000, 50_000),
+    ("$50K – $100K", 50_000, 100_000),
+    ("$100K – $500K", 100_000, 500_000),
+    ("> $500K", 500_000, float("inf")),
+]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/size-win-rate")
+@limiter.limit("5/minute")
+async def get_ai_deal_size_win_rate(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=365)
+
+    closed_result = await db.execute(
+        select(Deal.stage, Deal.value, Deal.created_at, Deal.updated_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.updated_at >= cutoff,
+        )
+    )
+    closed_rows = closed_result.all()
+
+    bucket_data: dict[str, dict] = {
+        label: {"won": 0, "lost": 0, "revenue": 0.0, "cycles": []}
+        for label, _, _ in _SIZE_BUCKETS
+    }
+
+    for row in closed_rows:
+        val = float(row.value or 0)
+        label = None
+        for lbl, lo, hi in _SIZE_BUCKETS:
+            if lo <= val < hi:
+                label = lbl
+                break
+        if label is None:
+            label = _SIZE_BUCKETS[-1][0]
+        d = bucket_data[label]
+        if row.stage == "closed_won":
+            d["won"] += 1
+            d["revenue"] += val
+        else:
+            d["lost"] += 1
+        if row.created_at and row.updated_at:
+            created = row.created_at
+            updated = row.updated_at
+            if hasattr(created, "tzinfo") and created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            if hasattr(updated, "tzinfo") and updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            cycle = max(0.0, (updated - created).total_seconds() / 86400.0)
+            d["cycles"].append(cycle)
+
+    size_buckets = []
+    best_score = -1.0
+    sweet_spot = None
+    for label, _, _ in _SIZE_BUCKETS:
+        d = bucket_data[label]
+        total = d["won"] + d["lost"]
+        win_rate = round(d["won"] / total * 100, 1) if total > 0 else 0.0
+        avg_cycle = round(statistics.mean(d["cycles"]), 1) if d["cycles"] else 0.0
+        avg_deal = round(d["revenue"] / d["won"], 0) if d["won"] > 0 else 0.0
+        score = win_rate * avg_deal / 1000.0
+        if score > best_score and total >= 2:
+            best_score = score
+            sweet_spot = label
+        size_buckets.append({
+            "label": label,
+            "won_count": d["won"],
+            "lost_count": d["lost"],
+            "total_count": total,
+            "win_rate": win_rate,
+            "avg_cycle_days": avg_cycle,
+            "total_revenue": round(d["revenue"], 2),
+            "avg_deal_value": avg_deal,
+        })
+
+    total_won = sum(b["won_count"] for b in size_buckets)
+    total_lost = sum(b["lost_count"] for b in size_buckets)
+    total_revenue = sum(b["total_revenue"] for b in size_buckets)
+
+    summary_parts = "; ".join(
+        f"{b['label']} win_rate={b['win_rate']}% ({b['total_count']} deals)"
+        for b in size_buckets if b["total_count"] > 0
+    ) or "no closed deals"
+    context = (
+        f"Deal size vs win-rate summary (last 12 months):\n"
+        f"Total closed deals: {total_won + total_lost} ({total_won} won, {total_lost} lost)\n"
+        f"Total revenue from won deals: ${total_revenue:,.0f}\n"
+        f"Sweet spot (highest win rate × avg deal value): {sweet_spot or 'insufficient data'}\n"
+        f"By bucket: {summary_parts}\n"
+    )
+
+    client = _mk_anthropic()
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=_SIZE_WIN_RATE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = resp.content[0].text.strip()
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    size_narrative = str(data.get("size_narrative", "")).strip()
+    if not size_narrative:
+        size_narrative = (
+            f"Analysis of {total_won + total_lost} closed deals shows "
+            f"{'the sweet spot at ' + sweet_spot if sweet_spot else 'insufficient data to identify a sweet spot'}."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    defaults = [
+        "Focus prospecting on deals in the value range with highest win rate to maximise close efficiency.",
+        "Review deal qualification criteria to avoid investing sales effort in low win-rate value bands.",
+        "Consider tiered pricing or packaging to convert more deals in adjacent size bands to the sweet spot.",
+    ]
+    while len(recs) < 3:
+        recs.append(defaults[len(recs) % 3])
+
+    return {
+        "size_buckets": size_buckets,
+        "sweet_spot": sweet_spot,
+        "total_won": total_won,
+        "total_lost": total_lost,
+        "total_revenue": round(total_revenue, 2),
+        "size_narrative": size_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }

@@ -9433,3 +9433,66 @@ async def test_revenue_forecast_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/quarterly-forecast")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20d: AI deal size vs win-rate analysis
+# ---------------------------------------------------------------------------
+
+class FakeSizeWinRateRow:
+    def __init__(self, stage, value, created_at, updated_at):
+        self.stage = stage
+        self.value = value
+        self.created_at = created_at
+        self.updated_at = updated_at
+
+
+@pytest.mark.asyncio
+async def test_size_win_rate_returns_correct_metrics(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    base = datetime.datetime(2026, 1, 1, 0, 0, 0)
+    closed_rows = [
+        FakeSizeWinRateRow("closed_won",  20000, base, base + datetime.timedelta(days=30)),
+        FakeSizeWinRateRow("closed_won",  30000, base, base + datetime.timedelta(days=20)),
+        FakeSizeWinRateRow("closed_lost", 15000, base, base + datetime.timedelta(days=45)),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result(closed_rows),
+    ])
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"size_narrative": "Strong performance in mid-market.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/size-win-rate")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "size_buckets" in body
+    bucket = next((b for b in body["size_buckets"] if b["label"] == "$10K – $50K"), None)
+    assert bucket is not None
+    assert bucket["won_count"] == 2
+    assert bucket["lost_count"] == 1
+    assert bucket["total_count"] == 3
+    assert bucket["win_rate"] == pytest.approx(66.7, rel=1e-2)
+    assert body["sweet_spot"] == "$10K – $50K"
+    assert body["total_won"] == 2
+    assert body["total_lost"] == 1
+    assert body["total_revenue"] == pytest.approx(50000.0, rel=1e-3)
+    assert "size_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_size_win_rate_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("77777777-7777-7777-7777-777777777777")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/size-win-rate")
+    assert resp.status_code == 403
