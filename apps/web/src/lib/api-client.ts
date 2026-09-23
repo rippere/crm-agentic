@@ -7341,5 +7341,31 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/score-segmentation`, {}, token)
   },
+
+  async getAIContactHealthScoreDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        total_contacts: 47,
+        critical_count: 5,
+        at_risk_count: 9,
+        avg_score: 61.4,
+        buckets: [
+          { bucket: 'excellent', bucket_label: 'Excellent', score_range: '80–100', contact_count: 14, pct_of_total: 29.8, avg_pipeline_value: 42500, total_revenue: 523000 },
+          { bucket: 'good', bucket_label: 'Good', score_range: '60–79', contact_count: 11, pct_of_total: 23.4, avg_pipeline_value: 28100, total_revenue: 314000 },
+          { bucket: 'fair', bucket_label: 'Fair', score_range: '40–59', contact_count: 8, pct_of_total: 17.0, avg_pipeline_value: 9400, total_revenue: 87000 },
+          { bucket: 'at_risk', bucket_label: 'At Risk', score_range: '20–39', contact_count: 9, pct_of_total: 19.1, avg_pipeline_value: 4200, total_revenue: 43000 },
+          { bucket: 'critical', bucket_label: 'Critical', score_range: '0–19', contact_count: 5, pct_of_total: 10.6, avg_pipeline_value: 0, total_revenue: 0 },
+        ],
+        health_narrative: '14 contacts (29.8%) are in Excellent health driving the bulk of pipeline, while 14 contacts across At Risk and Critical bands need urgent attention. The 61.4 average score indicates a healthy mid-market base with a long tail requiring re-engagement.',
+        recommendations: [
+          'Prioritise immediate outreach to the 5 Critical contacts — zero pipeline and near-zero scores signal churn risk within 30 days.',
+          'Build a re-engagement campaign for the 9 At Risk contacts: personalised email sequences tied to their last known pain point.',
+          'Leverage the 14 Excellent contacts as referral sources — they show the strongest engagement signals and highest pipeline values.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/health-score-distribution`, {}, token)
+  },
 }
 

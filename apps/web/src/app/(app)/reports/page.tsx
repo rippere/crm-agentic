@@ -850,6 +850,12 @@ export default function ReportsPage() {
   const [scoreSegmentationLoading, setScoreSegmentationLoading] = useState(false);
   const [scoreSegmentationOpen, setScoreSegmentationOpen] = useState(true);
 
+  type AIHealthScoreBucket = { bucket: string; bucket_label: string; score_range: string; contact_count: number; pct_of_total: number; avg_pipeline_value: number; total_revenue: number };
+  type AIHealthScoreDistData = { total_contacts: number; critical_count: number; at_risk_count: number; avg_score: number; buckets: AIHealthScoreBucket[]; health_narrative: string; recommendations: string[]; generated_at: string };
+  const [healthScoreDist, setHealthScoreDist] = useState<AIHealthScoreDistData | null>(null);
+  const [healthScoreDistLoading, setHealthScoreDistLoading] = useState(false);
+  const [healthScoreDistOpen, setHealthScoreDistOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1026,6 +1032,8 @@ export default function ReportsPage() {
       apiClient.getAIContactTaskBacklog("demo-workspace-1", "demo-token").then(setTaskBacklog).catch(() => {}).finally(() => setTaskBacklogLoading(false));
       setScoreSegmentationLoading(true);
       apiClient.getAIContactScoreSegmentation("demo-workspace-1", "demo-token").then(setScoreSegmentation).catch(() => {}).finally(() => setScoreSegmentationLoading(false));
+      setHealthScoreDistLoading(true);
+      apiClient.getAIContactHealthScoreDistribution("demo-workspace-1", "demo-token").then(setHealthScoreDist).catch(() => {}).finally(() => setHealthScoreDistLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1207,6 +1215,8 @@ export default function ReportsPage() {
       apiClient.getAIContactTaskBacklog(workspaceId, session.access_token).then(setTaskBacklog).catch(() => {}).finally(() => setTaskBacklogLoading(false));
       setScoreSegmentationLoading(true);
       apiClient.getAIContactScoreSegmentation(workspaceId, session.access_token).then(setScoreSegmentation).catch(() => {}).finally(() => setScoreSegmentationLoading(false));
+      setHealthScoreDistLoading(true);
+      apiClient.getAIContactHealthScoreDistribution(workspaceId, session.access_token).then(setHealthScoreDist).catch(() => {}).finally(() => setHealthScoreDistLoading(false));
     });
   }, []);
 
@@ -2476,6 +2486,27 @@ export default function ReportsPage() {
         if (!session) { setScoreSegmentationLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setScoreSegmentationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateHealthScoreDist = () => {
+    setHealthScoreDistLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactHealthScoreDistribution(wid, tok)
+        .then(setHealthScoreDist)
+        .catch(() => {})
+        .finally(() => setHealthScoreDistLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setHealthScoreDistLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setHealthScoreDistLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -10929,6 +10960,78 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact score segmentation analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 19k: AI Contact Health Score Distribution */}
+      <Card className="overflow-hidden">
+        <div
+          className="flex items-center justify-between p-4 cursor-pointer select-none"
+          onClick={() => setHealthScoreDistOpen((o) => !o)}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-semibold text-zinc-100 truncate">AI · Contact Health Score Distribution</span>
+            {(healthScoreDist?.critical_count ?? 0) > 0 && (
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400">
+                {healthScoreDist!.critical_count} critical
+              </span>
+            )}
+            {(healthScoreDist?.at_risk_count ?? 0) > 0 && (
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">
+                {healthScoreDist!.at_risk_count} at risk
+              </span>
+            )}
+            {healthScoreDist && (
+              <span className="text-xs text-zinc-500">avg {healthScoreDist.avg_score.toFixed(1)}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={(e) => { e.stopPropagation(); regenerateHealthScoreDist(); }}
+              disabled={healthScoreDistLoading}
+              className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", healthScoreDistLoading && "animate-spin")} />
+            </button>
+            {healthScoreDistOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </div>
+        {healthScoreDistOpen && (
+          healthScoreDistLoading && !healthScoreDist ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analysing contact health scores…</div>
+          ) : healthScoreDist ? (
+            <div className={cn("p-4 space-y-4", healthScoreDistLoading && "opacity-40")}>
+              <div className="grid grid-cols-5 gap-2">
+                {healthScoreDist.buckets.map((b) => {
+                  const colorMap: Record<string, string> = { excellent: 'emerald', good: 'teal', fair: 'amber', at_risk: 'orange', critical: 'rose' };
+                  const color = colorMap[b.bucket] ?? 'zinc';
+                  return (
+                    <div key={b.bucket} className={`rounded-lg p-3 text-center bg-${color}-500/10 border border-${color}-500/20`}>
+                      <p className={`text-xs font-semibold text-${color}-400`}>{b.bucket_label}</p>
+                      <p className="text-xs text-zinc-500">{b.score_range}</p>
+                      <p className="text-lg font-bold text-zinc-100">{b.contact_count}</p>
+                      <p className="text-xs text-zinc-500">{b.pct_of_total.toFixed(1)}%</p>
+                      {b.avg_pipeline_value > 0 && (
+                        <p className="text-xs text-zinc-400 mt-1">{formatCurrency(b.avg_pipeline_value)} avg</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{healthScoreDist.health_narrative}</p>
+              <ul className="space-y-1">
+                {healthScoreDist.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(healthScoreDist.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact health score distribution.</div>
           )
         )}
       </Card>
