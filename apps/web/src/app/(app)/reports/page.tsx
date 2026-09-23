@@ -883,6 +883,12 @@ export default function ReportsPage() {
   const [quarterlyForecastLoading, setQuarterlyForecastLoading] = useState(false);
   const [quarterlyForecastOpen, setQuarterlyForecastOpen] = useState(true);
 
+  type AICloseTimingDow = { day: string; deal_count: number; pct_of_total: number; total_revenue: number };
+  type AICloseTimingWom = { week: string; deal_count: number; pct_of_total: number; total_revenue: number };
+  const [closeTiming, setCloseTiming] = useState<{ day_of_week: AICloseTimingDow[]; week_of_month: AICloseTimingWom[]; eoq_count: number; eoq_pct: number; total_closed: number; peak_day: string | null; peak_week: string | null; timing_narrative: string; recommendations: string[]; generated_at: string } | null>(null);
+  const [closeTimingLoading, setCloseTimingLoading] = useState(false);
+  const [closeTimingOpen, setCloseTimingOpen] = useState(true);
+
   type AIPipelineBalanceStage = { stage: string; actual_count: number; actual_pct: number; expected_pct: number; variance_pct: number };
   type AIPipelineBalanceValueTier = { tier: string; count: number; pct: number };
   type AIPipelineBalanceData = { stage_balance: AIPipelineBalanceStage[]; value_balance: AIPipelineBalanceValueTier[]; balance_score: number; most_imbalanced_stage: string | null; concentration_risk: string; total_pipeline_value: number; total_open_deals: number; balance_narrative: string; recommendations: string[]; generated_at: string };
@@ -1094,8 +1100,8 @@ export default function ReportsPage() {
       setPriceSensitivityLoading(true);
       apiClient.getAIDealPriceSensitivity("demo-workspace-1", "demo-token").then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
       setStageVelocityLoading(true);
-      apiClient.getAIDealStageVelocity("demo-workspace-1", "demo-token").then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
-      return;
+      apiClient.getAIDealStageVelocity("demo-workspace-1", "demo-token").then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));      setCloseTimingLoading(true);
+      apiClient.getAIDealCloseTiming("demo-workspace-1", "demo-token").then(setCloseTiming).catch(() => {}).finally(() => setCloseTimingLoading(false));      return;
     }
     const supabase = createBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -1293,8 +1299,8 @@ export default function ReportsPage() {
       setPriceSensitivityLoading(true);
       apiClient.getAIDealPriceSensitivity(workspaceId, session.access_token).then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
       setStageVelocityLoading(true);
-      apiClient.getAIDealStageVelocity(workspaceId, session.access_token).then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
-    });
+      apiClient.getAIDealStageVelocity(workspaceId, session.access_token).then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));      setCloseTimingLoading(true);
+      apiClient.getAIDealCloseTiming(workspaceId, session.access_token).then(setCloseTiming).catch(() => {}).finally(() => setCloseTimingLoading(false));    });
   }, []);
 
   const stats = useMemo(() => {
@@ -2721,8 +2727,13 @@ export default function ReportsPage() {
       apiClient.getAIDealPriceSensitivity(wid, tok)
         .then(setPriceSensitivity)
         .catch(() => {})
-        .finally(() => setPriceSensitivityLoading(false));
-    };
+        .finally(() => setPriceSensitivityLoading(false));  const regenerateCloseTiming = () => {
+    setCloseTimingLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealCloseTiming(wid, tok)
+        .then(setCloseTiming)
+        .catch(() => {})
+        .finally(() => setCloseTimingLoading(false));    };
     if (DEMO_MODE) {
       doFetch("demo-workspace-1", "demo-token");
     } else {
@@ -2751,8 +2762,9 @@ export default function ReportsPage() {
       supabase.auth.getSession().then(({ data: { session } }) => {
         if (!session) { setStageVelocityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
-        if (!wid) { setStageVelocityLoading(false); return; }
-        doFetch(wid, session.access_token);
+        if (!wid) { setStageVelocityLoading(false); return; }        if (!session) { setCloseTimingLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCloseTimingLoading(false); return; }        doFetch(wid, session.access_token);
       });
     }
   };
@@ -11833,8 +11845,20 @@ export default function ReportsPage() {
             )}
             {priceSensitivity?.sweet_spot_bucket && (
               <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-900/40 text-emerald-300 border border-emerald-500/30">
-                Sweet spot: {priceSensitivity.sweet_spot_bucket}
+                Sweet spot: {priceSensitivity.sweet_spot_bucket}      {/* Phase 20e: Deal Close Timing Analysis */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 cursor-pointer select-none" onClick={() => setCloseTimingOpen(o => !o)}>
+          <div className="flex items-center gap-3">
+            <Calendar className="h-4 w-4 text-sky-400" />
+            <h3 className="font-semibold text-zinc-200 text-sm">Deal Close Timing Analysis</h3>
+            {closeTiming && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-sky-500/20 text-sky-300">
+                Peak: {closeTiming.peak_day ?? '—'}
               </span>
+            )}
+            {closeTiming && closeTiming.eoq_pct > 30 && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-500/20 text-amber-300">
+                {closeTiming.eoq_pct}% EOQ              </span>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -11961,16 +11985,71 @@ export default function ReportsPage() {
               <ul className="space-y-1">
                 {stageVelocity.recommendations.map((r, i) => (
                   <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
-                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-cyan-400 flex-shrink-0" />
-                    {r}
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-cyan-400 flex-shrink-0" />            <button onClick={e => { e.stopPropagation(); regenerateCloseTiming(); }} className="p-1 rounded hover:bg-zinc-700 transition-colors">
+              <RefreshCw className={`h-3 w-3 ${closeTimingLoading ? 'animate-spin' : ''}`} />
+            </button>
+            {closeTimingOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </div>
+        {closeTimingOpen && (
+          closeTimingLoading ? (
+            <div className="p-6 space-y-3">{[...Array(4)].map((_, i) => <div key={i} className="h-4 bg-zinc-800 rounded animate-pulse" />)}</div>
+          ) : closeTiming ? (
+            <div className="px-6 pb-6 space-y-4">
+              {/* Day of week bar chart */}
+              <div>
+                <p className="text-xs text-zinc-500 mb-2">Deals Closed by Day of Week</p>
+                <BarChart width={560} height={140} data={closeTiming.day_of_week} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="day" tick={{ fill: '#71717a', fontSize: 11 }} tickFormatter={(v: string) => v.slice(0, 3)} />
+                  <YAxis tick={{ fill: '#71717a', fontSize: 11 }} allowDecimals={false} />
+                  <Bar dataKey="deal_count" fill="#0ea5e9" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </div>
+              {/* Week of month grid */}
+              <div>
+                <p className="text-xs text-zinc-500 mb-2">Deals Closed by Week of Month</p>
+                <div className="grid grid-cols-4 gap-2">
+                  {closeTiming.week_of_month.map((w) => (
+                    <div key={w.week} className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                      <p className="text-xs text-zinc-500 truncate">{w.week.split(' ')[0]} {w.week.split(' ')[1]}</p>
+                      <p className="text-lg font-bold text-sky-400">{w.deal_count}</p>
+                      <p className="text-xs text-zinc-500">{w.pct_of_total}%</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* EOQ + summary stats */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500">Total Closed</p>
+                  <p className="text-xl font-bold text-zinc-200">{closeTiming.total_closed}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500">EOQ Closes</p>
+                  <p className="text-xl font-bold text-amber-400">{closeTiming.eoq_count}</p>
+                  <p className="text-xs text-zinc-500">{closeTiming.eoq_pct}% of total</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500">Peak Week</p>
+                  <p className="text-sm font-bold text-sky-300">{closeTiming.peak_week?.split(' ')[0]} {closeTiming.peak_week?.split(' ')[1]}</p>
+                </div>
+              </div>
+              <p className="text-sm text-zinc-300 italic">{closeTiming.timing_narrative}</p>
+              <ul className="space-y-1">
+                {closeTiming.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-sky-400 flex-shrink-0" />                    {r}
                   </li>
                 ))}
               </ul>
               <p className="text-xs text-zinc-600">Generated {new Date(stageVelocity.generated_at).toLocaleString()} · Claude Haiku</p>
             </div>
           ) : (
-            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the stage velocity analysis.</div>
-          )
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the stage velocity analysis.</div>              <p className="text-xs text-zinc-600">Generated {new Date(closeTiming.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load deal close timing analysis.</div>          )
         )}
       </Card>
 
