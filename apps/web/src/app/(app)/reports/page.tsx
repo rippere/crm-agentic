@@ -889,6 +889,11 @@ export default function ReportsPage() {
   const [pipelineBalance, setPipelineBalance] = useState<AIPipelineBalanceData | null>(null);
   const [pipelineBalanceLoading, setPipelineBalanceLoading] = useState(false);
   const [pipelineBalanceOpen, setPipelineBalanceOpen] = useState(true);
+  type AIPriceSensitivityBucket = { label: string; won_count: number; lost_count: number; total_count: number; win_rate: number | null };
+  type AIPriceSensitivityData = { buckets: AIPriceSensitivityBucket[]; sweet_spot_bucket: string | null; total_analyzed: number; overall_win_rate: number; price_narrative: string; recommendations: string[]; generated_at: string };
+  const [priceSensitivity, setPriceSensitivity] = useState<AIPriceSensitivityData | null>(null);
+  const [priceSensitivityLoading, setPriceSensitivityLoading] = useState(false);
+  const [priceSensitivityOpen, setPriceSensitivityOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1080,6 +1085,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPipelineBalance("demo-workspace-1", "demo-token").then(setPipelineBalance).catch(() => {}).finally(() => setPipelineBalanceLoading(false));
       setQuarterlyForecastLoading(true);
       apiClient.getAIDealQuarterlyForecast("demo-workspace-1", "demo-token").then(setQuarterlyForecast).catch(() => {}).finally(() => setQuarterlyForecastLoading(false));
+      setPriceSensitivityLoading(true);
+      apiClient.getAIDealPriceSensitivity("demo-workspace-1", "demo-token").then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1275,6 +1282,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPipelineBalance(workspaceId, session.access_token).then(setPipelineBalance).catch(() => {}).finally(() => setPipelineBalanceLoading(false));
       setQuarterlyForecastLoading(true);
       apiClient.getAIDealQuarterlyForecast(workspaceId, session.access_token).then(setQuarterlyForecast).catch(() => {}).finally(() => setQuarterlyForecastLoading(false));
+      setPriceSensitivityLoading(true);
+      apiClient.getAIDealPriceSensitivity(workspaceId, session.access_token).then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
     });
   }, []);
 
@@ -2691,6 +2700,27 @@ export default function ReportsPage() {
         if (!session) { setQuarterlyForecastLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setQuarterlyForecastLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regeneratePriceSensitivity = () => {
+    setPriceSensitivityLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealPriceSensitivity(wid, tok)
+        .then(setPriceSensitivity)
+        .catch(() => {})
+        .finally(() => setPriceSensitivityLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPriceSensitivityLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPriceSensitivityLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11755,6 +11785,79 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load quarterly revenue forecast.</div>
+          )
+        )}
+      </Card>
+
+      {/* Price Sensitivity */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 bg-zinc-900/60">
+          <div className="flex items-center gap-2">
+            <DollarSign className="h-4 w-4 text-emerald-400" />
+            <span className="text-sm font-semibold text-zinc-200">Deal Price Sensitivity</span>
+            {priceSensitivity && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700">
+                {priceSensitivity.overall_win_rate}% overall win rate · {priceSensitivity.total_analyzed} deals
+              </span>
+            )}
+            {priceSensitivity?.sweet_spot_bucket && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-900/40 text-emerald-300 border border-emerald-500/30">
+                Sweet spot: {priceSensitivity.sweet_spot_bucket}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePriceSensitivity}
+              disabled={priceSensitivityLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${priceSensitivityLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            <button onClick={() => setPriceSensitivityOpen(o => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {priceSensitivityOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {priceSensitivityOpen && (
+          priceSensitivityLoading && !priceSensitivity ? (
+            <div className="p-6 space-y-2">{[1,2,3,4,5].map(i => <div key={i} className="h-8 bg-zinc-800 rounded animate-pulse" />)}</div>
+          ) : priceSensitivity ? (
+            <div className="p-5 space-y-4">
+              <div className="space-y-2">
+                {priceSensitivity.buckets.map((b) => {
+                  const rate = b.win_rate ?? 0;
+                  const barColor = rate >= 70 ? 'bg-emerald-500' : rate >= 50 ? 'bg-amber-500' : 'bg-rose-500';
+                  return (
+                    <div key={b.label} className="flex items-center gap-3">
+                      <span className="text-xs text-zinc-400 w-24 flex-shrink-0">{b.label}</span>
+                      <div className="flex-1 bg-zinc-800 rounded-full h-2">
+                        <div className={`h-2 rounded-full ${barColor}`} style={{ width: `${rate}%` }} />
+                      </div>
+                      <span className="text-xs text-zinc-300 w-12 text-right">
+                        {b.total_count > 0 ? `${rate}%` : '—'}
+                      </span>
+                      <span className="text-xs text-zinc-500 w-16 text-right">
+                        {b.won_count}W / {b.lost_count}L
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{priceSensitivity.price_narrative}</p>
+              <ul className="space-y-1">
+                {priceSensitivity.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(priceSensitivity.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the price sensitivity analysis.</div>
           )
         )}
       </Card>

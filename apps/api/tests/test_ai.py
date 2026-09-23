@@ -9362,6 +9362,7 @@ async def test_pipeline_balance_wrong_workspace_returns_403(app_client):
 
 
 
+
 # ---------------------------------------------------------------------------
 # Phase 20c: AI deal revenue forecast
 # ---------------------------------------------------------------------------
@@ -9432,4 +9433,64 @@ async def test_revenue_forecast_wrong_workspace_returns_403(app_client):
     wrong_id = uuid.UUID("66666666-6666-6666-6666-666666666666")
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/quarterly-forecast")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20d — price sensitivity
+# ---------------------------------------------------------------------------
+
+class FakePriceSensitivityRow:
+    def __init__(self, id, value, stage):
+        self.id = id
+        self.value = value
+        self.stage = stage
+
+
+@pytest.mark.asyncio
+async def test_price_sensitivity_returns_buckets(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    deal_rows = [
+        FakePriceSensitivityRow("d1", 8000.0, "closed_won"),   # <$10K won
+        FakePriceSensitivityRow("d2", 8000.0, "closed_lost"),  # <$10K lost
+        FakePriceSensitivityRow("d3", 30000.0, "closed_won"),  # $25K-$50K won
+        FakePriceSensitivityRow("d4", 30000.0, "closed_won"),  # $25K-$50K won
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(deal_rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"price_narrative": "Mid-range deals win best.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/price-sensitivity")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["buckets"]) == 5
+    # <$10K bucket: 1 won, 1 lost → 50% win rate
+    small = next(b for b in body["buckets"] if b["label"] == "<$10K")
+    assert small["won_count"] == 1
+    assert small["lost_count"] == 1
+    assert small["win_rate"] == 50.0
+    # $25K-$50K bucket: 2 won → 100% win rate → sweet spot
+    mid = next(b for b in body["buckets"] if b["label"] == "$25K\u2013$50K")
+    assert mid["won_count"] == 2
+    assert mid["win_rate"] == 100.0
+    assert body["sweet_spot_bucket"] == "$25K\u2013$50K"
+    assert body["total_analyzed"] == 4
+    assert body["overall_win_rate"] == 75.0
+    assert "price_narrative" in body
+    assert len(body["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_price_sensitivity_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/price-sensitivity")
     assert resp.status_code == 403

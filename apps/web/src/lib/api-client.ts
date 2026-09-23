@@ -7535,5 +7535,30 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/quarterly-forecast`, {}, token)
   },
+
+  async getAIDealPriceSensitivity(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        buckets: [
+          { label: '<$10K',      won_count: 3,  lost_count: 5,  total_count: 8,  win_rate: 37.5 },
+          { label: '$10K–$25K',  won_count: 7,  lost_count: 4,  total_count: 11, win_rate: 63.6 },
+          { label: '$25K–$50K',  won_count: 9,  lost_count: 2,  total_count: 11, win_rate: 81.8 },
+          { label: '$50K–$100K', won_count: 5,  lost_count: 4,  total_count: 9,  win_rate: 55.6 },
+          { label: '>$100K',     won_count: 2,  lost_count: 5,  total_count: 7,  win_rate: 28.6 },
+        ],
+        sweet_spot_bucket: '$25K–$50K',
+        total_analyzed: 46,
+        overall_win_rate: 56.5,
+        price_narrative: 'Win rates peak in the $25K–$50K range at 81.8%, suggesting this is the optimal deal size for your team\'s current motion. Deals above $100K close at only 28.6%, indicating enterprise deals require additional support or a revised qualification framework.',
+        recommendations: [
+          'Prioritise prospecting and outreach for deals in the $25K–$50K range where win rates are highest.',
+          'Investigate why deals below $10K have a 37.5% win rate — consider whether they are worth the sales effort or need a self-serve path.',
+          'For deals above $100K, introduce a dedicated enterprise playbook with exec sponsorship and proof-of-concept milestones to lift the 28.6% win rate.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/price-sensitivity`, {}, token)
+  },
 }
 
