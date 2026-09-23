@@ -831,6 +831,12 @@ export default function ReportsPage() {
   const [dealEngagement, setDealEngagement] = useState<AIDealEngagementData | null>(null);
   const [dealEngagementLoading, setDealEngagementLoading] = useState(false);
   const [dealEngagementOpen, setDealEngagementOpen] = useState(true);
+  type AIWLGroup = { group: string; group_label: string; contact_count: number; total_won_revenue: number; total_lost_value: number; avg_win_prob: number };
+  type AIWLContact = { contact_id: string; name: string | null; company: string | null; won_revenue?: number; won_count?: number; lost_value?: number; lost_count?: number };
+  type AIWinLossAttrData = { win_count: number; loss_count: number; win_rate: number | null; groups: AIWLGroup[]; top_won_contacts: AIWLContact[]; top_lost_contacts: AIWLContact[]; attribution_narrative: string; recommendations: string[]; generated_at: string };
+  const [winLossAttr, setWinLossAttr] = useState<AIWinLossAttrData | null>(null);
+  const [winLossAttrLoading, setWinLossAttrLoading] = useState(false);
+  const [winLossAttrOpen, setWinLossAttrOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1002,6 +1008,8 @@ export default function ReportsPage() {
       apiClient.getAIContactRoleDistribution("demo-workspace-1", "demo-token").then(setRoleDistribution).catch(() => {}).finally(() => setRoleDistributionLoading(false));
       setDealEngagementLoading(true);
       apiClient.getAIContactDealEngagement("demo-workspace-1", "demo-token").then(setDealEngagement).catch(() => {}).finally(() => setDealEngagementLoading(false));
+      setWinLossAttrLoading(true);
+      apiClient.getAIContactWinLossAttribution("demo-workspace-1", "demo-token").then(setWinLossAttr).catch(() => {}).finally(() => setWinLossAttrLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1177,6 +1185,8 @@ export default function ReportsPage() {
       apiClient.getAIContactRoleDistribution(workspaceId, session.access_token).then(setRoleDistribution).catch(() => {}).finally(() => setRoleDistributionLoading(false));
       setDealEngagementLoading(true);
       apiClient.getAIContactDealEngagement(workspaceId, session.access_token).then(setDealEngagement).catch(() => {}).finally(() => setDealEngagementLoading(false));
+      setWinLossAttrLoading(true);
+      apiClient.getAIContactWinLossAttribution(workspaceId, session.access_token).then(setWinLossAttr).catch(() => {}).finally(() => setWinLossAttrLoading(false));
     });
   }, []);
 
@@ -2383,6 +2393,27 @@ export default function ReportsPage() {
         if (!session) { setDealEngagementLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealEngagementLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateWinLossAttr = () => {
+    setWinLossAttrLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactWinLossAttribution(wid, tok)
+        .then(setWinLossAttr)
+        .catch(() => {})
+        .finally(() => setWinLossAttrLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setWinLossAttrLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setWinLossAttrLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -10544,6 +10575,104 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact deal engagement analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Contact Win/Loss Attribution card */}
+      <Card
+        className="cursor-pointer select-none border-emerald-500/20"
+        onClick={() => setWinLossAttrOpen((o) => !o)}
+      >
+        <div className="flex items-center justify-between p-4">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-emerald-400" />
+            <span className="font-semibold text-sm text-zinc-200">Contact Win/Loss Attribution</span>
+            {winLossAttr?.win_rate !== null && winLossAttr?.win_rate !== undefined && (
+              <span className={cn("text-xs font-medium px-2 py-0.5 rounded-full", winLossAttr.win_rate >= 60 ? "bg-emerald-500/15 text-emerald-400" : winLossAttr.win_rate >= 40 ? "bg-amber-500/15 text-amber-400" : "bg-rose-500/15 text-rose-400")}>
+                {winLossAttr.win_rate}% win rate
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {winLossAttr && (
+              <span className="text-xs text-zinc-500">{winLossAttr.win_count + winLossAttr.loss_count} closed deals</span>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); regenerateWinLossAttr(); }}
+              disabled={winLossAttrLoading}
+              className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", winLossAttrLoading && "animate-spin")} />
+            </button>
+            {winLossAttrOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </div>
+        {winLossAttrOpen && (
+          winLossAttrLoading && !winLossAttr ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analyzing win/loss attribution…</div>
+          ) : winLossAttr ? (
+            <div className={cn("p-4 space-y-4", winLossAttrLoading && "opacity-40")}>
+              {/* Group grid */}
+              {winLossAttr.groups.length > 0 && (
+                <div className="grid grid-cols-3 gap-2">
+                  {winLossAttr.groups.map((g) => (
+                    <div key={g.group} className={cn("rounded-lg p-3", g.group === 'won_only' ? "bg-emerald-500/10" : g.group === 'lost_only' ? "bg-rose-500/10" : "bg-amber-500/10")}>
+                      <p className={cn("text-base font-bold", g.group === 'won_only' ? "text-emerald-400" : g.group === 'lost_only' ? "text-rose-400" : "text-amber-400")}>{g.contact_count}</p>
+                      <p className="text-xs text-zinc-400 mt-0.5">{g.group_label}</p>
+                      <p className="text-xs text-zinc-500 mt-1">avg wp {g.avg_win_prob}%</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Top won / lost contacts */}
+              <div className="grid grid-cols-2 gap-4">
+                {winLossAttr.top_won_contacts.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-emerald-400 mb-2">Top Won Contacts</p>
+                    <div className="space-y-1.5">
+                      {winLossAttr.top_won_contacts.map((c, i) => (
+                        <div key={c.contact_id} className="flex items-center justify-between">
+                          <div className="min-w-0">
+                            <p className="text-xs text-zinc-200 truncate">{i + 1}. {c.name ?? 'Unknown'}</p>
+                            <p className="text-xs text-zinc-500 truncate">{c.company ?? '—'}</p>
+                          </div>
+                          <span className="text-xs text-emerald-400 ml-2 flex-shrink-0">{formatCurrency(c.won_revenue ?? 0)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {winLossAttr.top_lost_contacts.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-rose-400 mb-2">Top Lost Contacts</p>
+                    <div className="space-y-1.5">
+                      {winLossAttr.top_lost_contacts.map((c, i) => (
+                        <div key={c.contact_id} className="flex items-center justify-between">
+                          <div className="min-w-0">
+                            <p className="text-xs text-zinc-200 truncate">{i + 1}. {c.name ?? 'Unknown'}</p>
+                            <p className="text-xs text-zinc-500 truncate">{c.company ?? '—'}</p>
+                          </div>
+                          <span className="text-xs text-rose-400 ml-2 flex-shrink-0">{formatCurrency(c.lost_value ?? 0)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{winLossAttr.attribution_narrative}</p>
+              <ul className="space-y-1">
+                {winLossAttr.recommendations.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(winLossAttr.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact win/loss attribution analysis.</div>
           )
         )}
       </Card>
