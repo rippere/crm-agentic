@@ -900,6 +900,11 @@ export default function ReportsPage() {
   const [stageVelocity, setStageVelocity] = useState<AIStageVelocityData | null>(null);
   const [stageVelocityLoading, setStageVelocityLoading] = useState(false);
   const [stageVelocityOpen, setStageVelocityOpen] = useState(true);
+  type AIWinLossTrendMonth = { month: string; won_count: number; lost_count: number; win_rate: number | null };
+  type AIWinLossTrendData = { monthly_data: AIWinLossTrendMonth[]; overall_win_rate: number; trend_direction: string; best_month: string | null; worst_month: string | null; total_won: number; total_lost: number; win_loss_narrative: string; recommendations: string[]; generated_at: string };
+  const [winLossTrend, setWinLossTrend] = useState<AIWinLossTrendData | null>(null);
+  const [winLossTrendLoading, setWinLossTrendLoading] = useState(false);
+  const [winLossTrendOpen, setWinLossTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1095,6 +1100,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPriceSensitivity("demo-workspace-1", "demo-token").then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
       setStageVelocityLoading(true);
       apiClient.getAIDealStageVelocity("demo-workspace-1", "demo-token").then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
+      setWinLossTrendLoading(true);
+      apiClient.getAIDealWinLossTrend("demo-workspace-1", "demo-token").then(setWinLossTrend).catch(() => {}).finally(() => setWinLossTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1294,6 +1301,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPriceSensitivity(workspaceId, session.access_token).then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
       setStageVelocityLoading(true);
       apiClient.getAIDealStageVelocity(workspaceId, session.access_token).then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
+      setWinLossTrendLoading(true);
+      apiClient.getAIDealWinLossTrend(workspaceId, session.access_token).then(setWinLossTrend).catch(() => {}).finally(() => setWinLossTrendLoading(false));
     });
   }, []);
 
@@ -2752,6 +2761,27 @@ export default function ReportsPage() {
         if (!session) { setStageVelocityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setStageVelocityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateWinLossTrend = () => {
+    setWinLossTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealWinLossTrend(wid, tok)
+        .then(setWinLossTrend)
+        .catch(() => {})
+        .finally(() => setWinLossTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setWinLossTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setWinLossTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11970,6 +12000,75 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the stage velocity analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Win/Loss Trend */}
+      <Card className="border-emerald-500/15 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 bg-zinc-900/60">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-emerald-400" />
+            <span className="text-sm font-semibold text-zinc-200">Win/Loss Trend</span>
+            {winLossTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${winLossTrend.trend_direction === 'improving' ? 'bg-emerald-500/20 text-emerald-300' : winLossTrend.trend_direction === 'declining' ? 'bg-rose-500/20 text-rose-300' : 'bg-zinc-700 text-zinc-400'}`}>
+                {winLossTrend.trend_direction} · {winLossTrend.overall_win_rate}% win rate
+              </span>
+            )}
+            {winLossTrend && (
+              <span className="text-xs text-zinc-500">{winLossTrend.total_won}W / {winLossTrend.total_lost}L</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={regenerateWinLossTrend} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded hover:bg-zinc-800 transition-colors" disabled={winLossTrendLoading}>
+              <RefreshCw className={`h-3 w-3 ${winLossTrendLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            <button onClick={() => setWinLossTrendOpen(o => !o)} className="text-zinc-400 hover:text-zinc-200 p-1 rounded hover:bg-zinc-800 transition-colors">
+              {winLossTrendOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {winLossTrendOpen && (
+          winLossTrendLoading && !winLossTrend ? (
+            <div className="p-6 space-y-2 animate-pulse"><div className="h-4 bg-zinc-800 rounded w-3/4" /><div className="h-32 bg-zinc-800 rounded" /><div className="h-4 bg-zinc-800 rounded w-1/2" /></div>
+          ) : winLossTrend ? (
+            <div className="px-5 py-4 space-y-4">
+              {/* Chart */}
+              <ResponsiveContainer width="100%" height={160}>
+                <LineChart data={winLossTrend.monthly_data.filter(m => m.win_rate !== null)} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="month" tick={{ fill: '#71717a', fontSize: 10 }} tickFormatter={(v: string) => v.slice(2)} />
+                  <YAxis domain={[0, 100]} tick={{ fill: '#71717a', fontSize: 10 }} tickFormatter={(v: number) => `${v}%`} width={36} />
+                  <Tooltip formatter={(v) => [`${v}%`, 'Win Rate']} contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }} />
+                  <ReferenceLine y={50} stroke="#3f3f46" strokeDasharray="3 3" />
+                  <Line type="monotone" dataKey="win_rate" stroke="#10b981" strokeWidth={2} dot={{ fill: '#10b981', r: 3 }} activeDot={{ r: 5 }} />
+                </LineChart>
+              </ResponsiveContainer>
+              {/* Best / Worst */}
+              {(winLossTrend.best_month || winLossTrend.worst_month) && (
+                <div className="flex items-center gap-3">
+                  {winLossTrend.best_month && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300">Best: {winLossTrend.best_month}</span>
+                  )}
+                  {winLossTrend.worst_month && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300">Worst: {winLossTrend.worst_month}</span>
+                  )}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{winLossTrend.win_loss_narrative}</p>
+              <ul className="space-y-1">
+                {winLossTrend.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(winLossTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the win/loss trend analysis.</div>
           )
         )}
       </Card>

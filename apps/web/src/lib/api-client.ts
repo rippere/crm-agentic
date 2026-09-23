@@ -7591,5 +7591,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/stage-velocity`, {}, token)
   },
+
+  async getAIDealWinLossTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        monthly_data: [
+          { month: '2025-10', won_count: 3, lost_count: 4, win_rate: 42.9 },
+          { month: '2025-11', won_count: 4, lost_count: 4, win_rate: 50.0 },
+          { month: '2025-12', won_count: 5, lost_count: 3, win_rate: 62.5 },
+          { month: '2026-01', won_count: 4, lost_count: 4, win_rate: 50.0 },
+          { month: '2026-02', won_count: 6, lost_count: 3, win_rate: 66.7 },
+          { month: '2026-03', won_count: 5, lost_count: 2, win_rate: 71.4 },
+          { month: '2026-04', won_count: 4, lost_count: 3, win_rate: 57.1 },
+          { month: '2026-05', won_count: 7, lost_count: 2, win_rate: 77.8 },
+          { month: '2026-06', won_count: 6, lost_count: 3, win_rate: 66.7 },
+          { month: '2026-07', won_count: 8, lost_count: 2, win_rate: 80.0 },
+          { month: '2026-08', won_count: 7, lost_count: 3, win_rate: 70.0 },
+          { month: '2026-09', won_count: 9, lost_count: 2, win_rate: 81.8 },
+        ],
+        overall_win_rate: 66.3,
+        trend_direction: 'improving',
+        best_month: '2026-09',
+        worst_month: '2025-10',
+        total_won: 68,
+        total_lost: 35,
+        win_loss_narrative: 'Your win rate has improved from 42.9% in October 2025 to 81.8% in September 2026, a remarkable 38-point gain over 12 months. The upward trend accelerated significantly in Q2 2026, suggesting improvements in qualification or sales execution took hold earlier this year. Sustaining this trajectory into Q4 will require continued focus on deal qualification and champion development.',
+        recommendations: [
+          'Document the qualification changes made in early 2026 that drove the win-rate improvement and codify them into a formal playbook.',
+          'Investigate October 2025 (42.9% win rate) to identify what changed — use those lessons to prevent regression.',
+          'Set a win-rate floor alert at 60% so any month-over-month dip triggers an immediate pipeline review.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-loss-trend`, {}, token)
+  },
 }
 
