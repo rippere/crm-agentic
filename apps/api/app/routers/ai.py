@@ -20138,3 +20138,174 @@ async def get_ai_deal_quarterly_forecast(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20e: Deal close timing analysis
+# ---------------------------------------------------------------------------
+
+_CLOSE_TIMING_SYSTEM = (
+    "You are a sales analytics AI. Analyse a CRM deal close timing report showing when deals "
+    "close by day of week, week of month, and end-of-quarter concentration. "
+    "Write a 2-sentence narrative identifying the strongest close timing patterns and any "
+    "end-of-quarter concentration risks, "
+    "and 3 actionable recommendations to smooth or leverage the close timing distribution. "
+    "Respond ONLY with valid JSON: "
+    "{\"timing_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_WEEK_LABELS = ["Week 1 (1–7)", "Week 2 (8–14)", "Week 3 (15–21)", "Week 4 (22–31)"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/close-timing")
+@limiter.limit("5/minute")
+async def get_ai_deal_close_timing(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=365)
+
+    closed_result = await db.execute(
+        select(Deal.stage_changed_at, Deal.value)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= cutoff,
+        )
+    )
+    rows = closed_result.all()
+
+    # Accumulators
+    dow_counts = [0] * 7   # Monday=0 … Sunday=6
+    dow_revenue = [0.0] * 7
+    wom_counts = [0] * 4   # weeks 1-4
+    wom_revenue = [0.0] * 4
+
+    # End-of-quarter: last 14 days of each calendar quarter
+    eoq_count = 0
+    non_eoq_count = 0
+
+    def _is_end_of_quarter(dt: datetime.datetime) -> bool:
+        # Quarter ends: Mar 31, Jun 30, Sep 30, Dec 31
+        quarter_end_months = {3: 31, 6: 30, 9: 30, 12: 31}
+        if dt.month not in quarter_end_months:
+            return False
+        last_day = quarter_end_months[dt.month]
+        return dt.day >= (last_day - 13)
+
+    for row in rows:
+        ts = row.stage_changed_at
+        if ts is None:
+            continue
+        if hasattr(ts, "tzinfo") and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        val = float(row.value or 0)
+
+        dow = ts.weekday()  # 0=Monday
+        dow_counts[dow] += 1
+        dow_revenue[dow] += val
+
+        day = ts.day
+        wom_idx = min((day - 1) // 7, 3)
+        wom_counts[wom_idx] += 1
+        wom_revenue[wom_idx] += val
+
+        if _is_end_of_quarter(ts):
+            eoq_count += 1
+        else:
+            non_eoq_count += 1
+
+    total_closed = sum(dow_counts)
+
+    day_of_week = [
+        {
+            "day": _DAY_NAMES[i],
+            "deal_count": dow_counts[i],
+            "pct_of_total": round(dow_counts[i] / total_closed * 100, 1) if total_closed else 0.0,
+            "total_revenue": round(dow_revenue[i], 2),
+        }
+        for i in range(7)
+    ]
+
+    week_of_month = [
+        {
+            "week": _WEEK_LABELS[i],
+            "deal_count": wom_counts[i],
+            "pct_of_total": round(wom_counts[i] / total_closed * 100, 1) if total_closed else 0.0,
+            "total_revenue": round(wom_revenue[i], 2),
+        }
+        for i in range(4)
+    ]
+
+    eoq_pct = round(eoq_count / total_closed * 100, 1) if total_closed else 0.0
+    peak_day = _DAY_NAMES[dow_counts.index(max(dow_counts))] if total_closed else None
+    peak_week = _WEEK_LABELS[wom_counts.index(max(wom_counts))] if total_closed else None
+
+    context = (
+        f"Deal close timing analysis (last 12 months):\n"
+        f"Total closed-won deals: {total_closed}\n"
+        f"Peak close day: {peak_day or 'n/a'}\n"
+        f"Peak close week: {peak_week or 'n/a'}\n"
+        f"End-of-quarter concentration: {eoq_count} deals ({eoq_pct}% of total)\n"
+        f"Day of week breakdown: "
+        + ", ".join(f"{d['day']} {d['deal_count']} ({d['pct_of_total']}%)" for d in day_of_week if d['deal_count'] > 0)
+        + "\n"
+        f"Week of month breakdown: "
+        + ", ".join(f"{w['week']} {w['deal_count']} ({w['pct_of_total']}%)" for w in week_of_month if w['deal_count'] > 0)
+    )
+
+    client = _mk_anthropic()
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=_CLOSE_TIMING_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = resp.content[0].text.strip()
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    timing_narrative = str(data.get("timing_narrative", "")).strip()
+    if not timing_narrative:
+        timing_narrative = (
+            f"{total_closed} closed-won deals analysed over the last 12 months. "
+            + (f"Peak close day is {peak_day}." if peak_day else "Insufficient data to identify patterns.")
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    defaults = [
+        "Schedule more demo and proposal calls mid-week to shift close concentration away from Fridays.",
+        "Avoid end-of-quarter discounting pressure by building pipeline earlier — target 3× coverage by week 10 of each quarter.",
+        "Use peak close days for renewal and upsell conversations where closing momentum is naturally highest.",
+    ]
+    while len(recs) < 3:
+        recs.append(defaults[len(recs) % 3])
+
+    return {
+        "day_of_week": day_of_week,
+        "week_of_month": week_of_month,
+        "eoq_count": eoq_count,
+        "eoq_pct": eoq_pct,
+        "total_closed": total_closed,
+        "peak_day": peak_day,
+        "peak_week": peak_week,
+        "timing_narrative": timing_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }

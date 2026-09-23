@@ -7535,5 +7535,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/quarterly-forecast`, {}, token)
   },
+
+  async getAIDealCloseTiming(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        day_of_week: [
+          { day: 'Monday',    deal_count: 4,  pct_of_total: 9.3,  total_revenue:  52000 },
+          { day: 'Tuesday',   deal_count: 6,  pct_of_total: 14.0, total_revenue:  88000 },
+          { day: 'Wednesday', deal_count: 7,  pct_of_total: 16.3, total_revenue: 115000 },
+          { day: 'Thursday',  deal_count: 8,  pct_of_total: 18.6, total_revenue: 124000 },
+          { day: 'Friday',    deal_count: 14, pct_of_total: 32.6, total_revenue: 218000 },
+          { day: 'Saturday',  deal_count: 2,  pct_of_total: 4.7,  total_revenue:  18000 },
+          { day: 'Sunday',    deal_count: 2,  pct_of_total: 4.7,  total_revenue:  22000 },
+        ],
+        week_of_month: [
+          { week: 'Week 1 (1–7)',   deal_count: 8,  pct_of_total: 18.6, total_revenue: 108000 },
+          { week: 'Week 2 (8–14)',  deal_count: 9,  pct_of_total: 20.9, total_revenue: 132000 },
+          { week: 'Week 3 (15–21)', deal_count: 7,  pct_of_total: 16.3, total_revenue:  98000 },
+          { week: 'Week 4 (22–31)', deal_count: 19, pct_of_total: 44.2, total_revenue: 299000 },
+        ],
+        eoq_count: 15,
+        eoq_pct: 34.9,
+        total_closed: 43,
+        peak_day: 'Friday',
+        peak_week: 'Week 4 (22–31)',
+        timing_narrative: 'Deals concentrate heavily on Fridays and in the final week of each month, with 34.9% of closes falling in the last 14 days of each quarter — a classic end-of-quarter push pattern. Mid-week deal activity is consistently lower, suggesting quota pressure drives late-cycle urgency.',
+        recommendations: [
+          'Build proposal momentum mid-month so deals are in closing conversations by week 3, reducing last-minute pressure.',
+          'Avoid over-discounting in end-of-quarter rushes — pre-negotiate terms earlier to protect margin.',
+          'Use Friday pipeline reviews to advance deals one stage, capitalising on natural weekly close momentum.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/close-timing`, {}, token)
+  },
 }
 

@@ -9433,3 +9433,69 @@ async def test_revenue_forecast_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/quarterly-forecast")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20e: Deal close timing
+# ---------------------------------------------------------------------------
+
+class FakeCloseTimingRow:
+    def __init__(self, stage_changed_at, value):
+        self.stage_changed_at = stage_changed_at
+        self.value = value
+
+
+@pytest.mark.asyncio
+async def test_close_timing_returns_correct_metrics(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # A Monday (2026-01-05) in week 1 → dow=0, wom=0
+    # A Friday (2026-01-30) in week 4, last day of Jan → dow=4, wom=3
+    # A Friday (2026-03-28) within last 14 days of March → EOQ, dow=4, wom=3
+    base = datetime.datetime(2026, 1, 5, 12, 0, 0)           # Monday
+    friday_w4 = datetime.datetime(2026, 1, 30, 12, 0, 0)     # Friday week 4
+    eoq_friday = datetime.datetime(2026, 3, 27, 12, 0, 0)    # Friday EOQ (Mar 27, within last 14 days)
+
+    rows = [
+        FakeCloseTimingRow(base, 20000),
+        FakeCloseTimingRow(friday_w4, 30000),
+        FakeCloseTimingRow(eoq_friday, 50000),
+    ]
+    mock_db.execute = AsyncMock(side_effect=[_make_execute_result(rows)])
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"timing_narrative": "Deals close mostly on Fridays.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/close-timing")
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["total_closed"] == 3
+    assert body["eoq_count"] == 1
+    assert body["eoq_pct"] == pytest.approx(33.3, rel=1e-2)
+
+    dow = {d["day"]: d for d in body["day_of_week"]}
+    assert dow["Monday"]["deal_count"] == 1
+    assert dow["Friday"]["deal_count"] == 2
+
+    assert body["peak_day"] == "Friday"
+    assert body["peak_week"] in ("Week 4 (22–31)",)
+
+    assert len(body["week_of_month"]) == 4
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_close_timing_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("88888888-8888-8888-8888-888888888888")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/close-timing")
+    assert resp.status_code == 403
+    assert resp.status_code == 403
