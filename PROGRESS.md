@@ -345,12 +345,13 @@ Phase 17 — AI Coaching & Playbook Intelligence
 
 - [2026-09-23] Phase 20d: AI deal price sensitivity analysis — GET /workspaces/{id}/ai/deals/price-sensitivity (Claude Haiku, 5/min; queries closed_won + closed_lost deals via Deal→Contact join; groups into 5 value buckets <$10K/$10K-$25K/$25K-$50K/$50K-$100K/>$100K; computes per-bucket won_count, lost_count, total_count, win_rate; identifies sweet_spot_bucket = highest win_rate bucket with ≥2 deals; computes overall_win_rate; Claude Haiku generates price_narrative + 3 recommendations; graceful empty default without Claude call; returns {buckets[×5], sweet_spot_bucket, total_analyzed, overall_win_rate, price_narrative, recommendations[×3], generated_at}); collapsible "Deal Price Sensitivity" card on /reports (emerald DollarSign icon, overall-win-rate badge, sweet-spot badge, per-bucket horizontal bars colour-coded by win rate emerald≥70%/amber≥50%/rose<50%, W/L counts per bucket, italic price_narrative, emerald-dot recs, Regenerate button); getAIDealPriceSensitivity() in api-client with 46-deal demo stub ($25K-$50K sweet spot at 81.8%, 56.5% overall win rate); 2 new tests (<$10K bucket 50% win_rate / $25K-$50K sweet_spot 100% + overall 75% + 403 guard ffffffff UUID); 264 AI tests total
 
+- [2026-09-23] Phase 20e: AI deal stage velocity analysis — GET /workspaces/{id}/ai/deals/stage-velocity (Claude Haiku, 5/min; queries active deals (discovery/qualified/proposal/negotiation) by Deal.workspace_id directly; computes days_in_stage = (now − stage_changed_at).total_seconds()/86400 per deal; per-stage: deal_count, avg_days, max_days, total_value; top 5 stuck deals sorted by days_in_stage desc; velocity_score = max(0, min(100, round(100 − overall_avg_days × 100 / 60))); Claude Haiku generates velocity_narrative + 3 recommendations; graceful empty default without Claude call; returns {stages[×4 with stage/deal_count/avg_days_in_stage/max_days_in_stage/total_value], top_stuck_deals[×5 with id/title/stage/value/days_in_stage], velocity_score, overall_avg_days, total_active, velocity_narrative, recommendations[×3], generated_at}); collapsible "Deal Stage Velocity" card on /reports (cyan Zap icon, velocity-score badge emerald≥70/amber≥40/rose<40, 4-stage grid with colour-coded avg days rose≥30d/amber≥14d/emerald<14d, top stuck deals list with days badge, italic narrative, cyan-dot recs, Regenerate button); getAIDealStageVelocity() in api-client with 18-deal demo stub (5/4/6/3 per stage, velocity_score=72, overall_avg_days=14.2); 2 new tests (3-deal stage grouping + top stuck deal + wrong-workspace 403 cccccccc UUID); 265 AI tests total; PR #228
+
 ## In Progress
-- Phase 18n pipeline balance: PR #226 (CI rerunning after FakePipelineBalanceDealRow fix)
-- Phase 20c quarterly forecast: PR #227 (CI running)
+(none)
 
 ## Next Task
-Phase 20d: next AI analytics feature — to be determined.
+Phase 20f: next AI analytics feature — to be determined.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
