@@ -7444,6 +7444,38 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/churn-risk`, {}, token)
   },
 
+  async getAIDealNextActionOverdue(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        buckets: [
+          { bucket: 'overdue', label: 'Overdue', count: 4, pct_of_active: 18.2, total_value: 124000 },
+          { bucket: 'due_today', label: 'Due Today', count: 2, pct_of_active: 9.1, total_value: 48000 },
+          { bucket: 'due_soon', label: 'Due This Week', count: 7, pct_of_active: 31.8, total_value: 215000 },
+          { bucket: 'on_track', label: 'On Track', count: 6, pct_of_active: 27.3, total_value: 198000 },
+          { bucket: 'no_action', label: 'No Action Set', count: 3, pct_of_active: 13.6, total_value: 72000 },
+        ],
+        top_overdue_deals: [
+          { deal_id: 'd-011', title: 'Pinnacle Systems', stage: 'negotiation', value: 52000, days_overdue: 12, next_action: 'Send revised contract' },
+          { deal_id: 'd-012', title: 'Zephyr Corp', stage: 'proposal', value: 38000, days_overdue: 7, next_action: 'Follow up on proposal feedback' },
+          { deal_id: 'd-013', title: 'Horizon Ltd', stage: 'qualified', value: 21000, days_overdue: 5, next_action: 'Schedule demo' },
+          { deal_id: 'd-014', title: 'Apex Industries', stage: 'discovery', value: 13000, days_overdue: 3, next_action: 'Send intro deck' },
+        ],
+        overdue_count: 4,
+        overdue_rate: 21.1,
+        total_active: 22,
+        total_with_actions: 19,
+        overdue_narrative: '4 of 22 active deals have overdue next-action dates, representing a 21% overdue rate across deals with actions set. Pinnacle Systems and Zephyr Corp are the highest-value overdue deals requiring immediate attention.',
+        recommendations: [
+          'Clear the 4 overdue deals today — Pinnacle Systems at $52K has been waiting 12 days for contract revision.',
+          'Block 30 minutes each morning to action overdue items before taking new sales calls.',
+          'Aim to keep overdue rate below 10% — use a Friday pipeline review to reset all next-action dates for the week ahead.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/next-action-overdue`, {}, token)
+  },
+
   async getAIDealPipelineBalance(workspaceId: string, token: string) {
     if (isDemoMode) {
       return Promise.resolve({
