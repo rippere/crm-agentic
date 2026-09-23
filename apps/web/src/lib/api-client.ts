@@ -7276,6 +7276,32 @@ export const apiClient = {
       })
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/win-loss-attribution`, {}, token)
+  },,
+    async getAIContactChurnRisk(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        at_risk_contacts: [
+          { contact_id: 'c-007', name: 'James Whitfield', company: 'OmniTech Solutions', revenue: 12500, days_since_last_contact: 72, messages_last_90d: 0, churn_risk_score: 100, churn_risk_level: 'high' },
+          { contact_id: 'c-008', name: 'Sandra Park', company: 'Vertex Industries', revenue: 8200, days_since_last_contact: 58, messages_last_90d: 1, churn_risk_score: 84, churn_risk_level: 'high' },
+          { contact_id: 'c-009', name: 'Daniel Torres', company: 'Skyline Corp', revenue: 6100, days_since_last_contact: 44, messages_last_90d: 2, churn_risk_score: 72, churn_risk_level: 'high' },
+          { contact_id: 'c-010', name: 'Emily Chen', company: 'NovaBridge', revenue: 4400, days_since_last_contact: 31, messages_last_90d: 3, churn_risk_score: 52, churn_risk_level: 'medium' },
+          { contact_id: 'c-011', name: 'Marcus Reed', company: 'Pinnacle Labs', revenue: 3800, days_since_last_contact: 22, messages_last_90d: 5, churn_risk_score: 38, churn_risk_level: 'medium' },
+          { contact_id: 'c-001', name: 'Sarah Chen', company: 'Acme Corp', revenue: 24000, days_since_last_contact: 3, messages_last_90d: 14, churn_risk_score: 0, churn_risk_level: 'low' },
+        ],
+        total_customers: 11,
+        at_risk_count: 5,
+        avg_churn_risk_score: 57.3,
+        churn_narrative: '5 of your 11 customers show elevated churn risk, with 3 having had no contact in over 40 days and zero recent messages. James Whitfield at OmniTech Solutions is the highest-value customer at immediate risk with no communication in 72 days.',
+        recommendations: [
+          'Immediately reach out to James Whitfield, Sandra Park and Daniel Torres — all have been dark for 40+ days with high deal value at risk.',
+          'Set up a 30-day automated re-engagement sequence for customers without recent messages to catch disengagement early.',
+          'Schedule quarterly business reviews with all customers earning over $5K revenue to reduce silent churn.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/churn-risk`, {}, token)
   },
+
 }
 
