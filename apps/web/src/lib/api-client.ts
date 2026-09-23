@@ -7443,5 +7443,68 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/churn-risk`, {}, token)
   },
+
+  async getAIDealEngagementReport(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        engagement_buckets: [
+          { bucket: 'high', label: 'High Engagement (≥60)', deal_count: 6, avg_score: 74.2 },
+          { bucket: 'medium', label: 'Medium Engagement (30–59)', deal_count: 9, avg_score: 44.8 },
+          { bucket: 'low', label: 'Low Engagement (<30)', deal_count: 7, avg_score: 14.3 },
+        ],
+        top_engaged: [
+          { id: 'd-001', title: 'Acme Corp Renewal', stage: 'negotiation', value: 85000, health_score: 82, engagement_score: 78 },
+          { id: 'd-004', title: 'TechCorp Expansion', stage: 'proposal', value: 62000, health_score: 75, engagement_score: 70 },
+          { id: 'd-007', title: 'Globex Enterprise', stage: 'qualified', value: 47000, health_score: 68, engagement_score: 65 },
+        ],
+        least_engaged: [
+          { id: 'd-022', title: 'Zephyr Systems', stage: 'discovery', value: 18000, health_score: 35, engagement_score: 8 },
+          { id: 'd-019', title: 'Pinnacle Group', stage: 'qualified', value: 24000, health_score: 42, engagement_score: 12 },
+          { id: 'd-016', title: 'Horizon Ltd', stage: 'proposal', value: 31000, health_score: 48, engagement_score: 17 },
+        ],
+        avg_engagement_score: 42.6,
+        total_active: 22,
+        engagement_narrative: '6 of 22 active deals show strong engagement scores above 60, driven by consistent messaging and deal note activity. However, 7 deals have critically low engagement below 30 — these are at risk of going silent and losing momentum without immediate intervention.',
+        recommendations: [
+          'Schedule a personal outreach call for each of the 7 low-engagement deals this week, prioritising those with the highest pipeline value.',
+          'Log at least one detailed deal note per low-engagement deal summarising blockers and next agreed actions to bring scores above 30.',
+          'Connect your Gmail connector to automatically capture inbound replies and boost engagement tracking without manual data entry.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/engagement-report`, {}, token)
+  },
+
+  async getAIDealPipelineBalance(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stage_balance: [
+          { stage: 'discovery', actual_count: 8, actual_pct: 36.4, expected_pct: 30.0, variance_pct: 6.4 },
+          { stage: 'qualified', actual_count: 4, actual_pct: 18.2, expected_pct: 25.0, variance_pct: -6.8 },
+          { stage: 'proposal', actual_count: 6, actual_pct: 27.3, expected_pct: 25.0, variance_pct: 2.3 },
+          { stage: 'negotiation', actual_count: 4, actual_pct: 18.2, expected_pct: 20.0, variance_pct: -1.8 },
+        ],
+        value_balance: [
+          { tier: 'Enterprise (>$50K)', count: 5, pct: 22.7 },
+          { tier: 'Mid-Market ($20K–$50K)', count: 9, pct: 40.9 },
+          { tier: 'SMB (<$20K)', count: 8, pct: 36.4 },
+        ],
+        balance_score: 72,
+        most_imbalanced_stage: 'qualified',
+        concentration_risk: 'medium',
+        total_pipeline_value: 685000,
+        total_open_deals: 22,
+        balance_narrative: 'The pipeline shows moderate balance with discovery slightly over-represented at 36.4% versus the ideal 30%, while qualified lags behind at 18.2%. The mid-market tier dominates value, and the top-3 deals represent 41% of total pipeline value — a concentration risk worth monitoring.',
+        recommendations: [
+          'Increase prospecting activity targeting qualified-stage criteria to move more discovery deals forward and fill the qualified gap.',
+          'Review the 8 SMB deals under $20K to identify which have upsell potential or should be fast-tracked to close to free capacity.',
+          'Set a weekly pipeline review cadence to track stage distribution against the 30/25/25/20 ideal and adjust outreach focus accordingly.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-balance`, {}, token)
+  },
 }
 
