@@ -7391,5 +7391,31 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/score-tier-analysis`, {}, token)
   },
+
+  getAIDealCohortAnalysis(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        cohorts: [
+          { cohort: 'Q1 2025', won_count: 8, lost_count: 4, total_revenue: 142000, win_rate: 66.7 },
+          { cohort: 'Q2 2025', won_count: 11, lost_count: 5, total_revenue: 198500, win_rate: 68.8 },
+          { cohort: 'Q3 2025', won_count: 6, lost_count: 6, total_revenue: 87000, win_rate: 50.0 },
+        ],
+        closing_quarters: ['Q2 2025', 'Q3 2025', 'Q4 2025'],
+        chart_data: [
+          { closing_quarter: 'Q2 2025', 'Q1 2025': 62000, 'Q2 2025': 0, 'Q3 2025': 0 },
+          { closing_quarter: 'Q3 2025', 'Q1 2025': 80000, 'Q2 2025': 95000, 'Q3 2025': 42000 },
+          { closing_quarter: 'Q4 2025', 'Q1 2025': 0, 'Q2 2025': 103500, 'Q3 2025': 45000 },
+        ],
+        cohort_narrative: 'The Q2 2025 acquisition cohort is your strongest, generating $198.5K in closed-won revenue across 11 deals at a 68.8% win rate. Recent cohorts are tracking at higher win rates than Q1 2025, suggesting improved lead qualification processes.',
+        recommendations: [
+          'Focus acquisition efforts on replicating conditions that made Q2 2025 your strongest cohort.',
+          'Analyse common deal characteristics from high-performing cohorts to identify repeatable success patterns.',
+          'Track newer cohorts monthly to detect performance changes early and adjust pipeline strategy.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/cohort-analysis`, {}, token)
+  },
 }
 
