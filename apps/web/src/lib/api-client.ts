@@ -7367,5 +7367,29 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/health-score-distribution`, {}, token)
   },
+
+  async getAIContactScoreTierAnalysis(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        tiers: [
+          { tier: 'Hot', score_range: '71–100', count: 12, pct_of_total: 25.5, avg_revenue: 18500, total_revenue: 222000 },
+          { tier: 'Warm', score_range: '40–70', count: 21, pct_of_total: 44.7, avg_revenue: 9200, total_revenue: 193200 },
+          { tier: 'Cold', score_range: '0–39', count: 8, pct_of_total: 17.0, avg_revenue: 2400, total_revenue: 19200 },
+          { tier: 'Unscored', score_range: 'N/A', count: 6, pct_of_total: 12.8, avg_revenue: 0, total_revenue: 0 },
+        ],
+        total_contacts: 47,
+        avg_score: 56.4,
+        highest_revenue_tier: 'Hot',
+        score_narrative: '25.5% of contacts are in the Hot tier, driving the highest average revenue at $18.5K per contact — your clearest immediate pipeline priority. The 6 unscored contacts represent a data gap that should be resolved with a scoring run to reveal hidden opportunities.',
+        recommendations: [
+          'Prioritise outreach to the 12 Hot-tier contacts to accelerate deal creation and close cycles.',
+          'Run the ML scoring agent on the 6 unscored contacts to surface potential Hot or Warm leads.',
+          'Schedule quarterly reviews of Cold-tier contacts to decide whether to re-engage or archive.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/score-tier-analysis`, {}, token)
+  },
 }
 

@@ -19082,3 +19082,160 @@ async def get_contact_health_score_distribution(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/score-tier-analysis")
+@limiter.limit("5/minute")
+async def get_contact_score_tier_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    contact_result = await db.execute(
+        select(Contact.id, Contact.ml_score, Contact.revenue, Contact.name)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    contacts = contact_result.all()
+    total_contacts = len(contacts)
+
+    if total_contacts == 0:
+        return {
+            "tiers": [
+                {"tier": "Hot", "score_range": "71–100", "count": 0, "pct_of_total": 0.0, "avg_revenue": 0.0, "total_revenue": 0.0},
+                {"tier": "Warm", "score_range": "40–70", "count": 0, "pct_of_total": 0.0, "avg_revenue": 0.0, "total_revenue": 0.0},
+                {"tier": "Cold", "score_range": "0–39", "count": 0, "pct_of_total": 0.0, "avg_revenue": 0.0, "total_revenue": 0.0},
+                {"tier": "Unscored", "score_range": "N/A", "count": 0, "pct_of_total": 0.0, "avg_revenue": 0.0, "total_revenue": 0.0},
+            ],
+            "total_contacts": 0,
+            "avg_score": 0.0,
+            "highest_revenue_tier": None,
+            "score_narrative": "No contacts in this workspace yet.",
+            "recommendations": [
+                "Import contacts to begin scoring.",
+                "Run the contact scoring agent to populate ML scores.",
+                "Review score signals in contact profiles.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    tier_counts: dict[str, int] = {"Hot": 0, "Warm": 0, "Cold": 0, "Unscored": 0}
+    tier_revenue: dict[str, float] = {"Hot": 0.0, "Warm": 0.0, "Cold": 0.0, "Unscored": 0.0}
+
+    for row in contacts:
+        ml_score = row.ml_score or {}
+        score_val = ml_score.get("value") if isinstance(ml_score, dict) else None
+        rev = float(row.revenue or 0)
+
+        if score_val is None:
+            tier = "Unscored"
+        elif score_val >= 70:
+            tier = "Hot"
+        elif score_val >= 40:
+            tier = "Warm"
+        else:
+            tier = "Cold"
+
+        tier_counts[tier] += 1
+        tier_revenue[tier] += rev
+
+    all_scores = [
+        float((row.ml_score or {}).get("value", 0) or 0)
+        for row in contacts
+        if isinstance(row.ml_score, dict) and row.ml_score.get("value") is not None
+    ]
+    avg_score = round(sum(all_scores) / len(all_scores), 1) if all_scores else 0.0
+
+    tier_defs = [
+        ("Hot", "71–100"),
+        ("Warm", "40–70"),
+        ("Cold", "0–39"),
+        ("Unscored", "N/A"),
+    ]
+    tiers = []
+    for tier_label, score_range in tier_defs:
+        count = tier_counts[tier_label]
+        pct = round(count / total_contacts * 100, 1) if total_contacts > 0 else 0.0
+        total_rev = tier_revenue[tier_label]
+        avg_rev = round(total_rev / count, 2) if count > 0 else 0.0
+        tiers.append({
+            "tier": tier_label,
+            "score_range": score_range,
+            "count": count,
+            "pct_of_total": pct,
+            "avg_revenue": avg_rev,
+            "total_revenue": round(total_rev, 2),
+        })
+
+    highest_revenue_tier = max(tier_defs, key=lambda td: tier_revenue[td[0]])[0] if any(tier_revenue.values()) else None
+
+    hot_count = tier_counts["Hot"]
+    warm_count = tier_counts["Warm"]
+    cold_count = tier_counts["Cold"]
+    unscored_count = tier_counts["Unscored"]
+
+    context = (
+        f"Contact ML Score Tier Analysis:\n"
+        f"- Total contacts: {total_contacts}\n"
+        f"- Hot (score ≥70): {hot_count} contacts\n"
+        f"- Warm (score 40–69): {warm_count} contacts\n"
+        f"- Cold (score <40): {cold_count} contacts\n"
+        f"- Unscored: {unscored_count} contacts\n"
+        f"- Average ML score: {avg_score}\n"
+        f"- Highest revenue tier: {highest_revenue_tier}\n"
+    )
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence score_narrative explaining what this score distribution reveals "
+        "about pipeline quality and where to focus sales attention. "
+        "Then provide exactly 3 short actionable recommendations to improve the score distribution. "
+        'Respond ONLY with valid JSON: {"score_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    score_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        score_narrative = str(parsed.get("score_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        hot_pct = round(hot_count / total_contacts * 100, 1) if total_contacts > 0 else 0.0
+        score_narrative = (
+            f"{hot_pct}% of contacts are Hot — your highest-priority segment for immediate pipeline action. "
+            f"The {unscored_count} unscored contacts represent a data gap that limits forecasting accuracy."
+        )
+        recommendations = [
+            f"Prioritise outreach to the {hot_count} Hot contacts to accelerate deal creation.",
+            f"Run the scoring agent on the {unscored_count} unscored contacts to uncover hidden opportunities.",
+            "Review Cold-tier contacts quarterly to decide whether to re-engage or archive.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Schedule regular ML score refreshes to keep tier assignments current.")
+
+    return {
+        "tiers": tiers,
+        "total_contacts": total_contacts,
+        "avg_score": avg_score,
+        "highest_revenue_tier": highest_revenue_tier,
+        "score_narrative": score_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
