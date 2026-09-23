@@ -873,6 +873,13 @@ export default function ReportsPage() {
   const [churnRiskLoading, setChurnRiskLoading] = useState(false);
   const [churnRiskOpen, setChurnRiskOpen] = useState(true);
 
+  type AILeadStage = { stage: string; stage_label: string; count: number; pct: number };
+  type AILeadSource = { source: string; count: number; pct: number };
+  type AILeadFunnelData = { total_leads: number; stage_breakdown: AILeadStage[]; top_sources: AILeadSource[]; converted_count: number; conversion_rate: number; high_score_unconverted: number; avg_score: number; funnel_narrative: string; recommendations: string[]; generated_at: string };
+  const [leadFunnel, setLeadFunnel] = useState<AILeadFunnelData | null>(null);
+  const [leadFunnelLoading, setLeadFunnelLoading] = useState(false);
+  const [leadFunnelOpen, setLeadFunnelOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1057,6 +1064,8 @@ export default function ReportsPage() {
       apiClient.getAIDealCohortAnalysis("demo-workspace-1", "demo-token").then(setCohortAnalysis).catch(() => {}).finally(() => setCohortAnalysisLoading(false));
       setChurnRiskLoading(true);
       apiClient.getAIContactChurnRisk("demo-workspace-1", "demo-token").then(setChurnRisk).catch(() => {}).finally(() => setChurnRiskLoading(false));
+      setLeadFunnelLoading(true);
+      apiClient.getAILeadFunnelAnalysis("demo-workspace-1", "demo-token").then(setLeadFunnel).catch(() => {}).finally(() => setLeadFunnelLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1246,6 +1255,8 @@ export default function ReportsPage() {
       apiClient.getAIDealCohortAnalysis(workspaceId, session.access_token).then(setCohortAnalysis).catch(() => {}).finally(() => setCohortAnalysisLoading(false));
       setChurnRiskLoading(true);
       apiClient.getAIContactChurnRisk(workspaceId, session.access_token).then(setChurnRisk).catch(() => {}).finally(() => setChurnRiskLoading(false));
+      setLeadFunnelLoading(true);
+      apiClient.getAILeadFunnelAnalysis(workspaceId, session.access_token).then(setLeadFunnel).catch(() => {}).finally(() => setLeadFunnelLoading(false));
     });
   }, []);
 
@@ -2599,6 +2610,27 @@ export default function ReportsPage() {
         if (!session) { setChurnRiskLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setChurnRiskLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateLeadFunnel = () => {
+    setLeadFunnelLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAILeadFunnelAnalysis(wid, tok)
+        .then(setLeadFunnel)
+        .catch(() => {})
+        .finally(() => setLeadFunnelLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setLeadFunnelLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setLeadFunnelLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11376,6 +11408,106 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load customer churn risk analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20b: Lead Funnel Analysis */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div
+          className="flex items-center gap-2 px-4 py-3 cursor-pointer select-none"
+          onClick={() => setLeadFunnelOpen((v) => !v)}
+        >
+          <Filter className="h-4 w-4 text-teal-400 flex-shrink-0" />
+          <span className="font-medium text-sm text-zinc-200 flex-1">Lead Funnel Analysis</span>
+          {leadFunnel && <span className="ml-1 rounded-full bg-teal-500/15 px-2 py-0.5 text-xs text-teal-300">{leadFunnel.total_leads} leads</span>}
+          {leadFunnel && <span className={`ml-1 rounded-full px-2 py-0.5 text-xs font-medium ${leadFunnel.conversion_rate >= 15 ? 'bg-emerald-500/15 text-emerald-300' : leadFunnel.conversion_rate >= 8 ? 'bg-amber-500/15 text-amber-300' : 'bg-rose-500/15 text-rose-300'}`}>{leadFunnel.conversion_rate}% converted</span>}
+          {leadFunnelLoading && <RefreshCw className="h-3.5 w-3.5 text-teal-400 animate-spin" />}
+          <button
+            className="ml-2 rounded-md bg-zinc-800 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-colors"
+            disabled={leadFunnelLoading}
+            onClick={(e) => { e.stopPropagation(); regenerateLeadFunnel(); }}
+          >
+            <RefreshCw className={`h-3 w-3 ${leadFunnelLoading ? 'animate-spin' : ''}`} />
+          </button>
+          {leadFunnelOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </div>
+        {leadFunnelOpen && (
+          leadFunnelLoading ? (
+            <div className="p-4 pt-0 space-y-3">
+              {[1,2,3].map((i) => <div key={i} className="h-6 rounded bg-zinc-800 animate-pulse" />)}
+            </div>
+          ) : leadFunnel ? (
+            <div className="p-4 pt-0 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-zinc-800/50 px-3 py-2 text-center">
+                  <p className="text-xs text-zinc-400">Total Leads</p>
+                  <p className="text-lg font-semibold text-zinc-100">{leadFunnel.total_leads}</p>
+                </div>
+                <div className="rounded-lg bg-zinc-800/50 px-3 py-2 text-center">
+                  <p className="text-xs text-zinc-400">Converted</p>
+                  <p className="text-lg font-semibold text-emerald-400">{leadFunnel.converted_count}</p>
+                </div>
+                <div className="rounded-lg bg-zinc-800/50 px-3 py-2 text-center">
+                  <p className="text-xs text-zinc-400">High-Score Waiting</p>
+                  <p className="text-lg font-semibold text-amber-400">{leadFunnel.high_score_unconverted}</p>
+                </div>
+              </div>
+              {leadFunnel.stage_breakdown.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Stage Breakdown</h3>
+                  <div className="space-y-2">
+                    {leadFunnel.stage_breakdown.map((s) => {
+                      const barColor = s.stage === 'converted' ? 'bg-emerald-500' : s.stage === 'lost' ? 'bg-rose-500' : s.stage === 'qualified' ? 'bg-teal-500' : s.stage === 'engaged' ? 'bg-indigo-500' : s.stage === 'contacted' ? 'bg-sky-500' : 'bg-zinc-500';
+                      return (
+                        <div key={s.stage}>
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className="text-xs text-zinc-300">{s.stage_label}</span>
+                            <span className="text-xs text-zinc-400">{s.count} <span className="text-zinc-600">({s.pct}%)</span></span>
+                          </div>
+                          <div className="h-1.5 w-full rounded-full bg-zinc-800">
+                            <div className={`h-1.5 rounded-full ${barColor}`} style={{ width: `${Math.max(s.pct, 2)}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {leadFunnel.top_sources.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Top Sources</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {leadFunnel.top_sources.map((src) => (
+                      <div key={src.source} className="flex items-center gap-1.5 rounded-md bg-zinc-800/50 px-2.5 py-1 text-xs">
+                        <span className="text-zinc-300 capitalize">{src.source}</span>
+                        <span className="text-teal-400 font-medium">{src.count}</span>
+                        <span className="text-zinc-600">({src.pct}%)</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {leadFunnel.funnel_narrative && (
+                <p className="text-sm text-zinc-400 italic">{leadFunnel.funnel_narrative}</p>
+              )}
+              {leadFunnel.recommendations.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Recommendations</h3>
+                  <ul className="space-y-1.5">
+                    {leadFunnel.recommendations.map((r, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                        <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="text-xs text-zinc-600">Generated {new Date(leadFunnel.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load lead funnel analysis.</div>
           )
         )}
       </Card>
