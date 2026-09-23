@@ -856,6 +856,12 @@ export default function ReportsPage() {
   const [healthScoreDistLoading, setHealthScoreDistLoading] = useState(false);
   const [healthScoreDistOpen, setHealthScoreDistOpen] = useState(true);
 
+  type AIScoreTier = { tier: string; score_range: string; count: number; pct_of_total: number; avg_revenue: number; total_revenue: number };
+  type AIScoreTierData = { tiers: AIScoreTier[]; total_contacts: number; avg_score: number; highest_revenue_tier: string | null; score_narrative: string; recommendations: string[]; generated_at: string };
+  const [scoreTierAnalysis, setScoreTierAnalysis] = useState<AIScoreTierData | null>(null);
+  const [scoreTierAnalysisLoading, setScoreTierAnalysisLoading] = useState(false);
+  const [scoreTierAnalysisOpen, setScoreTierAnalysisOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1034,6 +1040,8 @@ export default function ReportsPage() {
       apiClient.getAIContactScoreSegmentation("demo-workspace-1", "demo-token").then(setScoreSegmentation).catch(() => {}).finally(() => setScoreSegmentationLoading(false));
       setHealthScoreDistLoading(true);
       apiClient.getAIContactHealthScoreDistribution("demo-workspace-1", "demo-token").then(setHealthScoreDist).catch(() => {}).finally(() => setHealthScoreDistLoading(false));
+      setScoreTierAnalysisLoading(true);
+      apiClient.getAIContactScoreTierAnalysis("demo-workspace-1", "demo-token").then(setScoreTierAnalysis).catch(() => {}).finally(() => setScoreTierAnalysisLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1217,6 +1225,8 @@ export default function ReportsPage() {
       apiClient.getAIContactScoreSegmentation(workspaceId, session.access_token).then(setScoreSegmentation).catch(() => {}).finally(() => setScoreSegmentationLoading(false));
       setHealthScoreDistLoading(true);
       apiClient.getAIContactHealthScoreDistribution(workspaceId, session.access_token).then(setHealthScoreDist).catch(() => {}).finally(() => setHealthScoreDistLoading(false));
+      setScoreTierAnalysisLoading(true);
+      apiClient.getAIContactScoreTierAnalysis(workspaceId, session.access_token).then(setScoreTierAnalysis).catch(() => {}).finally(() => setScoreTierAnalysisLoading(false));
     });
   }, []);
 
@@ -2507,6 +2517,27 @@ export default function ReportsPage() {
         if (!session) { setHealthScoreDistLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setHealthScoreDistLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateScoreTierAnalysis = () => {
+    setScoreTierAnalysisLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactScoreTierAnalysis(wid, tok)
+        .then(setScoreTierAnalysis)
+        .catch(() => {})
+        .finally(() => setScoreTierAnalysisLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setScoreTierAnalysisLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setScoreTierAnalysisLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11032,6 +11063,76 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact health score distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Contact ML Score Tier Analysis */}
+      <Card className="overflow-hidden">
+        <button
+          className="w-full flex items-center justify-between px-6 py-4 hover:bg-zinc-800/40 transition-colors"
+          onClick={() => setScoreTierAnalysisOpen((o) => !o)}
+        >
+          <div className="flex items-center gap-3">
+            <BarChart2 className="h-4 w-4 text-amber-400" />
+            <span className="font-semibold text-sm">Contact ML Score Tiers</span>
+            {scoreTierAnalysis && (
+              <span className="text-xs bg-amber-500/15 text-amber-300 px-2 py-0.5 rounded-full">
+                avg {scoreTierAnalysis.avg_score}
+              </span>
+            )}
+            {scoreTierAnalysis?.highest_revenue_tier && (
+              <span className="text-xs text-zinc-500">top revenue: {scoreTierAnalysis.highest_revenue_tier}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="text-xs text-amber-400 hover:text-amber-300 flex items-center gap-1 px-2 py-1 rounded hover:bg-amber-500/10 transition-colors"
+              onClick={(e) => { e.stopPropagation(); regenerateScoreTierAnalysis(); }}
+              disabled={scoreTierAnalysisLoading}
+            >
+              {scoreTierAnalysisLoading ? <span className="animate-spin">↻</span> : '↻'} Regenerate
+            </button>
+            {scoreTierAnalysisOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </button>
+        {scoreTierAnalysisOpen && (
+          scoreTierAnalysisLoading && !scoreTierAnalysis ? (
+            <div className="p-6 space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-4 bg-zinc-800 rounded animate-pulse" />)}</div>
+          ) : scoreTierAnalysis ? (
+            <div className="px-6 pb-6 space-y-4">
+              <div className="space-y-2">
+                {scoreTierAnalysis.tiers.map((t) => {
+                  const tierColor: Record<string, string> = { Hot: 'bg-rose-500', Warm: 'bg-amber-500', Cold: 'bg-sky-500', Unscored: 'bg-zinc-500' };
+                  const textColor: Record<string, string> = { Hot: 'text-rose-300', Warm: 'text-amber-300', Cold: 'text-sky-300', Unscored: 'text-zinc-400' };
+                  return (
+                    <div key={t.tier} className="flex items-center gap-3">
+                      <span className={`w-20 text-xs font-medium ${textColor[t.tier] ?? 'text-zinc-400'}`}>{t.tier}</span>
+                      <div className="flex-1 bg-zinc-800 rounded-full h-2 overflow-hidden">
+                        <div className={`h-2 rounded-full ${tierColor[t.tier] ?? 'bg-zinc-500'}`} style={{ width: `${t.pct_of_total}%` }} />
+                      </div>
+                      <span className="w-8 text-xs text-right text-zinc-400">{t.count}</span>
+                      <span className="w-14 text-xs text-right text-zinc-500">{t.pct_of_total}%</span>
+                      {t.avg_revenue > 0 && (
+                        <span className="w-20 text-xs text-right text-emerald-400">${t.avg_revenue.toLocaleString()} avg</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{scoreTierAnalysis.score_narrative}</p>
+              <ul className="space-y-1">
+                {scoreTierAnalysis.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(scoreTierAnalysis.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact ML score tier analysis.</div>
           )
         )}
       </Card>
