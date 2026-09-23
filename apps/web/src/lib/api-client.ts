@@ -7507,6 +7507,35 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-balance`, {}, token)
   },
 
+  async getAIDealQuarterlyForecast(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        historical_actuals: [
+          { quarter: 'Q4 2025', revenue: 312000 },
+          { quarter: 'Q1 2026', revenue: 278000 },
+          { quarter: 'Q2 2026', revenue: 345000 },
+          { quarter: 'Q3 2026', revenue: 298000 },
+        ],
+        projected_quarter: 'Q4 2026',
+        projected_revenue: 385000,
+        weighted_forecast: 385000,
+        total_pipeline_value: 685000,
+        total_active_deals: 22,
+        avg_quarterly_revenue: 308250,
+        confidence_score: 76,
+        deal_count_by_stage: { discovery: 8, qualified: 4, proposal: 6, negotiation: 4 },
+        forecast_narrative: 'The probability-weighted forecast of $385K for Q4 2026 exceeds the $308K quarterly average, driven by a strong proposal and negotiation stage mix. Pipeline coverage ratio of 2.2× provides solid confidence in achieving the target.',
+        recommendations: [
+          'Focus closing effort on the 4 negotiation-stage deals ($142K weighted) to lock in Q4 revenue.',
+          'Advance 2–3 qualified deals to proposal this month to maintain Q1 2027 pipeline health.',
+          'Update ML win probability weekly — forecast accuracy degrades when probabilities are stale by more than 2 weeks.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/quarterly-forecast`, {}, token)
+  },
+
   async getAIDealPriceSensitivity(workspaceId: string, token: string) {
     if (isDemoMode) {
       return Promise.resolve({

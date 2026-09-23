@@ -19951,6 +19951,196 @@ async def get_ai_deal_pipeline_balance(
     }
 
 
+
+_QUARTERLY_FORECAST_SYSTEM = (
+    "You are a sales analytics AI. Analyse a CRM quarterly revenue forecast report comparing "
+    "pipeline-weighted projected revenue against historical closed-won actuals by quarter. "
+    "Write a 2-sentence narrative about forecast confidence and pipeline health, "
+    "and 3 actionable recommendations to improve forecast accuracy or accelerate revenue. "
+    "Respond ONLY with valid JSON: "
+    "{\"forecast_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_QUARTERLY_ACTIVE_STAGES = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/quarterly-forecast")
+@limiter.limit("5/minute")
+async def get_ai_deal_quarterly_forecast(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    def _quarter_label(dt: datetime.datetime) -> str:
+        q = (dt.month - 1) // 3 + 1
+        return f"Q{q} {dt.year}"
+
+    def _quarter_sort_key(label: str) -> tuple:
+        parts = label.split()
+        return (int(parts[1]), int(parts[0][1]))
+
+    # --- Active pipeline deals: weighted projected revenue ---
+    active_result = await db.execute(
+        select(Deal.value, Deal.ml_win_probability, Deal.stage, Deal.title)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(_QUARTERLY_ACTIVE_STAGES),
+        )
+    )
+    active_rows = active_result.all()
+
+    total_pipeline_value = 0.0
+    weighted_forecast = 0.0
+    deal_count_by_stage: dict[str, int] = {s: 0 for s in _QUARTERLY_ACTIVE_STAGES}
+    for row in active_rows:
+        val = float(row.value or 0)
+        prob = float(row.ml_win_probability or 0)
+        total_pipeline_value += val
+        weighted_forecast += val * prob / 100.0
+        if row.stage in deal_count_by_stage:
+            deal_count_by_stage[row.stage] += 1
+
+    total_active_deals = len(active_rows)
+
+    # --- Last 4 quarters of closed_won revenue ---
+    cutoff = now - datetime.timedelta(days=450)  # ~15 months back, plenty for 4 quarters
+    closed_result = await db.execute(
+        select(Deal.value, Deal.updated_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.updated_at >= cutoff,
+        )
+        .order_by(Deal.updated_at)
+    )
+    closed_rows = closed_result.all()
+
+    quarterly_actuals: dict[str, float] = {}
+    for row in closed_rows:
+        closed_at = row.updated_at
+        if closed_at is None:
+            continue
+        if hasattr(closed_at, "tzinfo") and closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=timezone.utc)
+        lbl = _quarter_label(closed_at)
+        quarterly_actuals[lbl] = quarterly_actuals.get(lbl, 0.0) + float(row.value or 0)
+
+    # Keep only the 4 most recent completed quarters
+    all_quarters = sorted(quarterly_actuals.keys(), key=_quarter_sort_key)
+    # Exclude current quarter (still open)
+    current_quarter = _quarter_label(now)
+    historical_quarters = [q for q in all_quarters if q != current_quarter][-4:]
+    historical_actuals = [{"quarter": q, "revenue": round(quarterly_actuals[q], 2)} for q in historical_quarters]
+
+    avg_quarterly_revenue = (
+        sum(h["revenue"] for h in historical_actuals) / len(historical_actuals)
+        if historical_actuals
+        else 0.0
+    )
+
+    # Confidence score: weighted_forecast vs avg_quarterly_revenue
+    if avg_quarterly_revenue > 0:
+        ratio = weighted_forecast / avg_quarterly_revenue
+        # 1.0 = exactly on track = 70, scale ±30
+        confidence_score = max(0, min(100, round(70 + (ratio - 1.0) * 50)))
+    else:
+        confidence_score = 50 if weighted_forecast > 0 else 0
+
+    # Graceful empty default
+    if total_active_deals == 0 and not historical_actuals:
+        return {
+            "historical_actuals": [],
+            "projected_quarter": current_quarter,
+            "projected_revenue": 0.0,
+            "weighted_forecast": 0.0,
+            "total_pipeline_value": 0.0,
+            "total_active_deals": 0,
+            "avg_quarterly_revenue": 0.0,
+            "confidence_score": 0,
+            "deal_count_by_stage": deal_count_by_stage,
+            "forecast_narrative": "No active deals or closed-won history found — add deals and start closing to see your revenue forecast.",
+            "recommendations": [
+                "Add active deals to your pipeline to generate a revenue forecast.",
+                "Close your first deals to build the historical baseline this forecast compares against.",
+                "Ensure ML win probability is set on active deals for accurate weighted projection.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    hist_str = ", ".join(f"{h['quarter']} ${h['revenue']:,.0f}" for h in historical_actuals) or "none"
+    context = (
+        f"Revenue forecast summary:\n"
+        f"Current quarter: {current_quarter}\n"
+        f"Active pipeline deals: {total_active_deals}\n"
+        f"Total pipeline value: ${total_pipeline_value:,.0f}\n"
+        f"Probability-weighted forecast: ${weighted_forecast:,.0f}\n"
+        f"Avg quarterly closed-won revenue (last {len(historical_actuals)} quarters): ${avg_quarterly_revenue:,.0f}\n"
+        f"Forecast confidence score: {confidence_score}/100\n"
+        f"Historical quarters: {hist_str}\n"
+        f"Deals by stage: {deal_count_by_stage}\n"
+    )
+
+    forecast_narrative = ""
+    recs: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_QUARTERLY_FORECAST_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    forecast_narrative = str(data.get("forecast_narrative", "")).strip()
+    if not forecast_narrative:
+        forecast_narrative = (
+            f"Probability-weighted forecast of ${weighted_forecast:,.0f} for {current_quarter} "
+            f"{'exceeds' if weighted_forecast >= avg_quarterly_revenue else 'trails'} "
+            f"the ${avg_quarterly_revenue:,.0f} quarterly average, giving a confidence score of {confidence_score}/100."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    defaults = [
+        "Update ML win probability on every active deal weekly to keep the forecast accurate.",
+        "Focus closing effort on deals in proposal and negotiation stages to maximise this quarter's revenue.",
+        "Identify deals with >70% win probability and schedule executive sponsor calls to accelerate.",
+    ]
+    while len(recs) < 3:
+        recs.append(defaults[len(recs) % 3])
+
+    return {
+        "historical_actuals": historical_actuals,
+        "projected_quarter": current_quarter,
+        "projected_revenue": round(weighted_forecast, 2),
+        "weighted_forecast": round(weighted_forecast, 2),
+        "total_pipeline_value": round(total_pipeline_value, 2),
+        "total_active_deals": total_active_deals,
+        "avg_quarterly_revenue": round(avg_quarterly_revenue, 2),
+        "confidence_score": confidence_score,
+        "deal_count_by_stage": deal_count_by_stage,
+        "forecast_narrative": forecast_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
 _PRICE_SENSITIVITY_SYSTEM = (
     "You are a sales analytics AI. Analyse a CRM deal price sensitivity report. "
     "Write a 2-sentence narrative about how deal size affects win rate "
@@ -19961,9 +20151,9 @@ _PRICE_SENSITIVITY_SYSTEM = (
 
 _PRICE_BUCKETS = [
     {"label": "<$10K",        "min": 0,      "max": 10_000},
-    {"label": "$10K–$25K",    "min": 10_000, "max": 25_000},
-    {"label": "$25K–$50K",    "min": 25_000, "max": 50_000},
-    {"label": "$50K–$100K",   "min": 50_000, "max": 100_000},
+    {"label": "$10K\u2013$25K",    "min": 10_000, "max": 25_000},
+    {"label": "$25K\u2013$50K",    "min": 25_000, "max": 50_000},
+    {"label": "$50K\u2013$100K",   "min": 50_000, "max": 100_000},
     {"label": ">$100K",       "min": 100_000, "max": None},
 ]
 
