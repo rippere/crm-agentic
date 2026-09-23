@@ -8877,3 +8877,50 @@ async def test_contact_task_backlog_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/task-backlog")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/deals/cohort-analysis  (Phase 20a)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deal_cohort_analysis_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    class FakeDealRow:
+        def __init__(self, value, stage, created_at, stage_changed_at):
+            self.id = str(uuid.uuid4())
+            self.value = value
+            self.stage = stage
+            self.created_at = created_at
+            self.stage_changed_at = stage_changed_at
+
+    rows = [
+        FakeDealRow(50000, "closed_won", datetime.datetime(2025, 1, 15), datetime.datetime(2025, 3, 20)),
+        FakeDealRow(30000, "closed_lost", datetime.datetime(2025, 2, 10), datetime.datetime(2025, 4, 5)),
+        FakeDealRow(70000, "closed_won", datetime.datetime(2025, 4, 8), datetime.datetime(2025, 6, 12)),
+    ]
+    mock_db.execute.return_value = _make_execute_result(rows)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/cohort-analysis")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "cohorts" in body
+    assert "closing_quarters" in body
+    assert "chart_data" in body
+    assert "cohort_narrative" in body
+    assert "recommendations" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+    assert len(body["cohorts"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_deal_cohort_analysis_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("55555555-5555-5555-5555-555555555555")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/cohort-analysis")
+    assert resp.status_code == 403
