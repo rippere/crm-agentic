@@ -150,9 +150,9 @@ async def _ai_draft_body(step: SequenceStep, lead: Lead | None, fallback: str) -
     if not api_key:
         return fallback, False
     try:
-        import anthropic
+        from app.services.llm import get_async_anthropic
 
-        client = anthropic.AsyncAnthropic(api_key=api_key)
+        client = get_async_anthropic()
         prompt = (
             "You are a sales assistant. Personalise this outreach message for the "
             f"lead {getattr(lead, 'name', None) or 'there'} at "

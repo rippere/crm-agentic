@@ -213,6 +213,29 @@ async def test_automated_senders_never_become_rows():
 
 
 @pytest.mark.asyncio
+async def test_ingest_respects_hard_message_cap(monkeypatch):
+    """One sync must process at most INGEST_MAX_MESSAGES, no matter how many the
+    mailbox returns — the guard that stops a connect from fanning LLM calls over
+    an entire multi-year mailbox. With the cap set to 3 and ten candidates
+    available, exactly three are fetched, stored and relevance-checked; the run
+    reports truncated so the remainder is picked up next sync (never dropped)."""
+    monkeypatch.setattr("app.config.settings.INGEST_MAX_MESSAGES", 3)
+
+    db = _mock_db()
+    msgs = [
+        _gmail_message(f"m{i}", sender=f"lead{i}@example.com", to="ben@novacrm.io")
+        for i in range(10)
+    ]
+    # Ten relevance verdicts offered; only cap-many may be consumed.
+    result = await _run(msgs, [True] * 10, db)
+
+    stored = _added_messages(db)
+    assert len(stored) == 3, "must persist no more than the hard message cap"
+    assert result["new_messages"] == 3, "at most cap-many messages enter the pipeline"
+    assert result["truncated"] is True, "hitting the cap must flag truncation, not drop silently"
+
+
+@pytest.mark.asyncio
 async def test_metadata_only_rows_are_not_enqueued_for_enrichment():
     """Relevance still gates Claude spend; only the drop was removed."""
     db = _mock_db()
@@ -226,3 +249,70 @@ async def test_metadata_only_rows_are_not_enqueued_for_enrichment():
     assert result["new_messages"] == 1
     assert result["graph_only_rows"] == 1
     assert result["enqueued_enrich"] == 1, "only the relevant message costs a Claude call"
+
+
+# ---------------------------------------------------------------------------
+# reprocess ("Re-run enrichment") fan-out cap — REPROCESS_MAX_MESSAGES
+# ---------------------------------------------------------------------------
+
+
+def _reprocess_message(idx: int):
+    """A stored, enrichable (has-body) message row for the reprocess path."""
+    m = MagicMock()
+    m.id = uuid.uuid4()
+    m.sender_email = f"lead{idx}@example.com"
+    m.subject = "Following up"
+    m.body_plain = "Hi - checking in on the proposal."
+    m.contact_id = None
+    return m
+
+
+def _reprocess_db(messages: list) -> AsyncMock:
+    """Session whose Message scan returns `messages` and every scalar lookup misses."""
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+
+    def _execute(stmt, *a, **kw):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = messages
+        result.scalar_one_or_none.return_value = None  # no existing ClarityScore
+        return result
+
+    db.execute = AsyncMock(side_effect=_execute)
+    return db
+
+
+@pytest.mark.asyncio
+async def test_reprocess_respects_message_cap(monkeypatch):
+    """One 'Re-run enrichment' run enriches at most REPROCESS_MAX_MESSAGES, no
+    matter how many messages the workspace holds — the guard that stops one click
+    from fanning ~4 Claude calls per message across an entire mailbox. With the
+    cap set to 3 and ten messages available, exactly three are processed and each
+    fires its relevance + enrichment calls only for those three; the run reports
+    truncated so the remainder is deferred to the next run (never dropped)."""
+    monkeypatch.setattr("app.config.settings.REPROCESS_MAX_MESSAGES", 3)
+
+    messages = [_reprocess_message(i) for i in range(10)]
+    db = _reprocess_db(messages)
+
+    relevance = MagicMock(return_value=True)
+    extract = AsyncMock(return_value=[])
+    clarity = AsyncMock(return_value={"score": 0.5, "rationale": "ok"})
+    sentiment = MagicMock(return_value={"sentiment": "neutral", "signals": []})
+
+    with patch("app.workers.ingest._get_async_session", return_value=_session_factory(db)), \
+         patch("app.workers.ingest._link_contact", AsyncMock(return_value=None)), \
+         patch("app.workers.ingest._is_deal_relevant", relevance), \
+         patch("app.services.extraction.extract_tasks", extract), \
+         patch("app.services.clarity.score_clarity", clarity), \
+         patch("app.services.sentiment.analyze_sentiment", sentiment):
+        from app.workers.ingest import _run_reprocess
+
+        result = await _run_reprocess(str(WS))
+
+    assert result["processed"] == 3, "must enrich no more than the message cap"
+    assert result["truncated"] is True, "hitting the cap must flag truncation, not drop silently"
+    # LLM fan-out is bounded to cap-many messages, not the full workspace.
+    assert relevance.call_count == 3, "relevance LLM fires only for cap-many messages"
+    assert extract.await_count == 3, "task extraction fires only for cap-many messages"

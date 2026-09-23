@@ -10,14 +10,12 @@ from typing import Any
 
 import anthropic
 
-_client: anthropic.Anthropic | None = None
+from app.services.llm import get_anthropic
 
 
 def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
-    return _client
+    # Delegates to the central factory so timeout + max_retries are bounded.
+    return get_anthropic()
 
 
 _SYSTEM_PROMPT = (

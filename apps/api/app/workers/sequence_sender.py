@@ -138,9 +138,9 @@ async def _draft_body(step: Any, lead: Any) -> tuple[str, bool]:
     if not api_key:
         return rendered, False
     try:
-        import anthropic
+        from app.services.llm import get_async_anthropic
 
-        client = anthropic.AsyncAnthropic(api_key=api_key)
+        client = get_async_anthropic()
         prompt = (
             "You are a sales assistant. Personalise this outreach message for the "
             f"lead {getattr(lead, 'name', None) or 'there'} at "
@@ -226,7 +226,16 @@ async def _deliver(
 # ─── DB loaders (thin, patchable so _run_tick tests need no query plumbing) ────
 
 async def _due_enrollments(db: AsyncSession, workspace_id: uuid.UUID, now: datetime) -> list[Any]:
-    """Enrollments due to advance: active/waiting, past next_run_at, parent campaign active."""
+    """Enrollments due to advance: active/waiting, past next_run_at, parent campaign active.
+
+    Hard-bounded by SEQUENCE_TICK_MAX_ENROLLMENTS. A single tick drafts one Claude
+    Haiku body per ai_generate enrollment, so an unbounded due set (e.g. a bulk
+    enroll of thousands of leads) would fan out that many Claude calls in one tick.
+    The .limit() caps the DB read; because rows come back due-ordered
+    (next_run_at ASC), the oldest-due enrollments are always served first and the
+    remainder are picked up on the next tick — deferred, never dropped.
+    """
+    from app.config import settings
     from app.models.sequence_enrollment import SequenceEnrollment
     from app.models.campaign import Campaign
 
@@ -240,6 +249,7 @@ async def _due_enrollments(db: AsyncSession, workspace_id: uuid.UUID, now: datet
             Campaign.status == "active",
         )
         .order_by(SequenceEnrollment.next_run_at)
+        .limit(settings.SEQUENCE_TICK_MAX_ENROLLMENTS)
     )
     return list(result.scalars().all())
 
@@ -312,6 +322,7 @@ async def _has_event_after_last_send(
 # ─── Core tick ────────────────────────────────────────────────────────────────
 
 async def _run_tick(workspace_id: str) -> dict[str, Any]:
+    from app.config import settings
     from app.models.engagement_event import EngagementEvent
     from app.models.activity_event import ActivityEvent
 
@@ -323,6 +334,18 @@ async def _run_tick(workspace_id: str) -> dict[str, Any]:
     SessionFactory = _get_async_session()
     async with SessionFactory() as db:
         enrollments = await _due_enrollments(db, ws_uuid, now)
+
+        # Per-tick fan-out bound (backstop to the .limit() in _due_enrollments).
+        # Hitting the cap means more enrollments are due than one tick will draft;
+        # they are due-ordered, so the remainder is served on the next 5-min tick.
+        max_enrollments = settings.SEQUENCE_TICK_MAX_ENROLLMENTS
+        if len(enrollments) >= max_enrollments:
+            logger.info(
+                "sequence_sender tick_cap_reached workspace=%s cap=%d due>=%d — "
+                "remainder deferred to next tick",
+                workspace_id, max_enrollments, len(enrollments),
+            )
+            enrollments = enrollments[:max_enrollments]
 
         for enr in enrollments:
             seq = await _load_sequence(db, ws_uuid, enr.sequence_id)

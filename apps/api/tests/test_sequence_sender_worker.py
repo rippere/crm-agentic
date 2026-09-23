@@ -384,6 +384,42 @@ def test_sms_channel_uses_stub_delivery():
 
 
 # ---------------------------------------------------------------------------
+# per-tick fan-out cap — SEQUENCE_TICK_MAX_ENROLLMENTS
+# ---------------------------------------------------------------------------
+
+
+def test_tick_caps_ai_draft_fanout_at_configured_limit(monkeypatch):
+    """One tick drafts/sends at most SEQUENCE_TICK_MAX_ENROLLMENTS, no matter how
+    many enrollments are due — the bound that stops a bulk enroll of N leads from
+    firing ~N uncapped Claude Haiku drafts in a single 5-min tick. The remainder
+    are due-ordered (next_run_at) and picked up on the next tick, never dropped.
+    """
+    import app.workers.sequence_sender as mod
+
+    monkeypatch.setattr("app.config.settings.SEQUENCE_TICK_MAX_ENROLLMENTS", 2)
+
+    # Five enrollments are due; each is an ai_generate send step that would draft
+    # a Claude body. _due_enrollments is patched to hand back all five (as an
+    # unbounded query would), so the cap under test is the one _run_tick enforces.
+    enrollments = [_enrollment(current_step=0, status="active") for _ in range(5)]
+    step0 = _step(step_order=0, requires_approval=False, ai_generate=True)
+
+    # Count the Claude-draft fan-out directly (patched — no key, no network).
+    draft_mock = AsyncMock(return_value=("drafted body", True))
+    with patch.object(mod, "_draft_body", new=draft_mock):
+        result, db, deliver = _run_tick(
+            enrollments=enrollments,
+            sequence=_sequence(),
+            steps={0: step0, 1: None},
+            lead=_lead(),
+        )
+
+    assert result["sent"] == 2, "only cap-many enrollments send this tick"
+    assert draft_mock.await_count == 2, "AI drafts must be capped at the per-tick limit"
+    assert deliver.await_count == 2, "no more than cap-many sends dispatched"
+
+
+# ---------------------------------------------------------------------------
 # _deliver — guarded external boundary (no creds / no network)
 # ---------------------------------------------------------------------------
 
