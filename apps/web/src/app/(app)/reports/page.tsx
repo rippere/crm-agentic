@@ -786,12 +786,6 @@ export default function ReportsPage() {
   const [priorityMatrix, setPriorityMatrix] = useState<AIPriorityMatrixData | null>(null);
   const [priorityMatrixLoading, setPriorityMatrixLoading] = useState(false);
   const [priorityMatrixOpen, setPriorityMatrixOpen] = useState(true);
-  type AIEngagementDeal = { id: string; title: string; stage: string; value: number; health_score: number; engagement_score: number };
-  type AIEngagementBucket = { bucket: string; label: string; deal_count: number; avg_score: number };
-  type AIEngagementReportData = { engagement_buckets: AIEngagementBucket[]; top_engaged: AIEngagementDeal[]; least_engaged: AIEngagementDeal[]; avg_engagement_score: number; total_active: number; engagement_narrative: string; recommendations: string[]; generated_at: string };
-  const [engagementReport, setEngagementReport] = useState<AIEngagementReportData | null>(null);
-  const [engagementReportLoading, setEngagementReportLoading] = useState(false);
-  const [engagementReportOpen, setEngagementReportOpen] = useState(true);
   type AIRiskDeal = { id: string; title: string; stage: string; value: number; health_score: number; win_probability: number; days_in_stage: number; composite_risk: number };
   type AIPipelineRiskData = { overall_risk_score: number; risk_level: string; total_active_deals: number; risk_breakdown: { health_risk: number; velocity_risk: number; probability_risk: number }; riskiest_deals: AIRiskDeal[]; risk_narrative: string; recommendations: string[]; generated_at: string };
   const [pipelineRiskScore, setPipelineRiskScore] = useState<AIPipelineRiskData | null>(null);
@@ -1029,8 +1023,6 @@ export default function ReportsPage() {
       apiClient.getAIDealStallAnalysis("demo-workspace-1", "demo-token").then(setStallAnalysis).catch(() => {}).finally(() => setStallAnalysisLoading(false));
       setPriorityMatrixLoading(true);
       apiClient.getAIDealPriorityMatrix("demo-workspace-1", "demo-token").then(setPriorityMatrix).catch(() => {}).finally(() => setPriorityMatrixLoading(false));
-      setEngagementReportLoading(true);
-      apiClient.getAIDealEngagementReport("demo-workspace-1", "demo-token").then(setEngagementReport).catch(() => {}).finally(() => setEngagementReportLoading(false));
       setPipelineRiskScoreLoading(true);
       apiClient.getAIDealPipelineRiskScore("demo-workspace-1", "demo-token").then(setPipelineRiskScore).catch(() => {}).finally(() => setPipelineRiskScoreLoading(false));
       setCommFreqLoading(true);
@@ -1218,8 +1210,6 @@ export default function ReportsPage() {
       apiClient.getAIDealStallAnalysis(workspaceId, session.access_token).then(setStallAnalysis).catch(() => {}).finally(() => setStallAnalysisLoading(false));
       setPriorityMatrixLoading(true);
       apiClient.getAIDealPriorityMatrix(workspaceId, session.access_token).then(setPriorityMatrix).catch(() => {}).finally(() => setPriorityMatrixLoading(false));
-      setEngagementReportLoading(true);
-      apiClient.getAIDealEngagementReport(workspaceId, session.access_token).then(setEngagementReport).catch(() => {}).finally(() => setEngagementReportLoading(false));
       setPipelineRiskScoreLoading(true);
       apiClient.getAIDealPipelineRiskScore(workspaceId, session.access_token).then(setPipelineRiskScore).catch(() => {}).finally(() => setPipelineRiskScoreLoading(false));
       setCommFreqLoading(true);
@@ -2286,27 +2276,6 @@ export default function ReportsPage() {
         if (!session) { setPriorityMatrixLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setPriorityMatrixLoading(false); return; }
-        doFetch(wid, session.access_token);
-      });
-    }
-  };
-
-  const regenerateEngagementReport = () => {
-    setEngagementReportLoading(true);
-    const doFetch = (wid: string, tok: string) => {
-      apiClient.getAIDealEngagementReport(wid, tok)
-        .then(setEngagementReport)
-        .catch(() => {})
-        .finally(() => setEngagementReportLoading(false));
-    };
-    if (DEMO_MODE) {
-      doFetch("demo-workspace-1", "demo-token");
-    } else {
-      const supabase = createBrowserClient();
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        if (!session) { setEngagementReportLoading(false); return; }
-        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
-        if (!wid) { setEngagementReportLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }

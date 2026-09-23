@@ -7012,38 +7012,6 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/priority-matrix`, {}, token)
   },
 
-  async getAIDealEngagementReport(workspaceId: string, token: string) {
-    if (isDemoMode) {
-      return Promise.resolve({
-        engagement_buckets: [
-          { bucket: 'high', label: 'High Engagement (≥60)', deal_count: 6, avg_score: 74.2 },
-          { bucket: 'medium', label: 'Medium Engagement (30–59)', deal_count: 9, avg_score: 44.8 },
-          { bucket: 'low', label: 'Low Engagement (<30)', deal_count: 7, avg_score: 14.3 },
-        ],
-        top_engaged: [
-          { id: 'd-001', title: 'Acme Corp Renewal', stage: 'negotiation', value: 85000, health_score: 82, engagement_score: 78 },
-          { id: 'd-004', title: 'TechCorp Expansion', stage: 'proposal', value: 62000, health_score: 75, engagement_score: 70 },
-          { id: 'd-007', title: 'Globex Enterprise', stage: 'qualified', value: 47000, health_score: 68, engagement_score: 65 },
-        ],
-        least_engaged: [
-          { id: 'd-022', title: 'Zephyr Systems', stage: 'discovery', value: 18000, health_score: 35, engagement_score: 8 },
-          { id: 'd-019', title: 'Pinnacle Group', stage: 'qualified', value: 24000, health_score: 42, engagement_score: 12 },
-          { id: 'd-016', title: 'Horizon Ltd', stage: 'proposal', value: 31000, health_score: 48, engagement_score: 17 },
-        ],
-        avg_engagement_score: 42.6,
-        total_active: 22,
-        engagement_narrative: '6 of 22 active deals show strong engagement scores above 60, driven by consistent messaging and deal note activity. However, 7 deals have critically low engagement below 30 — these are at risk of going silent and losing momentum without immediate intervention.',
-        recommendations: [
-          'Schedule a personal outreach call for each of the 7 low-engagement deals this week, prioritising those with the highest pipeline value.',
-          'Log at least one detailed deal note per low-engagement deal summarising blockers and next agreed actions to bring scores above 30.',
-          'Connect your Gmail connector to automatically capture inbound replies and boost engagement tracking without manual data entry.',
-        ],
-        generated_at: new Date().toISOString(),
-      })
-    }
-    return apiFetch(`/workspaces/${workspaceId}/ai/deals/engagement-report`, {}, token)
-  },
-
   async getAIDealPipelineRiskScore(workspaceId: string, token: string) {
     if (isDemoMode) {
       return Promise.resolve({
