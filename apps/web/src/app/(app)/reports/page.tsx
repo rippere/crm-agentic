@@ -850,6 +850,12 @@ export default function ReportsPage() {
   const [scoreSegmentationLoading, setScoreSegmentationLoading] = useState(false);
   const [scoreSegmentationOpen, setScoreSegmentationOpen] = useState(true);
 
+  type AIScoreTierItem = { tier: string; label: string; contact_count: number; total_pipeline_value: number; closed_won_value: number; win_rate: number; going_dark_count: number };
+  type AIScoreTierData = { tiers: AIScoreTierItem[]; total_contacts: number; best_performing_tier: string | null; most_at_risk_tier: string | null; tier_narrative: string; recommendations: string[]; generated_at: string };
+  const [scoreTierData, setScoreTierData] = useState<AIScoreTierData | null>(null);
+  const [scoreTierLoading, setScoreTierLoading] = useState(false);
+  const [scoreTierOpen, setScoreTierOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1026,6 +1032,8 @@ export default function ReportsPage() {
       apiClient.getAIContactTaskBacklog("demo-workspace-1", "demo-token").then(setTaskBacklog).catch(() => {}).finally(() => setTaskBacklogLoading(false));
       setScoreSegmentationLoading(true);
       apiClient.getAIContactScoreSegmentation("demo-workspace-1", "demo-token").then(setScoreSegmentation).catch(() => {}).finally(() => setScoreSegmentationLoading(false));
+      setScoreTierLoading(true);
+      apiClient.getAIContactScoreTierAnalysis("demo-workspace-1", "demo-token").then(setScoreTierData).catch(() => {}).finally(() => setScoreTierLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1207,6 +1215,8 @@ export default function ReportsPage() {
       apiClient.getAIContactTaskBacklog(workspaceId, session.access_token).then(setTaskBacklog).catch(() => {}).finally(() => setTaskBacklogLoading(false));
       setScoreSegmentationLoading(true);
       apiClient.getAIContactScoreSegmentation(workspaceId, session.access_token).then(setScoreSegmentation).catch(() => {}).finally(() => setScoreSegmentationLoading(false));
+      setScoreTierLoading(true);
+      apiClient.getAIContactScoreTierAnalysis(workspaceId, session.access_token).then(setScoreTierData).catch(() => {}).finally(() => setScoreTierLoading(false));
     });
   }, []);
 
@@ -2476,6 +2486,27 @@ export default function ReportsPage() {
         if (!session) { setScoreSegmentationLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setScoreSegmentationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateScoreTier = () => {
+    setScoreTierLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactScoreTierAnalysis(wid, tok)
+        .then(setScoreTierData)
+        .catch(() => {})
+        .finally(() => setScoreTierLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setScoreTierLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setScoreTierLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -10929,6 +10960,100 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact score segmentation analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 19g: Contact Score Tier Analysis */}
+      <Card className="overflow-hidden">
+        <button
+          className="w-full flex items-center justify-between p-4 hover:bg-zinc-800/40 transition-colors"
+          onClick={() => setScoreTierOpen((o) => !o)}
+        >
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-amber-400" />
+            <span className="text-sm font-medium text-zinc-200">Contact Score Tier Analysis</span>
+            {scoreTierData && scoreTierData.best_performing_tier && (
+              <span className="text-xs bg-amber-900/40 text-amber-300 px-2 py-0.5 rounded-full ml-1">
+                {scoreTierData.best_performing_tier} tier wins most
+              </span>
+            )}
+            {scoreTierData && (
+              <span className="text-xs text-zinc-500">{scoreTierData.total_contacts} contacts</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); regenerateScoreTier(); }}
+              disabled={scoreTierLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 border border-zinc-700 rounded px-2 py-1 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3 w-3", scoreTierLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            {scoreTierOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </button>
+        {scoreTierOpen && (
+          scoreTierLoading && !scoreTierData ? (
+            <div className="p-4 space-y-2">{[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-zinc-800 rounded animate-pulse" />)}</div>
+          ) : scoreTierData ? (
+            <div className={cn("p-4 space-y-4", scoreTierLoading && "opacity-40")}>
+              {scoreTierData.tiers.map((tier) => {
+                const tierColors: Record<string, string> = {
+                  hot: "bg-rose-500",
+                  warm: "bg-amber-500",
+                  cold: "bg-sky-500",
+                  unscored: "bg-zinc-500",
+                };
+                const tierTextColors: Record<string, string> = {
+                  hot: "text-rose-400",
+                  warm: "text-amber-400",
+                  cold: "text-sky-400",
+                  unscored: "text-zinc-400",
+                };
+                const maxPipeline = Math.max(...scoreTierData.tiers.map(t => t.total_pipeline_value), 1);
+                const barWidth = tier.total_pipeline_value / maxPipeline * 100;
+                return (
+                  <div key={tier.tier} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className={cn("font-medium", tierTextColors[tier.tier])}>{tier.label}</span>
+                      <div className="flex items-center gap-2 text-zinc-400">
+                        <span>{tier.contact_count} contacts</span>
+                        {tier.win_rate > 0 && (
+                          <span className="bg-emerald-900/40 text-emerald-400 px-1.5 py-0.5 rounded">{tier.win_rate}% win rate</span>
+                        )}
+                        {tier.going_dark_count > 0 && (
+                          <span className="bg-rose-900/40 text-rose-400 px-1.5 py-0.5 rounded">{tier.going_dark_count} going dark</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="h-4 bg-zinc-800 rounded-full overflow-hidden">
+                      <div
+                        className={cn("h-full rounded-full transition-all", tierColors[tier.tier])}
+                        style={{ width: `${barWidth}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-zinc-500">
+                      <span>Pipeline: ${tier.total_pipeline_value.toLocaleString()}</span>
+                      <span>Won: ${tier.closed_won_value.toLocaleString()}</span>
+                    </div>
+                  </div>
+                );
+              })}
+              <p className="text-xs text-zinc-400 italic">{scoreTierData.tier_narrative}</p>
+              <ul className="space-y-1">
+                {scoreTierData.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="text-teal-400 mt-0.5">•</span>
+                    <span>{r}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(scoreTierData.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact score tier analysis.</div>
           )
         )}
       </Card>

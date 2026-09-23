@@ -7341,5 +7341,29 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/score-segmentation`, {}, token)
   },
+
+  async getAIContactScoreTierAnalysis(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        tiers: [
+          { tier: 'hot', label: 'Hot (75-100)', contact_count: 9, total_pipeline_value: 285000, closed_won_value: 195000, win_rate: 72.7, going_dark_count: 1 },
+          { tier: 'warm', label: 'Warm (50-74)', contact_count: 14, total_pipeline_value: 148000, closed_won_value: 82000, win_rate: 45.5, going_dark_count: 3 },
+          { tier: 'cold', label: 'Cold (25-49)', contact_count: 16, total_pipeline_value: 62000, closed_won_value: 24000, win_rate: 18.8, going_dark_count: 8 },
+          { tier: 'unscored', label: 'Unscored (<25)', contact_count: 8, total_pipeline_value: 18000, closed_won_value: 0, win_rate: 0.0, going_dark_count: 5 },
+        ],
+        total_contacts: 47,
+        best_performing_tier: 'hot',
+        most_at_risk_tier: 'cold',
+        tier_narrative: 'Your Hot tier contacts deliver a 72.7% win rate and $195K in closed revenue, confirming that ML scoring accurately identifies your highest-value prospects. Cold and Unscored tiers account for 13 going-dark contacts — a significant re-engagement opportunity.',
+        recommendations: [
+          'Launch a targeted re-engagement campaign for the 8 Cold contacts who have gone dark — a brief, personalised touchpoint can move them back into Warm tier.',
+          'Run the Lead Scorer agent weekly to promote emerging Warm contacts before they stall or go dark.',
+          'Focus pipeline expansion on contacts already in the Hot tier: their 72.7% win rate means every new deal started here is likely to close.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/score-tier-analysis`, {}, token)
+  },
 }
 

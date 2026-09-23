@@ -18911,3 +18911,205 @@ async def get_contact_score_segmentation(
         "recommendations": recommendations2,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 19g: AI contact score tier analysis
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/score-tier-analysis")
+@limiter.limit("5/minute")
+async def get_contact_score_tier_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff_dark = now - datetime.timedelta(days=30)
+
+    contact_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.ml_score)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    contact_rows = contact_result.all()
+
+    if not contact_rows:
+        return {
+            "tiers": [],
+            "total_contacts": 0,
+            "best_performing_tier": None,
+            "most_at_risk_tier": None,
+            "tier_narrative": "No contacts found. Add contacts and score them to see tier analysis.",
+            "recommendations": [
+                "Run the Lead Scorer agent to assign ML scores to your contacts.",
+                "Import contacts and connect your email to begin building engagement data.",
+                "Set deal values to enable win-rate tracking per score tier.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    contact_ids = [row.id for row in contact_rows]
+
+    def _tier(score_val) -> str:
+        if score_val is None:
+            return "unscored"
+        v = float(score_val)
+        if v >= 75:
+            return "hot"
+        if v >= 50:
+            return "warm"
+        if v >= 25:
+            return "cold"
+        return "unscored"
+
+    tier_contacts: dict[str, list] = {"hot": [], "warm": [], "cold": [], "unscored": []}
+    for row in contact_rows:
+        score_val = None
+        if row.ml_score and isinstance(row.ml_score, dict):
+            score_val = row.ml_score.get("value")
+        elif row.ml_score is not None and not isinstance(row.ml_score, dict):
+            score_val = row.ml_score
+        tier_contacts[_tier(score_val)].append(row.id)
+
+    won_result = await db.execute(
+        select(Deal.contact_id, func.sum(Deal.value).label("won_revenue"))
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.contact_id.in_(contact_ids))
+        .group_by(Deal.contact_id)
+    )
+    won_by_contact: dict[str, float] = {
+        str(r.contact_id): float(r.won_revenue or 0) for r in won_result.all()
+    }
+
+    open_result = await db.execute(
+        select(Deal.contact_id, func.sum(Deal.value).label("pipeline_value"))
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.notin_(["closed_won", "closed_lost"]))
+        .where(Deal.contact_id.in_(contact_ids))
+        .group_by(Deal.contact_id)
+    )
+    open_by_contact: dict[str, float] = {
+        str(r.contact_id): float(r.pipeline_value or 0) for r in open_result.all()
+    }
+
+    lost_result = await db.execute(
+        select(Deal.contact_id, func.count(Deal.id).label("lost_count"))
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_lost")
+        .where(Deal.contact_id.in_(contact_ids))
+        .group_by(Deal.contact_id)
+    )
+    lost_by_contact: dict[str, int] = {
+        str(r.contact_id): int(r.lost_count or 0) for r in lost_result.all()
+    }
+
+    recent_msg_result = await db.execute(
+        select(func.distinct(Message.contact_id))
+        .where(Message.workspace_id == workspace_id)
+        .where(Message.contact_id.in_(contact_ids))
+        .where(Message.received_at >= cutoff_dark)
+    )
+    active_contact_ids: set[str] = {str(r[0]) for r in recent_msg_result.all()}
+
+    tier_order = ["hot", "warm", "cold", "unscored"]
+    tier_labels = {
+        "hot": "Hot (75-100)",
+        "warm": "Warm (50-74)",
+        "cold": "Cold (25-49)",
+        "unscored": "Unscored (<25)",
+    }
+    tiers: list[dict] = []
+
+    for t in tier_order:
+        ids = tier_contacts[t]
+        count = len(ids)
+        total_pipeline = sum(open_by_contact.get(str(cid), 0.0) for cid in ids)
+        total_won = sum(won_by_contact.get(str(cid), 0.0) for cid in ids)
+        won_count = sum(1 for cid in ids if str(cid) in won_by_contact)
+        lost_count = sum(lost_by_contact.get(str(cid), 0) for cid in ids)
+        win_rate = round(won_count / (won_count + lost_count) * 100, 1) if (won_count + lost_count) > 0 else 0.0
+        going_dark = sum(1 for cid in ids if str(cid) not in active_contact_ids)
+        tiers.append({
+            "tier": t,
+            "label": tier_labels[t],
+            "contact_count": count,
+            "total_pipeline_value": round(total_pipeline, 2),
+            "closed_won_value": round(total_won, 2),
+            "win_rate": win_rate,
+            "going_dark_count": going_dark,
+        })
+
+    total_contacts = len(contact_rows)
+    active_tiers = [t for t in tiers if t["win_rate"] > 0]
+    best_performing_tier = max(active_tiers, key=lambda t: t["win_rate"])["tier"] if active_tiers else None
+    non_empty = [t for t in tiers if t["contact_count"] > 0]
+    most_at_risk_tier = max(non_empty, key=lambda t: t["going_dark_count"])["tier"] if non_empty else None
+
+    context = (
+        "Contact Score Tier Analysis:\n"
+        f"- Total contacts: {total_contacts}\n"
+        + "".join(
+            f"- {t['label']}: {t['contact_count']} contacts, win_rate={t['win_rate']}%, "
+            f"pipeline=${t['total_pipeline_value']:,.0f}, going_dark={t['going_dark_count']}\n"
+            for t in tiers
+        )
+        + f"- Best performing tier: {best_performing_tier}\n"
+        f"- Most at-risk tier: {most_at_risk_tier}\n"
+    )
+
+    prompt = (
+        f"{context}\n"
+        "Return JSON with keys:\n"
+        '  "tier_narrative": one 2-sentence insight about score distribution and performance,\n'
+        '  "recommendations": array of exactly 3 specific actions to improve conversion across tiers\n'
+        "Return only JSON, no markdown."
+    )
+
+    tier_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        tier_narrative = str(parsed.get("tier_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        best_label = tier_labels.get(best_performing_tier or "hot", "Hot (75-100)")
+        risk_label = tier_labels.get(most_at_risk_tier or "cold", "Cold (25-49)")
+        tier_narrative = (
+            f"Your {best_label} contacts deliver the strongest win rate, while "
+            f"{risk_label} contacts show the highest going-dark risk."
+        )
+        recommendations = [
+            f"Launch re-engagement campaigns targeting {risk_label} contacts who have gone silent in the last 30 days.",
+            "Run the Lead Scorer agent weekly to keep score tiers current and catch tier promotions early.",
+            "Create dedicated outreach sequences for Warm contacts to accelerate them into the Hot tier.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Review and refresh contact scores regularly to maintain tier accuracy.")
+
+    return {
+        "tiers": tiers,
+        "total_contacts": total_contacts,
+        "best_performing_tier": best_performing_tier,
+        "most_at_risk_tier": most_at_risk_tier,
+        "tier_narrative": tier_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

@@ -8931,3 +8931,111 @@ async def test_contact_score_segmentation_wrong_workspace_returns_403(app_client
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/score-segmentation")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 19g: AI contact score tier analysis
+# ---------------------------------------------------------------------------
+
+class FakeContactScoreTierRow:
+    def __init__(self, id, ml_score_val=None):
+        self.id = id
+        if ml_score_val is not None:
+            self.ml_score = {"value": ml_score_val}
+        else:
+            self.ml_score = None
+        self.name = f"Contact {id}"
+
+
+class FakeScoreExecuteResult:
+    """Returns different result sets on successive calls."""
+    def __init__(self, calls: list):
+        self._calls = list(calls)
+        self._idx = 0
+
+    def all(self):
+        result = self._calls[self._idx] if self._idx < len(self._calls) else []
+        self._idx += 1
+        return result
+
+
+@pytest.mark.asyncio
+async def test_contact_score_tier_analysis_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    cid_hot = uuid.uuid4()
+    cid_warm = uuid.uuid4()
+    cid_cold = uuid.uuid4()
+
+    contact_rows = [
+        FakeContactScoreTierRow(cid_hot, 80),   # hot
+        FakeContactScoreTierRow(cid_warm, 60),  # warm
+        FakeContactScoreTierRow(cid_cold, 30),  # cold
+    ]
+
+    class FakeWonRow:
+        def __init__(self, contact_id, won_revenue):
+            self.contact_id = contact_id
+            self.won_revenue = won_revenue
+
+    class FakeOpenRow:
+        def __init__(self, contact_id, pipeline_value):
+            self.contact_id = contact_id
+            self.pipeline_value = pipeline_value
+
+    class FakeLostRow:
+        def __init__(self, contact_id, lost_count):
+            self.contact_id = contact_id
+            self.lost_count = lost_count
+
+    # Query results: contacts, won, open pipeline, lost, active msg contacts
+    call_results = [
+        contact_rows,                                      # contact query
+        [FakeWonRow(cid_hot, 50000)],                     # won deals
+        [FakeOpenRow(cid_warm, 20000)],                   # open pipeline
+        [FakeLostRow(cid_cold, 1)],                       # lost deals
+        [(str(cid_hot),)],                                # active contacts (recent messages)
+    ]
+    call_iter = iter(call_results)
+
+    async def fake_execute(q):
+        rows = next(call_iter, [])
+        r = MagicMock()
+        r.all.return_value = rows
+        return r
+
+    mock_db.execute = fake_execute
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"tier_narrative": "Hot contacts win the most.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/score-tier-analysis")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_contacts"] == 3
+    assert len(body["tiers"]) == 4  # hot, warm, cold, unscored always returned
+    hot_tier = next(t for t in body["tiers"] if t["tier"] == "hot")
+    assert hot_tier["contact_count"] == 1
+    assert hot_tier["closed_won_value"] == pytest.approx(50000.0)
+    warm_tier = next(t for t in body["tiers"] if t["tier"] == "warm")
+    assert warm_tier["total_pipeline_value"] == pytest.approx(20000.0)
+    # hot tier: won_count=1 lost_count=0 → win_rate=100
+    assert hot_tier["win_rate"] == 100.0
+    assert body["best_performing_tier"] == "hot"
+    assert "tier_narrative" in body
+    assert len(body["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_contact_score_tier_analysis_403_wrong_workspace(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    wrong_id = uuid.uuid4()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/score-tier-analysis")
+    assert resp.status_code == 403
