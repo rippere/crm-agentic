@@ -317,8 +317,10 @@ Phase 17 — AI Coaching & Playbook Intelligence
 
 - [2026-09-21] Phase 19f: AI contact role distribution analysis — GET /workspaces/{workspace_id}/ai/contacts/role-distribution (queries contacts by role field, groups into top-5 known roles by count, computes pct_of_total + customer_count + customer_rate + avg_revenue per role, unknown_role_pct for contacts missing role data, top_converting_role = highest customer_rate with ≥2 contacts; graceful empty default without Claude call); collapsible "Contact Role Distribution" card on /reports (violet Users icon, per-role horizontal bars with customer-rate colour coding emerald/amber/zinc, avg-revenue annotation, unknown-role footnote, AI narrative, violet-dot recs, Regenerate button); getAIContactRoleDistribution() in api-client with 47-contact demo stub (CEO 62.5%/Director 36.4%/VP 33.3%/Manager 0%/Engineer 0%); 2 new tests (structured-response math + 403 guard); 244 AI tests total; bundled in PR #192
 
+- [2026-09-21] Phase 19g: AI contact deal engagement analysis — GET /workspaces/{workspace_id}/ai/contacts/deal-engagement (queries all contacts + deals, buckets contacts by deal count into Untouched 0/Active 1/Engaged 2-3/Power 4+, computes pct_of_total + total_won_revenue + avg_won_revenue per bucket, identifies top_power_accounts (up to 5) sorted by won_revenue, untouched_pct; graceful empty default without Claude call); collapsible "Contact Deal Engagement" card on /reports (teal Zap icon, amber "X% untouched" badge, 4-bucket grid teal/indigo/amber/zinc, top power accounts list with deal count + won revenue, AI narrative, teal-dot recs, Regenerate button); getAIContactDealEngagement() in api-client with 47-contact demo stub (12 untouched/18 active/11 engaged/6 power, $218K power won revenue, Pinnacle Systems top at $82K); 2 new tests (structured-response 4-contact bucket math + 403 guard); 246 AI tests total; PR pending
+
 ## Next Task
-Phase 19g: placeholder for next session
+Phase 19h: placeholder for next session
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.

@@ -825,6 +825,13 @@ export default function ReportsPage() {
   const [roleDistributionLoading, setRoleDistributionLoading] = useState(false);
   const [roleDistributionOpen, setRoleDistributionOpen] = useState(true);
 
+  type AIDealEngagementBucket = { bucket: string; deal_range: string; count: number; pct_of_total: number; total_won_revenue: number; avg_won_revenue: number };
+  type AIPowerAccount = { name: string; deal_count: number; won_revenue: number };
+  type AIDealEngagementData = { buckets: AIDealEngagementBucket[]; total_contacts: number; untouched_pct: number; top_power_accounts: AIPowerAccount[]; engagement_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealEngagement, setDealEngagement] = useState<AIDealEngagementData | null>(null);
+  const [dealEngagementLoading, setDealEngagementLoading] = useState(false);
+  const [dealEngagementOpen, setDealEngagementOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -993,6 +1000,8 @@ export default function ReportsPage() {
       apiClient.getAIContactStatusDistribution("demo-workspace-1", "demo-token").then(setStatusDistribution).catch(() => {}).finally(() => setStatusDistributionLoading(false));
       setRoleDistributionLoading(true);
       apiClient.getAIContactRoleDistribution("demo-workspace-1", "demo-token").then(setRoleDistribution).catch(() => {}).finally(() => setRoleDistributionLoading(false));
+      setDealEngagementLoading(true);
+      apiClient.getAIContactDealEngagement("demo-workspace-1", "demo-token").then(setDealEngagement).catch(() => {}).finally(() => setDealEngagementLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1166,6 +1175,8 @@ export default function ReportsPage() {
       apiClient.getAIContactStatusDistribution(workspaceId, session.access_token).then(setStatusDistribution).catch(() => {}).finally(() => setStatusDistributionLoading(false));
       setRoleDistributionLoading(true);
       apiClient.getAIContactRoleDistribution(workspaceId, session.access_token).then(setRoleDistribution).catch(() => {}).finally(() => setRoleDistributionLoading(false));
+      setDealEngagementLoading(true);
+      apiClient.getAIContactDealEngagement(workspaceId, session.access_token).then(setDealEngagement).catch(() => {}).finally(() => setDealEngagementLoading(false));
     });
   }, []);
 
@@ -2351,6 +2362,27 @@ export default function ReportsPage() {
         if (!session) { setRoleDistributionLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setRoleDistributionLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealEngagement = () => {
+    setDealEngagementLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactDealEngagement(wid, tok)
+        .then(setDealEngagement)
+        .catch(() => {})
+        .finally(() => setDealEngagementLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealEngagementLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealEngagementLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -10432,6 +10464,86 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact role distribution analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 19g: Contact Deal Engagement */}
+      <Card className="border-teal-500/15">
+        <button
+          className="w-full flex items-center gap-3 p-4 text-left hover:bg-zinc-800/40 transition-colors rounded-t-lg"
+          onClick={() => setDealEngagementOpen((o) => !o)}
+        >
+          <Zap className="h-4 w-4 text-teal-400 flex-shrink-0" />
+          <span className="font-medium text-sm text-zinc-200 flex-1">Contact Deal Engagement</span>
+          {dealEngagement && dealEngagement.untouched_pct > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300">
+              {dealEngagement.untouched_pct}% untouched
+            </span>
+          )}
+          {dealEngagement && (
+            <span className="text-xs text-zinc-500">{dealEngagement.total_contacts} contacts</span>
+          )}
+          <button
+            className="ml-2 p-1 rounded hover:bg-zinc-700 transition-colors text-zinc-400 hover:text-zinc-200"
+            onClick={(e) => { e.stopPropagation(); regenerateDealEngagement(); }}
+            disabled={dealEngagementLoading}
+            title="Regenerate"
+          >
+            <RefreshCw className={cn("h-3 w-3", dealEngagementLoading && "animate-spin")} />
+          </button>
+          {dealEngagementOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+        {dealEngagementOpen && (
+          dealEngagementLoading && !dealEngagement ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analysing deal engagement…</div>
+          ) : dealEngagement ? (
+            <div className={cn("p-4 space-y-4", dealEngagementLoading && "opacity-40")}>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {dealEngagement.buckets.map((b) => {
+                  const colour = b.bucket === "Power" ? "text-teal-400 bg-teal-500/10 border-teal-500/20"
+                    : b.bucket === "Engaged" ? "text-indigo-400 bg-indigo-500/10 border-indigo-500/20"
+                    : b.bucket === "Active" ? "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                    : "text-zinc-500 bg-zinc-800/40 border-zinc-700/40";
+                  return (
+                    <div key={b.bucket} className={cn("rounded-lg border p-3 text-center", colour)}>
+                      <p className="text-lg font-bold">{b.count}</p>
+                      <p className="text-xs font-medium">{b.bucket}</p>
+                      <p className="text-xs opacity-70">{b.deal_range} deal{b.deal_range === "0" || b.deal_range === "1" ? "" : "s"}</p>
+                      <p className="text-xs opacity-70">{b.pct_of_total}%</p>
+                    </div>
+                  );
+                })}
+              </div>
+              {dealEngagement.top_power_accounts.length > 0 && (
+                <div>
+                  <p className="text-xs text-zinc-500 font-medium mb-2">Top Power Accounts</p>
+                  <div className="space-y-1">
+                    {dealEngagement.top_power_accounts.map((a, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300">{a.name}</span>
+                        <div className="flex items-center gap-2 text-zinc-500">
+                          <span>{a.deal_count} deals</span>
+                          {a.won_revenue > 0 && <span className="text-teal-400">${a.won_revenue.toLocaleString()} won</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{dealEngagement.engagement_narrative}</p>
+              <ul className="space-y-1">
+                {dealEngagement.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealEngagement.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact deal engagement analysis.</div>
           )
         )}
       </Card>

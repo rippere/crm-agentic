@@ -18398,3 +18398,173 @@ async def get_contact_revenue_concentration(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 19g: AI contact deal engagement analysis
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/deal-engagement")
+@limiter.limit("5/minute")
+async def get_contact_deal_engagement(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    # All contacts
+    contacts_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.revenue, Contact.deal_count)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    contacts_rows = contacts_result.all()
+
+    if not contacts_rows:
+        return {
+            "buckets": [],
+            "total_contacts": 0,
+            "untouched_pct": 0.0,
+            "top_power_accounts": [],
+            "engagement_narrative": "No contacts found. Add contacts to begin tracking deal engagement.",
+            "recommendations": [
+                "Import your existing contacts to start measuring deal engagement levels.",
+                "Connect each contact to at least one deal to activate pipeline tracking.",
+                "Set up automated contact creation from inbound leads to grow your base.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    total_contacts = len(contacts_rows)
+
+    # Build contact deal count and revenue map from contact.deal_count + contact.revenue
+    contact_map = {str(row.id): {"name": row.name or "Unknown", "deal_count": int(row.deal_count or 0), "revenue": float(row.revenue or 0)} for row in contacts_rows}
+
+    # Also query deals to get won revenue per contact
+    deals_result = await db.execute(
+        select(Deal.contact_id, Deal.stage, Deal.value)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.contact_id.isnot(None))
+    )
+    deals_rows = deals_result.all()
+
+    contact_won_revenue: dict[str, float] = defaultdict(float)
+    contact_deal_counts_from_deals: dict[str, int] = defaultdict(int)
+    for row in deals_rows:
+        cid = str(row.contact_id)
+        contact_deal_counts_from_deals[cid] += 1
+        if row.stage == "closed_won":
+            contact_won_revenue[cid] += float(row.value or 0)
+
+    # Use deal counts from deals table (more accurate) when available
+    for cid in contact_map:
+        if cid in contact_deal_counts_from_deals:
+            contact_map[cid]["deal_count"] = contact_deal_counts_from_deals[cid]
+
+    # Bucket contacts: Untouched (0), Active (1), Engaged (2-3), Power (4+)
+    bucket_defs = [
+        ("Untouched", 0, 0),
+        ("Active", 1, 1),
+        ("Engaged", 2, 3),
+        ("Power", 4, 9999),
+    ]
+
+    bucket_counts: dict[str, int] = defaultdict(int)
+    bucket_revenue: dict[str, float] = defaultdict(float)
+    power_accounts: list[dict] = []
+
+    for cid, data in contact_map.items():
+        dc = data["deal_count"]
+        rev = contact_won_revenue.get(cid, 0) + data["revenue"]
+        for label, lo, hi in bucket_defs:
+            if lo <= dc <= hi:
+                bucket_counts[label] += 1
+                bucket_revenue[label] += rev
+                if label == "Power":
+                    power_accounts.append({"name": data["name"], "deal_count": dc, "won_revenue": round(rev, 2)})
+                break
+
+    buckets = []
+    for label, lo, hi in bucket_defs:
+        count = bucket_counts.get(label, 0)
+        pct = round(count / total_contacts * 100, 1) if total_contacts > 0 else 0.0
+        total_rev = bucket_revenue.get(label, 0)
+        avg_rev = round(total_rev / count, 2) if count > 0 else 0.0
+        deal_range = f"{lo}" if lo == hi else (f"{lo}+" if hi >= 9999 else f"{lo}–{hi}")
+        buckets.append({
+            "bucket": label,
+            "deal_range": deal_range,
+            "count": count,
+            "pct_of_total": pct,
+            "total_won_revenue": round(total_rev, 2),
+            "avg_won_revenue": avg_rev,
+        })
+
+    untouched_pct = round(bucket_counts.get("Untouched", 0) / total_contacts * 100, 1) if total_contacts > 0 else 0.0
+    power_accounts_sorted = sorted(power_accounts, key=lambda x: x["won_revenue"], reverse=True)[:5]
+
+    power_count = bucket_counts.get("Power", 0)
+    engaged_count = bucket_counts.get("Engaged", 0)
+    context = (
+        f"Contact Deal Engagement for a CRM workspace:\n"
+        f"- Total contacts: {total_contacts}\n"
+        f"- Untouched (0 deals): {bucket_counts.get('Untouched', 0)} ({untouched_pct}%)\n"
+        f"- Active (1 deal): {bucket_counts.get('Active', 0)}\n"
+        f"- Engaged (2-3 deals): {engaged_count}\n"
+        f"- Power accounts (4+ deals): {power_count}\n"
+        f"- Top power account: {power_accounts_sorted[0]['name'] if power_accounts_sorted else 'none'} "
+        f"({power_accounts_sorted[0]['deal_count'] if power_accounts_sorted else 0} deals)\n"
+    )
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence engagement_narrative explaining what the deal engagement distribution reveals "
+        "about this sales team's pipeline health and which segment offers the most growth potential. "
+        "Then provide exactly 3 short actionable recommendations to improve deal engagement across contacts. "
+        'Respond ONLY with valid JSON: {"engagement_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    engagement_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        engagement_narrative = str(parsed.get("engagement_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        engagement_narrative = (
+            f"{untouched_pct}% of your contacts have no associated deals — a significant untapped pipeline opportunity. "
+            f"Power accounts ({power_count} contacts with 4+ deals) are your most engaged segment and likely your highest-revenue base."
+        )
+        recommendations = [
+            f"Activate the {bucket_counts.get('Untouched', 0)} untouched contacts by assigning discovery calls or automated outreach sequences.",
+            "Expand deals with your Engaged and Power contacts — multi-deal accounts signal strong product fit and expansion potential.",
+            "Audit Active (single-deal) contacts to determine whether they're early-stage or stalled, then tailor follow-ups accordingly.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Regularly review deal engagement to identify contacts slipping from active to untouched status.")
+
+    return {
+        "buckets": buckets,
+        "total_contacts": total_contacts,
+        "untouched_pct": untouched_pct,
+        "top_power_accounts": power_accounts_sorted,
+        "engagement_narrative": engagement_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
