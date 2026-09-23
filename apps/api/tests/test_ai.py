@@ -9223,3 +9223,75 @@ async def test_contact_churn_risk_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/churn-risk")
     assert resp.status_code == 403
+
+
+class FakeNextActionDealRow:
+    def __init__(self, id, title, stage, value, next_action_date, next_action=None):
+        self.id = id
+        self.title = title
+        self.stage = stage
+        self.value = value
+        self.next_action_date = next_action_date
+        self.next_action = next_action
+
+
+@pytest.mark.asyncio
+async def test_next_action_overdue_returns_buckets(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    today = datetime.date.today()
+    did1 = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000001")
+    did2 = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000002")
+    did3 = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000003")
+    did4 = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000004")
+    did5 = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000005")
+
+    deal_rows = [
+        FakeNextActionDealRow(did1, "Overdue Deal", "discovery", 30000, today - datetime.timedelta(days=5), "Follow up"),
+        FakeNextActionDealRow(did2, "Due Today Deal", "qualified", 20000, today, "Send proposal"),
+        FakeNextActionDealRow(did3, "Due Soon Deal", "proposal", 15000, today + datetime.timedelta(days=3), "Review docs"),
+        FakeNextActionDealRow(did4, "On Track Deal", "negotiation", 50000, today + datetime.timedelta(days=14), "Contract review"),
+        FakeNextActionDealRow(did5, "No Action Deal", "discovery", 10000, None),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[_make_execute_result(deal_rows)])
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"overdue_narrative": "One deal is overdue.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/next-action-overdue")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_active"] == 5
+    assert body["overdue_count"] == 1
+    assert body["total_with_actions"] == 4
+    assert body["overdue_rate"] == 25.0
+
+    buckets = {b["bucket"]: b for b in body["buckets"]}
+    assert buckets["overdue"]["count"] == 1
+    assert buckets["due_today"]["count"] == 1
+    assert buckets["due_soon"]["count"] == 1
+    assert buckets["on_track"]["count"] == 1
+    assert buckets["no_action"]["count"] == 1
+
+    assert len(body["top_overdue_deals"]) == 1
+    assert body["top_overdue_deals"][0]["title"] == "Overdue Deal"
+    assert body["top_overdue_deals"][0]["days_overdue"] == 5
+
+    assert "overdue_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_next_action_overdue_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("55555555-5555-5555-5555-555555555555")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/next-action-overdue")
+    assert resp.status_code == 403

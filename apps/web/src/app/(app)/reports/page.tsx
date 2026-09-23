@@ -872,6 +872,12 @@ export default function ReportsPage() {
   const [churnRisk, setChurnRisk] = useState<AIChurnRiskData | null>(null);
   const [churnRiskLoading, setChurnRiskLoading] = useState(false);
   const [churnRiskOpen, setChurnRiskOpen] = useState(true);
+  type AIDealNextActionOverdueBucket = { bucket: string; label: string; count: number; pct_of_active: number; total_value: number };
+  type AIDealNextActionOverdueDeal = { deal_id: string; title: string; stage: string; value: number; days_overdue: number; next_action: string };
+  type AIDealNextActionOverdueData = { buckets: AIDealNextActionOverdueBucket[]; top_overdue_deals: AIDealNextActionOverdueDeal[]; overdue_count: number; overdue_rate: number; total_active: number; total_with_actions: number; overdue_narrative: string; recommendations: string[]; generated_at: string };
+  const [nextActionOverdue, setNextActionOverdue] = useState<AIDealNextActionOverdueData | null>(null);
+  const [nextActionOverdueLoading, setNextActionOverdueLoading] = useState(false);
+  const [nextActionOverdueOpen, setNextActionOverdueOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1057,6 +1063,8 @@ export default function ReportsPage() {
       apiClient.getAIDealCohortAnalysis("demo-workspace-1", "demo-token").then(setCohortAnalysis).catch(() => {}).finally(() => setCohortAnalysisLoading(false));
       setChurnRiskLoading(true);
       apiClient.getAIContactChurnRisk("demo-workspace-1", "demo-token").then(setChurnRisk).catch(() => {}).finally(() => setChurnRiskLoading(false));
+      setNextActionOverdueLoading(true);
+      apiClient.getAIDealNextActionOverdue("demo-workspace-1", "demo-token").then(setNextActionOverdue).catch(() => {}).finally(() => setNextActionOverdueLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1246,6 +1254,8 @@ export default function ReportsPage() {
       apiClient.getAIDealCohortAnalysis(workspaceId, session.access_token).then(setCohortAnalysis).catch(() => {}).finally(() => setCohortAnalysisLoading(false));
       setChurnRiskLoading(true);
       apiClient.getAIContactChurnRisk(workspaceId, session.access_token).then(setChurnRisk).catch(() => {}).finally(() => setChurnRiskLoading(false));
+      setNextActionOverdueLoading(true);
+      apiClient.getAIDealNextActionOverdue(workspaceId, session.access_token).then(setNextActionOverdue).catch(() => {}).finally(() => setNextActionOverdueLoading(false));
     });
   }, []);
 
@@ -2599,6 +2609,27 @@ export default function ReportsPage() {
         if (!session) { setChurnRiskLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setChurnRiskLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateNextActionOverdue = () => {
+    setNextActionOverdueLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealNextActionOverdue(wid, tok)
+        .then(setNextActionOverdue)
+        .catch(() => {})
+        .finally(() => setNextActionOverdueLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setNextActionOverdueLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setNextActionOverdueLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11376,6 +11407,96 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load customer churn risk analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Deal Next-Action Overdue */}
+      <Card className="border-zinc-800/60">
+        <div className="flex items-center justify-between p-4 cursor-pointer select-none" onClick={() => setNextActionOverdueOpen((o) => !o)}>
+          <div className="flex items-center gap-2">
+            <Calendar className="h-4 w-4 text-orange-400" />
+            <span className="font-medium text-zinc-200 text-sm">Deal Next-Action Overdue</span>
+            {nextActionOverdue && nextActionOverdue.overdue_count > 0 && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${nextActionOverdue.overdue_rate >= 30 ? 'bg-rose-500/20 text-rose-300' : nextActionOverdue.overdue_rate >= 15 ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
+                {nextActionOverdue.overdue_count} overdue
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="text-xs text-zinc-400 hover:text-zinc-200 flex items-center gap-1 px-2 py-1 rounded hover:bg-zinc-800" onClick={(e) => { e.stopPropagation(); regenerateNextActionOverdue(); }}>
+              <RefreshCw className={`h-3 w-3 ${nextActionOverdueLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            {nextActionOverdueOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </div>
+        {nextActionOverdueOpen && (
+          nextActionOverdueLoading ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analysing next-action overdue…</div>
+          ) : nextActionOverdue ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-orange-400">{nextActionOverdue.overdue_count}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Overdue</p>
+                </div>
+                <div className="bg-zinc-900/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-zinc-200">{nextActionOverdue.total_active}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Active Deals</p>
+                </div>
+                <div className="bg-zinc-900/50 rounded-lg p-3 text-center">
+                  <p className={`text-2xl font-bold ${nextActionOverdue.overdue_rate >= 30 ? 'text-rose-400' : nextActionOverdue.overdue_rate >= 15 ? 'text-amber-400' : 'text-emerald-400'}`}>{nextActionOverdue.overdue_rate}%</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Overdue Rate</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {nextActionOverdue.buckets.map((b) => (
+                  <div key={b.bucket} className="flex items-center gap-2">
+                    <span className="text-xs text-zinc-400 w-28 flex-shrink-0">{b.label}</span>
+                    <div className="flex-1 bg-zinc-800 rounded-full h-1.5">
+                      <div className={`h-1.5 rounded-full ${b.bucket === 'overdue' ? 'bg-rose-500' : b.bucket === 'due_today' ? 'bg-amber-500' : b.bucket === 'due_soon' ? 'bg-yellow-500' : b.bucket === 'on_track' ? 'bg-emerald-500' : 'bg-zinc-600'}`} style={{ width: `${b.pct_of_active}%` }} />
+                    </div>
+                    <span className="text-xs text-zinc-300 w-6 text-right">{b.count}</span>
+                    <span className="text-xs text-zinc-500 w-10 text-right">{b.pct_of_active}%</span>
+                  </div>
+                ))}
+              </div>
+              {nextActionOverdue.top_overdue_deals.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-400 mb-2">Most Overdue Deals</p>
+                  <div className="space-y-1.5">
+                    {nextActionOverdue.top_overdue_deals.map((d) => (
+                      <div key={d.deal_id} className="flex items-center justify-between bg-zinc-900/50 rounded px-3 py-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <a href={`/pipeline/${d.deal_id}`} className="text-sm text-zinc-200 hover:text-orange-300 truncate flex items-center gap-1">
+                            {d.title}
+                            <ExternalLink className="h-3 w-3 flex-shrink-0 opacity-50" />
+                          </a>
+                          <span className="text-xs text-zinc-500 flex-shrink-0">{d.stage}</span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-xs bg-rose-500/20 text-rose-300 px-2 py-0.5 rounded-full">{d.days_overdue}d overdue</span>
+                          <span className="text-xs text-zinc-400">${(d.value / 1000).toFixed(0)}k</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="text-sm text-zinc-300 italic">{nextActionOverdue.overdue_narrative}</p>
+              <ul className="space-y-1.5">
+                {nextActionOverdue.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-orange-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(nextActionOverdue.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load deal next-action overdue analysis.</div>
           )
         )}
       </Card>

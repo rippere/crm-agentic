@@ -19574,3 +19574,177 @@ async def get_contact_churn_risk(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_NEXT_ACTION_OVERDUE_SYSTEM = (
+    "You are a sales analytics AI. Analyse a CRM deal next-action overdue report. "
+    "Write a 2-sentence narrative about the team's next-action discipline and urgency "
+    "and 3 actionable recommendations to reduce overdue actions and improve follow-up consistency. "
+    "Respond ONLY with valid JSON: "
+    "{\"overdue_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_NEXT_ACTION_ACTIVE_STAGES = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/next-action-overdue")
+@limiter.limit("5/minute")
+async def get_ai_deal_next_action_overdue(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    today = datetime.datetime.now(timezone.utc).date()
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.stage,
+            Deal.value,
+            Deal.next_action_date,
+            Deal.next_action,
+        ).where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(_NEXT_ACTION_ACTIVE_STAGES),
+        )
+    )
+    deals = result.all()
+
+    if not deals:
+        return {
+            "buckets": [
+                {"bucket": "overdue", "label": "Overdue", "count": 0, "pct_of_active": 0.0, "total_value": 0.0},
+                {"bucket": "due_today", "label": "Due Today", "count": 0, "pct_of_active": 0.0, "total_value": 0.0},
+                {"bucket": "due_soon", "label": "Due This Week", "count": 0, "pct_of_active": 0.0, "total_value": 0.0},
+                {"bucket": "on_track", "label": "On Track", "count": 0, "pct_of_active": 0.0, "total_value": 0.0},
+                {"bucket": "no_action", "label": "No Action Set", "count": 0, "pct_of_active": 0.0, "total_value": 0.0},
+            ],
+            "top_overdue_deals": [],
+            "overdue_count": 0,
+            "overdue_rate": 0.0,
+            "total_active": 0,
+            "total_with_actions": 0,
+            "overdue_narrative": "No active deals found — add deals to track next-action discipline.",
+            "recommendations": [
+                "Add active deals at each pipeline stage and set next-action dates to build follow-up habits.",
+                "Assign a next-action date to every new deal at creation time.",
+                "Review your pipeline weekly to ensure every deal has a next-action date within 14 days.",
+            ],
+            "generated_at": today.isoformat() + "Z",
+        }
+
+    total = len(deals)
+    bucket_data: dict[str, dict] = {
+        "overdue": {"bucket": "overdue", "label": "Overdue", "count": 0, "pct_of_active": 0.0, "total_value": 0.0},
+        "due_today": {"bucket": "due_today", "label": "Due Today", "count": 0, "pct_of_active": 0.0, "total_value": 0.0},
+        "due_soon": {"bucket": "due_soon", "label": "Due This Week", "count": 0, "pct_of_active": 0.0, "total_value": 0.0},
+        "on_track": {"bucket": "on_track", "label": "On Track", "count": 0, "pct_of_active": 0.0, "total_value": 0.0},
+        "no_action": {"bucket": "no_action", "label": "No Action Set", "count": 0, "pct_of_active": 0.0, "total_value": 0.0},
+    }
+    overdue_list = []
+
+    for d in deals:
+        val = float(d.value or 0)
+        if d.next_action_date is None:
+            bucket_data["no_action"]["count"] += 1
+            bucket_data["no_action"]["total_value"] += val
+        else:
+            delta = (today - d.next_action_date).days
+            if delta > 0:
+                bucket_data["overdue"]["count"] += 1
+                bucket_data["overdue"]["total_value"] += val
+                overdue_list.append({
+                    "deal_id": str(d.id),
+                    "title": d.title or "",
+                    "stage": d.stage,
+                    "value": val,
+                    "days_overdue": delta,
+                    "next_action": d.next_action or "",
+                })
+            elif delta == 0:
+                bucket_data["due_today"]["count"] += 1
+                bucket_data["due_today"]["total_value"] += val
+            elif delta >= -7:
+                bucket_data["due_soon"]["count"] += 1
+                bucket_data["due_soon"]["total_value"] += val
+            else:
+                bucket_data["on_track"]["count"] += 1
+                bucket_data["on_track"]["total_value"] += val
+
+    for b in bucket_data.values():
+        b["pct_of_active"] = round(b["count"] / total * 100, 1) if total > 0 else 0.0
+        b["total_value"] = round(b["total_value"], 2)
+
+    overdue_list.sort(key=lambda x: -x["days_overdue"])
+    top_overdue = overdue_list[:5]
+
+    overdue_count = bucket_data["overdue"]["count"]
+    total_with_actions = total - bucket_data["no_action"]["count"]
+    overdue_rate = round(overdue_count / total_with_actions * 100, 1) if total_with_actions > 0 else 0.0
+
+    top_3_str = ", ".join(f"{d['title']} ({d['days_overdue']}d overdue)" for d in top_overdue[:3])
+    context = (
+        f"Deal next-action overdue summary:\n"
+        f"Total active deals: {total}\n"
+        f"Overdue: {overdue_count} ({overdue_rate}% of deals with actions)\n"
+        f"Due today: {bucket_data['due_today']['count']}\n"
+        f"Due this week: {bucket_data['due_soon']['count']}\n"
+        f"On track: {bucket_data['on_track']['count']}\n"
+        f"No action set: {bucket_data['no_action']['count']}\n"
+        f"Most overdue: {top_3_str or 'none'}\n"
+    )
+
+    overdue_narrative = ""
+    recs: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_NEXT_ACTION_OVERDUE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    overdue_narrative = str(data.get("overdue_narrative", "")).strip()
+    if not overdue_narrative:
+        overdue_narrative = (
+            f"{overdue_count} of {total} active deals have overdue next-action dates, "
+            f"representing {overdue_rate}% of deals with actions set."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    defaults = [
+        "Block 30 minutes each morning to action overdue items before new sales calls.",
+        "Set up a daily 8 AM reminder to review and update overdue next-action dates.",
+        "Aim to keep overdue rate below 10% — use a weekly pipeline review to maintain discipline.",
+    ]
+    while len(recs) < 3:
+        recs.append(defaults[len(recs) % 3])
+
+    return {
+        "buckets": list(bucket_data.values()),
+        "top_overdue_deals": top_overdue,
+        "overdue_count": overdue_count,
+        "overdue_rate": overdue_rate,
+        "total_active": total,
+        "total_with_actions": total_with_actions,
+        "overdue_narrative": overdue_narrative,
+        "recommendations": recs,
+        "generated_at": datetime.datetime.now(timezone.utc).isoformat() + "Z",
+    }
