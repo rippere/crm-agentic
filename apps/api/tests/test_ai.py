@@ -9223,3 +9223,67 @@ async def test_contact_churn_risk_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/churn-risk")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 18n — AI deal pipeline balance
+# ---------------------------------------------------------------------------
+
+class FakePipelineBalanceDealRow:
+    def __init__(self, id, title, stage, value, ml_win_probability, health_score, stage_changed_at, created_at):
+        self.id = id
+        self.title = title
+        self.stage = stage
+        self.value = value
+        self.ml_win_probability = ml_win_probability
+        self.health_score = health_score
+        self.stage_changed_at = stage_changed_at
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_pipeline_balance_returns_stage_balance(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    deal_rows = [
+        FakePipelineBalanceDealRow("d1", "Discovery One", "discovery", 60000, 55.0, 72, now, now),
+        FakePipelineBalanceDealRow("d2", "Discovery Two", "discovery", 25000, 40.0, 60, now, now),
+        FakePipelineBalanceDealRow("d3", "Discovery Three", "discovery", 15000, 30.0, 50, now, now),
+        FakePipelineBalanceDealRow("d4", "Qualified One", "qualified", 30000, 60.0, 70, now, now),
+        FakePipelineBalanceDealRow("d5", "Proposal One", "proposal", 80000, 70.0, 80, now, now),
+        FakePipelineBalanceDealRow("d6", "Negotiation One", "negotiation", 50000, 85.0, 90, now, now),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(deal_rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"balance_narrative": "Good mix.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/pipeline-balance")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["stage_balance"]) == 4
+    disc = next(b for b in body["stage_balance"] if b["stage"] == "discovery")
+    assert disc["actual_count"] == 3
+    assert body["total_open_deals"] == 6
+    assert body["balance_score"] >= 0
+    assert body["concentration_risk"] in ("low", "medium", "high")
+    assert len(body["value_balance"]) == 3
+    assert "balance_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_pipeline_balance_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-balance")
+    assert resp.status_code == 403

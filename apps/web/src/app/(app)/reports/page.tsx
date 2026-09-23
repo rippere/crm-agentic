@@ -872,6 +872,12 @@ export default function ReportsPage() {
   const [churnRisk, setChurnRisk] = useState<AIChurnRiskData | null>(null);
   const [churnRiskLoading, setChurnRiskLoading] = useState(false);
   const [churnRiskOpen, setChurnRiskOpen] = useState(true);
+  type AIPipelineBalanceStage = { stage: string; actual_count: number; actual_pct: number; expected_pct: number; variance_pct: number };
+  type AIPipelineBalanceValueTier = { tier: string; count: number; pct: number };
+  type AIPipelineBalanceData = { stage_balance: AIPipelineBalanceStage[]; value_balance: AIPipelineBalanceValueTier[]; balance_score: number; most_imbalanced_stage: string | null; concentration_risk: string; total_pipeline_value: number; total_open_deals: number; balance_narrative: string; recommendations: string[]; generated_at: string };
+  const [pipelineBalance, setPipelineBalance] = useState<AIPipelineBalanceData | null>(null);
+  const [pipelineBalanceLoading, setPipelineBalanceLoading] = useState(false);
+  const [pipelineBalanceOpen, setPipelineBalanceOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1057,6 +1063,8 @@ export default function ReportsPage() {
       apiClient.getAIDealCohortAnalysis("demo-workspace-1", "demo-token").then(setCohortAnalysis).catch(() => {}).finally(() => setCohortAnalysisLoading(false));
       setChurnRiskLoading(true);
       apiClient.getAIContactChurnRisk("demo-workspace-1", "demo-token").then(setChurnRisk).catch(() => {}).finally(() => setChurnRiskLoading(false));
+      setPipelineBalanceLoading(true);
+      apiClient.getAIDealPipelineBalance("demo-workspace-1", "demo-token").then(setPipelineBalance).catch(() => {}).finally(() => setPipelineBalanceLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1246,6 +1254,8 @@ export default function ReportsPage() {
       apiClient.getAIDealCohortAnalysis(workspaceId, session.access_token).then(setCohortAnalysis).catch(() => {}).finally(() => setCohortAnalysisLoading(false));
       setChurnRiskLoading(true);
       apiClient.getAIContactChurnRisk(workspaceId, session.access_token).then(setChurnRisk).catch(() => {}).finally(() => setChurnRiskLoading(false));
+      setPipelineBalanceLoading(true);
+      apiClient.getAIDealPipelineBalance(workspaceId, session.access_token).then(setPipelineBalance).catch(() => {}).finally(() => setPipelineBalanceLoading(false));
     });
   }, []);
 
@@ -2599,6 +2609,27 @@ export default function ReportsPage() {
         if (!session) { setChurnRiskLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setChurnRiskLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regeneratePipelineBalance = () => {
+    setPipelineBalanceLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealPipelineBalance(wid, tok)
+        .then(setPipelineBalance)
+        .catch(() => {})
+        .finally(() => setPipelineBalanceLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPipelineBalanceLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPipelineBalanceLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11376,6 +11407,107 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load customer churn risk analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Pipeline Balance Report */}
+      <Card className="border-sky-500/15">
+        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Layers className="h-4 w-4 text-sky-400" />
+            <span className="text-sm font-semibold text-zinc-200">Pipeline Balance Report</span>
+            {pipelineBalance && (
+              <span className="text-xs text-zinc-500 ml-1">
+                score {pipelineBalance.balance_score}/100 · {pipelineBalance.total_open_deals} deals
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regeneratePipelineBalance}
+              disabled={pipelineBalanceLoading}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${pipelineBalanceLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            <button onClick={() => setPipelineBalanceOpen(o => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {pipelineBalanceOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {pipelineBalanceOpen && (
+          pipelineBalanceLoading && !pipelineBalance ? (
+            <div className="p-6 space-y-3 animate-pulse"><div className="h-4 bg-zinc-800 rounded w-3/4" /><div className="h-4 bg-zinc-800 rounded w-1/2" /><div className="h-4 bg-zinc-800 rounded w-2/3" /></div>
+          ) : pipelineBalance ? (
+            <div className="p-4 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className={cn(
+                  "flex items-center gap-1 px-3 py-1 rounded-full text-sm font-semibold",
+                  pipelineBalance.balance_score >= 70 ? "bg-emerald-900/40 text-emerald-300 border border-emerald-500/30" :
+                  pipelineBalance.balance_score >= 50 ? "bg-amber-900/40 text-amber-300 border border-amber-500/30" :
+                  "bg-rose-900/40 text-rose-300 border border-rose-500/30"
+                )}>
+                  Balance {pipelineBalance.balance_score}/100
+                </div>
+                <div className={cn(
+                  "px-2 py-0.5 rounded text-xs font-medium",
+                  pipelineBalance.concentration_risk === 'low' ? "bg-emerald-900/30 text-emerald-400" :
+                  pipelineBalance.concentration_risk === 'medium' ? "bg-amber-900/30 text-amber-400" :
+                  "bg-rose-900/30 text-rose-400"
+                )}>
+                  {pipelineBalance.concentration_risk.charAt(0).toUpperCase() + pipelineBalance.concentration_risk.slice(1)} concentration risk
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-zinc-500 mb-2 font-medium uppercase tracking-wide">Stage Distribution (vs ideal)</p>
+                <div className="space-y-2">
+                  {pipelineBalance.stage_balance.map((b) => {
+                    const label = stageConfig[b.stage as keyof typeof stageConfig]?.label ?? b.stage;
+                    const color = stageConfig[b.stage as keyof typeof stageConfig]?.color ?? '#6b7280';
+                    return (
+                      <div key={b.stage} className="space-y-0.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-zinc-300">{label} <span className="text-zinc-500">({b.actual_count})</span></span>
+                          <span className={cn("font-medium", b.variance_pct > 5 ? "text-amber-400" : b.variance_pct < -5 ? "text-rose-400" : "text-emerald-400")}>
+                            {b.actual_pct}% <span className="text-zinc-500 font-normal">(target {b.expected_pct}%)</span>
+                          </span>
+                        </div>
+                        <div className="h-2 bg-zinc-800 rounded-full overflow-hidden relative">
+                          <div className="h-full rounded-full" style={{ width: `${b.actual_pct}%`, backgroundColor: color }} />
+                          <div className="absolute top-0 h-full w-0.5 bg-zinc-400 opacity-50" style={{ left: `${b.expected_pct}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-zinc-500 mb-2 font-medium uppercase tracking-wide">Value Tier Mix</p>
+                <div className="flex gap-2">
+                  {pipelineBalance.value_balance.map((t) => (
+                    <div key={t.tier} className="flex-1 bg-zinc-800/60 rounded p-2 text-center">
+                      <p className="text-sm font-semibold text-zinc-200">{t.count}</p>
+                      <p className="text-xs text-zinc-500">{t.pct}%</p>
+                      <p className="text-xs text-zinc-400 mt-0.5 leading-tight">{t.tier}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <p className="text-xs text-zinc-400 italic">{pipelineBalance.balance_narrative}</p>
+              <ul className="space-y-1">
+                {pipelineBalance.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(pipelineBalance.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the pipeline balance report.</div>
           )
         )}
       </Card>

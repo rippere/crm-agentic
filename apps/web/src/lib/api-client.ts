@@ -7443,5 +7443,36 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/churn-risk`, {}, token)
   },
+
+  async getAIDealPipelineBalance(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stage_balance: [
+          { stage: 'discovery', actual_count: 8, actual_pct: 36.4, expected_pct: 30.0, variance_pct: 6.4 },
+          { stage: 'qualified', actual_count: 4, actual_pct: 18.2, expected_pct: 25.0, variance_pct: -6.8 },
+          { stage: 'proposal', actual_count: 6, actual_pct: 27.3, expected_pct: 25.0, variance_pct: 2.3 },
+          { stage: 'negotiation', actual_count: 4, actual_pct: 18.2, expected_pct: 20.0, variance_pct: -1.8 },
+        ],
+        value_balance: [
+          { tier: 'Enterprise (>$50K)', count: 5, pct: 22.7 },
+          { tier: 'Mid-Market ($20K–$50K)', count: 9, pct: 40.9 },
+          { tier: 'SMB (<$20K)', count: 8, pct: 36.4 },
+        ],
+        balance_score: 72,
+        most_imbalanced_stage: 'qualified',
+        concentration_risk: 'medium',
+        total_pipeline_value: 685000,
+        total_open_deals: 22,
+        balance_narrative: 'The pipeline shows moderate balance with discovery slightly over-represented at 36.4% versus the ideal 30%, while qualified lags behind at 18.2%. The mid-market tier dominates value, and the top-3 deals represent 41% of total pipeline value — a concentration risk worth monitoring.',
+        recommendations: [
+          'Increase prospecting activity targeting qualified-stage criteria to move more discovery deals forward and fill the qualified gap.',
+          'Review the 8 SMB deals under $20K to identify which have upsell potential or should be fast-tracked to close to free capacity.',
+          'Set a weekly pipeline review cadence to track stage distribution against the 30/25/25/20 ideal and adjust outreach focus accordingly.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-balance`, {}, token)
+  },
 }
 

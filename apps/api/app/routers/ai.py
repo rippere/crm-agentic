@@ -19574,3 +19574,204 @@ async def get_contact_churn_risk(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_PIPELINE_BALANCE_SYSTEM = (
+    "You are a sales analytics AI. Analyse a CRM pipeline balance report. "
+    "Write a 2-sentence narrative about the overall health and balance of the sales pipeline "
+    "and 3 actionable recommendations to improve pipeline balance. "
+    "Respond ONLY with valid JSON: "
+    "{\"balance_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_STAGE_EXPECTED_PCT = {
+    "discovery": 30.0,
+    "qualified": 25.0,
+    "proposal": 25.0,
+    "negotiation": 20.0,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-balance")
+@limiter.limit("5/minute")
+async def get_ai_deal_pipeline_balance(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    active_stages = ["discovery", "qualified", "proposal", "negotiation"]
+
+    result = await db.execute(
+        select(
+            Deal.id,
+            Deal.title,
+            Deal.stage,
+            Deal.value,
+            Deal.ml_win_probability,
+            Deal.health_score,
+            Deal.stage_changed_at,
+            Deal.created_at,
+        ).join(Contact, Deal.contact_id == Contact.id).where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(active_stages),
+        )
+    )
+    deals = result.all()
+
+    if not deals:
+        return {
+            "stage_balance": [
+                {
+                    "stage": s,
+                    "actual_count": 0,
+                    "actual_pct": 0.0,
+                    "expected_pct": _STAGE_EXPECTED_PCT[s],
+                    "variance_pct": -_STAGE_EXPECTED_PCT[s],
+                }
+                for s in active_stages
+            ],
+            "value_balance": [
+                {"tier": "Enterprise (>$50K)", "count": 0, "pct": 0.0},
+                {"tier": "Mid-Market ($20K–$50K)", "count": 0, "pct": 0.0},
+                {"tier": "SMB (<$20K)", "count": 0, "pct": 0.0},
+            ],
+            "balance_score": 0,
+            "most_imbalanced_stage": None,
+            "concentration_risk": "low",
+            "total_pipeline_value": 0,
+            "total_open_deals": 0,
+            "balance_narrative": "No active deals found — add deals to track pipeline balance.",
+            "recommendations": [
+                "Add deals at each pipeline stage to build a balanced funnel.",
+                "Aim for a 30/25/25/20 distribution across discovery, qualified, proposal, and negotiation.",
+                "Set target deal counts per stage and track weekly to maintain balance.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    total = len(deals)
+    stage_counts: dict[str, int] = {s: 0 for s in active_stages}
+    for d in deals:
+        if d.stage in stage_counts:
+            stage_counts[d.stage] += 1
+
+    stage_balance = []
+    for s in active_stages:
+        cnt = stage_counts[s]
+        actual_pct = (cnt / total) * 100.0
+        expected_pct = _STAGE_EXPECTED_PCT[s]
+        stage_balance.append(
+            {
+                "stage": s,
+                "actual_count": cnt,
+                "actual_pct": round(actual_pct, 1),
+                "expected_pct": expected_pct,
+                "variance_pct": round(actual_pct - expected_pct, 1),
+            }
+        )
+
+    most_imbalanced_stage = max(stage_balance, key=lambda x: abs(x["variance_pct"]))["stage"]
+
+    total_value = sum((d.value or 0) for d in deals)
+    enterprise = [d for d in deals if (d.value or 0) > 50000]
+    midmarket = [d for d in deals if 20000 <= (d.value or 0) <= 50000]
+    smb = [d for d in deals if (d.value or 0) < 20000]
+    value_balance = [
+        {
+            "tier": "Enterprise (>$50K)",
+            "count": len(enterprise),
+            "pct": round(len(enterprise) / total * 100, 1),
+        },
+        {
+            "tier": "Mid-Market ($20K–$50K)",
+            "count": len(midmarket),
+            "pct": round(len(midmarket) / total * 100, 1),
+        },
+        {
+            "tier": "SMB (<$20K)",
+            "count": len(smb),
+            "pct": round(len(smb) / total * 100, 1),
+        },
+    ]
+
+    sorted_by_value = sorted(deals, key=lambda d: (d.value or 0), reverse=True)
+    top3_value = sum((d.value or 0) for d in sorted_by_value[:3])
+    concentration_pct = (top3_value / total_value * 100) if total_value else 0
+    if concentration_pct > 60:
+        concentration_risk = "high"
+    elif concentration_pct > 40:
+        concentration_risk = "medium"
+    else:
+        concentration_risk = "low"
+
+    max_variance = max(abs(b["variance_pct"]) for b in stage_balance)
+    stage_score = max(0, 100 - max_variance * 2)
+    conc_penalty = 30 if concentration_risk == "high" else (15 if concentration_risk == "medium" else 0)
+    balance_score = max(0, min(100, round(stage_score - conc_penalty)))
+
+    stage_dist_str = ", ".join(
+        f"{b['stage']}={b['actual_pct']}% (expected {b['expected_pct']}%)" for b in stage_balance
+    )
+    context = (
+        f"Pipeline balance analysis:\n"
+        f"Total open deals: {total}\n"
+        f"Total pipeline value: ${total_value:,.0f}\n"
+        f"Stage distribution: {stage_dist_str}\n"
+        f"Value tiers: Enterprise {len(enterprise)}, Mid-Market {len(midmarket)}, SMB {len(smb)}\n"
+        f"Top-3 deals concentration: {concentration_pct:.1f}% of pipeline value\n"
+        f"Concentration risk: {concentration_risk}\n"
+        f"Balance score: {balance_score}/100\n"
+        f"Most imbalanced stage: {most_imbalanced_stage}\n"
+    )
+
+    balance_narrative = ""
+    recs: list[str] = []
+    try:
+        client = _anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)  # TODO: add real credentials
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_PIPELINE_BALANCE_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    balance_narrative = str(data.get("balance_narrative", "")).strip()
+    if not balance_narrative:
+        balance_narrative = (
+            f"Pipeline balance score is {balance_score}/100 with {most_imbalanced_stage} "
+            "showing the largest variance from the ideal distribution."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        f"Focus prospecting efforts on the {most_imbalanced_stage} stage to rebalance the funnel.",
+        "Review and advance deals that have been stagnant in over-represented stages.",
+        "Set monthly stage-balance targets and review pipeline distribution each Monday.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "stage_balance": stage_balance,
+        "value_balance": value_balance,
+        "balance_score": balance_score,
+        "most_imbalanced_stage": most_imbalanced_stage,
+        "concentration_risk": concentration_risk,
+        "total_pipeline_value": total_value,
+        "total_open_deals": total,
+        "balance_narrative": balance_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
