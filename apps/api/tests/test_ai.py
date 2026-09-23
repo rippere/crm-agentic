@@ -9610,3 +9610,63 @@ async def test_win_loss_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-loss-trend")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20g — time-to-close distribution
+# ---------------------------------------------------------------------------
+
+class FakeCloseDistRow:
+    def __init__(self, value, created_at, stage_changed_at):
+        self.id = uuid.uuid4()
+        self.title = "Test Deal"
+        self.value = value
+        self.created_at = created_at
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_time_to_close_distribution_returns_buckets(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = datetime.datetime.now(datetime.timezone.utc)
+    rows = [
+        FakeCloseDistRow(10000, now - datetime.timedelta(days=20), now - datetime.timedelta(days=5)),   # 15d → lightning
+        FakeCloseDistRow(25000, now - datetime.timedelta(days=80), now - datetime.timedelta(days=45)),  # 35d → fast
+        FakeCloseDistRow(50000, now - datetime.timedelta(days=150), now - datetime.timedelta(days=80)), # 70d → standard
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"distribution_narrative": "Deals close fast.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/time-to-close-distribution")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["buckets"]) == 5
+    assert body["total_analyzed"] == 3
+    assert body["median_days"] is not None
+    assert body["fastest_close_days"] is not None
+    assert body["slowest_close_days"] is not None
+    assert body["optimal_bucket"] is not None
+    assert "distribution_narrative" in body
+    assert len(body["recommendations"]) == 3
+    lightning = next(b for b in body["buckets"] if b["label"] == "lightning")
+    fast = next(b for b in body["buckets"] if b["label"] == "fast")
+    standard = next(b for b in body["buckets"] if b["label"] == "standard")
+    assert lightning["count"] == 1
+    assert fast["count"] == 1
+    assert standard["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_time_to_close_distribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/time-to-close-distribution")
+    assert resp.status_code == 403

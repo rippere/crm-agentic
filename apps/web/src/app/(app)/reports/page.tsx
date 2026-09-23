@@ -905,6 +905,11 @@ export default function ReportsPage() {
   const [winLossTrend, setWinLossTrend] = useState<AIWinLossTrendData | null>(null);
   const [winLossTrendLoading, setWinLossTrendLoading] = useState(false);
   const [winLossTrendOpen, setWinLossTrendOpen] = useState(true);
+  type AICloseDistBucket = { label: string; range_label: string; count: number; total_value: number; avg_value: number };
+  type AICloseDistData = { buckets: AICloseDistBucket[]; total_analyzed: number; fastest_close_days: number | null; slowest_close_days: number | null; median_days: number | null; optimal_bucket: string | null; distribution_narrative: string; recommendations: string[]; generated_at: string };
+  const [closeDist, setCloseDist] = useState<AICloseDistData | null>(null);
+  const [closeDistLoading, setCloseDistLoading] = useState(false);
+  const [closeDistOpen, setCloseDistOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1102,6 +1107,8 @@ export default function ReportsPage() {
       apiClient.getAIDealStageVelocity("demo-workspace-1", "demo-token").then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
       setWinLossTrendLoading(true);
       apiClient.getAIDealWinLossTrend("demo-workspace-1", "demo-token").then(setWinLossTrend).catch(() => {}).finally(() => setWinLossTrendLoading(false));
+      setCloseDistLoading(true);
+      apiClient.getAIDealTimeToCloseDistribution("demo-workspace-1", "demo-token").then(setCloseDist).catch(() => {}).finally(() => setCloseDistLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1303,6 +1310,8 @@ export default function ReportsPage() {
       apiClient.getAIDealStageVelocity(workspaceId, session.access_token).then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
       setWinLossTrendLoading(true);
       apiClient.getAIDealWinLossTrend(workspaceId, session.access_token).then(setWinLossTrend).catch(() => {}).finally(() => setWinLossTrendLoading(false));
+      setCloseDistLoading(true);
+      apiClient.getAIDealTimeToCloseDistribution(workspaceId, session.access_token).then(setCloseDist).catch(() => {}).finally(() => setCloseDistLoading(false));
     });
   }, []);
 
@@ -2782,6 +2791,27 @@ export default function ReportsPage() {
         if (!session) { setWinLossTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setWinLossTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateCloseDist = () => {
+    setCloseDistLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealTimeToCloseDistribution(wid, tok)
+        .then(setCloseDist)
+        .catch(() => {})
+        .finally(() => setCloseDistLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCloseDistLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCloseDistLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12069,6 +12099,80 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the win/loss trend analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Time-to-Close Distribution */}
+      <Card className="border-sky-500/15 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 bg-zinc-900/60">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-sky-400" />
+            <span className="text-sm font-semibold text-zinc-200">Time-to-Close Distribution</span>
+            {closeDist && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">
+                {closeDist.total_analyzed} closed-won · median {closeDist.median_days}d
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={regenerateCloseDist} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded hover:bg-zinc-800 transition-colors" disabled={closeDistLoading}>
+              <RefreshCw className={`h-3 w-3 ${closeDistLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            <button onClick={() => setCloseDistOpen(o => !o)} className="text-zinc-400 hover:text-zinc-200 p-1 rounded hover:bg-zinc-800 transition-colors">
+              {closeDistOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {closeDistOpen && (
+          closeDistLoading && !closeDist ? (
+            <div className="p-6 space-y-2 animate-pulse"><div className="h-4 bg-zinc-800 rounded w-3/4" /><div className="h-32 bg-zinc-800 rounded" /><div className="h-4 bg-zinc-800 rounded w-1/2" /></div>
+          ) : closeDist ? (
+            <div className="px-5 py-4 space-y-4">
+              {/* Horizontal bar chart */}
+              <ResponsiveContainer width="100%" height={140}>
+                <BarChart data={closeDist.buckets} layout="vertical" margin={{ top: 2, right: 24, left: 8, bottom: 2 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
+                  <XAxis type="number" tick={{ fill: '#71717a', fontSize: 10 }} allowDecimals={false} />
+                  <YAxis type="category" dataKey="range_label" tick={{ fill: '#71717a', fontSize: 10 }} width={72} />
+                  <Tooltip formatter={(v) => [v, 'Deals']} contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }} />
+                  <Bar dataKey="count" radius={[0, 3, 3, 0]}>
+                    {closeDist.buckets.map((b) => {
+                      const colorMap: Record<string, string> = { lightning: '#10b981', fast: '#14b8a6', standard: '#f59e0b', slow: '#f97316', long: '#f43f5e' };
+                      return <Cell key={b.label} fill={colorMap[b.label] ?? '#71717a'} />;
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+              {/* Stats chips */}
+              <div className="flex items-center gap-3 flex-wrap">
+                {closeDist.fastest_close_days !== null && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300">Fastest: {closeDist.fastest_close_days}d</span>
+                )}
+                {closeDist.median_days !== null && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">Median: {closeDist.median_days}d</span>
+                )}
+                {closeDist.slowest_close_days !== null && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300">Slowest: {closeDist.slowest_close_days}d</span>
+                )}
+                {closeDist.optimal_bucket && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-300">Sweet spot: {closeDist.optimal_bucket}</span>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{closeDist.distribution_narrative}</p>
+              <ul className="space-y-1">
+                {closeDist.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(closeDist.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the time-to-close distribution.</div>
           )
         )}
       </Card>

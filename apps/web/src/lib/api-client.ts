@@ -7626,5 +7626,32 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-loss-trend`, {}, token)
   },
+
+  async getAIDealTimeToCloseDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        buckets: [
+          { label: 'lightning', range_label: '< 30 days',  count: 4,  total_value: 78000,  avg_value: 19500 },
+          { label: 'fast',      range_label: '30–59 days', count: 11, total_value: 342000, avg_value: 31091 },
+          { label: 'standard',  range_label: '60–89 days', count: 9,  total_value: 385000, avg_value: 42778 },
+          { label: 'slow',      range_label: '90–179 days',count: 5,  total_value: 310000, avg_value: 62000 },
+          { label: 'long',      range_label: '≥ 180 days', count: 2,  total_value: 185000, avg_value: 92500 },
+        ],
+        total_analyzed: 31,
+        fastest_close_days: 8,
+        slowest_close_days: 214,
+        median_days: 54,
+        optimal_bucket: 'fast',
+        distribution_narrative: 'The majority of your 31 closed-won deals close in 30–59 days, with a median of 54 days — a healthy pipeline cadence. The 4 lightning deals (< 30 days) represent highly-qualified inbound opportunities worth examining for replication. The 7 long-cycle deals (≥ 90 days) average $66K in value, suggesting larger enterprise deals naturally require more time.',
+        recommendations: [
+          'Study your 4 lightning deals to identify the qualification and champion patterns that enabled rapid closure.',
+          'Set a 60-day soft target for standard deals and trigger a coaching review for any deal exceeding 90 days in stage.',
+          'For the long-cycle enterprise segment, introduce a structured executive-sponsor engagement programme to accelerate decisions.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/time-to-close-distribution`, {}, token)
+  },
 }
 

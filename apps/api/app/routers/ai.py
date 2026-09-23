@@ -20612,3 +20612,144 @@ async def get_ai_deal_win_loss_trend(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_CLOSE_DISTRIBUTION_SYSTEM = """You are a sales analytics AI. Given a histogram of days-to-close for won deals,
+identify patterns and produce actionable insights.
+
+Respond with ONLY valid JSON:
+{
+  "distribution_narrative": "2-3 sentence analysis of the time-to-close distribution pattern",
+  "recommendations": ["action 1", "action 2", "action 3"]
+}"""
+
+_CLOSE_BUCKETS = [
+    {"label": "lightning", "range_label": "< 30 days", "min_days": 0, "max_days": 29},
+    {"label": "fast", "range_label": "30–59 days", "min_days": 30, "max_days": 59},
+    {"label": "standard", "range_label": "60–89 days", "min_days": 60, "max_days": 89},
+    {"label": "slow", "range_label": "90–179 days", "min_days": 90, "max_days": 179},
+    {"label": "long", "range_label": "≥ 180 days", "min_days": 180, "max_days": 99999},
+]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/time-to-close-distribution")
+@limiter.limit("5/minute")
+async def get_ai_deal_time_to_close_distribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.value, Deal.created_at, Deal.stage_changed_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.stage_changed_at.isnot(None))
+        .where(Deal.created_at.isnot(None))
+    )
+    rows = result.all()
+
+    now = datetime.datetime.now(timezone.utc)
+
+    deal_days: list[tuple[int, float]] = []
+    for row in rows:
+        created = row.created_at.replace(tzinfo=timezone.utc) if row.created_at.tzinfo is None else row.created_at
+        closed = row.stage_changed_at.replace(tzinfo=timezone.utc) if row.stage_changed_at.tzinfo is None else row.stage_changed_at
+        days = max(0, (closed - created).days)
+        value = float(row.value or 0)
+        deal_days.append((days, value))
+
+    total_analyzed = len(deal_days)
+
+    buckets = []
+    for b in _CLOSE_BUCKETS:
+        matching = [(d, v) for d, v in deal_days if b["min_days"] <= d <= b["max_days"]]
+        count = len(matching)
+        total_value = sum(v for _, v in matching)
+        avg_value = round(total_value / count) if count > 0 else 0
+        buckets.append({
+            "label": b["label"],
+            "range_label": b["range_label"],
+            "count": count,
+            "total_value": round(total_value),
+            "avg_value": avg_value,
+        })
+
+    optimal_bucket = None
+    if total_analyzed > 0:
+        optimal_bucket = max(buckets, key=lambda b: b["count"])["label"]
+
+    all_days = sorted(d for d, _ in deal_days)
+    fastest_close_days = all_days[0] if all_days else None
+    slowest_close_days = all_days[-1] if all_days else None
+    median_days = all_days[len(all_days) // 2] if all_days else None
+
+    if total_analyzed == 0:
+        return {
+            "buckets": buckets,
+            "total_analyzed": 0,
+            "fastest_close_days": None,
+            "slowest_close_days": None,
+            "median_days": None,
+            "optimal_bucket": None,
+            "distribution_narrative": "No closed-won deals found. Start closing deals to see your time-to-close distribution.",
+            "recommendations": [
+                "Focus on moving deals through the pipeline consistently to build close-time data.",
+                "Set stage-specific time goals to create benchmarks for future analysis.",
+                "Review your current open deals and identify any that are taking longer than expected.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    summary = f"Total {total_analyzed} won deals. Distribution: " + ", ".join(
+        f"{b['label']}({b['count']})" for b in buckets if b["count"] > 0
+    ) + f". Median {median_days}d, fastest {fastest_close_days}d, slowest {slowest_close_days}d."
+
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=_CLOSE_DISTRIBUTION_SYSTEM,
+            messages=[{"role": "user", "content": summary}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        if raw.startswith("```"):
+            raw = "\n".join(raw.split("\n")[1:-1])
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    narrative = str(data.get("distribution_narrative", "")).strip()
+    if not narrative:
+        narrative = (
+            f"Your {total_analyzed} closed-won deals show a median close time of {median_days} days. "
+            f"The most common bucket is '{optimal_bucket}', suggesting your typical deal cadence."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Set stage-specific time targets based on your fastest-closing deals to accelerate the pipeline.",
+        "Investigate long-cycle deals (≥90 days) to find common blockers and create playbooks to avoid them.",
+        "Replicate the approach of lightning deals (<30 days) by documenting their qualification process.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "buckets": buckets,
+        "total_analyzed": total_analyzed,
+        "fastest_close_days": fastest_close_days,
+        "slowest_close_days": slowest_close_days,
+        "median_days": median_days,
+        "optimal_bucket": optimal_bucket,
+        "distribution_narrative": narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
