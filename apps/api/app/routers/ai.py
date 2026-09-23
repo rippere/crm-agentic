@@ -20072,6 +20072,7 @@ async def get_ai_deal_quarterly_forecast(
             "generated_at": now.isoformat() + "Z",
         }
 
+    hist_str = ", ".join(f"{h['quarter']} ${h['revenue']:,.0f}" for h in historical_actuals) or "none"
     context = (
         f"Revenue forecast summary:\n"
         f"Current quarter: {current_quarter}\n"
@@ -20080,7 +20081,7 @@ async def get_ai_deal_quarterly_forecast(
         f"Probability-weighted forecast: ${weighted_forecast:,.0f}\n"
         f"Avg quarterly closed-won revenue (last {len(historical_actuals)} quarters): ${avg_quarterly_revenue:,.0f}\n"
         f"Forecast confidence score: {confidence_score}/100\n"
-        f"Historical quarters: {', '.join(f'{h[\"quarter\"]} ${h[\"revenue\"]:,.0f}' for h in historical_actuals) or 'none'}\n"
+        f"Historical quarters: {hist_str}\n"
         f"Deals by stage: {deal_count_by_stage}\n"
     )
 
