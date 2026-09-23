@@ -9494,3 +9494,63 @@ async def test_price_sensitivity_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/price-sensitivity")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20e — stage velocity
+# ---------------------------------------------------------------------------
+
+class FakeStageVelocityRow:
+    def __init__(self, id, title, stage, value, stage_changed_at):
+        self.id = id
+        self.title = title
+        self.stage = stage
+        self.value = value
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_stage_velocity_returns_stages(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.datetime.utcnow()
+    deal_rows = [
+        FakeStageVelocityRow("d1", "Alpha Deal", "discovery", 10000.0, now - datetime.timedelta(days=5)),
+        FakeStageVelocityRow("d2", "Beta Deal",  "proposal",  25000.0, now - datetime.timedelta(days=20)),
+        FakeStageVelocityRow("d3", "Gamma Deal", "proposal",  15000.0, now - datetime.timedelta(days=10)),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(deal_rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"velocity_narrative": "Pipeline is moving reasonably.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/stage-velocity")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["stages"]) == 4  # all 4 velocity stages present
+    discovery = next(s for s in body["stages"] if s["stage"] == "discovery")
+    assert discovery["deal_count"] == 1
+    proposal = next(s for s in body["stages"] if s["stage"] == "proposal")
+    assert proposal["deal_count"] == 2
+    assert body["total_active"] == 3
+    assert len(body["top_stuck_deals"]) <= 5
+    # top stuck should be Beta Deal (20 days)
+    assert body["top_stuck_deals"][0]["title"] == "Beta Deal"
+    assert body["top_stuck_deals"][0]["days_in_stage"] == pytest.approx(20.0, abs=0.5)
+    assert 0 <= body["velocity_score"] <= 100
+    assert "velocity_narrative" in body
+    assert len(body["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_stage_velocity_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/stage-velocity")
+    assert resp.status_code == 403

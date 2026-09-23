@@ -7560,5 +7560,36 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/price-sensitivity`, {}, token)
   },
+
+  async getAIDealStageVelocity(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        stages: [
+          { stage: 'discovery',   deal_count: 5,  avg_days_in_stage: 8.2,  max_days_in_stage: 22.0, total_value: 87000 },
+          { stage: 'qualified',   deal_count: 4,  avg_days_in_stage: 14.5, max_days_in_stage: 31.0, total_value: 142000 },
+          { stage: 'proposal',    deal_count: 6,  avg_days_in_stage: 19.3, max_days_in_stage: 45.0, total_value: 218000 },
+          { stage: 'negotiation', deal_count: 3,  avg_days_in_stage: 11.0, max_days_in_stage: 18.0, total_value: 195000 },
+        ],
+        top_stuck_deals: [
+          { id: 'd1', title: 'Acme Corp Expansion',   stage: 'proposal',    value: 85000, days_in_stage: 45.0 },
+          { id: 'd2', title: 'Globex Digital Suite',  stage: 'qualified',   value: 42000, days_in_stage: 31.0 },
+          { id: 'd3', title: 'Initech Platform Deal', stage: 'discovery',   value: 28000, days_in_stage: 22.0 },
+          { id: 'd4', title: 'Umbrella Analytics',    stage: 'proposal',    value: 67000, days_in_stage: 19.0 },
+          { id: 'd5', title: 'Massive Dynamic CRM',   stage: 'negotiation', value: 95000, days_in_stage: 18.0 },
+        ],
+        velocity_score: 72,
+        overall_avg_days: 14.2,
+        total_active: 18,
+        velocity_narrative: 'Deals in the proposal stage are taking an average of 19 days, significantly longer than other stages, indicating friction in the proposal-to-close motion. Three deals have been stalled for over 3 weeks with no stage movement.',
+        recommendations: [
+          'Schedule a review call for Acme Corp Expansion — 45 days in proposal signals a decision-maker or budget blocker that needs executive escalation.',
+          'Set a 14-day maximum for the proposal stage; any deal exceeding this should trigger an automatic follow-up sequence.',
+          'Review discovery deals older than 20 days to confirm fit — deals that linger here often lack a clear champion.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/stage-velocity`, {}, token)
+  },
 }
 

@@ -20290,3 +20290,160 @@ async def get_ai_deal_price_sensitivity(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_STAGE_VELOCITY_SYSTEM = (
+    "You are a sales analytics AI. Analyse a CRM deal stage velocity report showing how long "
+    "active deals have been sitting in each pipeline stage. "
+    "Write a 2-sentence narrative about pipeline flow and where deals are getting stuck, "
+    "and 3 actionable recommendations to accelerate deals and improve stage velocity. "
+    "Respond ONLY with valid JSON: "
+    "{\"velocity_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_VELOCITY_STAGES = ["discovery", "qualified", "proposal", "negotiation"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/stage-velocity")
+@limiter.limit("5/minute")
+async def get_ai_deal_stage_velocity(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(_VELOCITY_STAGES),
+        )
+    )
+    rows = result.all()
+
+    # Compute days in current stage per deal
+    stage_days: dict[str, list[float]] = {s: [] for s in _VELOCITY_STAGES}
+    stage_values: dict[str, float] = {s: 0.0 for s in _VELOCITY_STAGES}
+    all_deals_info = []
+
+    for row in rows:
+        changed_at = row.stage_changed_at
+        if changed_at is None:
+            days = 0.0
+        else:
+            if hasattr(changed_at, "tzinfo") and changed_at.tzinfo is None:
+                changed_at = changed_at.replace(tzinfo=timezone.utc)
+            days = max(0.0, (now - changed_at).total_seconds() / 86400)
+        if row.stage in stage_days:
+            stage_days[row.stage].append(days)
+            stage_values[row.stage] += float(row.value or 0)
+        all_deals_info.append({
+            "id": str(row.id),
+            "title": row.title or "Untitled",
+            "stage": row.stage,
+            "value": float(row.value or 0),
+            "days_in_stage": round(days, 1),
+        })
+
+    stages = []
+    for s in _VELOCITY_STAGES:
+        days_list = stage_days[s]
+        count = len(days_list)
+        avg_days = round(sum(days_list) / count, 1) if count > 0 else 0.0
+        max_days = round(max(days_list), 1) if count > 0 else 0.0
+        stages.append({
+            "stage": s,
+            "deal_count": count,
+            "avg_days_in_stage": avg_days,
+            "max_days_in_stage": max_days,
+            "total_value": round(stage_values[s], 2),
+        })
+
+    total_active = len(rows)
+    top_stuck_deals = sorted(all_deals_info, key=lambda d: d["days_in_stage"], reverse=True)[:5]
+
+    # Velocity score: based on overall avg days in stage (lower = better)
+    all_days = [d["days_in_stage"] for d in all_deals_info]
+    overall_avg_days = round(sum(all_days) / len(all_days), 1) if all_days else 0.0
+    # 0 days avg = 100, 60+ days avg = 0, linear
+    velocity_score = max(0, min(100, round(100 - overall_avg_days * 100 / 60)))
+
+    if total_active == 0:
+        return {
+            "stages": stages,
+            "top_stuck_deals": [],
+            "velocity_score": 0,
+            "overall_avg_days": 0.0,
+            "total_active": 0,
+            "velocity_narrative": "No active deals in the pipeline — add deals to track stage velocity.",
+            "recommendations": [
+                "Add active deals to your pipeline to start tracking stage velocity.",
+                "Set stage_changed_at timestamps when moving deals between stages.",
+                "Review your pipeline stages to ensure they match your sales process.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Stage velocity analysis for {total_active} active deals. "
+        f"Overall average days in current stage: {overall_avg_days:.1f} days. "
+        f"Velocity score: {velocity_score}/100. "
+        "Per stage: "
+        + "; ".join(
+            f"{s['stage']}: {s['deal_count']} deals, avg {s['avg_days_in_stage']}d, max {s['max_days_in_stage']}d"
+            for s in stages if s["deal_count"] > 0
+        )
+        + ". Top stuck: "
+        + ", ".join(
+            f"{d['title']} ({d['stage']}, {d['days_in_stage']}d)"
+            for d in top_stuck_deals[:3]
+        )
+    )
+
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_STAGE_VELOCITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    velocity_narrative = str(data.get("velocity_narrative", "")).strip()
+    if not velocity_narrative:
+        velocity_narrative = (
+            f"Active deals have spent an average of {overall_avg_days:.1f} days in their current stage, "
+            f"yielding a velocity score of {velocity_score}/100."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Schedule a pipeline review meeting to action deals stuck for more than 14 days.",
+        "Set a next action date on every deal to create momentum and accountability.",
+        "Consider disqualifying deals stuck in discovery for more than 30 days with no engagement.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "stages": stages,
+        "top_stuck_deals": top_stuck_deals,
+        "velocity_score": velocity_score,
+        "overall_avg_days": overall_avg_days,
+        "total_active": total_active,
+        "velocity_narrative": velocity_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }

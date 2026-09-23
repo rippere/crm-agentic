@@ -894,6 +894,12 @@ export default function ReportsPage() {
   const [priceSensitivity, setPriceSensitivity] = useState<AIPriceSensitivityData | null>(null);
   const [priceSensitivityLoading, setPriceSensitivityLoading] = useState(false);
   const [priceSensitivityOpen, setPriceSensitivityOpen] = useState(true);
+  type AIStageVelocityStage = { stage: string; deal_count: number; avg_days_in_stage: number; max_days_in_stage: number; total_value: number };
+  type AIStageVelocityDeal = { id: string; title: string; stage: string; value: number; days_in_stage: number };
+  type AIStageVelocityData = { stages: AIStageVelocityStage[]; top_stuck_deals: AIStageVelocityDeal[]; velocity_score: number; overall_avg_days: number; total_active: number; velocity_narrative: string; recommendations: string[]; generated_at: string };
+  const [stageVelocity, setStageVelocity] = useState<AIStageVelocityData | null>(null);
+  const [stageVelocityLoading, setStageVelocityLoading] = useState(false);
+  const [stageVelocityOpen, setStageVelocityOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1087,6 +1093,8 @@ export default function ReportsPage() {
       apiClient.getAIDealQuarterlyForecast("demo-workspace-1", "demo-token").then(setQuarterlyForecast).catch(() => {}).finally(() => setQuarterlyForecastLoading(false));
       setPriceSensitivityLoading(true);
       apiClient.getAIDealPriceSensitivity("demo-workspace-1", "demo-token").then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
+      setStageVelocityLoading(true);
+      apiClient.getAIDealStageVelocity("demo-workspace-1", "demo-token").then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1284,6 +1292,8 @@ export default function ReportsPage() {
       apiClient.getAIDealQuarterlyForecast(workspaceId, session.access_token).then(setQuarterlyForecast).catch(() => {}).finally(() => setQuarterlyForecastLoading(false));
       setPriceSensitivityLoading(true);
       apiClient.getAIDealPriceSensitivity(workspaceId, session.access_token).then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
+      setStageVelocityLoading(true);
+      apiClient.getAIDealStageVelocity(workspaceId, session.access_token).then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
     });
   }, []);
 
@@ -2721,6 +2731,27 @@ export default function ReportsPage() {
         if (!session) { setPriceSensitivityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setPriceSensitivityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateStageVelocity = () => {
+    setStageVelocityLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealStageVelocity(wid, tok)
+        .then(setStageVelocity)
+        .catch(() => {})
+        .finally(() => setStageVelocityLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setStageVelocityLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setStageVelocityLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11858,6 +11889,87 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the price sensitivity analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Stage Velocity */}
+      <Card className="border-cyan-500/15 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 bg-zinc-900/60">
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-cyan-400" />
+            <span className="text-sm font-semibold text-zinc-200">Deal Stage Velocity</span>
+            {stageVelocity && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${stageVelocity.velocity_score >= 70 ? 'bg-emerald-500/20 text-emerald-300' : stageVelocity.velocity_score >= 40 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                {stageVelocity.velocity_score}/100 velocity
+              </span>
+            )}
+            {stageVelocity && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700">
+                avg {stageVelocity.overall_avg_days}d in stage · {stageVelocity.total_active} active
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateStageVelocity}
+              disabled={stageVelocityLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${stageVelocityLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            <button onClick={() => setStageVelocityOpen(o => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {stageVelocityOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {stageVelocityOpen && (
+          stageVelocityLoading && !stageVelocity ? (
+            <div className="p-6 space-y-2">{[1,2,3,4].map(i => <div key={i} className="h-8 bg-zinc-800 rounded animate-pulse" />)}</div>
+          ) : stageVelocity ? (
+            <div className="p-5 space-y-4">
+              {/* Per-stage table */}
+              <div className="grid grid-cols-4 gap-2">
+                {stageVelocity.stages.map((s) => (
+                  <div key={s.stage} className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                    <p className="text-xs text-zinc-500 capitalize mb-1">{s.stage}</p>
+                    <p className={`text-lg font-bold ${s.avg_days_in_stage >= 30 ? 'text-rose-400' : s.avg_days_in_stage >= 14 ? 'text-amber-400' : 'text-emerald-400'}`}>{s.avg_days_in_stage}d</p>
+                    <p className="text-xs text-zinc-500">{s.deal_count} deal{s.deal_count !== 1 ? 's' : ''}</p>
+                  </div>
+                ))}
+              </div>
+              {/* Top stuck deals */}
+              {stageVelocity.top_stuck_deals.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Most stuck deals</p>
+                  {stageVelocity.top_stuck_deals.map((d) => (
+                    <div key={d.id} className="flex items-center justify-between py-1.5 border-b border-zinc-800 last:border-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${d.days_in_stage >= 30 ? 'bg-rose-500/20 text-rose-300' : d.days_in_stage >= 14 ? 'bg-amber-500/20 text-amber-300' : 'bg-zinc-700 text-zinc-400'}`}>{d.days_in_stage}d</span>
+                        <span className="text-xs text-zinc-300 truncate">{d.title}</span>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="text-xs text-zinc-500 capitalize">{d.stage}</span>
+                        <span className="text-xs text-zinc-400">${(d.value / 1000).toFixed(0)}K</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{stageVelocity.velocity_narrative}</p>
+              <ul className="space-y-1">
+                {stageVelocity.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-cyan-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(stageVelocity.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the stage velocity analysis.</div>
           )
         )}
       </Card>
