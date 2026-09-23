@@ -349,11 +349,13 @@ Phase 17 — AI Coaching & Playbook Intelligence
 
 - [2026-09-23] Phase 20f: AI deal win/loss trend analysis — GET /workspaces/{id}/ai/deals/win-loss-trend (Claude Haiku, 5/min; queries closed_won + closed_lost deals from last 12 months, groups by YYYY-MM bucket using 30-day offsets, computes won_count/lost_count/win_rate per month; trend_direction improving/stable/declining by comparing first-half vs second-half win rates; identifies best_month/worst_month; graceful empty default without Claude call; returns {monthly_data[×12], overall_win_rate, trend_direction, best_month, worst_month, total_won, total_lost, win_loss_narrative, recommendations[×3], generated_at}); collapsible "Win/Loss Trend" card on /reports page (emerald TrendingUp icon, trend-direction + win-rate badge, W/L count, recharts LineChart win_rate 0–100% y-axis with emerald line + 50% reference line, best/worst month chips, italic narrative, emerald-dot recs, Regenerate button); getAIDealWinLossTrend() in api-client with 12-month improving demo stub (42.9%→81.8%, 66.3% overall, 68W/35L); 2 new tests (3W/3L monthly bucketing + 403 guard); 267 AI tests total
 
+- [2026-09-23] Phase 20g: AI deal time-to-close distribution — GET /workspaces/{id}/ai/deals/time-to-close-distribution (Claude Haiku, 5/min; queries closed_won deals with both created_at and stage_changed_at, buckets each deal's days-to-close into 5 speed tiers: lightning <30d / fast 30–59d / standard 60–89d / slow 90–179d / long ≥180d; per-bucket count/total_value/avg_value; computes fastest/median/slowest days, optimal_bucket by count; Claude Haiku generates distribution_narrative + 3 recommendations; graceful empty default without Claude call; returns {buckets[×5], total_analyzed, fastest_close_days, slowest_close_days, median_days, optimal_bucket, distribution_narrative, recommendations[×3], generated_at}); collapsible "Time-to-Close Distribution" card on /reports (sky Clock icon, total-analyzed + median-days badge, horizontal recharts BarChart color-coded by bucket emerald/teal/amber/orange/rose, fastest/median/slowest/sweet-spot chips row, italic narrative, teal-dot recs, Regenerate button); getAIDealTimeToCloseDistribution() in api-client with 31-deal demo stub (fast bucket dominant at 11 deals, median 54d); 2 new tests (3-deal bucket counts + 403 guard); 269 AI tests total; PR #238
+
 ## In Progress
 (none)
 
 ## Next Task
-Phase 20g: next AI analytics feature — to be determined.
+Phase 20h: next AI analytics feature — to be determined.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
