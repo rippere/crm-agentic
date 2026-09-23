@@ -9330,6 +9330,18 @@ class FakeEngagementCountRow:
         return "done"
 
 
+class FakePipelineBalanceDealRow:
+    def __init__(self, id, title, stage, value, ml_win_probability, health_score, stage_changed_at, created_at):
+        self.id = id
+        self.title = title
+        self.stage = stage
+        self.value = value
+        self.ml_win_probability = ml_win_probability
+        self.health_score = health_score
+        self.stage_changed_at = stage_changed_at
+        self.created_at = created_at
+
+
 @pytest.mark.asyncio
 async def test_pipeline_balance_returns_stage_balance(app_client, monkeypatch):
     fastapi_app, mock_db, workspace_id = app_client
