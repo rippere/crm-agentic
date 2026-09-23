@@ -18583,3 +18583,202 @@ async def get_contact_deal_engagement(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 19g: AI contact churn risk analysis
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/churn-risk")
+@limiter.limit("5/minute")
+async def get_contact_churn_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff_90d = now - datetime.timedelta(days=90)
+
+    # Query all customer contacts
+    customers_result = await db.execute(
+        select(Contact.id, Contact.name, Contact.company, Contact.revenue, Contact.updated_at)
+        .where(Contact.workspace_id == workspace_id)
+        .where(Contact.status == "customer")
+    )
+    customers = customers_result.all()
+
+    if not customers:
+        return {
+            "at_risk_contacts": [],
+            "total_customers": 0,
+            "at_risk_count": 0,
+            "avg_churn_risk_score": 0.0,
+            "churn_narrative": "No customer contacts found. Convert prospects to customers to enable churn risk monitoring.",
+            "recommendations": [
+                "Close active deals to grow your customer base and unlock churn risk monitoring.",
+                "Mark high-value prospects as customers once deals close to track retention.",
+                "Set up Gmail or Slack connectors to capture communication data for risk analysis.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    customer_ids = [c.id for c in customers]
+
+    # Message counts per contact in last 90 days
+    msgs_result = await db.execute(
+        select(Message.contact_id, func.count(Message.id).label("msg_count"))
+        .where(Message.workspace_id == workspace_id)
+        .where(Message.contact_id.in_(customer_ids))
+        .where(Message.received_at >= cutoff_90d)
+        .group_by(Message.contact_id)
+    )
+    msg_counts: dict[uuid.UUID, int] = {row.contact_id: row.msg_count for row in msgs_result.all()}
+
+    # Latest note date per contact
+    notes_result = await db.execute(
+        select(ContactNote.contact_id, func.max(ContactNote.created_at).label("latest_note"))
+        .where(ContactNote.workspace_id == workspace_id)
+        .where(ContactNote.contact_id.in_(customer_ids))
+        .group_by(ContactNote.contact_id)
+    )
+    latest_notes: dict[uuid.UUID, datetime.datetime] = {
+        row.contact_id: row.latest_note for row in notes_result.all()
+    }
+
+    # Latest message date per contact
+    latest_msg_result = await db.execute(
+        select(Message.contact_id, func.max(Message.received_at).label("latest_msg"))
+        .where(Message.workspace_id == workspace_id)
+        .where(Message.contact_id.in_(customer_ids))
+        .group_by(Message.contact_id)
+    )
+    latest_msgs: dict[uuid.UUID, datetime.datetime] = {
+        row.contact_id: row.latest_msg for row in latest_msg_result.all()
+    }
+
+    # Compute churn risk score per customer
+    contact_risks = []
+    for c in customers:
+        msgs_90d = msg_counts.get(c.id, 0)
+
+        last_msg = latest_msgs.get(c.id)
+        last_note = latest_notes.get(c.id)
+        last_touch_candidates = [d for d in [last_msg, last_note] if d is not None]
+        if last_touch_candidates:
+            last_touch = max(last_touch_candidates)
+            if last_touch.tzinfo is None:
+                last_touch = last_touch.replace(tzinfo=timezone.utc)
+            days_since = (now - last_touch).days
+        else:
+            days_since = 999
+
+        # Recency safety score 0–50 (higher = more recent contact = safer)
+        if days_since <= 7:
+            recency_pts = 50
+        elif days_since <= 14:
+            recency_pts = 40
+        elif days_since <= 30:
+            recency_pts = 28
+        elif days_since <= 60:
+            recency_pts = 12
+        else:
+            recency_pts = 0
+
+        # Engagement safety score 0–50 (diminishing returns)
+        engagement_pts = min(int(msgs_90d * 8), 50)
+
+        safety_score = recency_pts + engagement_pts
+        churn_risk_score = 100 - safety_score  # 0=safe, 100=very likely to churn
+
+        if churn_risk_score >= 70:
+            churn_risk_level = "high"
+        elif churn_risk_score >= 40:
+            churn_risk_level = "medium"
+        else:
+            churn_risk_level = "low"
+
+        contact_risks.append({
+            "contact_id": str(c.id),
+            "name": c.name or "Unknown",
+            "company": c.company or "",
+            "revenue": float(c.revenue or 0),
+            "days_since_last_contact": days_since if days_since < 999 else None,
+            "messages_last_90d": msgs_90d,
+            "churn_risk_score": churn_risk_score,
+            "churn_risk_level": churn_risk_level,
+        })
+
+    # Sort by churn_risk_score desc (most at risk first), return top 8
+    contact_risks.sort(key=lambda x: x["churn_risk_score"], reverse=True)
+    top_at_risk = contact_risks[:8]
+
+    total_customers = len(customers)
+    at_risk_count = sum(1 for r in contact_risks if r["churn_risk_level"] in ("high", "medium"))
+    avg_churn_risk_score = round(
+        sum(r["churn_risk_score"] for r in contact_risks) / total_customers, 1
+    ) if total_customers > 0 else 0.0
+
+    high_risk_names = ", ".join(r["name"] for r in top_at_risk[:3] if r["churn_risk_level"] == "high")
+
+    context = (
+        f"Customer Churn Risk Analysis:\n"
+        f"- Total customers: {total_customers}\n"
+        f"- At-risk (high + medium): {at_risk_count} ({round(at_risk_count / total_customers * 100)}%)\n"
+        f"- Average churn risk score: {avg_churn_risk_score}/100 (0=safe, 100=very high risk)\n"
+        f"- Top at-risk contacts: {high_risk_names or 'None'}\n"
+    )
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence churn_narrative summarising the overall retention health of this customer portfolio "
+        "and the most important retention signal. "
+        "Provide exactly 3 short actionable recommendations to reduce churn risk. "
+        'Respond ONLY with valid JSON: {"churn_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    churn_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        churn_narrative = str(parsed.get("churn_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        pct = round(at_risk_count / total_customers * 100) if total_customers > 0 else 0
+        churn_narrative = (
+            f"{at_risk_count} of your {total_customers} customers ({pct}%) show elevated churn risk "
+            f"based on reduced communication frequency and time since last contact. "
+            f"Average churn risk score is {avg_churn_risk_score}/100 across the portfolio."
+        )
+        recommendations = [
+            f"Immediately re-engage {high_risk_names or 'high-risk customers'} — schedule a check-in call or send a personalised email.",
+            "Set up automated 30-day re-engagement reminders for customers with no recent messages.",
+            "Review at-risk customers' open deals to identify expansion or renewal opportunities before they go dark.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Monitor churn risk scores weekly to catch disengaging customers early.")
+
+    return {
+        "at_risk_contacts": top_at_risk,
+        "total_customers": total_customers,
+        "at_risk_count": at_risk_count,
+        "avg_churn_risk_score": avg_churn_risk_score,
+        "churn_narrative": churn_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

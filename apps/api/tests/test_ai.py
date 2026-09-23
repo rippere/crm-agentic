@@ -8792,3 +8792,100 @@ async def test_contact_deal_engagement_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/deal-engagement")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 19g: AI contact churn risk
+# ---------------------------------------------------------------------------
+
+class FakeCustomerRow:
+    def __init__(self, cid, name, company="", revenue=0):
+        self.id = cid
+        self.name = name
+        self.company = company
+        self.revenue = revenue
+        self.updated_at = None
+
+
+class FakeMsgCountRow:
+    def __init__(self, contact_id, msg_count):
+        self.contact_id = contact_id
+        self.msg_count = msg_count
+
+
+class FakeLatestRow:
+    def __init__(self, contact_id, latest):
+        self.contact_id = contact_id
+        self.latest_note = latest
+        self.latest_msg = latest
+
+
+@pytest.mark.asyncio
+async def test_contact_churn_risk_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cid_active = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001")
+    cid_dark = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000002")
+    cid_medium = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000003")
+
+    customer_rows = [
+        FakeCustomerRow(cid_active, "Alice", "AcmeCo", 5000),
+        FakeCustomerRow(cid_dark, "Bob", "DarkCo", 2000),
+        FakeCustomerRow(cid_medium, "Carol", "MidCo", 3000),
+    ]
+    # Message counts (last 90d): Alice=10, Bob=0, Carol=2
+    msg_count_rows = [
+        FakeMsgCountRow(cid_active, 10),
+        FakeMsgCountRow(cid_medium, 2),
+    ]
+    # Latest notes: none for any
+    latest_note_rows = []
+    # Latest messages: Alice 3 days ago, Carol 35 days ago, Bob never
+    latest_msg_rows = [
+        FakeLatestRow(cid_active, now - datetime.timedelta(days=3)),
+        FakeLatestRow(cid_medium, now - datetime.timedelta(days=35)),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result(customer_rows),
+        _make_execute_result(msg_count_rows),
+        _make_execute_result(latest_note_rows),
+        _make_execute_result(latest_msg_rows),
+    ])
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"churn_narrative": "Two customers at high risk.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/churn-risk")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_customers"] == 3
+    # Bob (no messages, no notes) should have highest risk (score=100)
+    top = body["at_risk_contacts"]
+    assert len(top) >= 1
+    assert top[0]["name"] == "Bob"
+    assert top[0]["churn_risk_score"] == 100
+    assert top[0]["churn_risk_level"] == "high"
+    # Alice (msgs=10, days=3) should be low risk
+    alice = next(c for c in top if c["name"] == "Alice")
+    assert alice["churn_risk_level"] == "low"
+    assert alice["churn_risk_score"] == 0
+    assert body["at_risk_count"] >= 1
+    assert "churn_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_churn_risk_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("33333333-3333-3333-3333-333333333333")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/churn-risk")
+    assert resp.status_code == 403
