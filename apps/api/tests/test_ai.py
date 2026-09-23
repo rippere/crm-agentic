@@ -9295,3 +9295,76 @@ async def test_next_action_overdue_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/next-action-overdue")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20c: AI deal revenue forecast
+# ---------------------------------------------------------------------------
+
+class FakeRevenueForecastActiveDealRow:
+    def __init__(self, value, ml_win_probability, stage, title):
+        self.value = value
+        self.ml_win_probability = ml_win_probability
+        self.stage = stage
+        self.title = title
+
+
+class FakeRevenueForecastClosedDealRow:
+    def __init__(self, value, updated_at):
+        self.value = value
+        self.updated_at = updated_at
+
+
+@pytest.mark.asyncio
+async def test_revenue_forecast_returns_forecast(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.datetime.utcnow()
+    last_q_start = now - datetime.timedelta(days=200)
+
+    active_rows = [
+        FakeRevenueForecastActiveDealRow(100000, 80, "proposal", "Big Deal"),
+        FakeRevenueForecastActiveDealRow(50000, 60, "qualified", "Mid Deal"),
+        FakeRevenueForecastActiveDealRow(20000, 20, "discovery", "Small Deal"),
+    ]
+    closed_rows = [
+        FakeRevenueForecastClosedDealRow(80000, last_q_start),
+        FakeRevenueForecastClosedDealRow(40000, last_q_start + datetime.timedelta(days=10)),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[
+        _make_execute_result(active_rows),
+        _make_execute_result(closed_rows),
+    ])
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"forecast_narrative": "Forecast looks strong.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/quarterly-forecast")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # weighted: 100000*0.8 + 50000*0.6 + 20000*0.2 = 80000+30000+4000 = 114000
+    assert body["weighted_forecast"] == pytest.approx(114000.0, rel=1e-3)
+    assert body["total_pipeline_value"] == pytest.approx(170000.0, rel=1e-3)
+    assert body["total_active_deals"] == 3
+    assert len(body["historical_actuals"]) >= 1
+    assert body["avg_quarterly_revenue"] == pytest.approx(120000.0, rel=1e-3)
+    assert 0 <= body["confidence_score"] <= 100
+    assert "projected_quarter" in body
+    assert "forecast_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_revenue_forecast_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("66666666-6666-6666-6666-666666666666")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/quarterly-forecast")
+    assert resp.status_code == 403
