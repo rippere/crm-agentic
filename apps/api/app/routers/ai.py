@@ -19949,3 +19949,154 @@ async def get_ai_deal_pipeline_balance(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+_PRICE_SENSITIVITY_SYSTEM = (
+    "You are a sales analytics AI. Analyse a CRM deal price sensitivity report. "
+    "Write a 2-sentence narrative about how deal size affects win rate "
+    "and 3 actionable recommendations to optimise pricing strategy and deal sizing. "
+    "Respond ONLY with valid JSON: "
+    "{\"price_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+_PRICE_BUCKETS = [
+    {"label": "<$10K",        "min": 0,      "max": 10_000},
+    {"label": "$10K–$25K",    "min": 10_000, "max": 25_000},
+    {"label": "$25K–$50K",    "min": 25_000, "max": 50_000},
+    {"label": "$50K–$100K",   "min": 50_000, "max": 100_000},
+    {"label": ">$100K",       "min": 100_000, "max": None},
+]
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/price-sensitivity")
+@limiter.limit("5/minute")
+async def get_ai_deal_price_sensitivity(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    result = await db.execute(
+        select(Deal.id, Deal.value, Deal.stage)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+        )
+    )
+    rows = result.all()
+
+    bucket_won: dict[str, int] = {b["label"]: 0 for b in _PRICE_BUCKETS}
+    bucket_lost: dict[str, int] = {b["label"]: 0 for b in _PRICE_BUCKETS}
+
+    def _bucket_for(value: float) -> str:
+        for b in _PRICE_BUCKETS:
+            if b["max"] is None or value < b["max"]:
+                return b["label"]
+        return _PRICE_BUCKETS[-1]["label"]
+
+    for row in rows:
+        v = float(row.value or 0)
+        label = _bucket_for(v)
+        if row.stage == "closed_won":
+            bucket_won[label] += 1
+        else:
+            bucket_lost[label] += 1
+
+    buckets = []
+    sweet_spot_bucket: str | None = None
+    best_rate = -1.0
+    for b in _PRICE_BUCKETS:
+        lbl = b["label"]
+        won = bucket_won[lbl]
+        lost = bucket_lost[lbl]
+        total = won + lost
+        win_rate = round(won / total * 100, 1) if total > 0 else None
+        buckets.append({
+            "label": lbl,
+            "won_count": won,
+            "lost_count": lost,
+            "total_count": total,
+            "win_rate": win_rate,
+        })
+        if total >= 2 and win_rate is not None and win_rate > best_rate:
+            best_rate = win_rate
+            sweet_spot_bucket = lbl
+
+    total_analyzed = sum(b["total_count"] for b in buckets)
+    total_won = sum(b["won_count"] for b in buckets)
+    overall_win_rate = round(total_won / total_analyzed * 100, 1) if total_analyzed > 0 else 0.0
+
+    if total_analyzed == 0:
+        return {
+            "buckets": buckets,
+            "sweet_spot_bucket": None,
+            "total_analyzed": 0,
+            "overall_win_rate": 0.0,
+            "price_narrative": "No closed deals found to analyse price sensitivity.",
+            "recommendations": [
+                "Close more deals to build a statistically meaningful sample.",
+                "Tag all deals with accurate values before closing.",
+                "Review pricing tiers quarterly as deal mix evolves.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Price sensitivity analysis for {total_analyzed} closed deals "
+        f"(overall win rate {overall_win_rate}%). "
+        f"Sweet spot bucket: {sweet_spot_bucket} (win rate {best_rate}%). "
+        "Bucket breakdown: "
+        + "; ".join(
+            f"{b['label']}: {b['won_count']}W/{b['lost_count']}L "
+            f"({b['win_rate']}% win rate)"
+            for b in buckets if b["total_count"] > 0
+        )
+    )
+
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_PRICE_SENSITIVITY_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    price_narrative = str(data.get("price_narrative", "")).strip()
+    if not price_narrative:
+        price_narrative = (
+            f"The overall win rate across {total_analyzed} closed deals is {overall_win_rate}%, "
+            f"with the strongest performance in the {sweet_spot_bucket} range."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        f"Prioritise deals in the {sweet_spot_bucket} range where win rate peaks.",
+        "Review lost deals in low-win-rate buckets to identify pricing objections.",
+        "Set deal-size guidelines per stage to keep the pipeline in the optimal range.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "buckets": buckets,
+        "sweet_spot_bucket": sweet_spot_bucket,
+        "total_analyzed": total_analyzed,
+        "overall_win_rate": overall_win_rate,
+        "price_narrative": price_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
