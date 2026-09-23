@@ -19053,3 +19053,174 @@ async def get_contact_score_segmentation(
         "recommendations": recommendations2,
         "generated_at": now.isoformat() + "Z",
     }
+
+# ---------------------------------------------------------------------------
+# Phase 19k: Contact Health Score Distribution
+# ---------------------------------------------------------------------------
+
+_HEALTH_SCORE_BUCKETS = [
+    ("excellent", "Excellent", 80, 100),
+    ("good", "Good", 60, 79),
+    ("fair", "Fair", 40, 59),
+    ("at_risk", "At Risk", 20, 39),
+    ("critical", "Critical", 0, 19),
+]
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/health-score-distribution")
+@limiter.limit("5/minute")
+async def get_contact_health_score_distribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    # Query all contacts with their ml_score and revenue
+    contacts_result = await db.execute(
+        select(Contact.id, Contact.ml_score, Contact.revenue)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    contact_rows = contacts_result.all()
+
+    if not contact_rows:
+        return {
+            "buckets": [],
+            "total_contacts": 0,
+            "critical_count": 0,
+            "at_risk_count": 0,
+            "avg_score": None,
+            "health_narrative": "No contacts found. Add contacts to begin tracking health score distribution.",
+            "recommendations": [
+                "Import your existing contacts to start monitoring their health scores.",
+                "Ensure AI scoring is enabled so contacts receive ml_score values.",
+                "Review your scoring criteria to confirm they reflect your ideal customer profile.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Query open pipeline value per contact
+    pipeline_result = await db.execute(
+        select(Contact.id, func.sum(Deal.value).label("pipeline_value"))
+        .join(Deal, Deal.contact_id == Contact.id)
+        .where(Contact.workspace_id == workspace_id)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(["discovery", "qualified", "proposal", "negotiation"]))
+        .group_by(Contact.id)
+    )
+    pipeline_map: dict[uuid.UUID, float] = {
+        row.id: float(row.pipeline_value or 0) for row in pipeline_result.all()
+    }
+
+    # Classify contacts into buckets
+    bucket_contacts: dict[str, list[dict]] = {b[0]: [] for b in _HEALTH_SCORE_BUCKETS}
+    scores: list[float] = []
+
+    for row in contact_rows:
+        score_val = row.ml_score
+        if isinstance(score_val, dict):
+            score = float(score_val.get("value", 50))
+        elif isinstance(score_val, (int, float)):
+            score = float(score_val)
+        else:
+            score = 50.0
+        score = max(0.0, min(100.0, score))
+        scores.append(score)
+
+        revenue = float(row.revenue or 0)
+        pipeline = pipeline_map.get(row.id, 0.0)
+
+        for key, label, low, high in _HEALTH_SCORE_BUCKETS:
+            if low <= score <= high:
+                bucket_contacts[key].append({"score": score, "revenue": revenue, "pipeline": pipeline})
+                break
+
+    total_contacts = len(contact_rows)
+    avg_score = round(sum(scores) / len(scores), 1) if scores else None
+
+    buckets = []
+    for key, label, low, high in _HEALTH_SCORE_BUCKETS:
+        members = bucket_contacts[key]
+        count = len(members)
+        if count == 0:
+            continue
+        pct = round(count / total_contacts * 100, 1) if total_contacts > 0 else 0.0
+        avg_pipeline = round(sum(m["pipeline"] for m in members) / count, 2) if count > 0 else 0.0
+        total_revenue = round(sum(m["revenue"] for m in members), 2)
+        buckets.append({
+            "bucket": key,
+            "bucket_label": label,
+            "score_range": f"{low}–{high}",
+            "contact_count": count,
+            "pct_of_total": pct,
+            "avg_pipeline_value": avg_pipeline,
+            "total_revenue": total_revenue,
+        })
+
+    critical_count = len(bucket_contacts.get("critical", []))
+    at_risk_count = len(bucket_contacts.get("at_risk", []))
+
+    # Claude Haiku narrative
+    context = (
+        f"Contact Health Score Distribution:\n"
+        f"- Total contacts: {total_contacts}\n"
+        f"- Average score: {avg_score}\n"
+        f"- Critical (0-19): {critical_count}\n"
+        f"- At Risk (20-39): {at_risk_count}\n"
+    )
+    for b in buckets:
+        context += f"- {b['bucket_label']} ({b['score_range']}): {b['contact_count']} contacts ({b['pct_of_total']}%)\n"
+
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence health_narrative explaining what the score distribution reveals about overall contact portfolio health. "
+        "Then provide exactly 3 short, actionable recommendations to improve health scores and reduce critical/at-risk contacts. "
+        'Respond ONLY with valid JSON: {"health_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    health_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        health_narrative = str(parsed.get("health_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        health_narrative = (
+            f"Your {total_contacts} contacts have an average health score of {avg_score}, "
+            f"with {critical_count + at_risk_count} contacts in critical or at-risk territory requiring immediate attention."
+        )
+        recommendations = [
+            "Schedule outreach campaigns for critical and at-risk contacts to re-engage them before they churn.",
+            "Investigate common traits of excellent-scored contacts and replicate those patterns in your qualification process.",
+            "Set up automated health-score alerts to notify your team when a contact drops below 40.",
+        ]
+
+    while len(recommendations) < 3:
+        recommendations.append("Review scoring criteria regularly to ensure health scores reflect current engagement signals.")
+
+    return {
+        "buckets": buckets,
+        "total_contacts": total_contacts,
+        "critical_count": critical_count,
+        "at_risk_count": at_risk_count,
+        "avg_score": avg_score,
+        "health_narrative": health_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

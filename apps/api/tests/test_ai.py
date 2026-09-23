@@ -9013,3 +9013,86 @@ async def test_contact_score_segmentation_wrong_workspace_returns_403(app_client
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/score-segmentation")
     assert resp.status_code == 403
+# Phase 19k: Contact Health Score Distribution tests
+# ---------------------------------------------------------------------------
+
+class FakeHealthScoreContactRow:
+    """Row for health score query: id, ml_score, revenue."""
+    def __init__(self, cid: uuid.UUID, score: float, revenue: float):
+        self.id = cid
+        self.ml_score = {"value": score}
+        self.revenue = revenue
+
+
+class FakeHealthScorePipelineRow:
+    """Row for pipeline aggregation: id, pipeline_value."""
+    def __init__(self, cid: uuid.UUID, pipeline_value: float):
+        self.id = cid
+        self.pipeline_value = pipeline_value
+
+
+@pytest.mark.asyncio
+async def test_contact_health_score_distribution_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    c1 = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    c2 = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    c3 = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    c4 = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+    # c1=85 excellent, c2=65 good, c3=35 at_risk, c4=10 critical
+    contact_rows = [
+        FakeHealthScoreContactRow(c1, 85.0, 10000),
+        FakeHealthScoreContactRow(c2, 65.0, 5000),
+        FakeHealthScoreContactRow(c3, 35.0, 0),
+        FakeHealthScoreContactRow(c4, 10.0, 0),
+    ]
+    pipeline_rows = [
+        FakeHealthScorePipelineRow(c1, 20000),
+        FakeHealthScorePipelineRow(c2, 8000),
+    ]
+
+    call_count = 0
+
+    def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_execute_result(contact_rows)
+        return _make_execute_result(pipeline_rows)
+
+    mock_db.execute = AsyncMock(side_effect=fake_execute)
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"health_narrative": "Mixed health.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/health-score-distribution")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_contacts"] == 4
+    assert body["critical_count"] == 1   # c4 score=10
+    assert body["at_risk_count"] == 1    # c3 score=35
+    assert body["avg_score"] == pytest.approx(48.75, abs=0.1)  # (85+65+35+10)/4
+    buckets = {b["bucket"]: b for b in body["buckets"]}
+    assert buckets["excellent"]["contact_count"] == 1
+    assert buckets["good"]["contact_count"] == 1
+    assert buckets["at_risk"]["contact_count"] == 1
+    assert buckets["critical"]["contact_count"] == 1
+    assert buckets["excellent"]["avg_pipeline_value"] == pytest.approx(20000.0, abs=0.01)
+    assert "health_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_health_score_distribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/health-score-distribution")
+    assert resp.status_code == 403
