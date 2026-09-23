@@ -7443,5 +7443,39 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/churn-risk`, {}, token)
   },
+
+  getAILeadFunnelAnalysis(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        total_leads: 58,
+        stage_breakdown: [
+          { stage: 'new', stage_label: 'New', count: 14, pct: 24.1 },
+          { stage: 'contacted', stage_label: 'Contacted', count: 18, pct: 31.0 },
+          { stage: 'engaged', stage_label: 'Engaged', count: 11, pct: 19.0 },
+          { stage: 'qualified', stage_label: 'Qualified', count: 8, pct: 13.8 },
+          { stage: 'converted', stage_label: 'Converted', count: 5, pct: 8.6 },
+          { stage: 'lost', stage_label: 'Lost', count: 2, pct: 3.4 },
+        ],
+        top_sources: [
+          { source: 'discovery', count: 26, pct: 44.8 },
+          { source: 'import', count: 18, pct: 31.0 },
+          { source: 'web', count: 9, pct: 15.5 },
+          { source: 'referral', count: 5, pct: 8.6 },
+        ],
+        converted_count: 5,
+        conversion_rate: 8.6,
+        high_score_unconverted: 9,
+        avg_score: 52.4,
+        funnel_narrative: '58 leads in the funnel with an 8.6% conversion rate — strong top-of-funnel volume but a bottleneck between "engaged" and "qualified." 9 high-score leads sitting unconverted represent your highest-value immediate opportunity.',
+        recommendations: [
+          'Prioritise the 9 high-score unconverted leads with a personalised outreach sequence this week.',
+          'Investigate the engaged-to-qualified drop-off: add a qualification call trigger when leads hit "engaged" status.',
+          'Discovery is your top source at 44.8% — expand discovery run frequency to capitalise on this channel.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/leads/funnel-analysis`, {}, token)
+  },
 }
 

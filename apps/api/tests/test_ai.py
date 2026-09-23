@@ -9223,3 +9223,54 @@ async def test_contact_churn_risk_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/churn-risk")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/ai/leads/funnel-analysis (Phase 20b)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lead_funnel_analysis_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    class FakeLeadRow:
+        def __init__(self, stage, score, source, contact_id=None):
+            self.id = str(uuid.uuid4())
+            self.stage = stage
+            self.score = score
+            self.source = source
+            self.contact_id = contact_id
+
+    rows = [
+        FakeLeadRow("new", 20, "import"),
+        FakeLeadRow("contacted", 55, "discovery"),
+        FakeLeadRow("engaged", 75, "discovery"),
+        FakeLeadRow("qualified", 80, "web"),
+        FakeLeadRow("converted", 90, "discovery", contact_id=str(uuid.uuid4())),
+        FakeLeadRow("lost", 30, "import"),
+    ]
+    mock_db.execute.return_value = _make_execute_result(rows)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/leads/funnel-analysis")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_leads"] == 6
+    assert body["converted_count"] == 1
+    assert body["conversion_rate"] == round(1 / 6 * 100, 1)
+    assert body["high_score_unconverted"] == 2  # engaged (75) + qualified (80)
+    assert len(body["stage_breakdown"]) == 6
+    assert len(body["top_sources"]) >= 1
+    assert "funnel_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_lead_funnel_analysis_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("66666666-6666-6666-6666-666666666666")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/leads/funnel-analysis")
+    assert resp.status_code == 403

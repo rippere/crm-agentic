@@ -42,6 +42,7 @@ from app.models.connector import Connector
 from app.models.task import Task
 from app.models.activity_event import ActivityEvent
 from app.models.deal_health_history import DealHealthHistory
+from app.models.lead import Lead
 
 router = APIRouter()
 
@@ -19571,6 +19572,166 @@ async def get_contact_churn_risk(
         "at_risk_count": at_risk_count,
         "avg_churn_risk_score": avg_churn_risk_score,
         "churn_narrative": churn_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+_LEAD_STAGES_ORDER = ["new", "contacted", "engaged", "qualified", "converted", "lost"]
+_LEAD_STAGE_LABELS = {
+    "new": "New",
+    "contacted": "Contacted",
+    "engaged": "Engaged",
+    "qualified": "Qualified",
+    "converted": "Converted",
+    "lost": "Lost",
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai/leads/funnel-analysis")
+@limiter.limit("5/minute")
+async def get_ai_lead_funnel_analysis(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    leads_q = await db.execute(
+        select(Lead.id, Lead.stage, Lead.score, Lead.source, Lead.contact_id)
+        .where(Lead.workspace_id == workspace_id)
+    )
+    leads = leads_q.all()
+
+    total_leads = len(leads)
+
+    if total_leads == 0:
+        return {
+            "total_leads": 0,
+            "stage_breakdown": [],
+            "top_sources": [],
+            "converted_count": 0,
+            "conversion_rate": 0.0,
+            "high_score_unconverted": 0,
+            "avg_score": 0.0,
+            "funnel_narrative": "No leads found in this workspace. Add leads via import, manual entry, or discovery runs to begin tracking funnel performance.",
+            "recommendations": [
+                "Import existing prospect lists to populate your lead funnel and start measuring conversion rates.",
+                "Connect a discovery run to automatically surface new leads from your target market.",
+                "Define a lead scoring model to prioritise follow-up on the highest-potential prospects.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    stage_counts: dict[str, int] = {s: 0 for s in _LEAD_STAGES_ORDER}
+    source_counts: dict[str, int] = {}
+    converted_count = 0
+    high_score_unconverted = 0
+    score_total = 0.0
+
+    for row in leads:
+        stage = row.stage or "new"
+        if stage not in stage_counts:
+            stage_counts[stage] = 0
+        stage_counts[stage] += 1
+
+        src = row.source or "unknown"
+        source_counts[src] = source_counts.get(src, 0) + 1
+
+        score = int(row.score or 0)
+        score_total += score
+
+        if stage == "converted" or row.contact_id is not None:
+            converted_count += 1
+        elif score >= 70:
+            high_score_unconverted += 1
+
+    avg_score = round(score_total / total_leads, 1) if total_leads else 0.0
+    conversion_rate = round(converted_count / total_leads * 100, 1) if total_leads else 0.0
+
+    stage_breakdown = [
+        {
+            "stage": s,
+            "stage_label": _LEAD_STAGE_LABELS.get(s, s.capitalize()),
+            "count": stage_counts.get(s, 0),
+            "pct": round(stage_counts.get(s, 0) / total_leads * 100, 1) if total_leads else 0.0,
+        }
+        for s in _LEAD_STAGES_ORDER
+        if stage_counts.get(s, 0) > 0
+    ]
+
+    top_sources = sorted(source_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    top_sources_out = [
+        {
+            "source": src,
+            "count": cnt,
+            "pct": round(cnt / total_leads * 100, 1) if total_leads else 0.0,
+        }
+        for src, cnt in top_sources
+    ]
+
+    funnel_narrative = ""
+    recommendations: list[str] = []
+
+    try:
+        client = _anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        stages_str = ", ".join(s["stage_label"] + ": " + str(s["count"]) for s in stage_breakdown)
+        top_src = top_sources_out[0]["source"] if top_sources_out else "unknown"
+        top_src_pct = top_sources_out[0]["pct"] if top_sources_out else 0
+        prompt = (
+            f"Lead funnel: {total_leads} total leads, {converted_count} converted ({conversion_rate}% conversion rate). "
+            f"Stages: {stages_str}. "
+            f"Top source: {top_src} ({top_src_pct}%). "
+            f"{high_score_unconverted} high-score leads (>=70) not yet converted. Avg score: {avg_score}. "
+            "Write 2 sentences analysing funnel health and the biggest conversion opportunity. "
+            "Then on a new line starting with 'RECOMMENDATIONS:' list exactly 3 numbered actionable recommendations."
+        )
+        ai_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = ai_resp.content[0].text.strip()
+        if "RECOMMENDATIONS:" in raw:
+            parts = raw.split("RECOMMENDATIONS:", 1)
+            funnel_narrative = parts[0].strip()
+            rec_block = parts[1].strip()
+            for line in rec_block.splitlines():
+                line = line.strip().lstrip("123456789.-) ").strip()
+                if line:
+                    recommendations.append(line)
+        else:
+            funnel_narrative = raw
+    except Exception:
+        pass
+
+    if not funnel_narrative:
+        funnel_narrative = (
+            f"Your lead funnel holds {total_leads} leads with a {conversion_rate}% overall conversion rate. "
+            f"{high_score_unconverted} high-score leads remain unconverted — prioritise these for immediate outreach to boost near-term pipeline."
+        )
+
+    while len(recommendations) < 3:
+        defaults = [
+            f"Prioritise the {high_score_unconverted} high-score unconverted leads — these are your most likely near-term wins.",
+            "Move stalled 'contacted' and 'engaged' leads to a nurture sequence to keep momentum without manual effort.",
+            "Audit your top lead source and double down on it; diversify only once that channel is saturated.",
+        ]
+        recommendations.append(defaults[len(recommendations) % 3])
+
+    return {
+        "total_leads": total_leads,
+        "stage_breakdown": stage_breakdown,
+        "top_sources": top_sources_out,
+        "converted_count": converted_count,
+        "conversion_rate": conversion_rate,
+        "high_score_unconverted": high_score_unconverted,
+        "avg_score": avg_score,
+        "funnel_narrative": funnel_narrative,
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
