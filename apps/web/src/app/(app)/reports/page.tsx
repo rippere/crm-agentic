@@ -883,6 +883,11 @@ export default function ReportsPage() {
   const [quarterlyForecastLoading, setQuarterlyForecastLoading] = useState(false);
   const [quarterlyForecastOpen, setQuarterlyForecastOpen] = useState(true);
 
+  type AISizeWinRateBucket = { label: string; won_count: number; lost_count: number; total_count: number; win_rate: number; avg_cycle_days: number; total_revenue: number; avg_deal_value: number };
+  const [sizeWinRate, setSizeWinRate] = useState<{ size_buckets: AISizeWinRateBucket[]; sweet_spot: string | null; total_won: number; total_lost: number; total_revenue: number; size_narrative: string; recommendations: string[]; generated_at: string } | null>(null);
+  const [sizeWinRateLoading, setSizeWinRateLoading] = useState(false);
+  const [sizeWinRateOpen, setSizeWinRateOpen] = useState(true);
+
   type AIPipelineBalanceStage = { stage: string; actual_count: number; actual_pct: number; expected_pct: number; variance_pct: number };
   type AIPipelineBalanceValueTier = { tier: string; count: number; pct: number };
   type AIPipelineBalanceData = { stage_balance: AIPipelineBalanceStage[]; value_balance: AIPipelineBalanceValueTier[]; balance_score: number; most_imbalanced_stage: string | null; concentration_risk: string; total_pipeline_value: number; total_open_deals: number; balance_narrative: string; recommendations: string[]; generated_at: string };
@@ -1095,6 +1100,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPriceSensitivity("demo-workspace-1", "demo-token").then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
       setStageVelocityLoading(true);
       apiClient.getAIDealStageVelocity("demo-workspace-1", "demo-token").then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
+      setSizeWinRateLoading(true);
+      apiClient.getAIDealSizeWinRate("demo-workspace-1", "demo-token").then(setSizeWinRate).catch(() => {}).finally(() => setSizeWinRateLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1294,6 +1301,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPriceSensitivity(workspaceId, session.access_token).then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
       setStageVelocityLoading(true);
       apiClient.getAIDealStageVelocity(workspaceId, session.access_token).then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
+      setSizeWinRateLoading(true);
+      apiClient.getAIDealSizeWinRate(workspaceId, session.access_token).then(setSizeWinRate).catch(() => {}).finally(() => setSizeWinRateLoading(false));
     });
   }, []);
 
@@ -2722,6 +2731,13 @@ export default function ReportsPage() {
         .then(setPriceSensitivity)
         .catch(() => {})
         .finally(() => setPriceSensitivityLoading(false));
+  const regenerateSizeWinRate = () => {
+    setSizeWinRateLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealSizeWinRate(wid, tok)
+        .then(setSizeWinRate)
+        .catch(() => {})
+        .finally(() => setSizeWinRateLoading(false));
     };
     if (DEMO_MODE) {
       doFetch("demo-workspace-1", "demo-token");
@@ -2752,6 +2768,9 @@ export default function ReportsPage() {
         if (!session) { setStageVelocityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setStageVelocityLoading(false); return; }
+        if (!session) { setSizeWinRateLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setSizeWinRateLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11834,6 +11853,15 @@ export default function ReportsPage() {
             {priceSensitivity?.sweet_spot_bucket && (
               <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-900/40 text-emerald-300 border border-emerald-500/30">
                 Sweet spot: {priceSensitivity.sweet_spot_bucket}
+      {/* Deal Size vs Win-Rate */}
+      <Card className="border-teal-500/15">
+        <div className="flex items-center justify-between px-6 py-4 cursor-pointer select-none" onClick={() => setSizeWinRateOpen(o => !o)}>
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-teal-400" />
+            <span className="font-semibold text-zinc-100">Deal Size vs Win-Rate</span>
+            {sizeWinRate?.sweet_spot && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-300 font-medium">
+                Sweet spot: {sizeWinRate.sweet_spot}
               </span>
             )}
           </div>
@@ -11962,6 +11990,83 @@ export default function ReportsPage() {
                 {stageVelocity.recommendations.map((r, i) => (
                   <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
                     <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-cyan-400 flex-shrink-0" />
+            <button onClick={e => { e.stopPropagation(); regenerateSizeWinRate(); }} className="p-1 rounded hover:bg-zinc-700 transition-colors">
+              <RefreshCw className={`h-3 w-3 ${sizeWinRateLoading ? 'animate-spin' : ''}`} />
+            </button>
+            {sizeWinRateOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </div>
+        {sizeWinRateOpen && (
+          sizeWinRateLoading ? (
+            <div className="px-6 pb-6 text-sm text-zinc-500 animate-pulse">Loading size vs win-rate analysis…</div>
+          ) : sizeWinRate ? (
+            <div className="px-6 pb-6 space-y-4">
+              {/* Summary metrics */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/60 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Won</p>
+                  <p className="text-xl font-bold text-teal-400">{sizeWinRate.total_won}</p>
+                </div>
+                <div className="bg-zinc-800/60 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Lost</p>
+                  <p className="text-xl font-bold text-zinc-200">{sizeWinRate.total_lost}</p>
+                </div>
+                <div className="bg-zinc-800/60 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Revenue Won</p>
+                  <p className="text-xl font-bold text-zinc-200">${(sizeWinRate.total_revenue / 1000).toFixed(0)}K</p>
+                </div>
+              </div>
+              {/* Bar chart: win rate by bucket */}
+              {sizeWinRate.size_buckets.some(b => b.total_count > 0) && (
+                <div className="h-44">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={sizeWinRate.size_buckets.filter(b => b.total_count > 0)} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                      <XAxis dataKey="label" tick={{ fill: '#a1a1aa', fontSize: 10 }} />
+                      <YAxis domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} tick={{ fill: '#a1a1aa', fontSize: 11 }} />
+                      <Tooltip
+                        contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 8 }}
+                        labelStyle={{ color: '#e4e4e7' }}
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        formatter={(value: any) => value != null ? [`${value}%`, 'Win Rate'] : ['-']}
+                      />
+                      <Bar dataKey="win_rate" fill="#14b8a6" radius={[4, 4, 0, 0]} name="Win Rate %" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {/* Bucket table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-zinc-400">
+                  <thead>
+                    <tr className="border-b border-zinc-700/50">
+                      <th className="text-left py-1 pr-3 text-zinc-500">Bucket</th>
+                      <th className="text-right py-1 pr-3 text-zinc-500">Won</th>
+                      <th className="text-right py-1 pr-3 text-zinc-500">Lost</th>
+                      <th className="text-right py-1 pr-3 text-zinc-500">Win %</th>
+                      <th className="text-right py-1 pr-3 text-zinc-500">Avg Cycle</th>
+                      <th className="text-right py-1 text-zinc-500">Avg Deal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sizeWinRate.size_buckets.filter(b => b.total_count > 0).map(b => (
+                      <tr key={b.label} className={`border-b border-zinc-800/50 ${sizeWinRate.sweet_spot === b.label ? 'text-teal-300' : ''}`}>
+                        <td className="py-1 pr-3 font-medium">{b.label}{sizeWinRate.sweet_spot === b.label && ' ★'}</td>
+                        <td className="text-right py-1 pr-3">{b.won_count}</td>
+                        <td className="text-right py-1 pr-3">{b.lost_count}</td>
+                        <td className="text-right py-1 pr-3">{b.win_rate}%</td>
+                        <td className="text-right py-1 pr-3">{b.avg_cycle_days}d</td>
+                        <td className="text-right py-1">${(b.avg_deal_value / 1000).toFixed(0)}K</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-sm text-zinc-300 italic">{sizeWinRate.size_narrative}</p>
+              <ul className="space-y-1">
+                {sizeWinRate.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
                     {r}
                   </li>
                 ))}
@@ -11970,6 +12075,10 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the stage velocity analysis.</div>
+              <p className="text-xs text-zinc-600">Generated {new Date(sizeWinRate.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load deal size vs win-rate analysis.</div>
           )
         )}
       </Card>
