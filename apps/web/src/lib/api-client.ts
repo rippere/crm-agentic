@@ -7304,6 +7304,44 @@ export const apiClient = {
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/task-backlog`, {}, token)
   },
 
+  async getAIContactScoreSegmentation(workspaceId: string, token: string): Promise<{
+    tiers: Array<{ tier: string; label: string; count: number; pct_of_total: number; avg_revenue: number; total_revenue: number; avg_deals: number; rising_trend_count: number }>
+    total_contacts: number; hot_count: number; warm_count: number; cold_count: number; rising_trend_count: number
+    top_hot_contacts: Array<{ contact_id: string; name: string; score: number; trend: string; revenue: number }>
+    score_narrative: string; recommendations: string[]; generated_at: string
+  }> {
+    if (isDemoMode) {
+      await new Promise((r) => setTimeout(r, 700))
+      return Promise.resolve({
+        tiers: [
+          { tier: 'hot', label: 'Hot', count: 12, pct_of_total: 25.5, avg_revenue: 8400, total_revenue: 100800, avg_deals: 2.1, rising_trend_count: 4 },
+          { tier: 'warm', label: 'Warm', count: 22, pct_of_total: 46.8, avg_revenue: 3200, total_revenue: 70400, avg_deals: 0.9, rising_trend_count: 6 },
+          { tier: 'cold', label: 'Cold', count: 13, pct_of_total: 27.7, avg_revenue: 800, total_revenue: 10400, avg_deals: 0.2, rising_trend_count: 2 },
+        ],
+        total_contacts: 47,
+        hot_count: 12,
+        warm_count: 22,
+        cold_count: 13,
+        rising_trend_count: 12,
+        top_hot_contacts: [
+          { contact_id: 'c-001', name: 'Sarah Chen', score: 92, trend: 'improving', revenue: 48000 },
+          { contact_id: 'c-003', name: 'James Park', score: 88, trend: 'stable', revenue: 32000 },
+          { contact_id: 'c-004', name: 'Lisa Thompson', score: 84, trend: 'improving', revenue: 27000 },
+          { contact_id: 'c-005', name: 'Michael Ross', score: 81, trend: 'stable', revenue: 19500 },
+          { contact_id: 'c-006', name: 'Anna Walsh', score: 76, trend: 'improving', revenue: 15200 },
+        ],
+        score_narrative: '25.5% of your contacts are hot leads with scores ≥70, generating $100.8K in cumulative revenue. 12 contacts show an improving score trend — prioritise these for proactive outreach before competitors engage.',
+        recommendations: [
+          'Schedule outreach for the 12 hot contacts within 48 hours — their high scores indicate strong engagement and purchase intent.',
+          'Create a nurture sequence for the 22 warm contacts to move them into the hot tier before quarter end.',
+          'Review the 13 cold contacts for re-engagement potential; archive any with no activity in 180+ days to keep your pipeline clean.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/score-segmentation`, {}, token)
+  },
+
   getAIDealCohortAnalysis(workspaceId: string, token: string) {
     if (isDemoMode) {
       return Promise.resolve({

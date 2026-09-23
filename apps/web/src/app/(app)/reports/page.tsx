@@ -844,6 +844,11 @@ export default function ReportsPage() {
   const [taskBacklogLoading, setTaskBacklogLoading] = useState(false);
   const [taskBacklogOpen, setTaskBacklogOpen] = useState(true);
 
+  type AIScoreSegTier = { tier: string; label: string; count: number; pct_of_total: number; avg_revenue: number; total_revenue: number; avg_deals: number; rising_trend_count: number };
+  type AIScoreSegmentation = { tiers: AIScoreSegTier[]; total_contacts: number; hot_count: number; warm_count: number; cold_count: number; rising_trend_count: number; top_hot_contacts: Array<{ contact_id: string; name: string; score: number; trend: string; revenue: number }>; score_narrative: string; recommendations: string[]; generated_at: string };
+  const [scoreSegmentation, setScoreSegmentation] = useState<AIScoreSegmentation | null>(null);
+  const [scoreSegmentationLoading, setScoreSegmentationLoading] = useState(false);
+  const [scoreSegmentationOpen, setScoreSegmentationOpen] = useState(true);
   type AIDealCohortRow = { cohort: string; won_count: number; lost_count: number; total_revenue: number; win_rate: number };
   type AIDealCohortData = { cohorts: AIDealCohortRow[]; closing_quarters: string[]; chart_data: Record<string, number | string>[]; cohort_narrative: string; recommendations: string[]; generated_at: string };
   const [cohortAnalysis, setCohortAnalysis] = useState<AIDealCohortData | null>(null);
@@ -1024,6 +1029,8 @@ export default function ReportsPage() {
       apiClient.getAIContactWinLossAttribution("demo-workspace-1", "demo-token").then(setWinLossAttr).catch(() => {}).finally(() => setWinLossAttrLoading(false));
       setTaskBacklogLoading(true);
       apiClient.getAIContactTaskBacklog("demo-workspace-1", "demo-token").then(setTaskBacklog).catch(() => {}).finally(() => setTaskBacklogLoading(false));
+      setScoreSegmentationLoading(true);
+      apiClient.getAIContactScoreSegmentation("demo-workspace-1", "demo-token").then(setScoreSegmentation).catch(() => {}).finally(() => setScoreSegmentationLoading(false));
       setCohortAnalysisLoading(true);
       apiClient.getAIDealCohortAnalysis("demo-workspace-1", "demo-token").then(setCohortAnalysis).catch(() => {}).finally(() => setCohortAnalysisLoading(false));
       return;
@@ -1205,6 +1212,8 @@ export default function ReportsPage() {
       apiClient.getAIContactWinLossAttribution(workspaceId, session.access_token).then(setWinLossAttr).catch(() => {}).finally(() => setWinLossAttrLoading(false));
       setTaskBacklogLoading(true);
       apiClient.getAIContactTaskBacklog(workspaceId, session.access_token).then(setTaskBacklog).catch(() => {}).finally(() => setTaskBacklogLoading(false));
+      setScoreSegmentationLoading(true);
+      apiClient.getAIContactScoreSegmentation(workspaceId, session.access_token).then(setScoreSegmentation).catch(() => {}).finally(() => setScoreSegmentationLoading(false));
       setCohortAnalysisLoading(true);
       apiClient.getAIDealCohortAnalysis(workspaceId, session.access_token).then(setCohortAnalysis).catch(() => {}).finally(() => setCohortAnalysisLoading(false));
     });
@@ -2460,6 +2469,27 @@ export default function ReportsPage() {
     }
   };
 
+  const regenerateScoreSegmentation = () => {
+    setScoreSegmentationLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIContactScoreSegmentation(wid, tok)
+        .then(setScoreSegmentation)
+        .catch(() => {})
+        .finally(() => setScoreSegmentationLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setScoreSegmentationLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setScoreSegmentationLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
   const regenerateCohortAnalysis = () => {
     setCohortAnalysisLoading(true);
     const doFetch = (wid: string, tok: string) => {
@@ -2480,6 +2510,7 @@ export default function ReportsPage() {
       });
     }
   };
+
 
   const regenerateQuarterReadiness = () => {
     setQuarterReadinessLoading(true);
@@ -10843,6 +10874,97 @@ export default function ReportsPage() {
         )}
       </Card>
 
+      {/* Contact Score Segmentation */}
+      <Card className="overflow-hidden">
+        <div
+          className="flex items-center justify-between p-4 cursor-pointer hover:bg-zinc-800/40 transition-colors"
+          onClick={() => setScoreSegmentationOpen(!scoreSegmentationOpen)}
+        >
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-5 w-5 text-violet-400" />
+            <h2 className="font-semibold text-zinc-100">Contact Score Segmentation</h2>
+            {scoreSegmentationLoading && <RefreshCw className="h-3.5 w-3.5 text-violet-400 animate-spin" />}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium transition-colors disabled:opacity-50"
+              disabled={scoreSegmentationLoading}
+              onClick={(e) => { e.stopPropagation(); regenerateScoreSegmentation(); }}
+            >
+              <RefreshCw className={`h-3 w-3 ${scoreSegmentationLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            {scoreSegmentationOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </div>
+        {scoreSegmentationOpen && (
+          scoreSegmentation ? (
+            <div className="p-4 pt-0 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-emerald-900/30 border border-emerald-500/20 p-3 text-center">
+                  <div className="text-2xl font-bold text-emerald-400">{scoreSegmentation.hot_count}</div>
+                  <div className="text-xs text-emerald-300 font-medium">Hot</div>
+                  <div className="text-xs text-zinc-500">{scoreSegmentation.tiers.find(t => t.tier === 'hot')?.pct_of_total.toFixed(1)}% of total</div>
+                </div>
+                <div className="rounded-lg bg-amber-900/30 border border-amber-500/20 p-3 text-center">
+                  <div className="text-2xl font-bold text-amber-400">{scoreSegmentation.warm_count}</div>
+                  <div className="text-xs text-amber-300 font-medium">Warm</div>
+                  <div className="text-xs text-zinc-500">{scoreSegmentation.tiers.find(t => t.tier === 'warm')?.pct_of_total.toFixed(1)}% of total</div>
+                </div>
+                <div className="rounded-lg bg-zinc-800/50 border border-zinc-600/20 p-3 text-center">
+                  <div className="text-2xl font-bold text-zinc-400">{scoreSegmentation.cold_count}</div>
+                  <div className="text-xs text-zinc-400 font-medium">Cold</div>
+                  <div className="text-xs text-zinc-500">{scoreSegmentation.tiers.find(t => t.tier === 'cold')?.pct_of_total.toFixed(1)}% of total</div>
+                </div>
+              </div>
+              {scoreSegmentation.rising_trend_count > 0 && (
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-teal-900/40 border border-teal-500/30 text-xs text-teal-300">
+                  <TrendingUp className="h-3 w-3" />
+                  {scoreSegmentation.rising_trend_count} contact{scoreSegmentation.rising_trend_count !== 1 ? 's' : ''} with improving trend
+                </div>
+              )}
+              {scoreSegmentation.top_hot_contacts.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Top Hot Contacts</h3>
+                  <div className="space-y-1.5">
+                    {scoreSegmentation.top_hot_contacts.map((c) => (
+                      <div key={c.contact_id} className="flex items-center justify-between rounded-md bg-zinc-800/50 px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center justify-center w-8 h-5 rounded bg-emerald-800/60 text-emerald-300 text-xs font-bold">{c.score}</span>
+                          <span className="text-sm text-zinc-200">{c.name}</span>
+                          {c.trend === 'improving' && <TrendingUp className="h-3 w-3 text-emerald-400" />}
+                        </div>
+                        <span className="text-xs text-zinc-400">${c.revenue.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {scoreSegmentation.score_narrative && (
+                <p className="text-sm text-zinc-400 italic">{scoreSegmentation.score_narrative}</p>
+              )}
+              {scoreSegmentation.recommendations.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Recommendations</h3>
+                  <ul className="space-y-1.5">
+                    {scoreSegmentation.recommendations.map((r, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                        <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="text-xs text-zinc-600">Generated {new Date(scoreSegmentation.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact score segmentation analysis.</div>
+          )
+        )}
+      </Card>
+
+
       {/* Deal Cohort Analysis */}
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 cursor-pointer select-none" onClick={() => setCohortAnalysisOpen((o) => !o)}>
@@ -10931,6 +11053,7 @@ export default function ReportsPage() {
           )
         )}
       </Card>
+
 
       {/* Stale alert */}
       {stats.stale > 0 && (
