@@ -9554,3 +9554,66 @@ async def test_stage_velocity_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/stage-velocity")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20f — win rate trend
+# ---------------------------------------------------------------------------
+
+class FakeWinRateRow:
+    def __init__(self, stage, stage_changed_at):
+        self.stage = stage
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_win_rate_trend_returns_quarters(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.datetime.utcnow()
+    # 2 closed_won and 2 closed_lost spread across 2 different quarters
+    q_current_start = now.replace(month=((now.month - 1) // 3) * 3 + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    prev_q_start = q_current_start - datetime.timedelta(days=92)
+    rows = [
+        FakeWinRateRow("closed_won",  q_current_start + datetime.timedelta(days=5)),
+        FakeWinRateRow("closed_won",  q_current_start + datetime.timedelta(days=10)),
+        FakeWinRateRow("closed_lost", q_current_start + datetime.timedelta(days=15)),
+        FakeWinRateRow("closed_won",  prev_q_start + datetime.timedelta(days=5)),
+        FakeWinRateRow("closed_lost", prev_q_start + datetime.timedelta(days=10)),
+        FakeWinRateRow("closed_lost", prev_q_start + datetime.timedelta(days=15)),
+    ]
+    mock_db.execute = AsyncMock(return_value=_make_execute_result(rows))
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"win_rate_narrative": "Win rate is trending upward.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/win-rate-trend")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["quarters"]) == 6  # default 6 quarters
+    # Find the current quarter bucket
+    active_quarters = [q for q in body["quarters"] if q["total"] > 0]
+    assert len(active_quarters) >= 1
+    # Current quarter: 2W + 1L = 66.7%
+    cur_q = active_quarters[-1]
+    assert cur_q["won_count"] == 2
+    assert cur_q["lost_count"] == 1
+    assert cur_q["win_rate"] == pytest.approx(66.7, abs=0.2)
+    assert body["overall_win_rate"] > 0
+    assert body["trend_direction"] in ("improving", "declining", "stable")
+    assert "win_rate_narrative" in body
+    assert len(body["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_win_rate_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-rate-trend")
+    assert resp.status_code == 403

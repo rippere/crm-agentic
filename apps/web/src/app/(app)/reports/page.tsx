@@ -900,6 +900,11 @@ export default function ReportsPage() {
   const [stageVelocity, setStageVelocity] = useState<AIStageVelocityData | null>(null);
   const [stageVelocityLoading, setStageVelocityLoading] = useState(false);
   const [stageVelocityOpen, setStageVelocityOpen] = useState(true);
+  type AIWinRateQuarter = { quarter: string; won_count: number; lost_count: number; total: number; win_rate: number };
+  type AIWinRateTrendData = { quarters: AIWinRateQuarter[]; overall_win_rate: number; trend_direction: string; best_quarter: string | null; worst_quarter: string | null; win_rate_narrative: string; recommendations: string[]; generated_at: string };
+  const [winRateTrend, setWinRateTrend] = useState<AIWinRateTrendData | null>(null);
+  const [winRateTrendLoading, setWinRateTrendLoading] = useState(false);
+  const [winRateTrendOpen, setWinRateTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -2752,6 +2757,27 @@ export default function ReportsPage() {
         if (!session) { setStageVelocityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setStageVelocityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateWinRateTrend = () => {
+    setWinRateTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealWinRateTrend(wid, tok)
+        .then(setWinRateTrend)
+        .catch(() => {})
+        .finally(() => setWinRateTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setWinRateTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setWinRateTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -11970,6 +11996,88 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the stage velocity analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Win Rate Trend */}
+      <Card className="border-indigo-500/15 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 bg-zinc-900/60">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-zinc-200">Win Rate Trend by Quarter</span>
+            {winRateTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${winRateTrend.overall_win_rate >= 55 ? 'bg-emerald-500/20 text-emerald-300' : winRateTrend.overall_win_rate >= 40 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                {winRateTrend.overall_win_rate.toFixed(1)}% overall
+              </span>
+            )}
+            {winRateTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${winRateTrend.trend_direction === 'improving' ? 'bg-emerald-500/20 text-emerald-300' : winRateTrend.trend_direction === 'declining' ? 'bg-rose-500/20 text-rose-300' : 'bg-zinc-700 text-zinc-400'}`}>
+                {winRateTrend.trend_direction}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerateWinRateTrend}
+              disabled={winRateTrendLoading}
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${winRateTrendLoading ? 'animate-spin' : ''}`} />
+              Regenerate
+            </button>
+            <button onClick={() => setWinRateTrendOpen(o => !o)} className="text-zinc-400 hover:text-zinc-200">
+              {winRateTrendOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        {winRateTrendOpen && (
+          winRateTrendLoading && !winRateTrend ? (
+            <div className="p-6 space-y-2">{[1,2,3].map(i => <div key={i} className="h-8 bg-zinc-800 rounded animate-pulse" />)}</div>
+          ) : winRateTrend ? (
+            <div className="p-5 space-y-4">
+              <div className="h-44">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={winRateTrend.quarters} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <XAxis dataKey="quarter" tick={{ fontSize: 10, fill: '#71717a' }} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#71717a' }} unit="%" />
+                    <Tooltip
+                      contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }}
+                      formatter={(v: unknown, _: unknown, entry: { payload?: AIWinRateQuarter }) => [`${Number(v ?? 0).toFixed(1)}% (${entry.payload?.won_count ?? 0}W / ${entry.payload?.lost_count ?? 0}L)`, 'Win Rate']}
+                    />
+                    <ReferenceLine y={winRateTrend.overall_win_rate} stroke="#6366f1" strokeDasharray="4 4" label={{ value: 'avg', position: 'insideTopRight', fontSize: 10, fill: '#6366f1' }} />
+                    <Line type="monotone" dataKey="win_rate" stroke="#6366f1" strokeWidth={2} dot={{ r: 4, fill: '#6366f1' }} activeDot={{ r: 5 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              {(winRateTrend.best_quarter || winRateTrend.worst_quarter) && (
+                <div className="flex gap-3">
+                  {winRateTrend.best_quarter && (
+                    <span className="text-xs px-2 py-1 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-700/30">
+                      Best: {winRateTrend.best_quarter}
+                    </span>
+                  )}
+                  {winRateTrend.worst_quarter && (
+                    <span className="text-xs px-2 py-1 rounded bg-rose-500/10 text-rose-300 border border-rose-700/30">
+                      Worst: {winRateTrend.worst_quarter}
+                    </span>
+                  )}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{winRateTrend.win_rate_narrative}</p>
+              <ul className="space-y-1">
+                {winRateTrend.recommendations.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(winRateTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the win rate trend analysis.</div>
           )
         )}
       </Card>
