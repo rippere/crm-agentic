@@ -20141,6 +20141,165 @@ async def get_ai_deal_quarterly_forecast(
     }
 
 
+_WIN_RATE_TREND_SYSTEM = (
+    "You are a sales analytics AI. Analyse a CRM quarterly win rate trend report. "
+    "Write a 2-sentence narrative about whether the team's win rate is improving or declining "
+    "and 3 actionable coaching recommendations to improve win rate. "
+    "Respond ONLY with valid JSON: "
+    "{\"win_rate_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-rate-trend")
+@limiter.limit("5/minute")
+async def deal_win_rate_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    quarters: int = 6,
+) -> dict:
+    """
+    Phase 20f — quarterly win rate trend for the past N quarters.
+    Returns won/lost counts per quarter, trend direction, narrative, and recommendations.
+    """
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+    quarters = max(2, min(quarters, 12))
+
+    def _quarter_label(y: int, q: int) -> str:
+        return f"Q{q} {y}"
+
+    def _quarter_for_date(dt: datetime.datetime) -> tuple[int, int]:
+        return dt.year, (dt.month - 1) // 3 + 1
+
+    cur_y, cur_q = _quarter_for_date(now)
+    result = await db.execute(
+        select(Deal.stage, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+        )
+    )
+    rows = result.all()
+
+    # Build quarter buckets list (oldest first) using calendar-quarter subtraction
+    bucket_keys = []
+    for i in range(quarters - 1, -1, -1):
+        total_q = (cur_y * 4 + cur_q - 1) - i
+        yr = total_q // 4
+        q = total_q % 4 + 1
+        bucket_keys.append((yr, q))
+
+    bucket_map = {k: {"quarter": _quarter_label(k[0], k[1]), "won_count": 0, "lost_count": 0} for k in bucket_keys}
+
+    for row in rows:
+        if row.stage_changed_at is None:
+            continue
+        key = _quarter_for_date(row.stage_changed_at)
+        if key in bucket_map:
+            if row.stage == "closed_won":
+                bucket_map[key]["won_count"] += 1
+            else:
+                bucket_map[key]["lost_count"] += 1
+
+    quarter_list = [bucket_map[k] for k in bucket_keys]
+    for q in quarter_list:
+        total = q["won_count"] + q["lost_count"]
+        q["total"] = total
+        q["win_rate"] = round(q["won_count"] / total * 100, 1) if total > 0 else 0.0
+
+    total_won = sum(q["won_count"] for q in quarter_list)
+    total_all = sum(q["total"] for q in quarter_list)
+    overall_win_rate = round(total_won / total_all * 100, 1) if total_all > 0 else 0.0
+
+    # Trend: compare avg of last half vs first half
+    mid = len(quarter_list) // 2
+    first_half = [q["win_rate"] for q in quarter_list[:mid] if q["total"] > 0]
+    second_half = [q["win_rate"] for q in quarter_list[mid:] if q["total"] > 0]
+    avg_first = sum(first_half) / len(first_half) if first_half else 0.0
+    avg_second = sum(second_half) / len(second_half) if second_half else 0.0
+    if avg_second > avg_first + 3:
+        trend_direction = "improving"
+    elif avg_second < avg_first - 3:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    scored = [(q["win_rate"], q["quarter"]) for q in quarter_list if q["total"] > 0]
+    best_quarter = max(scored, key=lambda x: x[0])[1] if scored else None
+    worst_quarter = min(scored, key=lambda x: x[0])[1] if scored else None
+
+    if total_all == 0:
+        return {
+            "quarters": quarter_list,
+            "overall_win_rate": 0.0,
+            "trend_direction": "stable",
+            "best_quarter": None,
+            "worst_quarter": None,
+            "win_rate_narrative": "No closed deals found — close some deals to start tracking win rate trends.",
+            "recommendations": [
+                "Ensure all closed deals have their stage set to closed_won or closed_lost.",
+                "Review open deals in proposal and negotiation stages to identify close opportunities.",
+                "Set a quarterly win rate target for the team and review progress monthly.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Quarterly win rate trend over the last {quarters} quarters. "
+        f"Overall win rate: {overall_win_rate:.1f}%. Trend: {trend_direction}. "
+        "Quarters (oldest→newest): "
+        + ", ".join(f"{q['quarter']} {q['win_rate']:.0f}% ({q['won_count']}W/{q['lost_count']}L)" for q in quarter_list)
+        + f". Best: {best_quarter}, worst: {worst_quarter}."
+    )
+
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=350,
+            system=_WIN_RATE_TREND_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    win_rate_narrative = str(data.get("win_rate_narrative", "")).strip()
+    if not win_rate_narrative:
+        win_rate_narrative = (
+            f"Win rate is {overall_win_rate:.1f}% overall across {quarters} quarters "
+            f"and appears to be {trend_direction}."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Run a win/loss debrief on every closed deal to identify the most common objections.",
+        "Focus qualification effort early — deals that stall in discovery rarely close.",
+        "Review the deals from your best quarter and codify what the team did differently.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "quarters": quarter_list,
+        "overall_win_rate": overall_win_rate,
+        "trend_direction": trend_direction,
+        "best_quarter": best_quarter,
+        "worst_quarter": worst_quarter,
+        "win_rate_narrative": win_rate_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
 _PRICE_SENSITIVITY_SYSTEM = (
     "You are a sales analytics AI. Analyse a CRM deal price sensitivity report. "
     "Write a 2-sentence narrative about how deal size affects win rate "

@@ -7591,5 +7591,32 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/stage-velocity`, {}, token)
   },
+
+  async getAIDealWinRateTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        quarters: [
+          { quarter: 'Q4 2024', won_count: 3, lost_count: 5, total: 8,  win_rate: 37.5 },
+          { quarter: 'Q1 2025', won_count: 4, lost_count: 5, total: 9,  win_rate: 44.4 },
+          { quarter: 'Q2 2025', won_count: 5, lost_count: 5, total: 10, win_rate: 50.0 },
+          { quarter: 'Q3 2025', won_count: 6, lost_count: 5, total: 11, win_rate: 54.5 },
+          { quarter: 'Q4 2025', won_count: 7, lost_count: 5, total: 12, win_rate: 58.3 },
+          { quarter: 'Q1 2026', won_count: 8, lost_count: 5, total: 13, win_rate: 61.5 },
+        ],
+        overall_win_rate: 52.4,
+        trend_direction: 'improving',
+        best_quarter: 'Q1 2026',
+        worst_quarter: 'Q4 2024',
+        win_rate_narrative: 'Win rate has improved steadily from 37.5% in Q4 2024 to 61.5% in Q1 2026, reflecting stronger qualification and follow-through. The team\'s Q1 2026 performance is the highest on record and sets a strong benchmark for the year.',
+        recommendations: [
+          'Replicate the Q1 2026 playbook across all reps — identify which discovery and qualification habits drove the improvement.',
+          'Set a team target of 65% win rate by Q3 2026 and review progress in weekly pipeline calls.',
+          'Run a win/loss debrief on the 5 lost deals each quarter to surface repeating objections early.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-rate-trend`, {}, token)
+  },
 }
 
