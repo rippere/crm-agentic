@@ -7591,5 +7591,67 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/stage-velocity`, {}, token)
   },
+
+  async getAIDealWinLossTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        monthly_data: [
+          { month: '2025-10', won_count: 3, lost_count: 4, win_rate: 42.9 },
+          { month: '2025-11', won_count: 4, lost_count: 4, win_rate: 50.0 },
+          { month: '2025-12', won_count: 5, lost_count: 3, win_rate: 62.5 },
+          { month: '2026-01', won_count: 4, lost_count: 4, win_rate: 50.0 },
+          { month: '2026-02', won_count: 6, lost_count: 3, win_rate: 66.7 },
+          { month: '2026-03', won_count: 5, lost_count: 2, win_rate: 71.4 },
+          { month: '2026-04', won_count: 4, lost_count: 3, win_rate: 57.1 },
+          { month: '2026-05', won_count: 7, lost_count: 2, win_rate: 77.8 },
+          { month: '2026-06', won_count: 6, lost_count: 3, win_rate: 66.7 },
+          { month: '2026-07', won_count: 8, lost_count: 2, win_rate: 80.0 },
+          { month: '2026-08', won_count: 7, lost_count: 3, win_rate: 70.0 },
+          { month: '2026-09', won_count: 9, lost_count: 2, win_rate: 81.8 },
+        ],
+        overall_win_rate: 66.3,
+        trend_direction: 'improving',
+        best_month: '2026-09',
+        worst_month: '2025-10',
+        total_won: 68,
+        total_lost: 35,
+        win_loss_narrative: 'Your win rate has improved from 42.9% in October 2025 to 81.8% in September 2026, a remarkable 38-point gain over 12 months. The upward trend accelerated significantly in Q2 2026, suggesting improvements in qualification or sales execution took hold earlier this year. Sustaining this trajectory into Q4 will require continued focus on deal qualification and champion development.',
+        recommendations: [
+          'Document the qualification changes made in early 2026 that drove the win-rate improvement and codify them into a formal playbook.',
+          'Investigate October 2025 (42.9% win rate) to identify what changed — use those lessons to prevent regression.',
+          'Set a win-rate floor alert at 60% so any month-over-month dip triggers an immediate pipeline review.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-loss-trend`, {}, token)
+  },
+
+  async getAIDealTimeToCloseDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        buckets: [
+          { label: 'lightning', range_label: '< 30 days',  count: 4,  total_value: 78000,  avg_value: 19500 },
+          { label: 'fast',      range_label: '30–59 days', count: 11, total_value: 342000, avg_value: 31091 },
+          { label: 'standard',  range_label: '60–89 days', count: 9,  total_value: 385000, avg_value: 42778 },
+          { label: 'slow',      range_label: '90–179 days',count: 5,  total_value: 310000, avg_value: 62000 },
+          { label: 'long',      range_label: '≥ 180 days', count: 2,  total_value: 185000, avg_value: 92500 },
+        ],
+        total_analyzed: 31,
+        fastest_close_days: 8,
+        slowest_close_days: 214,
+        median_days: 54,
+        optimal_bucket: 'fast',
+        distribution_narrative: 'The majority of your 31 closed-won deals close in 30–59 days, with a median of 54 days — a healthy pipeline cadence. The 4 lightning deals (< 30 days) represent highly-qualified inbound opportunities worth examining for replication. The 7 long-cycle deals (≥ 90 days) average $66K in value, suggesting larger enterprise deals naturally require more time.',
+        recommendations: [
+          'Study your 4 lightning deals to identify the qualification and champion patterns that enabled rapid closure.',
+          'Set a 60-day soft target for standard deals and trigger a coaching review for any deal exceeding 90 days in stage.',
+          'For the long-cycle enterprise segment, introduce a structured executive-sponsor engagement programme to accelerate decisions.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/time-to-close-distribution`, {}, token)
+  },
 }
 
