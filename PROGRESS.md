@@ -347,11 +347,13 @@ Phase 17 — AI Coaching & Playbook Intelligence
 
 - [2026-09-23] Phase 20e: AI deal stage velocity analysis — GET /workspaces/{id}/ai/deals/stage-velocity (Claude Haiku, 5/min; queries active deals (discovery/qualified/proposal/negotiation) by Deal.workspace_id directly; computes days_in_stage = (now − stage_changed_at).total_seconds()/86400 per deal; per-stage: deal_count, avg_days, max_days, total_value; top 5 stuck deals sorted by days_in_stage desc; velocity_score = max(0, min(100, round(100 − overall_avg_days × 100 / 60))); Claude Haiku generates velocity_narrative + 3 recommendations; graceful empty default without Claude call; returns {stages[×4 with stage/deal_count/avg_days_in_stage/max_days_in_stage/total_value], top_stuck_deals[×5 with id/title/stage/value/days_in_stage], velocity_score, overall_avg_days, total_active, velocity_narrative, recommendations[×3], generated_at}); collapsible "Deal Stage Velocity" card on /reports (cyan Zap icon, velocity-score badge emerald≥70/amber≥40/rose<40, 4-stage grid with colour-coded avg days rose≥30d/amber≥14d/emerald<14d, top stuck deals list with days badge, italic narrative, cyan-dot recs, Regenerate button); getAIDealStageVelocity() in api-client with 18-deal demo stub (5/4/6/3 per stage, velocity_score=72, overall_avg_days=14.2); 2 new tests (3-deal stage grouping + top stuck deal + wrong-workspace 403 cccccccc UUID); 265 AI tests total; PR #228
 
+- [2026-09-24] Phase 20f: AI deal win rate trend by quarter — GET /workspaces/{id}/ai/deals/win-rate-trend (Claude Haiku, 5/min; groups closed_won/closed_lost deals into 6 quarterly buckets, computes won_count/lost_count/total/win_rate per quarter, trend_direction improving/stable/declining via first-half vs second-half avg comparison, best_quarter/worst_quarter, narrative + 3 recs; graceful empty default); collapsible "Win Rate Trend by Quarter" card on /reports (indigo TrendingUp icon, recharts LineChart with dashed avg ReferenceLine, best/worst quarter chips, narrative, recs, Regenerate); getAIDealWinRateTrend() in api-client with 6-quarter improving-trend demo stub (37.5%→61.5%); 2 new tests (quarterly math + 403 guard); 267 AI tests pass; PR #240
+
 ## In Progress
 (none)
 
 ## Next Task
-Phase 20f: next AI analytics feature — to be determined.
+Phase 20g: next AI analytics feature — to be determined.
 
 ## Blockers
 - No live Railway deployment URL configured in .env — Railway service URLs must be set via Railway dashboard env vars (FRONTEND_URL, NEXT_PUBLIC_FASTAPI_URL). No URL found in local .env files; this is expected for local dev.
