@@ -20447,3 +20447,168 @@ async def get_ai_deal_stage_velocity(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20f: AI deal win/loss trend analysis
+# ---------------------------------------------------------------------------
+
+_WIN_LOSS_TREND_SYSTEM = """You are a sales analytics AI. Given monthly win/loss data for the last 12 months,
+identify trend direction and produce actionable insights.
+
+Respond with ONLY valid JSON:
+{
+  "win_loss_narrative": "2-3 sentence analysis of the win/loss trend pattern",
+  "recommendations": ["action 1", "action 2", "action 3"]
+}"""
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-loss-trend")
+@limiter.limit("5/minute")
+async def get_ai_deal_win_loss_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if str(current_user.workspace_id) != str(workspace_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    twelve_months_ago = now - datetime.timedelta(days=365)
+
+    from app.models.deal import Deal
+    from app.models.contact import Contact
+
+    result = await db.execute(
+        select(Deal.stage, Deal.stage_changed_at)
+        .join(Contact, Deal.contact_id == Contact.id)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= twelve_months_ago,
+        )
+    )
+    rows = result.all()
+
+    monthly: dict[str, dict] = {}
+    for i in range(12):
+        dt = now - datetime.timedelta(days=30 * (11 - i))
+        key = f"{dt.year}-{dt.month:02d}"
+        monthly[key] = {"won": 0, "lost": 0}
+
+    for row in rows:
+        closed_at = row.stage_changed_at
+        if closed_at is None:
+            continue
+        closed_dt = closed_at.replace(tzinfo=timezone.utc) if closed_at.tzinfo is None else closed_at
+        key = f"{closed_dt.year}-{closed_dt.month:02d}"
+        if key in monthly:
+            if row.stage == "closed_won":
+                monthly[key]["won"] += 1
+            else:
+                monthly[key]["lost"] += 1
+
+    monthly_data = []
+    for month_key in sorted(monthly.keys()):
+        w = monthly[month_key]["won"]
+        l = monthly[month_key]["lost"]
+        total = w + l
+        monthly_data.append({
+            "month": month_key,
+            "won_count": w,
+            "lost_count": l,
+            "win_rate": round(w / total * 100, 1) if total > 0 else None,
+        })
+
+    total_won = sum(m["won_count"] for m in monthly_data)
+    total_lost = sum(m["lost_count"] for m in monthly_data)
+    total_closed = total_won + total_lost
+    overall_win_rate = round(total_won / total_closed * 100, 1) if total_closed > 0 else 0.0
+
+    rates = [m["win_rate"] for m in monthly_data if m["win_rate"] is not None]
+    if len(rates) >= 4:
+        first_half_avg = sum(rates[: len(rates) // 2]) / (len(rates) // 2)
+        second_half_avg = sum(rates[len(rates) // 2 :]) / (len(rates) - len(rates) // 2)
+        if second_half_avg - first_half_avg >= 5:
+            trend_direction = "improving"
+        elif first_half_avg - second_half_avg >= 5:
+            trend_direction = "declining"
+        else:
+            trend_direction = "stable"
+    else:
+        trend_direction = "stable"
+
+    with_rates = [(m["month"], m["win_rate"]) for m in monthly_data if m["win_rate"] is not None]
+    best_month = max(with_rates, key=lambda x: x[1])[0] if with_rates else None
+    worst_month = min(with_rates, key=lambda x: x[1])[0] if with_rates else None
+
+    if total_closed == 0:
+        return {
+            "monthly_data": monthly_data,
+            "overall_win_rate": 0.0,
+            "trend_direction": "stable",
+            "best_month": None,
+            "worst_month": None,
+            "total_won": 0,
+            "total_lost": 0,
+            "win_loss_narrative": "No closed deals found in the last 12 months. Start tracking deals to see win/loss trends.",
+            "recommendations": [
+                "Begin logging deal outcomes as closed_won or closed_lost to build trend data.",
+                "Set up a regular pipeline review cadence to increase deal closure velocity.",
+                "Ensure all deals have expected close dates to enable forecasting.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Win/Loss trend over 12 months. Total: {total_won} won, {total_lost} lost, "
+        f"{overall_win_rate}% overall win rate. Trend: {trend_direction}. "
+        f"Monthly rates: "
+        + ", ".join(f"{m['month']}={m['win_rate']}%" if m['win_rate'] is not None else f"{m['month']}=N/A" for m in monthly_data[-6:])
+    )
+
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_WIN_LOSS_TREND_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    narrative = str(data.get("win_loss_narrative", "")).strip()
+    if not narrative:
+        narrative = (
+            f"Your win rate is {overall_win_rate}% over the last 12 months with a "
+            f"{trend_direction} trend across {total_closed} closed deals."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Review your qualification criteria to focus on higher-probability deals.",
+        "Analyse the characteristics of won deals to replicate success patterns.",
+        "Introduce a loss review process to capture learnings from each lost deal.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "monthly_data": monthly_data,
+        "overall_win_rate": overall_win_rate,
+        "trend_direction": trend_direction,
+        "best_month": best_month,
+        "worst_month": worst_month,
+        "total_won": total_won,
+        "total_lost": total_lost,
+        "win_loss_narrative": narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
