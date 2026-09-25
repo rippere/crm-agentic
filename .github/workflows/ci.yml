@@ -72,11 +72,10 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install \
-            fastapi uvicorn sqlalchemy asyncpg pyjwt cryptography \
-            celery httpx anthropic python-dotenv pydantic-settings \
-            pydantic pgvector slowapi python-multipart redis \
-            pytest pytest-asyncio anyio
+          # Install the SAME pinned set the prod Dockerfile uses. An unpinned
+          # list here silently pulled SQLAlchemy 2.1 (which no longer brings
+          # greenlet) and broke CI while prod stayed on 2.0.35.
+          pip install -r requirements.txt pytest pytest-asyncio anyio
 
       - name: Run tests
         run: python -m pytest -q --tb=short
