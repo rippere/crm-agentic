@@ -16,9 +16,11 @@ reference (path), NOT 10k rows through the JSON serializer.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 import uuid
 from typing import Any, Iterable, Iterator
 
@@ -37,8 +39,11 @@ MAX_ROWS = 10_000
 # Lead columns the import path is allowed to populate directly; everything else
 # in a source row falls through to custom_fields (import passthrough).
 _MAPPABLE_FIELDS = frozenset(
-    {"name", "email", "phone", "company", "title", "source", "external_id"}
+    {"name", "email", "phone", "company", "title", "source", "external_id", "score"}
 )
+
+_REDIS_REF_PREFIX = "redis:"
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _get_async_session() -> async_sessionmaker[AsyncSession]:
@@ -56,19 +61,68 @@ def _load_rows(rows_ref: Any) -> list[dict[str, Any]]:
     """Resolve the worker's `rows_ref` argument into a list of raw dict rows.
 
     Mock-friendly boundary for the staged payload — accepts an inline list, a
-    JSON string, or a filesystem path to a staged JSON file (what the router
-    writes for a 10k import). Anything else yields an empty list.
+    ``redis:<key>`` reference (what the router stages; Redis is shared by the api
+    and worker services), a JSON string, or a filesystem path to a staged JSON
+    file. Anything else yields an empty list. A redis ref whose key is gone
+    (expired / never written) raises, so the job reports failure instead of
+    silently importing zero rows. The key is NOT deleted here — only after a
+    successful import (see _delete_staged_payload) so a failed run can retry.
     """
     if isinstance(rows_ref, list):
         return rows_ref
     if isinstance(rows_ref, str):
-        if os.path.exists(rows_ref):
+        if rows_ref.startswith(_REDIS_REF_PREFIX):
+            data = json.loads(_read_staged_payload(rows_ref[len(_REDIS_REF_PREFIX):]))
+        elif os.path.exists(rows_ref):
             with open(rows_ref, encoding="utf-8") as fh:
                 data = json.load(fh)
         else:
             data = json.loads(rows_ref)
         return data if isinstance(data, list) else []
     return []
+
+
+def _redis_client():
+    import redis as _redis
+
+    from app.config import settings
+
+    return _redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=5)
+
+
+def _read_staged_payload(key: str) -> str:
+    """GET a staged import payload from Redis; raise if it's gone."""
+    client = _redis_client()
+    try:
+        payload = client.get(key)
+    finally:
+        client.close()
+    if payload is None:
+        raise ValueError(f"staged lead-import payload missing or expired: {key}")
+    return payload.decode("utf-8") if isinstance(payload, bytes) else payload
+
+
+def _delete_staged_payload(rows_ref: Any) -> None:
+    """Best-effort DELETE of a staged payload once imported (PII doesn't linger; TTL backstops)."""
+    if not (isinstance(rows_ref, str) and rows_ref.startswith(_REDIS_REF_PREFIX)):
+        return
+    try:
+        client = _redis_client()
+        try:
+            client.delete(rows_ref[len(_REDIS_REF_PREFIX):])
+        finally:
+            client.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("import_leads staging_delete_failed exc=%s", exc)
+
+
+def _coerce_score(value: Any) -> int | None:
+    """Parse an imported score into the 0-100 int the column holds; None if unusable."""
+    try:
+        score = int(round(float(str(value).strip().rstrip("%"))))
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(100, score))
 
 
 def _map_row(raw: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
@@ -87,7 +141,22 @@ def _map_row(raw: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
             value = value.strip()
             if value == "":
                 value = None
-        if target in _MAPPABLE_FIELDS:
+        if target == "score":
+            if value is not None:
+                score = _coerce_score(value)
+                if score is not None:
+                    fields["score"] = score
+                else:
+                    custom[f"{src_col}_raw" if src_col == "score" else src_col] = value
+        elif target == "email":
+            # Prospect sheets often put a contact ROUTE ("Online form", a phone
+            # number) in the email column. Only a real address is an email — it
+            # is also a dedupe key, so garbage there would collide rows.
+            if isinstance(value, str) and _EMAIL_RE.match(value):
+                fields["email"] = value
+            elif value is not None:
+                custom["contact_route"] = value
+        elif target in _MAPPABLE_FIELDS:
             if value is not None:
                 fields[target] = value
         else:
@@ -98,9 +167,39 @@ def _map_row(raw: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
         fields["email"] = fields["email"].lower()
 
     fields.setdefault("source", "import")
+    # Without an email or external_id a row has no dedupe key, so re-uploading
+    # an updated sheet would duplicate it. Derive a stable key from identity.
+    if not fields.get("email") and not fields.get("external_id"):
+        ident = "|".join(
+            str(fields.get(k, "")).strip().lower() for k in ("company", "name", "phone")
+        )
+        if ident.strip("|"):
+            fields["external_id"] = "import:" + hashlib.sha1(ident.encode("utf-8")).hexdigest()[:20]
     if custom:
         fields["custom_fields"] = custom
     return fields
+
+
+# Defaults for NOT NULL columns when a sparse row omits them; every other
+# column pads with None.
+_PAD_DEFAULTS: dict[str, Any] = {"score": 0, "source": "import"}
+
+
+def _uniform_keys(chunk: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pad every record in a chunk to the same key set.
+
+    A multi-row INSERT ... VALUES renders one column list for the whole chunk,
+    so a row missing a key another row has (a lead with no email) fails the
+    ENTIRE chunk. Sparse CSVs are the norm, so normalise before inserting.
+    """
+    keys = set().union(*(r.keys() for r in chunk)) if chunk else set()
+    return [
+        {
+            k: r[k] if k in r else (dict() if k == "custom_fields" else _PAD_DEFAULTS.get(k))
+            for k in keys
+        }
+        for r in chunk
+    ]
 
 
 def _chunks(seq: list[Any], size: int) -> Iterator[list[Any]]:
@@ -120,6 +219,12 @@ async def _run_import(
 
     ws_uuid = uuid.UUID(str(workspace_id))
     mapping = mapping or {}
+
+    if isinstance(rows_ref, str) and rows_ref.startswith(_REDIS_REF_PREFIX):
+        # Keys are lead-import:staged:<workspace_id>:<uuid>; refuse a mismatched tenant.
+        parts = rows_ref[len(_REDIS_REF_PREFIX):].split(":")
+        if len(parts) < 4 or parts[2] != str(ws_uuid):
+            raise ValueError("staged lead-import payload does not belong to this workspace")
 
     raw_rows = _load_rows(rows_ref)
     # Best-effort cleanup: the router stages up to 10k rows of lead PII (name/
@@ -160,7 +265,7 @@ async def _run_import(
                 # (workspace_id, email) and (workspace_id, external_id). No index
                 # target => any unique violation is silently skipped, which covers
                 # both dedupe keys regardless of `dedupe_on`.
-                stmt = pg_insert(Lead).values(chunk).on_conflict_do_nothing()
+                stmt = pg_insert(Lead).values(_uniform_keys(chunk)).on_conflict_do_nothing()
                 result = await db.execute(stmt)
                 rc = getattr(result, "rowcount", None)
                 inserted_chunk = rc if isinstance(rc, int) and rc >= 0 else len(chunk)
@@ -195,6 +300,7 @@ async def _run_import(
         db.add(event)
         await db.commit()
 
+    _delete_staged_payload(rows_ref)
     return {"workspace_id": str(ws_uuid), **summary}
 
 

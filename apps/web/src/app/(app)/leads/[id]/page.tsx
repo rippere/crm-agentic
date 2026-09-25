@@ -280,6 +280,10 @@ export default function LeadDetailPage() {
   const otherStages = funnelStageOrder.filter((s) => s !== lead.stage);
   const isConverted = lead.stage === "converted";
 
+  const customEntries = Object.entries(lead.customFields ?? {})
+    .filter(([, v]) => v != null && String(v).trim() !== "")
+    .map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)] as const);
+
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header title={lead.name ?? "Unnamed lead"} subtitle={`${lead.company ?? "—"} · ${stageCfg.label}`} />
@@ -438,6 +442,29 @@ export default function LeadDetailPage() {
 
         {/* Right: score trend + enrollments + timeline */}
         <div className="flex flex-col gap-6">
+
+          {/* Imported research (CSV custom columns, e.g. an ABC-tool dossier) */}
+          {customEntries.length > 0 && (
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+                <p className="text-sm font-semibold text-zinc-200">Prospect Research</p>
+                <span className="ml-auto text-[10px] font-mono text-zinc-500">{customEntries.length} fields</span>
+              </div>
+              <dl className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-x-4 gap-y-2">
+                {customEntries.map(([key, value]) => (
+                  <div key={key} className="contents">
+                    <dt className="text-xs text-zinc-500">{key}</dt>
+                    <dd className="text-xs text-zinc-200 break-words">
+                      {/^https?:\/\//.test(value) ? (
+                        <a href={value} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">{value}</a>
+                      ) : value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </Card>
+          )}
 
           {/* Score trend */}
           <Card className="p-4 space-y-3">

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -425,6 +426,64 @@ async def test_import_leads_returns_202(app_client):
     assert resp.status_code == 202
     assert resp.json()["status"] == "queued"
     assert "job_id" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_import_leads_stages_rows_in_redis_not_local_disk(app_client):
+    """The worker is a separate container; a local temp file is invisible to it."""
+    fastapi_app, mock_db, workspace_id = app_client
+    fake_redis = MagicMock()
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        with patch("redis.Redis.from_url", return_value=fake_redis), patch(
+            "app.workers.import_leads.process_lead_import.delay",
+            return_value=MagicMock(id="job-1"),
+        ) as delay:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/leads/import",
+                json={"rows": [{"email": "a@b.com"}], "mapping": {}, "dedupe_on": "email"},
+            )
+
+    assert resp.status_code == 202
+    rows_ref = delay.call_args.args[1]
+    assert rows_ref.startswith("redis:lead-import:staged:")
+    # first set() is the staging write; a later one is the job-dispatched marker
+    key, payload = fake_redis.set.call_args_list[0].args
+    assert rows_ref == f"redis:{key}"
+    assert json.loads(payload) == [{"email": "a@b.com"}]
+
+
+@pytest.mark.asyncio
+async def test_import_leads_falls_back_to_inline_rows_when_redis_down(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        with patch("redis.Redis.from_url", side_effect=ConnectionError("down")), patch(
+            "app.workers.import_leads.process_lead_import.delay",
+            return_value=MagicMock(id="job-2"),
+        ) as delay:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/leads/import",
+                json={"rows": [{"email": "a@b.com"}]},
+            )
+
+    assert resp.status_code == 202
+    assert delay.call_args.args[1] == [{"email": "a@b.com"}]
+
+
+@pytest.mark.asyncio
+async def test_import_leads_over_row_cap_returns_413_before_staging(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        with patch("redis.Redis.from_url") as from_url:
+            resp = await ac.post(
+                f"/workspaces/{workspace_id}/leads/import",
+                json={"rows": [{"email": f"u{i}@x.com"} for i in range(10_001)]},
+            )
+
+    assert resp.status_code == 413
+    from_url.assert_not_called()
 
 
 @pytest.mark.asyncio

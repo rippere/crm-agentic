@@ -14,13 +14,13 @@ STATIC sub-paths (``/funnel``, ``/import``, ``/export``) are declared BEFORE the
 import csv
 import io
 import json
-import os
-import tempfile
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +35,8 @@ from app.models.contact import Contact
 from app.models.deal import Deal
 from app.models.activity_event import ActivityEvent
 from app.services.supabase_rest import get_row
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -202,6 +204,29 @@ async def lead_funnel(
     return [{"stage": s, "count": counts[s], "value": values[s]} for s in LEAD_STAGES]
 
 
+_IMPORT_STAGING_TTL_SECONDS = 24 * 3600
+_IMPORT_MAX_ROWS = 10_000
+
+
+def _stage_import_rows(workspace_id: uuid.UUID, rows: list[dict]) -> str | list[dict]:
+    """Stage import rows in Redis; return a ``redis:<key>`` ref, or the rows inline on failure."""
+    from app.config import settings
+
+    key = f"lead-import:staged:{workspace_id}:{uuid.uuid4()}"
+    try:
+        import redis as _redis
+
+        client = _redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=5)
+        try:
+            client.set(key, json.dumps(rows), ex=_IMPORT_STAGING_TTL_SECONDS)
+        finally:
+            client.close()
+    except Exception as exc:  # noqa: BLE001 — staging is an optimisation; inline still works
+        logger.warning("event=lead_import_staging_failed workspace=%s error=%s", workspace_id, exc)
+        return rows
+    return f"redis:{key}"
+
+
 @router.post("/workspaces/{workspace_id}/leads/import", status_code=202)
 async def import_leads(
     workspace_id: uuid.UUID,
@@ -212,29 +237,32 @@ async def import_leads(
     """Enqueue a bulk CSV import (up to 10k rows) via Celery.
 
     The payload rows (up to 10k dicts) are NOT passed inline through the Celery
-    broker. They are persisted to a staging JSON file (temp dir keyed by a
-    generated staging id) and only the FILE PATH is handed to the worker, whose
-    `_load_rows` already accepts a path. This keeps the broker message tiny.
+    broker. They are staged in Redis under a generated key (short TTL) and only
+    the ``redis:<key>`` reference is handed to the worker. Redis is the one store
+    the api and worker services share — a temp FILE written here lived on the api
+    container's disk, which the separately-deployed worker cannot see, so every
+    prod import failed. If Redis is unreachable we fall back to passing the rows
+    inline (a bigger broker message, but still correct across containers).
 
     NOTE: static path — registered before /{lead_id}.
     """
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    # Persist rows to a staging file keyed by a generated job id; pass the path.
-    staging_id = uuid.uuid4()
-    staging_dir = os.path.join(tempfile.gettempdir(), "lead-import", str(workspace_id))
-    os.makedirs(staging_dir, exist_ok=True)
-    staging_path = os.path.join(staging_dir, f"{staging_id}.json")
-    with open(staging_path, "w", encoding="utf-8") as fh:
-        json.dump(body.rows, fh)
+    if len(body.rows) > _IMPORT_MAX_ROWS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Import is limited to {_IMPORT_MAX_ROWS:,} rows per upload",
+        )
+    # Sync redis client — keep it off the event loop.
+    rows_ref: str | list[dict] = await run_in_threadpool(_stage_import_rows, workspace_id, body.rows)
 
     try:
         from app.workers.import_leads import process_lead_import  # noqa: PLC0415
         from app.routers.agents import _mark_job_dispatched
 
         task = process_lead_import.delay(
-            str(workspace_id), staging_path, body.mapping, body.dedupe_on
+            str(workspace_id), rows_ref, body.mapping, body.dedupe_on
         )
         _mark_job_dispatched(task.id, str(workspace_id))
         job_id = task.id
