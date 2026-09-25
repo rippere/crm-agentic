@@ -20447,3 +20447,145 @@ async def get_ai_deal_stage_velocity(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# Phase 20g — health vs win probability gap
+# ---------------------------------------------------------------------------
+
+_HEALTH_PROB_GAP_SYSTEM = (
+    "You are a sales analytics AI. Analyse a CRM deal health vs win-probability gap report. "
+    "Write a 2-sentence narrative explaining what the misaligned deals signal about forecast accuracy "
+    "and 3 actionable recommendations to reduce the gap between health scores and win probabilities. "
+    "Respond ONLY with valid JSON: "
+    "{\"gap_narrative\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}."
+)
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/health-probability-gap")
+@limiter.limit("5/minute")
+async def get_ai_deal_health_probability_gap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+    ACTIVE_STAGES = ("discovery", "qualified", "proposal", "negotiation")
+
+    result = await db.execute(
+        select(Deal.id, Deal.title, Deal.stage, Deal.value, Deal.health_score, Deal.ml_win_probability)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(ACTIVE_STAGES))
+    )
+    rows = result.all()
+
+    total_active = len(rows)
+    overconfident = []  # win_prob >> health (gap > 20)
+    undervalued = []    # health >> win_prob (gap < -20)
+    aligned_count = 0
+
+    for row in rows:
+        health = row.health_score or 0
+        prob = row.ml_win_probability or 0
+        gap = int(prob) - int(health)
+        entry = {
+            "id": str(row.id),
+            "title": row.title,
+            "stage": row.stage,
+            "value": row.value,
+            "health_score": int(health),
+            "win_probability": int(prob),
+            "gap": gap,
+        }
+        if gap > 20:
+            overconfident.append(entry)
+        elif gap < -20:
+            undervalued.append(entry)
+        else:
+            aligned_count += 1
+
+    overconfident.sort(key=lambda d: d["gap"], reverse=True)
+    overconfident_top = overconfident[:5]
+    undervalued.sort(key=lambda d: d["gap"])
+    undervalued_top = undervalued[:5]
+
+    gaps = [int(r.ml_win_probability or 0) - int(r.health_score or 0) for r in rows]
+    avg_gap = round(sum(gaps) / len(gaps), 1) if gaps else 0.0
+
+    if total_active == 0:
+        return {
+            "overconfident_deals": [],
+            "undervalued_deals": [],
+            "overconfident_count": 0,
+            "undervalued_count": 0,
+            "aligned_count": 0,
+            "avg_gap": 0.0,
+            "total_active": 0,
+            "gap_narrative": "No active deals to analyse — add deals to start tracking health vs win-probability alignment.",
+            "recommendations": [
+                "Add active deals to your pipeline so alignment can be measured.",
+                "Score each deal's health after every stage move to keep data fresh.",
+                "Review your ML win-probability model calibration against actual outcomes.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"Health vs win-probability gap analysis for {total_active} active deals. "
+        f"Average gap (win_prob − health): {avg_gap:+.1f} points. "
+        f"Overconfident deals (win_prob >> health by >20): {len(overconfident)}. "
+        f"Undervalued deals (health >> win_prob by >20): {len(undervalued)}. "
+        f"Aligned deals: {aligned_count}. "
+        "Most overconfident: "
+        + ", ".join(f"{d['title']} (gap +{d['gap']})" for d in overconfident_top[:3])
+        + ". Most undervalued: "
+        + ", ".join(f"{d['title']} (gap {d['gap']})" for d in undervalued_top[:3])
+    )
+
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=_HEALTH_PROB_GAP_SYSTEM,
+            messages=[{"role": "user", "content": context}],
+        )
+        raw = msg.content[0].text.strip() if msg.content else "{}"
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI unavailable: {exc}",
+        ) from exc
+
+    gap_narrative = str(data.get("gap_narrative", "")).strip()
+    if not gap_narrative:
+        gap_narrative = (
+            f"The average gap between win probability and health score is {avg_gap:+.1f} points "
+            f"across {total_active} active deals, with {len(overconfident)} overconfident and {len(undervalued)} undervalued deals."
+        )
+    raw_recs = data.get("recommendations", [])
+    recs = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    default_recs = [
+        "Review overconfident deals with a deal-by-deal health audit before the next forecast call.",
+        "For undervalued deals, investigate whether the ML model needs retraining with more recent closed data.",
+        "Set a monthly cadence to reconcile health scores and win probabilities to keep your forecast accurate.",
+    ]
+    while len(recs) < 3:
+        recs.append(default_recs[len(recs) % 3])
+
+    return {
+        "overconfident_deals": overconfident_top,
+        "undervalued_deals": undervalued_top,
+        "overconfident_count": len(overconfident),
+        "undervalued_count": len(undervalued),
+        "aligned_count": aligned_count,
+        "avg_gap": avg_gap,
+        "total_active": total_active,
+        "gap_narrative": gap_narrative,
+        "recommendations": recs,
+        "generated_at": now.isoformat() + "Z",
+    }
