@@ -7618,5 +7618,34 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-rate-trend`, {}, token)
   },
+
+  async getAIDealHealthProbabilityGap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        overconfident_deals: [
+          { id: 'd1', title: 'Pinnacle Systems Expansion', stage: 'proposal',    value: 75000, health_score: 28, win_probability: 72, gap: 44 },
+          { id: 'd2', title: 'Zephyr Corp Platform',       stage: 'negotiation', value: 42000, health_score: 35, win_probability: 68, gap: 33 },
+          { id: 'd3', title: 'Horizon Ltd SaaS',           stage: 'qualified',   value: 30000, health_score: 45, win_probability: 71, gap: 26 },
+        ],
+        undervalued_deals: [
+          { id: 'd4', title: 'Apex Industries Suite',  stage: 'proposal',  value: 95000, health_score: 88, win_probability: 41, gap: -47 },
+          { id: 'd5', title: 'Globex Digital Renewal', stage: 'qualified', value: 55000, health_score: 82, win_probability: 55, gap: -27 },
+        ],
+        overconfident_count: 3,
+        undervalued_count: 2,
+        aligned_count: 8,
+        avg_gap: 5.2,
+        total_active: 13,
+        gap_narrative: 'Three deals show win probabilities more than 20 points higher than their health scores, suggesting forecast optimism that may not survive a reality check. Two high-health deals are undervalued by the ML model — likely strong candidates to close sooner than the model predicts.',
+        recommendations: [
+          'Review the three overconfident deals with your team this week — a gap above 30 points between win probability and health score is a red flag for pipeline inflation.',
+          'Accelerate the two undervalued deals (Apex Industries, Globex Digital) by assigning a dedicated champion and tightening the close timeline.',
+          'Retrain your win-probability model quarterly using the last 90 days of closed deals to reduce systematic bias in the forecast.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/health-probability-gap`, {}, token)
+  },
 }
 

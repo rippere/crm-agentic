@@ -9617,3 +9617,54 @@ async def test_win_rate_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-rate-trend")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20g — health vs win probability gap
+# ---------------------------------------------------------------------------
+
+class FakeHealthProbGapRow:
+    def __init__(self, id, title, stage, value, health_score, ml_win_probability):
+        self.id = id
+        self.title = title
+        self.stage = stage
+        self.value = value
+        self.health_score = health_score
+        self.ml_win_probability = ml_win_probability
+
+
+@pytest.mark.asyncio
+async def test_health_probability_gap_classifies_correctly(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    rows = [
+        FakeHealthProbGapRow("d1", "Overconfident Deal", "proposal",  50000.0, 30, 80),  # gap +50 → overconfident
+        FakeHealthProbGapRow("d2", "Undervalued Deal",   "qualified", 35000.0, 85, 40),  # gap -45 → undervalued
+        FakeHealthProbGapRow("d3", "Aligned Deal",       "discovery", 20000.0, 60, 65),  # gap +5 → aligned
+    ]
+    mock_db.execute.return_value = _make_execute_result(rows)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"gap_narrative": "Three deals analysed.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/health-probability-gap")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["overconfident_count"] == 1
+    assert body["undervalued_count"] == 1
+    assert body["aligned_count"] == 1
+    assert body["total_active"] == 3
+    assert body["overconfident_deals"][0]["title"] == "Overconfident Deal"
+    assert body["undervalued_deals"][0]["title"] == "Undervalued Deal"
+    assert body["avg_gap"] == pytest.approx((50 - 45 + 5) / 3, abs=0.5)
+    assert "gap_narrative" in body
+
+
+@pytest.mark.asyncio
+async def test_health_probability_gap_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-ffffffffffff")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/health-probability-gap")
+    assert resp.status_code == 403

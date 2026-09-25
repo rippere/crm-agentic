@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle, UserPlus, Building2, LayoutList,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle, UserPlus, Building2, LayoutList, SplitSquareHorizontal, Loader2,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -906,6 +906,10 @@ export default function ReportsPage() {
   const [winRateTrendLoading, setWinRateTrendLoading] = useState(false);
   const [winRateTrendOpen, setWinRateTrendOpen] = useState(true);
 
+  const [healthProbGap, setHealthProbGap] = useState<any>(null);
+  const [healthProbGapLoading, setHealthProbGapLoading] = useState(false);
+  const [healthProbGapOpen, setHealthProbGapOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1100,6 +1104,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPriceSensitivity("demo-workspace-1", "demo-token").then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
       setStageVelocityLoading(true);
       apiClient.getAIDealStageVelocity("demo-workspace-1", "demo-token").then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
+      setHealthProbGapLoading(true);
+      apiClient.getAIDealHealthProbabilityGap("demo-workspace-1", "demo-token").then(setHealthProbGap).catch(() => {}).finally(() => setHealthProbGapLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1299,6 +1305,8 @@ export default function ReportsPage() {
       apiClient.getAIDealPriceSensitivity(workspaceId, session.access_token).then(setPriceSensitivity).catch(() => {}).finally(() => setPriceSensitivityLoading(false));
       setStageVelocityLoading(true);
       apiClient.getAIDealStageVelocity(workspaceId, session.access_token).then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
+      setHealthProbGapLoading(true);
+      apiClient.getAIDealHealthProbabilityGap(workspaceId, session.access_token).then(setHealthProbGap).catch(() => {}).finally(() => setHealthProbGapLoading(false));
     });
   }, []);
 
@@ -2778,6 +2786,27 @@ export default function ReportsPage() {
         if (!session) { setWinRateTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setWinRateTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateHealthProbGap = () => {
+    setHealthProbGapLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAIDealHealthProbabilityGap(wid, tok)
+        .then(setHealthProbGap)
+        .catch(() => {})
+        .finally(() => setHealthProbGapLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setHealthProbGapLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setHealthProbGapLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12078,6 +12107,95 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the win rate trend analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20g: Deal Health vs Win Probability Gap */}
+      <Card className="divide-y divide-zinc-800/60 cursor-pointer" onClick={() => setHealthProbGapOpen((o) => !o)}>
+        <div className="flex items-center gap-2 px-4 py-3">
+          <SplitSquareHorizontal className="h-4 w-4 text-violet-400" />
+          <span className="text-sm font-semibold text-zinc-200">Health vs Win Probability Gap</span>
+          {healthProbGap && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ml-1 ${healthProbGap.overconfident_count > 3 ? 'bg-rose-500/20 text-rose-300' : healthProbGap.overconfident_count > 0 ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
+              {healthProbGap.overconfident_count} overconfident · {healthProbGap.undervalued_count} undervalued
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              className="text-xs text-zinc-400 hover:text-zinc-200 flex items-center gap-1 px-2 py-1 rounded hover:bg-zinc-800"
+              disabled={healthProbGapLoading}
+              onClick={(e) => { e.stopPropagation(); regenerateHealthProbGap(); }}
+            >
+              {healthProbGapLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              Regenerate
+            </button>
+            {healthProbGapOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {healthProbGapOpen && (
+          healthProbGapLoading && !healthProbGap ? (
+            <div className="p-6 text-center text-zinc-500 text-sm"><Loader2 className="h-4 w-4 animate-spin mx-auto mb-2" />Analysing health vs win probability gap…</div>
+          ) : healthProbGap ? (
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-rose-500/10 border border-rose-700/30 p-3 text-center">
+                  <p className="text-2xl font-bold text-rose-300">{healthProbGap.overconfident_count}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Overconfident</p>
+                  <p className="text-xs text-zinc-500">win_prob {">"} health +20</p>
+                </div>
+                <div className="rounded-lg bg-zinc-800/60 border border-zinc-700/30 p-3 text-center">
+                  <p className="text-2xl font-bold text-zinc-200">{healthProbGap.aligned_count}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Aligned</p>
+                  <p className="text-xs text-zinc-500">gap within ±20</p>
+                </div>
+                <div className="rounded-lg bg-emerald-500/10 border border-emerald-700/30 p-3 text-center">
+                  <p className="text-2xl font-bold text-emerald-300">{healthProbGap.undervalued_count}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">Undervalued</p>
+                  <p className="text-xs text-zinc-500">health {">"} win_prob +20</p>
+                </div>
+              </div>
+              {healthProbGap.overconfident_deals?.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-rose-400 mb-2">Overconfident Deals</p>
+                  <div className="space-y-1">
+                    {healthProbGap.overconfident_deals.slice(0, 5).map((d: any) => (
+                      <div key={d.id} className="flex items-center justify-between text-xs bg-zinc-800/40 rounded px-3 py-1.5">
+                        <span className="text-zinc-200 truncate max-w-[180px]">{d.title}</span>
+                        <span className="text-zinc-500 ml-2">{d.stage}</span>
+                        <span className="ml-auto text-rose-300 font-medium">+{d.gap}pt gap</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {healthProbGap.undervalued_deals?.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-emerald-400 mb-2">Undervalued Deals</p>
+                  <div className="space-y-1">
+                    {healthProbGap.undervalued_deals.slice(0, 5).map((d: any) => (
+                      <div key={d.id} className="flex items-center justify-between text-xs bg-zinc-800/40 rounded px-3 py-1.5">
+                        <span className="text-zinc-200 truncate max-w-[180px]">{d.title}</span>
+                        <span className="text-zinc-500 ml-2">{d.stage}</span>
+                        <span className="ml-auto text-emerald-300 font-medium">{d.gap}pt gap</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{healthProbGap.gap_narrative}</p>
+              <ul className="space-y-1">
+                {healthProbGap.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-violet-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(healthProbGap.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the health vs win probability gap analysis.</div>
           )
         )}
       </Card>
