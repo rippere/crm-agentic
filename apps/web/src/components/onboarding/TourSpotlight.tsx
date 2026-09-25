@@ -16,6 +16,8 @@ import { useAnchorRect, type AnchorRect } from "./useAnchorRect";
 const POPOVER_W = 360;
 const GAP = 16; // px between spotlight and popover
 const MIN_SIDE = 140; // smallest height we'll squeeze the card into a tight gap
+/** The page surface a target-less step should sit beside, never on top of. */
+const TOUR_SURFACE_SELECTOR = '[data-tour="onboarding-card"]';
 
 interface PopoverPos {
   /** Exactly one of top/bottom is set — CSS anchoring for the absolute card. */
@@ -256,9 +258,20 @@ export default function TourSpotlight() {
     next();
   }, [currentStep, next]);
 
+  // When the step's own target isn't mounted (the tour is a step ahead of the
+  // wizard, e.g. "Choose your mode" while the user is still naming), position
+  // the card AGAINST the wizard card instead of docking a full-height card over
+  // it — otherwise it buries the very Continue button the step asks for.
+  // Positioning only: the spotlight still dims the whole page.
+  const fallbackRect = useAnchorRect(
+    isActive && !rect ? TOUR_SURFACE_SELECTOR : null,
+    isActive && !rect,
+    0,
+  );
+
   const popoverPos = useMemo(
-    () => computePopoverPos(rect, vw, vh),
-    [rect, vw, vh],
+    () => computePopoverPos(rect ?? fallbackRect, vw, vh),
+    [rect, fallbackRect, vw, vh],
   );
 
   if (!mounted) return null;

@@ -14,7 +14,7 @@ function LoginInner() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(() =>
     searchParams.get("error") === "confirm"
-      ? "That confirmation link is invalid or expired. Sign up again to get a new one."
+      ? "That confirmation link was already used or has expired. If you already confirmed, just sign in below; otherwise sign up again to get a new link."
       : null,
   );
   const [message, setMessage] = useState<string | null>(() =>
