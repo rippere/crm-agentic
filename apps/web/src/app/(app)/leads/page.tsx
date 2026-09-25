@@ -426,7 +426,7 @@ function NewLeadModal({ onClose, onCreate }: { onClose: () => void; onCreate: (f
 
 // ─── CSV import modal ────────────────────────────────────────────────────────
 
-const LEAD_FIELDS = ["name", "email", "company", "title", "phone", "external_id"] as const;
+const LEAD_FIELDS = ["name", "email", "company", "title", "phone", "score", "external_id"] as const;
 type LeadField = (typeof LEAD_FIELDS)[number];
 
 // Minimal CSV parser — handles quoted fields and commas within quotes.
@@ -456,10 +456,25 @@ function parseCsv(text: string): string[][] {
   return rows;
 }
 
+// Column mapping value: a lead field, "" = keep as a custom field, SKIP = drop.
+const SKIP = "__skip";
+type ColumnTarget = LeadField | "" | typeof SKIP;
+
+// Exports like the ABC-tool dossier open with title/legend banner rows. The header
+// is the first row that fills at least half the widest row's columns.
+function findHeaderRow(rows: string[][]): number {
+  const width = Math.max(...rows.map((r) => r.filter((v) => v.trim() !== "").length));
+  const idx = rows.findIndex((r) => r.filter((v) => v.trim() !== "").length * 2 >= width);
+  return Math.max(0, idx);
+}
+
 function autoMap(header: string): LeadField | "" {
   const h = header.toLowerCase().replace(/[^a-z]/g, "");
   if (h.includes("email") || h.includes("mail")) return "email";
+  if (h.includes("score")) return "score";
   if (h.includes("name") && !h.includes("company")) return "name";
+  // "Primary Contact / Route" style headers name the person to reach.
+  if (h.includes("contact") && !h.includes("confidence")) return "name";
   if (h.includes("company") || h.includes("org") || h.includes("venue")) return "company";
   if (h.includes("title") || h.includes("role") || h.includes("position")) return "title";
   if (h.includes("phone") || h.includes("cell") || h.includes("mobile")) return "phone";
@@ -478,7 +493,7 @@ function ImportLeadsModal({
   const [step, setStep] = useState<"upload" | "map">("upload");
   const [headers, setHeaders] = useState<string[]>([]);
   const [dataRows, setDataRows] = useState<string[][]>([]);
-  const [mapping, setMapping] = useState<Record<number, LeadField | "">>({});
+  const [mapping, setMapping] = useState<Record<number, ColumnTarget>>({});
   const [importing, setImporting] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -488,12 +503,19 @@ function ImportLeadsModal({
     try {
       const text = await file.text();
       const parsed = parseCsv(text);
-      if (parsed.length < 2) { setParseError("CSV needs a header row and at least one data row."); return; }
-      const hdr = parsed[0];
+      const headerIdx = parsed.length ? findHeaderRow(parsed) : 0;
+      if (parsed.length - headerIdx < 2) { setParseError("CSV needs a header row and at least one data row."); return; }
+      const hdr = parsed[headerIdx];
       setHeaders(hdr);
-      setDataRows(parsed.slice(1));
-      const init: Record<number, LeadField | ""> = {};
-      hdr.forEach((h, i) => { init[i] = autoMap(h); });
+      setDataRows(parsed.slice(headerIdx + 1));
+      // First column wins each field ("Venue" before "Venue Category",
+      // "Working Score" before "Seasonality Score"); the rest stay custom fields.
+      const init: Record<number, ColumnTarget> = {};
+      const taken = new Set<LeadField>();
+      hdr.forEach((h, i) => {
+        const f = autoMap(h);
+        if (f && !taken.has(f)) { init[i] = f; taken.add(f); } else { init[i] = ""; }
+      });
       setMapping(init);
       setStep("map");
     } catch {
@@ -504,9 +526,12 @@ function ImportLeadsModal({
   const mappedRows = useMemo(() => {
     return dataRows.map((cells) => {
       const rec: Record<string, unknown> = {};
-      headers.forEach((_, i) => {
-        const field = mapping[i];
-        if (field && cells[i] != null && cells[i].trim() !== "") rec[field] = cells[i].trim();
+      headers.forEach((h, i) => {
+        const target = mapping[i] ?? "";
+        if (target === SKIP || cells[i] == null || cells[i].trim() === "") return;
+        // Unmapped columns ride along under their header; the API files them in custom_fields.
+        const key = target || h.trim() || `Column ${i + 1}`;
+        rec[key] = cells[i].trim();
       });
       return rec;
     }).filter((r) => Object.keys(r).length > 0);
@@ -557,7 +582,7 @@ function ImportLeadsModal({
         {step === "map" && (
           <div className="p-5 space-y-4">
             <p className="text-xs text-zinc-500">
-              Map each CSV column to a lead field. <span className="text-zinc-300">{dataRows.length}</span> rows detected.
+              Map each CSV column to a lead field; unmapped columns are kept as custom fields. <span className="text-zinc-300">{dataRows.length}</span> rows detected.
             </p>
             <div className="space-y-2">
               {headers.map((h, i) => (
@@ -569,10 +594,11 @@ function ImportLeadsModal({
                   <ChevronRight className="h-3.5 w-3.5 text-zinc-700 flex-shrink-0" />
                   <select
                     value={mapping[i] ?? ""}
-                    onChange={(e) => setMapping((m) => ({ ...m, [i]: e.target.value as LeadField | "" }))}
+                    onChange={(e) => setMapping((m) => ({ ...m, [i]: e.target.value as ColumnTarget }))}
                     className="w-40 flex-shrink-0 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-xs text-zinc-100 focus:border-indigo-500 focus:outline-none"
                   >
-                    <option value="">— skip —</option>
+                    <option value="">— custom field —</option>
+                    <option value={SKIP}>— skip —</option>
                     {LEAD_FIELDS.map((f) => <option key={f} value={f}>{f}</option>)}
                   </select>
                 </div>

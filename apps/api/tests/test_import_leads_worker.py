@@ -207,3 +207,122 @@ def test_task_wrapper_delegates_to_run_import():
 
 def test_task_registered_under_conventional_name():
     assert "app.workers.import_leads.process_lead_import" in il.celery_app.tasks
+
+
+# ---------------------------------------------------------------------------
+# Redis-staged payloads — the api and worker are separate containers, so the
+# router stages rows in Redis (shared) rather than on the api's local disk.
+# ---------------------------------------------------------------------------
+
+
+def test_load_rows_resolves_redis_ref():
+    with patch.object(il, "_read_staged_payload", return_value='[{"email": "r@b.com"}]') as rd:
+        assert il._load_rows("redis:lead-import:staged:ws:1") == [{"email": "r@b.com"}]
+    rd.assert_called_once_with("lead-import:staged:ws:1")
+
+
+def test_read_staged_payload_missing_key_raises():
+    fake = MagicMock()
+    fake.get.return_value = None
+    with patch("redis.Redis.from_url", return_value=fake):
+        try:
+            il._read_staged_payload("lead-import:staged:gone")
+        except ValueError as exc:
+            assert "missing or expired" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for a missing staged payload")
+
+
+def test_read_staged_payload_does_not_delete():
+    """A failed import must be retryable — the payload survives the read."""
+    fake = MagicMock()
+    fake.get.return_value = b'[{"email": "x@y.com"}]'
+    with patch("redis.Redis.from_url", return_value=fake):
+        assert il._read_staged_payload("k") == '[{"email": "x@y.com"}]'
+    fake.delete.assert_not_called()
+
+
+def test_run_import_deletes_staged_payload_only_after_success():
+    ref = f"redis:lead-import:staged:{_WS}:abc"
+    with patch.object(il, "_read_staged_payload", return_value='[{"email": "a@b.com"}]'), \
+         patch.object(il, "_delete_staged_payload") as dele, \
+         patch.object(il, "_get_async_session", return_value=_session([1])[0]):
+        import asyncio
+        asyncio.run(il._run_import(_WS, ref, {}, "email"))
+    dele.assert_called_once_with(ref)
+
+
+def test_run_import_rejects_staged_key_from_other_workspace():
+    ref = "redis:lead-import:staged:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:abc"
+    import asyncio
+    try:
+        asyncio.run(il._run_import(_WS, ref, {}, "email"))
+    except ValueError as exc:
+        assert "does not belong" in str(exc)
+    else:
+        raise AssertionError("expected cross-workspace staged key to be rejected")
+
+
+# ---------------------------------------------------------------------------
+# score + email-route mapping (ABC-tool prospect dossiers)
+# ---------------------------------------------------------------------------
+
+
+def test_map_row_score_is_coerced_and_clamped():
+    assert il._map_row({"Working Score": "97"}, {"Working Score": "score"})["score"] == 97
+    assert il._map_row({"s": "88.6"}, {"s": "score"})["score"] == 89
+    assert il._map_row({"s": "140"}, {"s": "score"})["score"] == 100
+    assert il._map_row({"s": "85%"}, {"s": "score"})["score"] == 85
+
+
+def test_map_row_unparseable_score_is_kept_as_custom_field():
+    out = il._map_row({"Working Score": "TBD"}, {"Working Score": "score"})
+    assert "score" not in out
+    assert out["custom_fields"]["Working Score"] == "TBD"
+    # a column literally named "score" is namespaced so it can't shadow the real field
+    assert il._map_row({"score": "n/a"}, {})["custom_fields"]["score_raw"] == "n/a"
+
+
+def test_map_row_email_like_non_addresses_are_not_emails():
+    for bogus in ("@VenueHandle", "REF@2024", "a@b"):
+        out = il._map_row({"e": bogus}, {"e": "email"})
+        assert "email" not in out, bogus
+        assert out["custom_fields"]["contact_route"] == bogus
+
+
+def test_map_row_non_email_contact_route_goes_to_custom_fields():
+    out = il._map_row({"Route": "Online contact form"}, {"Route": "email"})
+    assert "email" not in out
+    assert out["custom_fields"]["contact_route"] == "Online contact form"
+
+
+def test_map_row_real_email_still_maps():
+    out = il._map_row({"Route": "NAngus@MononaTerrace.com"}, {"Route": "email"})
+    assert out["email"] == "nangus@mononaterrace.com"
+
+
+def test_uniform_keys_pads_sparse_rows_so_one_insert_renders():
+    chunk = [
+        {"workspace_id": "w", "email": "a@b.com", "source": "import"},
+        {"workspace_id": "w", "company": "No Email Co", "source": "import", "custom_fields": {"x": 1}},
+        {"workspace_id": "w", "score": 90, "source": "import"},
+    ]
+    out = il._uniform_keys(chunk)
+    assert all(set(r) == set(out[0]) for r in out)
+    assert out[0]["custom_fields"] == {}      # NOT NULL jsonb gets {}
+    assert out[1]["email"] is None             # nullable pads None
+    assert out[0]["score"] == 0 and out[2]["score"] == 90
+
+
+def test_map_row_derives_stable_external_id_when_no_email():
+    raw = {"Venue": "Olbrich Gardens", "Contact": "Tanya Z", "Phone": "608-246-4550"}
+    mapping = {"Venue": "company", "Contact": "name", "Phone": "phone"}
+    a = il._map_row(raw, mapping)
+    b = il._map_row(dict(raw), mapping)
+    assert a["external_id"].startswith("import:")
+    assert a["external_id"] == b["external_id"]   # re-upload dedupes
+
+
+def test_map_row_keeps_email_rows_without_derived_id():
+    out = il._map_row({"email": "a@b.com", "company": "X"}, {})
+    assert "external_id" not in out
