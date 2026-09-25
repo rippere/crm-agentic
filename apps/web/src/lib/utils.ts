@@ -8,6 +8,7 @@ import type {
   CampaignStatus,
   SequenceStatus,
   EngagementLabel,
+  LeadScoreDetail,
 } from "./types";
 
 export function cn(...inputs: ClassValue[]) {
@@ -151,6 +152,19 @@ export function engagementLabelFromScore(score: number): EngagementLabel {
   if (score >= 70) return "hot";
   if (score >= 40) return "warm";
   return "cold";
+}
+
+// A lead's score_detail is `{}` until the engagement worker first scores it
+// (e.g. every freshly imported lead), so fill any missing field from the score.
+export function normalizeScoreDetail(
+  raw: Partial<LeadScoreDetail> | null | undefined,
+  score: number,
+): LeadScoreDetail {
+  return {
+    value: typeof raw?.value === "number" ? raw.value : score,
+    label: raw?.label ?? engagementLabelFromScore(score),
+    signals: Array.isArray(raw?.signals) ? raw.signals : [],
+  };
 }
 
 export const SIGNAL = "#10B981";

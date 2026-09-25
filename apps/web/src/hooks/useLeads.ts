@@ -7,6 +7,7 @@ import type { Lead } from "@/lib/types";
 import type { LeadRow } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/demo-mode";
 import { demoLeads } from "@/lib/demo-data";
+import { normalizeScoreDetail } from "@/lib/utils";
 
 function rowToLead(row: LeadRow): Lead {
   return {
@@ -21,7 +22,7 @@ function rowToLead(row: LeadRow): Lead {
     source: row.source,
     stage: row.stage,
     score: row.score,
-    scoreDetail: row.score_detail ?? { value: row.score ?? 0, label: "cold", signals: [] },
+    scoreDetail: normalizeScoreDetail(row.score_detail, row.score ?? 0),
     ownerId: row.owner_id,
     customFields: row.custom_fields ?? {},
     externalId: row.external_id,

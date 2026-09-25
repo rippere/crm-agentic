@@ -8,7 +8,7 @@ import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import {
   cn, funnelStageConfig, funnelStageOrder,
-  engagementScoreConfig, engagementLabelFromScore,
+  engagementScoreConfig, engagementLabelFromScore, normalizeScoreDetail,
 } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
@@ -33,7 +33,7 @@ function normalizeLead(raw: unknown): Lead | null {
   const get = <T,>(camel: string, snake: string, fallback: T): T =>
     (r[camel] ?? r[snake] ?? fallback) as T;
   const score = get<number>("score", "score", 0);
-  const scoreDetail = (r.scoreDetail ?? r.score_detail) as Lead["scoreDetail"] | undefined;
+  const scoreDetail = (r.scoreDetail ?? r.score_detail) as Partial<Lead["scoreDetail"]> | undefined;
   return {
     id: get<string>("id", "id", ""),
     workspaceId: get<string>("workspaceId", "workspace_id", ""),
@@ -46,7 +46,7 @@ function normalizeLead(raw: unknown): Lead | null {
     source: get<Lead["source"]>("source", "source", "import"),
     stage: get<LeadStage>("stage", "stage", "new"),
     score,
-    scoreDetail: scoreDetail ?? { value: score, label: engagementLabelFromScore(score), signals: [] },
+    scoreDetail: normalizeScoreDetail(scoreDetail, score),
     ownerId: get<string | null>("ownerId", "owner_id", null),
     customFields: get<Record<string, unknown>>("customFields", "custom_fields", {}),
     externalId: get<string | null>("externalId", "external_id", null),
