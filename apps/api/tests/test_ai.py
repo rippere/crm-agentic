@@ -9239,7 +9239,9 @@ class FakeNextActionDealRow:
 async def test_next_action_overdue_returns_buckets(app_client, monkeypatch):
     fastapi_app, mock_db, workspace_id = app_client
 
-    today = datetime.date.today()
+    # The endpoint buckets on the UTC date; local date.today() drifts a day off
+    # in the evening (US time zones) and flips the buckets.
+    today = datetime.datetime.now(datetime.timezone.utc).date()
     did1 = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000001")
     did2 = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000002")
     did3 = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000003")
