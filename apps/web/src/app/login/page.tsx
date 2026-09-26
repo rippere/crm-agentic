@@ -1,9 +1,22 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase";
 import { Zap } from "lucide-react";
+
+const OAUTH_PENDING_KEY = "novacrm_oauth_pending";
+
+function MicrosoftLogo() {
+  return (
+    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 21 21">
+      <rect x="1" y="1" width="9" height="9" fill="#F25022" />
+      <rect x="11" y="1" width="9" height="9" fill="#7FBA00" />
+      <rect x="1" y="11" width="9" height="9" fill="#00A4EF" />
+      <rect x="11" y="11" width="9" height="9" fill="#FFB900" />
+    </svg>
+  );
+}
 
 function LoginInner() {
   const router = useRouter();
@@ -22,6 +35,22 @@ function LoginInner() {
       ? "Email confirmed! Sign in to continue."
       : null,
   );
+
+  // /auth/callback sends every provider error to ?error=confirm. If we just
+  // bounced out to Microsoft, the failure was the OAuth hop, not an email link.
+  // Read in an effect (not the state initializer) so SSR and hydration agree.
+  useEffect(() => {
+    let viaOAuth = false;
+    try {
+      viaOAuth = sessionStorage.getItem(OAUTH_PENDING_KEY) === "1";
+      sessionStorage.removeItem(OAUTH_PENDING_KEY);
+    } catch {
+      return; // storage blocked — keep the email-link message
+    }
+    if (viaOAuth && searchParams.get("error") === "confirm") {
+      setError("Microsoft sign-in didn't complete. Try again, or use email and password below.");
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,6 +91,34 @@ function LoginInner() {
     }
 
     setLoading(false);
+  };
+
+  const handleMicrosoft = async () => {
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      sessionStorage.setItem(OAUTH_PENDING_KEY, "1");
+    } catch {
+      // non-fatal: only affects which error message a failed hop shows
+    }
+    const supabase = createBrowserClient();
+    // Supabase's "azure" provider covers both work/school (Microsoft 365) and
+    // personal (outlook.com / hotmail / live) accounts. The "email" scope is
+    // required or Azure omits the address and Supabase rejects the sign-in.
+    // Same /auth/callback as email confirmation: it exchanges the PKCE code.
+    const { error: oauthError } = await supabase.auth.signInWithOAuth({
+      provider: "azure",
+      options: {
+        scopes: "email",
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+    if (oauthError) {
+      setError(oauthError.message);
+      setLoading(false);
+    }
+    // On success the browser is navigating away to Microsoft; keep loading state.
   };
 
   return (
@@ -139,6 +196,25 @@ function LoginInner() {
               {loading ? "Please wait..." : mode === "login" ? "Sign in" : "Create account"}
             </button>
           </form>
+
+          <div className="my-5 flex items-center gap-3">
+            <div className="h-px flex-1 bg-zinc-800" />
+            <span className="text-[11px] uppercase tracking-wide text-zinc-600">or</span>
+            <div className="h-px flex-1 bg-zinc-800" />
+          </div>
+
+          <button
+            type="button"
+            onClick={handleMicrosoft}
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-2.5 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition cursor-pointer"
+          >
+            <MicrosoftLogo />
+            Continue with Microsoft
+          </button>
+          <p className="mt-2 text-center text-[11px] text-zinc-600">
+            Outlook, Hotmail, Live, or Microsoft 365 work accounts
+          </p>
 
           <p className="mt-5 text-center text-xs text-zinc-500">
             {mode === "login" ? (
