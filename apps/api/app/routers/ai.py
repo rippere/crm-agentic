@@ -21637,3 +21637,174 @@ async def get_ai_lost_revenue_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20o: AI Outreach Trend
+# GET /workspaces/{workspace_id}/ai/messages/outreach-trend
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/messages/outreach-trend")
+@limiter.limit("5/minute")
+async def get_ai_outreach_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    stmt = (
+        select(Message.direction, Message.created_at)
+        .where(Message.workspace_id == workspace_id)
+        .where(Message.created_at >= cutoff)
+        .where(Message.created_at.isnot(None))
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    # Build 6 calendar-month buckets
+    buckets: list[dict] = []
+    for offset in range(5, -1, -1):
+        m = now.month - offset
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        buckets.append({"year": y, "month": m, "month_label": f"{y}-{m:02d}", "outbound": 0, "inbound": 0})
+
+    for row in rows:
+        ts = row.created_at
+        direction = (row.direction or "").lower()
+        for b in buckets:
+            if ts.year == b["year"] and ts.month == b["month"]:
+                if direction == "outbound":
+                    b["outbound"] += 1
+                elif direction == "inbound":
+                    b["inbound"] += 1
+                break
+
+    monthly_messages = []
+    for b in buckets:
+        total = b["outbound"] + b["inbound"]
+        response_rate = round(b["inbound"] / b["outbound"] * 100, 1) if b["outbound"] > 0 else None
+        monthly_messages.append({
+            "month_label": b["month_label"],
+            "outbound": b["outbound"],
+            "inbound": b["inbound"],
+            "total": total,
+            "response_rate": response_rate,
+        })
+
+    total_outbound = sum(b["outbound"] for b in buckets)
+    total_inbound = sum(b["inbound"] for b in buckets)
+    total_messages = total_outbound + total_inbound
+    overall_response_rate = round(total_inbound / total_outbound * 100, 1) if total_outbound > 0 else None
+
+    if total_messages == 0:
+        return {
+            "monthly_messages": monthly_messages,
+            "total_outbound": 0,
+            "total_inbound": 0,
+            "total_messages": 0,
+            "overall_response_rate": None,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": None,
+            "best_response_rate": None,
+            "outreach_narrative": "No messages found in the last 6 months.",
+            "recommendations": [
+                "Connect your Gmail or Slack account to start tracking message activity.",
+                "Send at least one outbound message per active contact each month.",
+                "Log touchpoints manually via the contact timeline to build your history.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    # Trend: first-half vs second-half response rate
+    rated = [m for m in monthly_messages if m["response_rate"] is not None]
+    if len(rated) >= 2:
+        half = len(rated) // 2
+        first_avg = sum(m["response_rate"] for m in rated[:half]) / half
+        second_avg = sum(m["response_rate"] for m in rated[half:]) / (len(rated) - half)
+        rate_delta = round(second_avg - first_avg, 1)
+        if rate_delta >= 5:
+            trend_direction = "improving"
+        elif rate_delta <= -5:
+            trend_direction = "declining"
+        else:
+            trend_direction = "stable"
+    else:
+        rate_delta = 0.0
+        trend_direction = "stable"
+
+    best_entry = max(
+        (m for m in monthly_messages if m["response_rate"] is not None),
+        key=lambda m: m["response_rate"],
+        default=None,
+    )
+    best_month = best_entry["month_label"] if best_entry else None
+    best_response_rate = best_entry["response_rate"] if best_entry else None
+
+    prompt = (
+        f"Outreach activity for the last 6 months:\n"
+        f"Monthly data: {[{'month': m['month_label'], 'outbound': m['outbound'], 'inbound': m['inbound'], 'response_rate': m['response_rate']} for m in monthly_messages]}\n"
+        f"Overall: {total_outbound} outbound, {total_inbound} inbound, {overall_response_rate}% response rate\n"
+        f"Trend: {trend_direction} ({rate_delta:+.1f}pp)\n"
+        f"Best month: {best_month} at {best_response_rate}% response rate\n\n"
+        "Return JSON only:\n"
+        '{"outreach_narrative": "2-3 sentence insight about outreach patterns and what the response rate trend suggests", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    outreach_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        outreach_narrative = str(parsed.get("outreach_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        outreach_narrative = (
+            f"Your team sent {total_outbound} outbound messages and received {total_inbound} inbound responses "
+            f"over the last 6 months, a {overall_response_rate}% response rate. "
+            f"The trend is {trend_direction} ({rate_delta:+.1f}pp change in response rate)."
+        )
+
+    default_recs = [
+        "Aim for at least one outbound touch per active contact each month to maintain engagement.",
+        "Analyze your best-responding month to identify which subject lines or timing drove higher reply rates.",
+        "Contacts with no inbound activity in 60+ days should enter a re-engagement sequence.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_messages": monthly_messages,
+        "total_outbound": total_outbound,
+        "total_inbound": total_inbound,
+        "total_messages": total_messages,
+        "overall_response_rate": overall_response_rate,
+        "trend_direction": trend_direction,
+        "rate_delta": rate_delta,
+        "best_month": best_month,
+        "best_response_rate": best_response_rate,
+        "outreach_narrative": outreach_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }

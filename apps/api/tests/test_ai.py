@@ -9973,3 +9973,63 @@ async def test_lost_revenue_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/lost-revenue-trend")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20o: Outreach Trend
+# ---------------------------------------------------------------------------
+
+class FakeMessageRow:
+    def __init__(self, direction: str, created_at: _dt.datetime):
+        self.direction = direction
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_outreach_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.utcnow()
+
+    rows = [
+        FakeMessageRow("outbound", now - _dt.timedelta(days=5)),
+        FakeMessageRow("outbound", now - _dt.timedelta(days=8)),
+        FakeMessageRow("inbound",  now - _dt.timedelta(days=6)),
+        FakeMessageRow("outbound", now - _dt.timedelta(days=40)),
+        FakeMessageRow("inbound",  now - _dt.timedelta(days=42)),
+        FakeMessageRow("inbound",  now - _dt.timedelta(days=43)),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"outreach_narrative": "Outreach is solid.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/messages/outreach-trend")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_outbound"] == 3
+    assert body["total_inbound"] == 3
+    assert body["total_messages"] == 6
+    assert len(body["monthly_messages"]) == 6
+    assert body["overall_response_rate"] == 100.0
+    assert "trend_direction" in body
+    assert "rate_delta" in body
+    assert "best_month" in body
+    assert "best_response_rate" in body
+    assert "outreach_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_outreach_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("77778888-9999-0000-1111-222233334444")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/messages/outreach-trend")
+    assert resp.status_code == 403
