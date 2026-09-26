@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle, UserPlus, Building2, LayoutList, SplitSquareHorizontal, Loader2,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle, UserPlus, Building2, LayoutList, SplitSquareHorizontal, Loader2, UserCheck,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -925,6 +925,11 @@ export default function ReportsPage() {
   const [dealCycleTimeTrend, setDealCycleTimeTrend] = useState<DealCycleTimeTrendData | null>(null);
   const [dealCycleTimeTrendLoading, setDealCycleTimeTrendLoading] = useState(false);
   const [dealCycleTimeTrendOpen, setDealCycleTimeTrendOpen] = useState(true);
+  type ContactConversionMonth = { month_label: string; contacts_created: number; contacts_converted: number; conversion_rate: number | null };
+  type ContactConversionRateTrendData = { monthly_conversion: ContactConversionMonth[]; total_contacts: number; total_converted: number; overall_conversion_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_rate: number | null; conversion_narrative: string; recommendations: string[]; generated_at: string };
+  const [contactConversionRateTrend, setContactConversionRateTrend] = useState<ContactConversionRateTrendData | null>(null);
+  const [contactConversionRateTrendLoading, setContactConversionRateTrendLoading] = useState(false);
+  const [contactConversionRateTrendOpen, setContactConversionRateTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1130,6 +1135,8 @@ export default function ReportsPage() {
       apiClient.getDealWinRateTrend("demo-workspace-1", "demo-token").then(setDealWinRateTrend).catch(() => {}).finally(() => setDealWinRateTrendLoading(false));
       setDealCycleTimeTrendLoading(true);
       apiClient.getDealCycleTimeTrend("demo-workspace-1", "demo-token").then(setDealCycleTimeTrend).catch(() => {}).finally(() => setDealCycleTimeTrendLoading(false));
+      setContactConversionRateTrendLoading(true);
+      apiClient.getContactConversionRateTrend("demo-workspace-1", "demo-token").then(setContactConversionRateTrend).catch(() => {}).finally(() => setContactConversionRateTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1339,6 +1346,8 @@ export default function ReportsPage() {
       apiClient.getDealWinRateTrend(workspaceId, session.access_token).then(setDealWinRateTrend).catch(() => {}).finally(() => setDealWinRateTrendLoading(false));
       setDealCycleTimeTrendLoading(true);
       apiClient.getDealCycleTimeTrend(workspaceId, session.access_token).then(setDealCycleTimeTrend).catch(() => {}).finally(() => setDealCycleTimeTrendLoading(false));
+      setContactConversionRateTrendLoading(true);
+      apiClient.getContactConversionRateTrend(workspaceId, session.access_token).then(setContactConversionRateTrend).catch(() => {}).finally(() => setContactConversionRateTrendLoading(false));
     });
   }, []);
 
@@ -2902,6 +2911,27 @@ export default function ReportsPage() {
         if (!session) { setDealCycleTimeTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealCycleTimeTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateContactConversionRateTrend = () => {
+    setContactConversionRateTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getContactConversionRateTrend(wid, tok)
+        .then(setContactConversionRateTrend)
+        .catch(() => {})
+        .finally(() => setContactConversionRateTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setContactConversionRateTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setContactConversionRateTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12527,6 +12557,86 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the deal cycle time trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Contact-to-Deal Conversion Rate Trend */}
+      <Card className="border-zinc-800">
+        <div className="flex items-center justify-between p-4 pb-0">
+          <div className="flex items-center gap-2">
+            <UserCheck className="h-4 w-4 text-violet-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Contact-to-Deal Conversion Trend</h3>
+            {contactConversionRateTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                contactConversionRateTrend.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+                contactConversionRateTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'
+              }`}>
+                {contactConversionRateTrend.trend_direction} {contactConversionRateTrend.rate_delta > 0 ? '+' : ''}{contactConversionRateTrend.rate_delta}pp
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateContactConversionRateTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={contactConversionRateTrendLoading}>
+              {contactConversionRateTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setContactConversionRateTrendOpen(v => !v)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {contactConversionRateTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {contactConversionRateTrendOpen && (
+          contactConversionRateTrendLoading && !contactConversionRateTrend ? (
+            <div className="p-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-zinc-500" /></div>
+          ) : contactConversionRateTrend ? (
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900/60 rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-violet-300">{contactConversionRateTrend.overall_conversion_rate ?? '—'}%</p>
+                  <p className="text-xs text-zinc-500">overall rate</p>
+                  <p className="text-xs text-zinc-600">{contactConversionRateTrend.total_converted} of {contactConversionRateTrend.total_contacts}</p>
+                </div>
+                <div className="bg-zinc-900/60 rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-zinc-100">{contactConversionRateTrend.total_contacts}</p>
+                  <p className="text-xs text-zinc-500">new contacts</p>
+                </div>
+                <div className="bg-zinc-900/60 rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-emerald-300">{contactConversionRateTrend.best_rate ?? '—'}%</p>
+                  <p className="text-xs text-zinc-500">best month</p>
+                  <p className="text-xs text-zinc-600">{contactConversionRateTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <LineChart data={contactConversionRateTrend.monthly_conversion} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: string) => v.slice(5)} />
+                  <YAxis tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: any) => `${v}%`} domain={[0, 100]} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181B', border: '1px solid #3F3F46', borderRadius: 8 }}
+                    labelStyle={{ color: '#A1A1AA', fontSize: 11 }}
+                    formatter={(value: any, name: any) => [name === 'conversion_rate' ? `${value}%` : value, name === 'conversion_rate' ? 'Conv. Rate' : name === 'contacts_created' ? 'Contacts' : 'Converted']}
+                  />
+                  {contactConversionRateTrend.overall_conversion_rate != null && (
+                    <ReferenceLine y={contactConversionRateTrend.overall_conversion_rate} stroke="#8B5CF6" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#8B5CF6', fontSize: 9 }} />
+                  )}
+                  <Line type="monotone" dataKey="conversion_rate" stroke="#A78BFA" strokeWidth={2} dot={{ fill: '#A78BFA', r: 3 }} activeDot={{ r: 5 }} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{contactConversionRateTrend.conversion_narrative}</p>
+              <ul className="space-y-1">
+                {contactConversionRateTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-violet-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(contactConversionRateTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the contact conversion rate trend.</div>
           )
         )}
       </Card>

@@ -21269,3 +21269,195 @@ async def get_ai_deal_cycle_time_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/conversion-rate-trend")
+@limiter.limit("5/minute")
+async def get_ai_contact_conversion_rate_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    six_months_ago = now - datetime.timedelta(days=183)
+
+    # Build 6 calendar-month buckets
+    cur_year, cur_month = now.year, now.month
+    month_keys = []
+    for offset in range(5, -1, -1):
+        m = cur_month - offset
+        y = cur_year
+        while m <= 0:
+            m += 12
+            y -= 1
+        month_keys.append(f"{y:04d}-{m:02d}")
+
+    def _month_key(dt: datetime.datetime) -> str:
+        return dt.strftime("%Y-%m")
+
+    # Fetch contacts created in last 183 days
+    contact_result = await db.execute(
+        select(Contact.id, Contact.created_at)
+        .where(
+            Contact.workspace_id == workspace_id,
+            Contact.created_at >= six_months_ago,
+        )
+    )
+    contact_rows = contact_result.all()
+
+    # Fetch first deal created_at per contact_id for this workspace
+    deal_result = await db.execute(
+        select(Deal.contact_id, func.min(Deal.created_at).label("first_deal_at"))
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.contact_id.isnot(None),
+        )
+        .group_by(Deal.contact_id)
+    )
+    deal_rows = deal_result.all()
+    contact_first_deal: dict[uuid.UUID, datetime.datetime] = {}
+    for dr in deal_rows:
+        if dr.contact_id and dr.first_deal_at:
+            fd = dr.first_deal_at
+            if fd.tzinfo is None:
+                fd = fd.replace(tzinfo=timezone.utc)
+            contact_first_deal[dr.contact_id] = fd
+
+    # Build buckets: {month_key: {total: int, converted: int}}
+    buckets: dict[str, dict[str, int]] = {mk: {"total": 0, "converted": 0} for mk in month_keys}
+
+    for row in contact_rows:
+        created = row.created_at
+        if created is None:
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        mk = _month_key(created)
+        if mk not in buckets:
+            continue
+        buckets[mk]["total"] += 1
+        # Check if contact has a deal created within 90 days
+        first_deal = contact_first_deal.get(row.id)
+        if first_deal is not None:
+            diff = (first_deal - created).total_seconds() / 86400
+            if 0 <= diff <= 90:
+                buckets[mk]["converted"] += 1
+
+    monthly_conversion = []
+    for mk in month_keys:
+        b = buckets[mk]
+        rate = round(b["converted"] / b["total"] * 100, 1) if b["total"] > 0 else None
+        monthly_conversion.append({
+            "month_label": mk,
+            "contacts_created": b["total"],
+            "contacts_converted": b["converted"],
+            "conversion_rate": rate,
+        })
+
+    total_contacts = sum(b["total"] for b in buckets.values())
+    total_converted = sum(b["converted"] for b in buckets.values())
+
+    if total_contacts == 0:
+        return {
+            "monthly_conversion": monthly_conversion,
+            "total_contacts": 0,
+            "total_converted": 0,
+            "overall_conversion_rate": None,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": None,
+            "best_rate": None,
+            "conversion_narrative": "No contacts found in the last 6 months to compute conversion rates.",
+            "recommendations": [
+                "Add contacts to your CRM to start tracking lead-to-deal conversion.",
+                "Link contacts to deals to enable conversion rate analysis.",
+                "Set up a lead qualification process to improve contact-to-deal flow.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    overall_conversion_rate = round(total_converted / total_contacts * 100, 1)
+
+    filled = [m for m in monthly_conversion if m["conversion_rate"] is not None]
+    if len(filled) >= 2:
+        mid = len(filled) // 2
+        first_half = filled[:mid]
+        second_half = filled[mid:]
+        first_avg = sum(m["conversion_rate"] for m in first_half) / len(first_half)
+        second_avg = sum(m["conversion_rate"] for m in second_half) / len(second_half)
+        rate_delta = round(second_avg - first_avg, 1)
+        if rate_delta >= 5:
+            trend_direction = "improving"
+        elif rate_delta <= -5:
+            trend_direction = "declining"
+        else:
+            trend_direction = "stable"
+    else:
+        rate_delta = 0.0
+        trend_direction = "stable"
+
+    best_entry = max(filled, key=lambda m: m["conversion_rate"]) if filled else None
+    best_month = best_entry["month_label"] if best_entry else None
+    best_rate = best_entry["conversion_rate"] if best_entry else None
+
+    prompt = (
+        f"Contact-to-deal conversion rate for the last 6 months:\n"
+        f"Monthly data: {[{'month': m['month_label'], 'contacts': m['contacts_created'], 'converted': m['contacts_converted'], 'rate': m['conversion_rate']} for m in monthly_conversion]}\n"
+        f"Overall: {overall_conversion_rate}% of {total_contacts} contacts converted to deals within 90 days\n"
+        f"Trend: {trend_direction} (rate_delta {rate_delta:+.1f}pp)\n"
+        f"Best month: {best_month} at {best_rate}%\n\n"
+        "Return JSON only:\n"
+        '{"conversion_narrative": "2-3 sentence insight about the contact conversion trend and what drives it", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    conversion_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        conversion_narrative = str(parsed.get("conversion_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        conversion_narrative = (
+            f"Your contact-to-deal conversion rate over the last 6 months is {overall_conversion_rate}%, "
+            f"with {total_converted} of {total_contacts} new contacts converting to deals within 90 days. "
+            f"The trend is {trend_direction} ({rate_delta:+.1f}pp change)."
+        )
+
+    default_recs = [
+        "Qualify new contacts within 48 hours of creation to maximize conversion timing.",
+        "Follow up on contacts with no associated deal after 30 days with a targeted outreach.",
+        "Analyze your best-converting months to identify which lead sources produce the highest rates.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_conversion": monthly_conversion,
+        "total_contacts": total_contacts,
+        "total_converted": total_converted,
+        "overall_conversion_rate": overall_conversion_rate,
+        "trend_direction": trend_direction,
+        "rate_delta": rate_delta,
+        "best_month": best_month,
+        "best_rate": best_rate,
+        "conversion_narrative": conversion_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }
