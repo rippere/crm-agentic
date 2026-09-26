@@ -12177,7 +12177,7 @@ export default function ReportsPage() {
                   <Tooltip
                     contentStyle={{ backgroundColor: '#18181B', border: '1px solid #3F3F46', borderRadius: 8 }}
                     labelStyle={{ color: '#A1A1AA', fontSize: 11 }}
-                    formatter={(value: number, name: string) => [value, name === 'new_deals' ? 'New Deals' : 'Pipeline Value']}
+                    formatter={(value: any, name: any) => [value, name === 'new_deals' ? 'New Deals' : 'Pipeline Value']}
                   />
                   <ReferenceLine y={dealCreationRate.avg_per_week} stroke="#38BDF8" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#38BDF8', fontSize: 9 }} />
                   <Line type="monotone" dataKey="new_deals" stroke="#38BDF8" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
