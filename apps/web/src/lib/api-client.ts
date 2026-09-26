@@ -7731,5 +7731,39 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-rate-trend`, {}, token)
   },
+
+  async getDealCycleTimeTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const avgArr = [32, 28, 35, 26, 22, 20];
+      const cntArr = [2, 3, 2, 4, 3, 5];
+      const months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toISOString().slice(0, 7);
+        const avg_cycle_days = avgArr[i];
+        const won_count = cntArr[i];
+        return { month_label: label, won_count, avg_cycle_days, min_cycle_days: avg_cycle_days - 5, max_cycle_days: avg_cycle_days + 8 };
+      });
+      const totalWon = cntArr.reduce((a, b) => a + b, 0);
+      const overall_avg = Math.round(avgArr.reduce((a, b) => a + b, 0) / avgArr.length * 10) / 10;
+      const best = months.reduce((a, m) => m.avg_cycle_days < a.avg_cycle_days ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_cycle_time: months,
+        total_won: totalWon,
+        overall_avg_cycle_days: overall_avg,
+        trend_direction: 'faster',
+        cycle_delta: -12.0,
+        best_month: best.month_label,
+        best_avg_days: best.avg_cycle_days,
+        cycle_time_narrative: 'Deal cycle time has improved significantly from 32 days to 20 days over the last 6 months, suggesting better qualification at entry, stronger follow-up cadences, and deals advancing through stages with less friction.',
+        recommendations: [
+          'Document the tactics reps used in your fastest months and make them standard practice.',
+          'Add a maximum stage-age rule so stalled deals get escalated before they inflate cycle time.',
+          'Review multi-month deals to find which stage causes the most time loss and optimize it.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/cycle-time-trend`, {}, token)
+  },
 }
 
