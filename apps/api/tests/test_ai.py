@@ -9725,3 +9725,58 @@ async def test_deal_closing_rate_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/closing-rate")
     assert resp.status_code == 403
+
+
+class FakeDealWinRateRow:
+    def __init__(self, stage, value, stage_changed_at):
+        self.stage = stage
+        self.value = value
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_deal_win_rate_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    rows = (
+        [FakeDealWinRateRow("closed_won", 25000.0, now - _dt.timedelta(days=1))] * 4
+        + [FakeDealWinRateRow("closed_lost", 15000.0, now - _dt.timedelta(days=2))]
+        + [FakeDealWinRateRow("closed_won", 20000.0, now - _dt.timedelta(days=35))] * 2
+    )
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"win_rate_narrative": "Win rate is improving.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/win-rate-trend")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_won"] == 6
+    assert body["total_closed"] == 7
+    assert len(body["monthly_win_rate"]) == 6
+    assert body["overall_win_rate"] == round(6 / 7 * 100, 1)
+    assert "trend_direction" in body
+    assert "rate_delta" in body
+    assert "best_month" in body
+    assert "best_win_rate" in body
+    assert "win_rate_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_win_rate_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("33334444-5555-6666-7777-888899990000")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-rate-trend")
+    assert resp.status_code == 403

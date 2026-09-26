@@ -20915,3 +20915,178 @@ async def get_ai_deal_closing_rate(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/win-rate-trend")
+@limiter.limit("5/minute")
+async def get_ai_deal_win_rate_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    six_months_ago = now - datetime.timedelta(days=183)
+
+    result = await db.execute(
+        select(Deal.stage, Deal.value, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= six_months_ago,
+        )
+    )
+    rows = result.all()
+
+    # Build 6 calendar-month buckets (current month + 5 prior)
+    def _month_key(dt: datetime.datetime) -> str:
+        return dt.strftime("%Y-%m")
+
+    cur_year, cur_month = now.year, now.month
+    month_keys = []
+    for offset in range(5, -1, -1):
+        m = cur_month - offset
+        y = cur_year
+        while m <= 0:
+            m += 12
+            y -= 1
+        month_keys.append(f"{y:04d}-{m:02d}")
+
+    buckets: dict[str, dict] = {mk: {"won": 0, "lost": 0, "total": 0, "value_won": 0.0} for mk in month_keys}
+
+    for row in rows:
+        ts = row.stage_changed_at
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        mk = _month_key(ts)
+        if mk not in buckets:
+            continue
+        if row.stage == "closed_won":
+            buckets[mk]["won"] += 1
+            buckets[mk]["value_won"] += float(row.value or 0)
+        else:
+            buckets[mk]["lost"] += 1
+        buckets[mk]["total"] += 1
+
+    monthly_win_rate = []
+    for mk in month_keys:
+        b = buckets[mk]
+        win_rate = round(b["won"] / b["total"] * 100, 1) if b["total"] > 0 else None
+        monthly_win_rate.append({
+            "month": mk,
+            "won": b["won"],
+            "lost": b["lost"],
+            "total_closed": b["total"],
+            "win_rate": win_rate,
+            "value_won": round(b["value_won"]),
+        })
+
+    total_won = sum(b["won"] for b in buckets.values())
+    total_closed = sum(b["total"] for b in buckets.values())
+    overall_win_rate = round(total_won / total_closed * 100, 1) if total_closed > 0 else 0.0
+
+    # Trend: compare avg win rate of first 3 vs last 3 months (only months with data)
+    filled = [m for m in monthly_win_rate if m["win_rate"] is not None]
+    if len(filled) >= 2:
+        mid = len(filled) // 2
+        first_avg = sum(m["win_rate"] for m in filled[:mid]) / mid
+        second_avg = sum(m["win_rate"] for m in filled[mid:]) / (len(filled) - mid)
+        rate_delta = round(second_avg - first_avg, 1)
+        if rate_delta >= 5:
+            trend_direction = "improving"
+        elif rate_delta <= -5:
+            trend_direction = "declining"
+        else:
+            trend_direction = "stable"
+    else:
+        rate_delta = 0.0
+        trend_direction = "stable"
+
+    best_month_entry = max(
+        [m for m in monthly_win_rate if m["win_rate"] is not None],
+        key=lambda m: m["win_rate"],
+        default=None,
+    )
+    best_month = best_month_entry["month"] if best_month_entry else month_keys[-1]
+    best_win_rate = best_month_entry["win_rate"] if best_month_entry else 0.0
+
+    if total_closed == 0:
+        return {
+            "monthly_win_rate": monthly_win_rate,
+            "total_won": 0,
+            "total_closed": 0,
+            "overall_win_rate": 0.0,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": best_month,
+            "best_win_rate": 0.0,
+            "win_rate_narrative": "No closed deals in the last 6 months — start closing to track win rate trends.",
+            "recommendations": [
+                "Set a monthly win-rate target and review it in every team meeting.",
+                "Analyse lost deals for the most common objection patterns.",
+                "Implement a deal qualification checklist to improve close quality.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    prompt = (
+        f"You are a CRM analytics assistant. A sales workspace has an overall win rate of {overall_win_rate:.1f}% "
+        f"over the last 6 months ({total_won} won / {total_closed} total closed). "
+        f"The trend is {trend_direction} (delta: {rate_delta:+.1f} percentage points first half vs second half). "
+        f"Best month was {best_month} at {best_win_rate:.1f}%. "
+        "Respond ONLY with JSON: "
+        "{\"win_rate_narrative\": \"2-sentence insight on win rate health and momentum\", "
+        "\"recommendations\": [\"action 1\", \"action 2\", \"action 3\"]}"
+    )
+
+    win_rate_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        win_rate_narrative = str(parsed.get("win_rate_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        win_rate_narrative = (
+            f"Your win rate over the last 6 months is {overall_win_rate:.1f}% "
+            f"({total_won} of {total_closed} deals closed-won), with a {trend_direction} trend "
+            f"({rate_delta:+.1f} pp change). Best month: {best_month} at {best_win_rate:.1f}%."
+        )
+
+    default_recs = [
+        "Review lost deals monthly to identify and address recurring objection patterns.",
+        "Replicate the tactics used in your best win-rate month across the whole team.",
+        "Set a minimum deal qualification score before advancing deals to proposal stage.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_win_rate": monthly_win_rate,
+        "total_won": total_won,
+        "total_closed": total_closed,
+        "overall_win_rate": overall_win_rate,
+        "trend_direction": trend_direction,
+        "rate_delta": rate_delta,
+        "best_month": best_month,
+        "best_win_rate": best_win_rate,
+        "win_rate_narrative": win_rate_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

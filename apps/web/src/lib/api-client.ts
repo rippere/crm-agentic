@@ -7693,5 +7693,43 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/closing-rate`, {}, token)
   },
+
+  async getDealWinRateTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const wonArr  = [3, 4, 5, 3, 5, 6];
+      const lostArr = [2, 2, 1, 2, 1, 1];
+      const months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toISOString().slice(0, 7);
+        const won = wonArr[i]; const lost = lostArr[i];
+        const total_closed = won + lost;
+        const win_rate = Math.round(won / total_closed * 1000) / 10;
+        const value_won = won * 22000;
+        return { month_label: label, won, lost, total_closed, win_rate, value_won };
+      });
+      const totalWon = months.reduce((a, m) => a + m.won, 0);
+      const totalClosed = months.reduce((a, m) => a + m.total_closed, 0);
+      const overall_win_rate = Math.round(totalWon / totalClosed * 1000) / 10;
+      const best = months.reduce((a, m) => (m.win_rate > a.win_rate ? m : a), months[0]);
+      return Promise.resolve({
+        monthly_win_rate: months,
+        total_won: totalWon,
+        total_closed: totalClosed,
+        overall_win_rate,
+        trend_direction: 'improving',
+        rate_delta: 16.7,
+        best_month: best.month_label,
+        best_win_rate: best.win_rate,
+        win_rate_narrative: 'Win rate has improved from 60% to 85% over the last 6 months, with the team closing deals faster and more consistently in recent months.',
+        recommendations: [
+          'Continue the qualification rigor that drove improvement in recent months.',
+          'Share best practices from high win-rate months with the full team.',
+          'Monitor the months where win rate dipped to identify repeating patterns.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-rate-trend`, {}, token)
+  },
 }
 
