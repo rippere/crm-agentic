@@ -7841,5 +7841,41 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/lost-revenue-trend`, {}, token)
   },
+
+  async getOutreachTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const outArr = [18, 22, 25, 20, 28, 30];
+      const inArr  = [ 6,  8, 10,  9, 13, 16];
+      const months = outArr.map((o, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toISOString().slice(0, 7);
+        const response_rate = o > 0 ? Math.round(inArr[i] / o * 1000) / 10 : null;
+        return { month_label: label, outbound: o, inbound: inArr[i], total: o + inArr[i], response_rate };
+      });
+      const totalOut = outArr.reduce((a, b) => a + b, 0);
+      const totalIn  = inArr.reduce((a, b) => a + b, 0);
+      const overall = Math.round(totalIn / totalOut * 1000) / 10;
+      const best = months.reduce((a, m) => (m.response_rate ?? 0) > (a.response_rate ?? 0) ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_messages: months,
+        total_outbound: totalOut,
+        total_inbound: totalIn,
+        total_messages: totalOut + totalIn,
+        overall_response_rate: overall,
+        trend_direction: 'improving',
+        rate_delta: 19.8,
+        best_month: best.month_label,
+        best_response_rate: best.response_rate,
+        outreach_narrative: 'Outreach volume has grown steadily from 18 to 30 messages per month, while response rates have climbed from 33% to 53%. This suggests improved messaging quality and better contact targeting over the period.',
+        recommendations: [
+          'Aim for at least one outbound touch per active contact each month to maintain engagement.',
+          'Analyze your best-responding month to identify which subject lines or timing drove higher reply rates.',
+          'Contacts with no inbound activity in 60+ days should enter a re-engagement sequence.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/messages/outreach-trend`, {}, token)
+  },
 }
 

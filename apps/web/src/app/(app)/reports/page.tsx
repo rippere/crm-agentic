@@ -935,6 +935,11 @@ export default function ReportsPage() {
   const [lostRevenueTrend, setLostRevenueTrend] = useState<LostRevenueTrendData | null>(null);
   const [lostRevenueTrendLoading, setLostRevenueTrendLoading] = useState(false);
   const [lostRevenueTrendOpen, setLostRevenueTrendOpen] = useState(true);
+  type OutreachMonth = { month_label: string; outbound: number; inbound: number; total: number; response_rate: number | null };
+  type OutreachTrendData = { monthly_messages: OutreachMonth[]; total_outbound: number; total_inbound: number; total_messages: number; overall_response_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_response_rate: number | null; outreach_narrative: string; recommendations: string[]; generated_at: string };
+  const [outreachTrend, setOutreachTrend] = useState<OutreachTrendData | null>(null);
+  const [outreachTrendLoading, setOutreachTrendLoading] = useState(false);
+  const [outreachTrendOpen, setOutreachTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1144,6 +1149,8 @@ export default function ReportsPage() {
       apiClient.getContactConversionRateTrend("demo-workspace-1", "demo-token").then(setContactConversionRateTrend).catch(() => {}).finally(() => setContactConversionRateTrendLoading(false));
       setLostRevenueTrendLoading(true);
       apiClient.getLostRevenueTrend("demo-workspace-1", "demo-token").then(setLostRevenueTrend).catch(() => {}).finally(() => setLostRevenueTrendLoading(false));
+      setOutreachTrendLoading(true);
+      apiClient.getOutreachTrend("demo-workspace-1", "demo-token").then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1357,6 +1364,8 @@ export default function ReportsPage() {
       apiClient.getContactConversionRateTrend(workspaceId, session.access_token).then(setContactConversionRateTrend).catch(() => {}).finally(() => setContactConversionRateTrendLoading(false));
       setLostRevenueTrendLoading(true);
       apiClient.getLostRevenueTrend(workspaceId, session.access_token).then(setLostRevenueTrend).catch(() => {}).finally(() => setLostRevenueTrendLoading(false));
+      setOutreachTrendLoading(true);
+      apiClient.getOutreachTrend(workspaceId, session.access_token).then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
     });
   }, []);
 
@@ -2962,6 +2971,27 @@ export default function ReportsPage() {
         if (!session) { setLostRevenueTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setLostRevenueTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateOutreachTrend = () => {
+    setOutreachTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getOutreachTrend(wid, tok)
+        .then(setOutreachTrend)
+        .catch(() => {})
+        .finally(() => setOutreachTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setOutreachTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setOutreachTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12746,6 +12776,85 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the lost revenue trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Outreach Trend */}
+      <Card className="border-zinc-800">
+        <div className="flex items-center justify-between p-4 pb-0">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-cyan-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Outreach Trend</h3>
+            {outreachTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                outreachTrend.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+                outreachTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'
+              }`}>
+                {outreachTrend.trend_direction} {outreachTrend.rate_delta > 0 ? '+' : ''}{outreachTrend.rate_delta}pp
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateOutreachTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={outreachTrendLoading}>
+              {outreachTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setOutreachTrendOpen(v => !v)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {outreachTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {outreachTrendOpen && (
+          outreachTrendLoading && !outreachTrend ? (
+            <div className="p-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-zinc-500" /></div>
+          ) : outreachTrend ? (
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900/60 rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-cyan-300">{outreachTrend.overall_response_rate ?? '—'}%</p>
+                  <p className="text-xs text-zinc-500">response rate</p>
+                </div>
+                <div className="bg-zinc-900/60 rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-zinc-100">{outreachTrend.total_outbound}</p>
+                  <p className="text-xs text-zinc-500">outbound msgs</p>
+                </div>
+                <div className="bg-zinc-900/60 rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-emerald-300">{outreachTrend.best_response_rate ?? '—'}%</p>
+                  <p className="text-xs text-zinc-500">best month</p>
+                  <p className="text-xs text-zinc-600">{outreachTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <LineChart data={outreachTrend.monthly_messages} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: string) => v.slice(5)} />
+                  <YAxis tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: any) => `${v}%`} domain={[0, 100]} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181B', border: '1px solid #3F3F46', borderRadius: 8 }}
+                    labelStyle={{ color: '#A1A1AA', fontSize: 11 }}
+                    formatter={(value: any, name: any) => [name === 'response_rate' ? `${value}%` : value, name === 'response_rate' ? 'Response Rate' : name === 'outbound' ? 'Outbound' : 'Inbound']}
+                  />
+                  {outreachTrend.overall_response_rate != null && (
+                    <ReferenceLine y={outreachTrend.overall_response_rate} stroke="#22D3EE" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#22D3EE', fontSize: 9 }} />
+                  )}
+                  <Line type="monotone" dataKey="response_rate" stroke="#06B6D4" strokeWidth={2} dot={{ fill: '#06B6D4', r: 3 }} activeDot={{ r: 5 }} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{outreachTrend.outreach_narrative}</p>
+              <ul className="space-y-1">
+                {outreachTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-cyan-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(outreachTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the outreach trend.</div>
           )
         )}
       </Card>
