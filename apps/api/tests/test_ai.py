@@ -9666,3 +9666,62 @@ async def test_deal_creation_rate_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/creation-rate")
     assert resp.status_code == 403
+
+
+class FakeDealClosedRow:
+    def __init__(self, stage, value, stage_changed_at):
+        self.stage = stage
+        self.value = value
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_deal_closing_rate_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    # 3 closed_won in the most-recent week, 2 closed_lost 3 weeks ago
+    recent_week_start = now - _dt.timedelta(days=now.weekday())
+    three_weeks_ago = now - _dt.timedelta(weeks=3)
+
+    rows = (
+        [FakeDealClosedRow("closed_won", 30000.0, recent_week_start + _dt.timedelta(hours=1))] * 3
+        + [FakeDealClosedRow("closed_lost", 20000.0, three_weeks_ago + _dt.timedelta(hours=1))] * 2
+    )
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"closing_narrative": "Closing momentum is strong.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/closing-rate")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_closed"] == 5
+    assert len(body["weekly_closing"]) == 12
+    assert body["avg_per_week"] == round(5 / 12, 2)
+    assert body["peak_count"] == 3
+    assert body["avg_win_rate"] == round(3 / 5 * 100, 1)
+    assert "trend_direction" in body
+    assert "growth_rate" in body
+    assert "peak_week" in body
+    assert "peak_win_rate" in body
+    assert "closing_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_closing_rate_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("22223333-4444-5555-6666-777788889999")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/closing-rate")
+    assert resp.status_code == 403
