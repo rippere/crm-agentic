@@ -10039,7 +10039,7 @@ async def test_outreach_trend_wrong_workspace_returns_403(app_client):
 # Phase 20p: AI tasks completion trend
 # ---------------------------------------------------------------------------
 
-class FakeTaskRow:
+class FakeTaskCompletionRow:
     def __init__(self, status: str, created_at: _dt.datetime):
         self.status = status
         self.created_at = created_at
@@ -10050,9 +10050,9 @@ async def test_tasks_completion_trend_returns_structured_response(app_client, mo
     fastapi_app, mock_db, workspace_id = app_client
     now = _dt.datetime.utcnow()
     rows = [
-        FakeTaskRow("done", now - _dt.timedelta(days=2)),
-        FakeTaskRow("done", now - _dt.timedelta(days=5)),
-        FakeTaskRow("open", now - _dt.timedelta(days=8)),
+        FakeTaskCompletionRow("done", now - _dt.timedelta(days=2)),
+        FakeTaskCompletionRow("done", now - _dt.timedelta(days=5)),
+        FakeTaskCompletionRow("open", now - _dt.timedelta(days=8)),
     ]
 
     mock_result = MagicMock()
