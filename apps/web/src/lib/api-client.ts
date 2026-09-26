@@ -7765,5 +7765,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/cycle-time-trend`, {}, token)
   },
+
+  async getContactConversionRateTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const contactsArr = [12, 15, 18, 14, 20, 22];
+      const convertedArr = [4, 5, 7, 6, 9, 11];
+      const months = contactsArr.map((c, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toISOString().slice(0, 7);
+        const conversion_rate = c > 0 ? Math.round(convertedArr[i] / c * 1000) / 10 : null;
+        return { month_label: label, contacts_created: c, contacts_converted: convertedArr[i], conversion_rate };
+      });
+      const totalContacts = contactsArr.reduce((a, b) => a + b, 0);
+      const totalConverted = convertedArr.reduce((a, b) => a + b, 0);
+      const overall_conversion_rate = Math.round(totalConverted / totalContacts * 1000) / 10;
+      const best = months.reduce((a, m) => (m.conversion_rate ?? 0) > (a.conversion_rate ?? 0) ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_conversion: months,
+        total_contacts: totalContacts,
+        total_converted: totalConverted,
+        overall_conversion_rate,
+        trend_direction: 'improving',
+        rate_delta: 16.7,
+        best_month: best.month_label,
+        best_rate: best.conversion_rate,
+        conversion_narrative: 'Contact-to-deal conversion has grown steadily from 33% to 50% over six months, suggesting improved lead qualification and faster initial outreach. The most recent month saw 11 of 22 new contacts advance to deals within 90 days.',
+        recommendations: [
+          'Reach out to new contacts within 24 hours of creation — early follow-up is the top driver of conversion.',
+          'Audit contacts older than 60 days with no associated deal and run a targeted re-engagement campaign.',
+          'Compare your best-converting months to identify which lead sources or reps have the highest rates.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/conversion-rate-trend`, {}, token)
+  },
 }
 

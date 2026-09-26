@@ -9834,3 +9834,80 @@ async def test_deal_cycle_time_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/cycle-time-trend")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20m: Contact-to-Deal Conversion Rate Trend
+# ---------------------------------------------------------------------------
+
+class FakeContactRow:
+    def __init__(self, id: uuid.UUID, created_at: _dt.datetime):
+        self.id = id
+        self.created_at = created_at
+
+
+class FakeDealFirstRow:
+    def __init__(self, contact_id: uuid.UUID, first_deal_at: _dt.datetime):
+        self.contact_id = contact_id
+        self.first_deal_at = first_deal_at
+
+
+@pytest.mark.asyncio
+async def test_contact_conversion_rate_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.utcnow()
+
+    contacts = [
+        FakeContactRow(uuid.uuid4(), now - _dt.timedelta(days=10)),
+        FakeContactRow(uuid.uuid4(), now - _dt.timedelta(days=15)),
+        FakeContactRow(uuid.uuid4(), now - _dt.timedelta(days=40)),
+        FakeContactRow(uuid.uuid4(), now - _dt.timedelta(days=50)),
+    ]
+    deal_rows = [
+        FakeDealFirstRow(contacts[0].id, contacts[0].created_at + _dt.timedelta(days=5)),
+        FakeDealFirstRow(contacts[1].id, contacts[1].created_at + _dt.timedelta(days=7)),
+    ]
+
+    call_count = 0
+
+    async def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        mock_result = MagicMock()
+        if call_count == 1:
+            mock_result.all = MagicMock(return_value=contacts)
+        else:
+            mock_result.all = MagicMock(return_value=deal_rows)
+        return mock_result
+
+    mock_db.execute = fake_execute
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"conversion_narrative": "Conversion looks good.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/conversion-rate-trend")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_contacts"] == 4
+    assert body["total_converted"] == 2
+    assert len(body["monthly_conversion"]) == 6
+    assert body["overall_conversion_rate"] == 50.0
+    assert "trend_direction" in body
+    assert "rate_delta" in body
+    assert "best_month" in body
+    assert "best_rate" in body
+    assert "conversion_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_contact_conversion_rate_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("55556666-7777-8888-9999-000011112222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/conversion-rate-trend")
+    assert resp.status_code == 403
