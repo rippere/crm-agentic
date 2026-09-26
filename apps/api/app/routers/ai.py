@@ -20744,3 +20744,174 @@ async def get_ai_deal_creation_rate(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/closing-rate")
+@limiter.limit("5/minute")
+async def get_ai_deal_closing_rate(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    twelve_weeks_ago = now - datetime.timedelta(weeks=12)
+
+    result = await db.execute(
+        select(Deal.stage, Deal.value, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage.in_(["closed_won", "closed_lost"]),
+            Deal.stage_changed_at >= twelve_weeks_ago,
+        )
+    )
+    rows = result.all()
+
+    # Build 12 Mon-aligned weekly buckets
+    def _monday(dt: datetime.datetime) -> datetime.datetime:
+        return (dt - datetime.timedelta(days=dt.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+    current_monday = _monday(now)
+    bucket_starts = [current_monday - datetime.timedelta(weeks=11 - i) for i in range(12)]
+
+    buckets: dict[datetime.datetime, dict] = {
+        bs: {"closed_won": 0, "closed_lost": 0, "total_closed": 0, "total_value": 0.0}
+        for bs in bucket_starts
+    }
+
+    for row in rows:
+        ts = row.stage_changed_at
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        bucket = _monday(ts)
+        if bucket in buckets:
+            if row.stage == "closed_won":
+                buckets[bucket]["closed_won"] += 1
+            else:
+                buckets[bucket]["closed_lost"] += 1
+            buckets[bucket]["total_closed"] += 1
+            buckets[bucket]["total_value"] += float(row.value or 0)
+
+    weekly_closing = []
+    for bs in bucket_starts:
+        b = buckets[bs]
+        total = b["total_closed"]
+        win_rate = round(b["closed_won"] / total * 100, 1) if total > 0 else 0.0
+        weekly_closing.append({
+            "week_start": bs.strftime("%Y-%m-%d"),
+            "closed_won": b["closed_won"],
+            "closed_lost": b["closed_lost"],
+            "total_closed": total,
+            "win_rate": win_rate,
+        })
+
+    total_closed = sum(w["total_closed"] for w in weekly_closing)
+    avg_per_week = round(total_closed / 12, 2)
+    total_won = sum(w["closed_won"] for w in weekly_closing)
+    avg_win_rate = round(total_won / total_closed * 100, 1) if total_closed > 0 else 0.0
+
+    first_half = sum(w["total_closed"] for w in weekly_closing[:6])
+    second_half = sum(w["total_closed"] for w in weekly_closing[6:])
+    if first_half == 0:
+        growth_rate = 0.0
+    else:
+        growth_rate = round((second_half - first_half) / first_half * 100, 1)
+
+    if growth_rate >= 20:
+        trend_direction = "accelerating"
+    elif growth_rate >= 5:
+        trend_direction = "growing"
+    elif growth_rate >= -5:
+        trend_direction = "stable"
+    else:
+        trend_direction = "declining"
+
+    peak_entry = max(weekly_closing, key=lambda w: w["total_closed"])
+    peak_week = peak_entry["week_start"]
+    peak_count = peak_entry["total_closed"]
+    peak_win_rate = peak_entry["win_rate"]
+
+    if total_closed == 0:
+        return {
+            "weekly_closing": weekly_closing,
+            "total_closed": 0,
+            "avg_per_week": 0.0,
+            "avg_win_rate": 0.0,
+            "growth_rate": 0.0,
+            "trend_direction": "stable",
+            "peak_week": peak_week,
+            "peak_count": 0,
+            "peak_win_rate": 0.0,
+            "closing_narrative": "No deals have been closed in the last 12 weeks.",
+            "recommendations": [
+                "Set a team closing target and track it weekly.",
+                "Review your pipeline for deals ready to close this week.",
+                "Identify the top 3 stalled deals and create urgency to move them.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    prompt = (
+        f"You are a CRM analytics assistant. A workspace closed {total_closed} deals over 12 weeks "
+        f"({avg_per_week:.1f}/week avg), with an average win rate of {avg_win_rate:.1f}%. "
+        f"Trend: {trend_direction} ({growth_rate:+.1f}% first-to-second half). "
+        f"Peak week had {peak_count} closed deals at {peak_win_rate:.1f}% win rate. "
+        "Respond ONLY with JSON: "
+        "{\"closing_narrative\": \"2-sentence insight on closing momentum and win rate health\", "
+        "\"recommendations\": [\"action 1\", \"action 2\", \"action 3\"]}"
+    )
+
+    closing_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        closing_narrative = str(parsed.get("closing_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        closing_narrative = (
+            f"Your team closed {total_closed} deals over 12 weeks ({avg_per_week}/week avg) "
+            f"with a {avg_win_rate:.1f}% win rate and a {trend_direction} trajectory "
+            f"({growth_rate:+.1f}% change)."
+        )
+
+    default_recs = [
+        "Hold a weekly deal-review meeting to keep closing momentum high.",
+        "Investigate why deals are being lost and address the top objection pattern.",
+        "Celebrate wins publicly to reinforce a closing culture on the team.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "weekly_closing": weekly_closing,
+        "total_closed": total_closed,
+        "avg_per_week": avg_per_week,
+        "avg_win_rate": avg_win_rate,
+        "growth_rate": growth_rate,
+        "trend_direction": trend_direction,
+        "peak_week": peak_week,
+        "peak_count": peak_count,
+        "peak_win_rate": peak_win_rate,
+        "closing_narrative": closing_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

@@ -7653,5 +7653,45 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/creation-rate`, {}, token)
   },
+
+  async getDealClosingRate(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const now = new Date();
+      const mondayOffset = now.getDay() === 0 ? 6 : now.getDay() - 1;
+      const thisMonday = new Date(now); thisMonday.setDate(now.getDate() - mondayOffset); thisMonday.setHours(0,0,0,0);
+      // Simulate a growing won trend: [1,0,1,1,2,1,2,3,2,4,3,5] won, [0,1,1,0,1,0,1,1,0,1,1,0] lost
+      const wonArr  = [1,0,1,1,2,1,2,3,2,4,3,5];
+      const lostArr = [0,1,1,0,1,0,1,1,0,1,1,0];
+      const weeklyClosing = Array.from({ length: 12 }, (_, i) => {
+        const ws = new Date(thisMonday); ws.setDate(thisMonday.getDate() - (11 - i) * 7);
+        const closed_won = wonArr[i];
+        const closed_lost = lostArr[i];
+        const total_closed = closed_won + closed_lost;
+        const win_rate = total_closed > 0 ? Math.round(closed_won / total_closed * 1000) / 10 : 0;
+        return { week_start: ws.toISOString().slice(0, 10), closed_won, closed_lost, total_closed, win_rate };
+      });
+      const totalWon = wonArr.reduce((a, b) => a + b, 0);
+      const totalClosed = totalWon + lostArr.reduce((a, b) => a + b, 0);
+      return Promise.resolve({
+        weekly_closing: weeklyClosing,
+        total_closed: totalClosed,
+        avg_per_week: Math.round(totalClosed / 12 * 100) / 100,
+        avg_win_rate: Math.round(totalWon / totalClosed * 1000) / 10,
+        growth_rate: 133.3,
+        trend_direction: 'accelerating',
+        peak_week: weeklyClosing[11].week_start,
+        peak_count: 5,
+        peak_win_rate: 100.0,
+        closing_narrative: 'Closing momentum is accelerating with won deals increasing 133% from the first to second half of the period. Win rate is holding strong at 76%, indicating the team is not just closing more but closing better-fit deals.',
+        recommendations: [
+          'Hold weekly deal-review meetings to maintain the closing cadence and catch stalls early.',
+          'Investigate why deals are being lost in down weeks and address the top recurring objection.',
+          'Replicate the outreach approach used in your peak week across the full team to sustain the rate.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/closing-rate`, {}, token)
+  },
 }
 
