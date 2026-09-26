@@ -930,6 +930,11 @@ export default function ReportsPage() {
   const [contactConversionRateTrend, setContactConversionRateTrend] = useState<ContactConversionRateTrendData | null>(null);
   const [contactConversionRateTrendLoading, setContactConversionRateTrendLoading] = useState(false);
   const [contactConversionRateTrendOpen, setContactConversionRateTrendOpen] = useState(true);
+  type LostRevenueMonth = { month_label: string; won_value: number; lost_value: number; total_closed_value: number; revenue_efficiency: number | null };
+  type LostRevenueTrendData = { monthly_revenue: LostRevenueMonth[]; total_won_value: number; total_lost_value: number; total_closed_value: number; overall_revenue_efficiency: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_efficiency: number | null; worst_month: string | null; worst_lost_value: number | null; revenue_efficiency_narrative: string; recommendations: string[]; generated_at: string };
+  const [lostRevenueTrend, setLostRevenueTrend] = useState<LostRevenueTrendData | null>(null);
+  const [lostRevenueTrendLoading, setLostRevenueTrendLoading] = useState(false);
+  const [lostRevenueTrendOpen, setLostRevenueTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1137,6 +1142,8 @@ export default function ReportsPage() {
       apiClient.getDealCycleTimeTrend("demo-workspace-1", "demo-token").then(setDealCycleTimeTrend).catch(() => {}).finally(() => setDealCycleTimeTrendLoading(false));
       setContactConversionRateTrendLoading(true);
       apiClient.getContactConversionRateTrend("demo-workspace-1", "demo-token").then(setContactConversionRateTrend).catch(() => {}).finally(() => setContactConversionRateTrendLoading(false));
+      setLostRevenueTrendLoading(true);
+      apiClient.getLostRevenueTrend("demo-workspace-1", "demo-token").then(setLostRevenueTrend).catch(() => {}).finally(() => setLostRevenueTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1348,6 +1355,8 @@ export default function ReportsPage() {
       apiClient.getDealCycleTimeTrend(workspaceId, session.access_token).then(setDealCycleTimeTrend).catch(() => {}).finally(() => setDealCycleTimeTrendLoading(false));
       setContactConversionRateTrendLoading(true);
       apiClient.getContactConversionRateTrend(workspaceId, session.access_token).then(setContactConversionRateTrend).catch(() => {}).finally(() => setContactConversionRateTrendLoading(false));
+      setLostRevenueTrendLoading(true);
+      apiClient.getLostRevenueTrend(workspaceId, session.access_token).then(setLostRevenueTrend).catch(() => {}).finally(() => setLostRevenueTrendLoading(false));
     });
   }, []);
 
@@ -2932,6 +2941,27 @@ export default function ReportsPage() {
         if (!session) { setContactConversionRateTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setContactConversionRateTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateLostRevenueTrend = () => {
+    setLostRevenueTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getLostRevenueTrend(wid, tok)
+        .then(setLostRevenueTrend)
+        .catch(() => {})
+        .finally(() => setLostRevenueTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setLostRevenueTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setLostRevenueTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12637,6 +12667,85 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the contact conversion rate trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Lost Revenue Trend */}
+      <Card className="border-zinc-800">
+        <div className="flex items-center justify-between p-4 pb-0">
+          <div className="flex items-center gap-2">
+            <TrendingDown className="h-4 w-4 text-rose-400" />
+            <h3 className="text-sm font-semibold text-zinc-100">Lost Revenue Trend</h3>
+            {lostRevenueTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                lostRevenueTrend.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+                lostRevenueTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'
+              }`}>
+                {lostRevenueTrend.trend_direction} {lostRevenueTrend.rate_delta > 0 ? '+' : ''}{lostRevenueTrend.rate_delta}pp
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateLostRevenueTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={lostRevenueTrendLoading}>
+              {lostRevenueTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setLostRevenueTrendOpen(v => !v)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {lostRevenueTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {lostRevenueTrendOpen && (
+          lostRevenueTrendLoading && !lostRevenueTrend ? (
+            <div className="p-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-zinc-500" /></div>
+          ) : lostRevenueTrend ? (
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900/60 rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-rose-300">{lostRevenueTrend.overall_revenue_efficiency ?? '—'}%</p>
+                  <p className="text-xs text-zinc-500">rev efficiency</p>
+                </div>
+                <div className="bg-zinc-900/60 rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-zinc-100">${(lostRevenueTrend.total_lost_value / 1000).toFixed(1)}k</p>
+                  <p className="text-xs text-zinc-500">total lost</p>
+                </div>
+                <div className="bg-zinc-900/60 rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-emerald-300">{lostRevenueTrend.best_efficiency ?? '—'}%</p>
+                  <p className="text-xs text-zinc-500">best month</p>
+                  <p className="text-xs text-zinc-600">{lostRevenueTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <LineChart data={lostRevenueTrend.monthly_revenue} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: string) => v.slice(5)} />
+                  <YAxis tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: any) => `${v}%`} domain={[0, 100]} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181B', border: '1px solid #3F3F46', borderRadius: 8 }}
+                    labelStyle={{ color: '#A1A1AA', fontSize: 11 }}
+                    formatter={(value: any, name: any) => [name === 'revenue_efficiency' ? `${value}%` : `$${(value/1000).toFixed(1)}k`, name === 'revenue_efficiency' ? 'Efficiency' : name === 'won_value' ? 'Won' : 'Lost']}
+                  />
+                  {lostRevenueTrend.overall_revenue_efficiency != null && (
+                    <ReferenceLine y={lostRevenueTrend.overall_revenue_efficiency} stroke="#FB7185" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#FB7185', fontSize: 9 }} />
+                  )}
+                  <Line type="monotone" dataKey="revenue_efficiency" stroke="#F43F5E" strokeWidth={2} dot={{ fill: '#F43F5E', r: 3 }} activeDot={{ r: 5 }} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{lostRevenueTrend.revenue_efficiency_narrative}</p>
+              <ul className="space-y-1">
+                {lostRevenueTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(lostRevenueTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the lost revenue trend.</div>
           )
         )}
       </Card>

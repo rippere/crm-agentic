@@ -21461,3 +21461,179 @@ async def get_ai_contact_conversion_rate_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20n: AI Lost Revenue Trend
+# GET /workspaces/{workspace_id}/ai/deals/lost-revenue-trend
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/deals/lost-revenue-trend")
+@limiter.limit("5/minute")
+async def get_ai_lost_revenue_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    if str(current_user.get("workspace_id")) != str(workspace_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=183)
+
+    stmt = (
+        select(Deal.stage, Deal.value, Deal.stage_changed_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(["closed_won", "closed_lost"]))
+        .where(Deal.stage_changed_at >= cutoff)
+        .where(Deal.stage_changed_at.isnot(None))
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    # Build 6 calendar-month buckets
+    buckets: list[dict] = []
+    for offset in range(5, -1, -1):
+        m = now.month - offset
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        buckets.append({"year": y, "month": m, "month_label": f"{y}-{m:02d}", "won_value": 0.0, "lost_value": 0.0})
+
+    for row in rows:
+        ts = row.stage_changed_at
+        val = float(row.value or 0.0)
+        for b in buckets:
+            if ts.year == b["year"] and ts.month == b["month"]:
+                if row.stage == "closed_won":
+                    b["won_value"] += val
+                else:
+                    b["lost_value"] += val
+                break
+
+    monthly_revenue = []
+    for b in buckets:
+        total = b["won_value"] + b["lost_value"]
+        eff = round(b["won_value"] / total * 100, 1) if total > 0 else None
+        monthly_revenue.append({
+            "month_label": b["month_label"],
+            "won_value": round(b["won_value"], 2),
+            "lost_value": round(b["lost_value"], 2),
+            "total_closed_value": round(total, 2),
+            "revenue_efficiency": eff,
+        })
+
+    total_won_value = sum(b["won_value"] for b in buckets)
+    total_lost_value = sum(b["lost_value"] for b in buckets)
+    total_closed_value = total_won_value + total_lost_value
+    overall_revenue_efficiency = round(total_won_value / total_closed_value * 100, 1) if total_closed_value > 0 else None
+
+    if total_closed_value == 0:
+        return {
+            "monthly_revenue": monthly_revenue,
+            "total_won_value": 0.0,
+            "total_lost_value": 0.0,
+            "total_closed_value": 0.0,
+            "overall_revenue_efficiency": None,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": None,
+            "best_efficiency": None,
+            "worst_month": None,
+            "worst_lost_value": None,
+            "revenue_efficiency_narrative": "No closed deals found in the last 6 months.",
+            "recommendations": [
+                "Move at least one deal to closed_won or closed_lost to begin tracking revenue efficiency.",
+                "Review your pipeline to identify deals ready to close.",
+                "Set expected close dates on open deals to forecast the next month.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    # Trend: first-half vs second-half efficiency
+    rated = [m for m in monthly_revenue if m["revenue_efficiency"] is not None]
+    if len(rated) >= 2:
+        half = len(rated) // 2
+        first_avg = sum(m["revenue_efficiency"] for m in rated[:half]) / half
+        second_avg = sum(m["revenue_efficiency"] for m in rated[half:]) / (len(rated) - half)
+        rate_delta = round(second_avg - first_avg, 1)
+        if rate_delta >= 5:
+            trend_direction = "improving"
+        elif rate_delta <= -5:
+            trend_direction = "declining"
+        else:
+            trend_direction = "stable"
+    else:
+        rate_delta = 0.0
+        trend_direction = "stable"
+
+    best_entry = max((m for m in monthly_revenue if m["revenue_efficiency"] is not None), key=lambda m: m["revenue_efficiency"], default=None)
+    worst_entry = max((m for m in monthly_revenue if m["lost_value"] > 0), key=lambda m: m["lost_value"], default=None)
+    best_month = best_entry["month_label"] if best_entry else None
+    best_efficiency = best_entry["revenue_efficiency"] if best_entry else None
+    worst_month = worst_entry["month_label"] if worst_entry else None
+    worst_lost_value = worst_entry["lost_value"] if worst_entry else None
+
+    prompt = (
+        f"Lost revenue analysis for the last 6 months:\n"
+        f"Monthly data: {[{'month': m['month_label'], 'won': m['won_value'], 'lost': m['lost_value'], 'efficiency': m['revenue_efficiency']} for m in monthly_revenue]}\n"
+        f"Overall: won ${total_won_value:,.0f}, lost ${total_lost_value:,.0f}, revenue efficiency {overall_revenue_efficiency}%\n"
+        f"Trend: {trend_direction} ({rate_delta:+.1f}pp)\n"
+        f"Best efficiency month: {best_month} at {best_efficiency}%\n"
+        f"Highest revenue loss month: {worst_month} (${worst_lost_value:,.0f} lost)\n\n"
+        "Return JSON only:\n"
+        '{"revenue_efficiency_narrative": "2-3 sentence insight about revenue efficiency trends and what drives lost revenue", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    revenue_efficiency_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        revenue_efficiency_narrative = str(parsed.get("revenue_efficiency_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        revenue_efficiency_narrative = (
+            f"Your revenue efficiency over the last 6 months is {overall_revenue_efficiency}%, "
+            f"with ${total_won_value:,.0f} won against ${total_lost_value:,.0f} lost. "
+            f"The trend is {trend_direction} ({rate_delta:+.1f}pp change in efficiency)."
+        )
+
+    default_recs = [
+        "Conduct win-loss interviews on your highest-value lost deals to identify recurring objections.",
+        "Set a target revenue efficiency of 70%+ and review progress monthly in your pipeline meeting.",
+        "Assign your best-performing reps to deals above your average deal size to protect high-value revenue.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_revenue": monthly_revenue,
+        "total_won_value": round(total_won_value, 2),
+        "total_lost_value": round(total_lost_value, 2),
+        "total_closed_value": round(total_closed_value, 2),
+        "overall_revenue_efficiency": overall_revenue_efficiency,
+        "trend_direction": trend_direction,
+        "rate_delta": rate_delta,
+        "best_month": best_month,
+        "best_efficiency": best_efficiency,
+        "worst_month": worst_month,
+        "worst_lost_value": worst_lost_value,
+        "revenue_efficiency_narrative": revenue_efficiency_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

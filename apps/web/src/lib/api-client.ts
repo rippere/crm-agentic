@@ -7800,5 +7800,46 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/contacts/conversion-rate-trend`, {}, token)
   },
+
+  async getLostRevenueTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const wonArr  = [45000, 52000, 38000, 61000, 55000, 72000];
+      const lostArr = [18000, 21000, 25000, 15000, 12000, 10000];
+      const months = wonArr.map((w, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toISOString().slice(0, 7);
+        const total = w + lostArr[i];
+        const revenue_efficiency = total > 0 ? Math.round(w / total * 1000) / 10 : null;
+        return { month_label: label, won_value: w, lost_value: lostArr[i], total_closed_value: total, revenue_efficiency };
+      });
+      const totalWon  = wonArr.reduce((a, b) => a + b, 0);
+      const totalLost = lostArr.reduce((a, b) => a + b, 0);
+      const totalClosed = totalWon + totalLost;
+      const overall = Math.round(totalWon / totalClosed * 1000) / 10;
+      const best  = months.reduce((a, m) => (m.revenue_efficiency ?? 0) > (a.revenue_efficiency ?? 0) ? m : a, months[0]);
+      const worst = months.reduce((a, m) => m.lost_value > a.lost_value ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_revenue: months,
+        total_won_value: totalWon,
+        total_lost_value: totalLost,
+        total_closed_value: totalClosed,
+        overall_revenue_efficiency: overall,
+        trend_direction: 'improving',
+        rate_delta: 14.2,
+        best_month: best.month_label,
+        best_efficiency: best.revenue_efficiency,
+        worst_month: worst.month_label,
+        worst_lost_value: worst.lost_value,
+        revenue_efficiency_narrative: 'Revenue efficiency has climbed from 71% to 88% over six months, driven by a sharp reduction in high-value losses in the most recent quarter. Wins are also growing in absolute value, compounding the positive trend.',
+        recommendations: [
+          'Conduct win-loss interviews on your highest-value lost deals to identify recurring objections.',
+          'Set a target revenue efficiency of 85%+ and review progress monthly in your pipeline meeting.',
+          'Assign your best-performing reps to deals above your average deal size to protect high-value revenue.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/lost-revenue-trend`, {}, token)
+  },
 }
 
