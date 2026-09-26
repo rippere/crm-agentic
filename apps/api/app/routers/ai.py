@@ -21474,13 +21474,13 @@ async def get_ai_lost_revenue_trend(
     request: Request,
     workspace_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    if str(current_user.get("workspace_id")) != str(workspace_id):
+    if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    now = datetime.utcnow()
-    cutoff = now - timedelta(days=183)
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
 
     stmt = (
         select(Deal.stage, Deal.value, Deal.stage_changed_at)
