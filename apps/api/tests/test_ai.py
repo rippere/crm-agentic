@@ -9911,3 +9911,65 @@ async def test_contact_conversion_rate_trend_wrong_workspace_returns_403(app_cli
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/conversion-rate-trend")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20n: Lost Revenue Trend
+# ---------------------------------------------------------------------------
+
+class FakeDealRevenueRow:
+    def __init__(self, stage: str, value: float, stage_changed_at: _dt.datetime):
+        self.stage = stage
+        self.value = value
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_lost_revenue_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.utcnow()
+
+    rows = [
+        FakeDealRevenueRow("closed_won", 5000.0, now - _dt.timedelta(days=5)),
+        FakeDealRevenueRow("closed_won", 8000.0, now - _dt.timedelta(days=10)),
+        FakeDealRevenueRow("closed_lost", 3000.0, now - _dt.timedelta(days=8)),
+        FakeDealRevenueRow("closed_won", 6000.0, now - _dt.timedelta(days=40)),
+        FakeDealRevenueRow("closed_lost", 4000.0, now - _dt.timedelta(days=45)),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"revenue_efficiency_narrative": "Revenue efficiency is solid.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/lost-revenue-trend")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_won_value"] == 5000.0 + 8000.0 + 6000.0
+    assert body["total_lost_value"] == 3000.0 + 4000.0
+    assert len(body["monthly_revenue"]) == 6
+    assert body["overall_revenue_efficiency"] is not None
+    assert body["overall_revenue_efficiency"] > 0
+    assert "trend_direction" in body
+    assert "rate_delta" in body
+    assert "best_month" in body
+    assert "best_efficiency" in body
+    assert "worst_month" in body
+    assert "worst_lost_value" in body
+    assert "revenue_efficiency_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_lost_revenue_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("66667777-8888-9999-0000-111122223333")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/lost-revenue-trend")
+    assert resp.status_code == 403
