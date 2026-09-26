@@ -920,6 +920,11 @@ export default function ReportsPage() {
   const [dealWinRateTrend, setDealWinRateTrend] = useState<DealWinRateTrendData | null>(null);
   const [dealWinRateTrendLoading, setDealWinRateTrendLoading] = useState(false);
   const [dealWinRateTrendOpen, setDealWinRateTrendOpen] = useState(true);
+  type DealCycleMonth = { month_label: string; won_count: number; avg_cycle_days: number | null; min_cycle_days: number | null; max_cycle_days: number | null };
+  type DealCycleTimeTrendData = { monthly_cycle_time: DealCycleMonth[]; total_won: number; overall_avg_cycle_days: number | null; trend_direction: string; cycle_delta: number; best_month: string | null; best_avg_days: number | null; cycle_time_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealCycleTimeTrend, setDealCycleTimeTrend] = useState<DealCycleTimeTrendData | null>(null);
+  const [dealCycleTimeTrendLoading, setDealCycleTimeTrendLoading] = useState(false);
+  const [dealCycleTimeTrendOpen, setDealCycleTimeTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1123,6 +1128,8 @@ export default function ReportsPage() {
       apiClient.getDealClosingRate("demo-workspace-1", "demo-token").then(setDealClosingRate).catch(() => {}).finally(() => setDealClosingRateLoading(false));
       setDealWinRateTrendLoading(true);
       apiClient.getDealWinRateTrend("demo-workspace-1", "demo-token").then(setDealWinRateTrend).catch(() => {}).finally(() => setDealWinRateTrendLoading(false));
+      setDealCycleTimeTrendLoading(true);
+      apiClient.getDealCycleTimeTrend("demo-workspace-1", "demo-token").then(setDealCycleTimeTrend).catch(() => {}).finally(() => setDealCycleTimeTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1330,6 +1337,8 @@ export default function ReportsPage() {
       apiClient.getDealClosingRate(workspaceId, session.access_token).then(setDealClosingRate).catch(() => {}).finally(() => setDealClosingRateLoading(false));
       setDealWinRateTrendLoading(true);
       apiClient.getDealWinRateTrend(workspaceId, session.access_token).then(setDealWinRateTrend).catch(() => {}).finally(() => setDealWinRateTrendLoading(false));
+      setDealCycleTimeTrendLoading(true);
+      apiClient.getDealCycleTimeTrend(workspaceId, session.access_token).then(setDealCycleTimeTrend).catch(() => {}).finally(() => setDealCycleTimeTrendLoading(false));
     });
   }, []);
 
@@ -2872,6 +2881,27 @@ export default function ReportsPage() {
         if (!session) { setDealWinRateTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealWinRateTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealCycleTimeTrend = () => {
+    setDealCycleTimeTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealCycleTimeTrend(wid, tok)
+        .then(setDealCycleTimeTrend)
+        .catch(() => {})
+        .finally(() => setDealCycleTimeTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealCycleTimeTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealCycleTimeTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12417,6 +12447,86 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the deal win rate trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Deal Cycle Time Trend */}
+      <Card className="border-zinc-800 space-y-3 p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Timer className="h-4 w-4 text-amber-400" />
+            <span className="text-sm font-semibold text-zinc-100">Deal Cycle Time Trend</span>
+            {dealCycleTimeTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                dealCycleTimeTrend.trend_direction === 'faster' ? 'bg-emerald-900/40 text-emerald-300' :
+                dealCycleTimeTrend.trend_direction === 'slower' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'
+              }`}>
+                {dealCycleTimeTrend.trend_direction} {dealCycleTimeTrend.cycle_delta > 0 ? '+' : ''}{dealCycleTimeTrend.cycle_delta}d
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateDealCycleTimeTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={dealCycleTimeTrendLoading}>
+              {dealCycleTimeTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setDealCycleTimeTrendOpen(o => !o)} className="p-1 rounded hover:bg-zinc-800 text-zinc-400">
+              {dealCycleTimeTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {dealCycleTimeTrendOpen && (
+          dealCycleTimeTrendLoading && !dealCycleTimeTrend ? (
+            <div className="h-24 bg-zinc-800/40 animate-pulse rounded" />
+          ) : dealCycleTimeTrend ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-0.5">Avg Cycle</p>
+                  <p className="text-xl font-bold text-amber-300">{dealCycleTimeTrend.overall_avg_cycle_days ?? '—'}</p>
+                  <p className="text-xs text-zinc-500">days</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-0.5">Deals Analyzed</p>
+                  <p className="text-xl font-bold text-zinc-100">{dealCycleTimeTrend.total_won}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-0.5">Best Month</p>
+                  <p className="text-xl font-bold text-emerald-300">{dealCycleTimeTrend.best_avg_days ?? '—'}</p>
+                  <p className="text-xs text-zinc-500">{dealCycleTimeTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <LineChart data={dealCycleTimeTrend.monthly_cycle_time} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: string) => v.slice(5)} />
+                  <YAxis tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: any) => `${v}d`} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181B', border: '1px solid #3F3F46', borderRadius: 8 }}
+                    labelStyle={{ color: '#A1A1AA', fontSize: 11 }}
+                    formatter={(value: any, name: any) => [`${value}d`, name === 'avg_cycle_days' ? 'Avg Days' : name === 'min_cycle_days' ? 'Min' : 'Max']}
+                  />
+                  {dealCycleTimeTrend.overall_avg_cycle_days != null && (
+                    <ReferenceLine y={dealCycleTimeTrend.overall_avg_cycle_days} stroke="#F59E0B" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#F59E0B', fontSize: 9 }} />
+                  )}
+                  <Line type="monotone" dataKey="avg_cycle_days" stroke="#FBBF24" strokeWidth={2} dot={{ fill: '#FBBF24', r: 3 }} activeDot={{ r: 5 }} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{dealCycleTimeTrend.cycle_time_narrative}</p>
+              <ul className="space-y-1">
+                {dealCycleTimeTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealCycleTimeTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the deal cycle time trend.</div>
           )
         )}
       </Card>

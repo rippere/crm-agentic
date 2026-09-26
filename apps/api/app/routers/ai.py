@@ -21090,3 +21090,182 @@ async def get_ai_deal_win_rate_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/cycle-time-trend")
+@limiter.limit("5/minute")
+async def get_ai_deal_cycle_time_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    six_months_ago = now - datetime.timedelta(days=183)
+
+    result = await db.execute(
+        select(Deal.created_at, Deal.stage_changed_at)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.stage == "closed_won",
+            Deal.stage_changed_at >= six_months_ago,
+            Deal.created_at.isnot(None),
+        )
+    )
+    rows = result.all()
+
+    def _month_key(dt: datetime.datetime) -> str:
+        return dt.strftime("%Y-%m")
+
+    cur_year, cur_month = now.year, now.month
+    month_keys = []
+    for offset in range(5, -1, -1):
+        m = cur_month - offset
+        y = cur_year
+        while m <= 0:
+            m += 12
+            y -= 1
+        month_keys.append(f"{y:04d}-{m:02d}")
+
+    buckets: dict[str, list[float]] = {mk: [] for mk in month_keys}
+
+    for row in rows:
+        closed_at = row.stage_changed_at
+        created_at = row.created_at
+        if closed_at is None or created_at is None:
+            continue
+        if closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=timezone.utc)
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        mk = _month_key(closed_at)
+        if mk not in buckets:
+            continue
+        cycle_days = (closed_at - created_at).total_seconds() / 86400
+        if cycle_days >= 0:
+            buckets[mk].append(cycle_days)
+
+    monthly_cycle_time = []
+    for mk in month_keys:
+        days_list = buckets[mk]
+        if days_list:
+            avg = round(sum(days_list) / len(days_list), 1)
+            mn = round(min(days_list), 1)
+            mx = round(max(days_list), 1)
+        else:
+            avg = None
+            mn = None
+            mx = None
+        monthly_cycle_time.append({
+            "month_label": mk,
+            "won_count": len(days_list),
+            "avg_cycle_days": avg,
+            "min_cycle_days": mn,
+            "max_cycle_days": mx,
+        })
+
+    all_days: list[float] = [d for v in buckets.values() for d in v]
+    total_won = len(all_days)
+
+    if total_won == 0:
+        return {
+            "monthly_cycle_time": monthly_cycle_time,
+            "total_won": 0,
+            "overall_avg_cycle_days": None,
+            "trend_direction": "stable",
+            "cycle_delta": 0.0,
+            "best_month": None,
+            "best_avg_days": None,
+            "cycle_time_narrative": "No closed-won deals found in the last 6 months to compute cycle time.",
+            "recommendations": [
+                "Start tracking deal creation dates to enable cycle time analysis.",
+                "Set expected close dates on all active deals to build forecasting habits.",
+                "Review your pipeline stages to ensure deals are progressing in a structured way.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    overall_avg_cycle_days = round(sum(all_days) / len(all_days), 1)
+
+    filled = [m for m in monthly_cycle_time if m["avg_cycle_days"] is not None]
+    if len(filled) >= 2:
+        mid = len(filled) // 2
+        first_half = filled[:mid]
+        second_half = filled[mid:]
+        first_avg = sum(m["avg_cycle_days"] for m in first_half) / len(first_half)
+        second_avg = sum(m["avg_cycle_days"] for m in second_half) / len(second_half)
+        cycle_delta = round(second_avg - first_avg, 1)
+        pct_change = (second_avg - first_avg) / first_avg * 100 if first_avg > 0 else 0
+        if pct_change <= -10:
+            trend_direction = "faster"
+        elif pct_change >= 10:
+            trend_direction = "slower"
+        else:
+            trend_direction = "stable"
+    else:
+        cycle_delta = 0.0
+        trend_direction = "stable"
+
+    best_entry = min(filled, key=lambda m: m["avg_cycle_days"]) if filled else None
+    best_month = best_entry["month_label"] if best_entry else None
+    best_avg_days = best_entry["avg_cycle_days"] if best_entry else None
+
+    prompt = (
+        f"Sales cycle time analysis for the last 6 months:\n"
+        f"Monthly avg days to close: {[{'month': m['month_label'], 'avg_days': m['avg_cycle_days'], 'won': m['won_count']} for m in monthly_cycle_time]}\n"
+        f"Overall avg cycle: {overall_avg_cycle_days} days\n"
+        f"Trend: {trend_direction} (delta {cycle_delta:+.1f} days)\n"
+        f"Best month: {best_month} at {best_avg_days} days avg\n\n"
+        "Return JSON only:\n"
+        '{"cycle_time_narrative": "2-3 sentence insight about the cycle time trend and what it means for the team", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    cycle_time_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        cycle_time_narrative = str(parsed.get("cycle_time_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        cycle_time_narrative = (
+            f"Average deal cycle time over the last 6 months is {overall_avg_cycle_days} days, "
+            f"with a {trend_direction} trend ({cycle_delta:+.1f} days change). "
+            f"Best month was {best_month} at {best_avg_days} days."
+        )
+
+    default_recs = [
+        "Identify the top deals closed fastest and document what made them move quickly.",
+        "Set hard stage-time limits so reps escalate stalled deals before they drag cycle time up.",
+        "Review deals that took the longest to close and identify the common friction points.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_cycle_time": monthly_cycle_time,
+        "total_won": total_won,
+        "overall_avg_cycle_days": overall_avg_cycle_days,
+        "trend_direction": trend_direction,
+        "cycle_delta": cycle_delta,
+        "best_month": best_month,
+        "best_avg_days": best_avg_days,
+        "cycle_time_narrative": cycle_time_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

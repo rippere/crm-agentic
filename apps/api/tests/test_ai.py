@@ -9780,3 +9780,57 @@ async def test_deal_win_rate_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-rate-trend")
     assert resp.status_code == 403
+
+
+class FakeDealCycleRow:
+    def __init__(self, created_at, stage_changed_at):
+        self.created_at = created_at
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_deal_cycle_time_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    rows = [
+        FakeDealCycleRow(now - _dt.timedelta(days=20), now - _dt.timedelta(days=5)),
+        FakeDealCycleRow(now - _dt.timedelta(days=45), now - _dt.timedelta(days=35)),
+        FakeDealCycleRow(now - _dt.timedelta(days=60), now - _dt.timedelta(days=45)),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"cycle_time_narrative": "Cycle time is improving.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/cycle-time-trend")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_won"] == 3
+    assert len(body["monthly_cycle_time"]) == 6
+    assert body["overall_avg_cycle_days"] is not None
+    assert body["overall_avg_cycle_days"] > 0
+    assert "trend_direction" in body
+    assert "cycle_delta" in body
+    assert "best_month" in body
+    assert "best_avg_days" in body
+    assert "cycle_time_narrative" in body
+    assert len(body["recommendations"]) == 3
+    assert "generated_at" in body
+
+
+@pytest.mark.asyncio
+async def test_deal_cycle_time_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("44445555-6666-7777-8888-999900001111")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/cycle-time-trend")
+    assert resp.status_code == 403
