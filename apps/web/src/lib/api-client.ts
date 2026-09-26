@@ -7912,5 +7912,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getPipelineValueTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const dealsArr = [3, 4, 5, 4, 6, 7];
+      const valuesArr = [85000, 112000, 138000, 95000, 175000, 210000];
+      const months = dealsArr.map((d, i) => {
+        const dt = new Date(); dt.setDate(1); dt.setMonth(dt.getMonth() - (5 - i));
+        const label = dt.toISOString().slice(0, 7);
+        const avg = d > 0 ? Math.round(valuesArr[i] / d) : null;
+        return { month_label: label, deals_created: d, total_value: valuesArr[i], avg_value: avg };
+      });
+      const totalDeals = dealsArr.reduce((a, b) => a + b, 0);
+      const totalValue = valuesArr.reduce((a, b) => a + b, 0);
+      const overallAvg = Math.round(totalValue / totalDeals);
+      const peak = months.reduce((a, m) => m.total_value > a.total_value ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_pipeline: months,
+        total_deals: totalDeals,
+        total_value: totalValue,
+        overall_avg_value: overallAvg,
+        trend_direction: 'growing',
+        value_delta: 59.3,
+        peak_month: peak.month_label,
+        peak_value: peak.total_value,
+        pipeline_value_narrative: 'Pipeline value has grown from $85K to $210K over the last six months, a 59% increase driven by higher-value enterprise deals entering the funnel. The consistent month-over-month growth suggests improved targeting and qualification are attracting larger opportunities.',
+        recommendations: [
+          'Focus prospecting on deal segments with the highest average deal value to maximise pipeline growth.',
+          'Review months with lower pipeline value to identify gaps in lead generation activity.',
+          'Correlate pipeline value trend with close rates to refine deal qualification criteria.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-value-trend`, {}, token)
+  },
 }
 

@@ -21969,3 +21969,164 @@ async def get_ai_tasks_completion_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/pipeline-value-trend")
+@limiter.limit("5/minute")
+async def get_ai_pipeline_value_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    # Build 6 calendar-month buckets oldest→newest
+    monthly_pipeline: list[dict] = []
+    for offset in range(5, -1, -1):
+        m = now.month - offset
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        monthly_pipeline.append(
+            {
+                "month_label": f"{y}-{m:02d}",
+                "deals_created": 0,
+                "total_value": 0.0,
+                "avg_value": None,
+            }
+        )
+
+    stmt = (
+        select(Deal.created_at, Deal.value)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.created_at >= cutoff)
+        .where(Deal.created_at.isnot(None))
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    for row in rows:
+        created_at = row.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        label = f"{created_at.year}-{created_at.month:02d}"
+        for bucket in monthly_pipeline:
+            if bucket["month_label"] == label:
+                bucket["deals_created"] += 1
+                bucket["total_value"] += float(row.value or 0)
+                break
+
+    total_deals = sum(b["deals_created"] for b in monthly_pipeline)
+    total_value = sum(b["total_value"] for b in monthly_pipeline)
+
+    for bucket in monthly_pipeline:
+        bucket["total_value"] = round(bucket["total_value"], 0)
+        if bucket["deals_created"] > 0:
+            bucket["avg_value"] = round(bucket["total_value"] / bucket["deals_created"], 0)
+
+    if total_deals == 0:
+        return {
+            "monthly_pipeline": monthly_pipeline,
+            "total_deals": 0,
+            "total_value": 0.0,
+            "overall_avg_value": None,
+            "trend_direction": "stable",
+            "value_delta": 0.0,
+            "peak_month": None,
+            "peak_value": None,
+            "pipeline_value_narrative": "No deal data available for the last 6 months.",
+            "recommendations": [
+                "Start adding deals to your pipeline to track value trends over time.",
+                "Set deal values accurately when creating deals to enable revenue forecasting.",
+                "Review your pipeline regularly to ensure all active opportunities are recorded.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    overall_avg_value = round(total_value / total_deals, 0) if total_deals > 0 else None
+
+    first_half = [b["total_value"] for b in monthly_pipeline[:3]]
+    second_half = [b["total_value"] for b in monthly_pipeline[3:]]
+    first_avg = sum(first_half) / max(len(first_half), 1)
+    second_avg = sum(second_half) / max(len(second_half), 1)
+    if first_avg > 0:
+        value_delta = round((second_avg - first_avg) / first_avg * 100, 1)
+    else:
+        value_delta = 0.0
+    if value_delta >= 10.0:
+        trend_direction = "growing"
+    elif value_delta <= -10.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    peak_entry = max(
+        (b for b in monthly_pipeline if b["deals_created"] > 0),
+        key=lambda x: x["total_value"],
+        default=None,
+    )
+    peak_month = peak_entry["month_label"] if peak_entry else None
+    peak_value = peak_entry["total_value"] if peak_entry else None
+
+    prompt = (
+        f"Pipeline value data for the last 6 months:\n"
+        f"Monthly data: {[{'month': b['month_label'], 'deals': b['deals_created'], 'total_value': b['total_value'], 'avg_value': b['avg_value']} for b in monthly_pipeline]}\n"
+        f"Overall: {total_deals} deals created, ${total_value:,.0f} total pipeline value, ${overall_avg_value:,.0f} avg deal size\n"
+        f"Trend: {trend_direction} ({value_delta:+.1f}% change)\n"
+        f"Peak month: {peak_month} at ${peak_value:,.0f}\n\n"
+        "Return JSON only:\n"
+        '{"pipeline_value_narrative": "2-3 sentence insight about pipeline value trends and what they suggest for revenue growth", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    pipeline_value_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        pipeline_value_narrative = str(parsed.get("pipeline_value_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        pipeline_value_narrative = (
+            f"Your pipeline added {total_deals} deals worth ${total_value:,.0f} over the last 6 months. "
+            f"Average deal size is ${overall_avg_value:,.0f}. "
+            f"Pipeline value trend is {trend_direction} ({value_delta:+.1f}% change)."
+        )
+
+    default_recs = [
+        "Focus prospecting on deal segments with the highest average deal value to maximize pipeline growth.",
+        "Review months with declining pipeline value to identify and address gaps in lead generation.",
+        "Correlate pipeline value trend with close rates to optimize deal qualification criteria.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_pipeline": monthly_pipeline,
+        "total_deals": total_deals,
+        "total_value": round(total_value, 0),
+        "overall_avg_value": overall_avg_value,
+        "trend_direction": trend_direction,
+        "value_delta": value_delta,
+        "peak_month": peak_month,
+        "peak_value": peak_value,
+        "pipeline_value_narrative": pipeline_value_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
