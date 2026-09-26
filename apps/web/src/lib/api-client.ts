@@ -7877,5 +7877,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/messages/outreach-trend`, {}, token)
   },
+
+  async getTasksCompletionTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const createdArr = [8, 10, 12, 9, 14, 15];
+      const completedArr = [5, 6, 8, 7, 11, 13];
+      const months = createdArr.map((c, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toISOString().slice(0, 7);
+        const rate = c > 0 ? Math.round(completedArr[i] / c * 1000) / 10 : null;
+        return { month_label: label, tasks_created: c, tasks_completed: completedArr[i], completion_rate: rate };
+      });
+      const totalTasks = createdArr.reduce((a, b) => a + b, 0);
+      const totalCompleted = completedArr.reduce((a, b) => a + b, 0);
+      const overall = Math.round(totalCompleted / totalTasks * 1000) / 10;
+      const best = months.reduce((a, m) => (m.completion_rate ?? 0) > (a.completion_rate ?? 0) ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_tasks: months,
+        total_tasks: totalTasks,
+        total_completed: totalCompleted,
+        overall_completion_rate: overall,
+        trend_direction: 'improving',
+        rate_delta: 24.2,
+        best_month: best.month_label,
+        best_completion_rate: best.completion_rate,
+        task_narrative: 'Task completion rate has risen from 62.5% to 86.7% over the last six months, reflecting improved execution discipline and more realistic task scoping. The recent acceleration suggests the team is closing more action items before new ones are created.',
+        recommendations: [
+          'Review tasks that remain open past their due date and either reassign or close them.',
+          'Set weekly completion targets to maintain team accountability on follow-up actions.',
+          'Correlate task completion rate with deal win rate to identify execution patterns that drive revenue.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
+  },
 }
 

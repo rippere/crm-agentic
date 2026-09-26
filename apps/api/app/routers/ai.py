@@ -21808,3 +21808,164 @@ async def get_ai_outreach_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/tasks/completion-trend")
+@limiter.limit("5/minute")
+async def get_ai_tasks_completion_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    stmt = (
+        select(Task.status, Task.created_at)
+        .where(Task.workspace_id == workspace_id)
+        .where(Task.created_at >= cutoff)
+        .where(Task.created_at.isnot(None))
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    # Build 6 calendar-month buckets (oldest first)
+    buckets: list[dict] = []
+    for offset in range(5, -1, -1):
+        m = now.month - offset
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        label = datetime.datetime(y, m, 1).strftime("%b %Y")
+        buckets.append({"month_label": label, "year": y, "month": m, "tasks_created": 0, "tasks_completed": 0})
+
+    for row in rows:
+        if row.created_at is None:
+            continue
+        ts = row.created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        for b in buckets:
+            if ts.year == b["year"] and ts.month == b["month"]:
+                b["tasks_created"] += 1
+                if row.status == "done":
+                    b["tasks_completed"] += 1
+                break
+
+    monthly_tasks = []
+    for b in buckets:
+        rate = round(b["tasks_completed"] / b["tasks_created"] * 100, 1) if b["tasks_created"] > 0 else None
+        monthly_tasks.append({
+            "month_label": b["month_label"],
+            "tasks_created": b["tasks_created"],
+            "tasks_completed": b["tasks_completed"],
+            "completion_rate": rate,
+        })
+
+    total_tasks = sum(b["tasks_created"] for b in buckets)
+    total_completed = sum(b["tasks_completed"] for b in buckets)
+    overall_completion_rate = round(total_completed / total_tasks * 100, 1) if total_tasks > 0 else None
+
+    if total_tasks == 0:
+        return {
+            "monthly_tasks": monthly_tasks,
+            "total_tasks": 0,
+            "total_completed": 0,
+            "overall_completion_rate": None,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": None,
+            "best_completion_rate": None,
+            "task_narrative": "No task data available for the last 6 months.",
+            "recommendations": [
+                "Start creating tasks for contacts and deals to track action items.",
+                "Use tasks to assign follow-up actions after each deal stage move.",
+                "Set due dates on tasks to enable overdue tracking and prioritization.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    # trend: compare first 3 months vs last 3 months avg completion rate
+    rates_with_data = [m["completion_rate"] for m in monthly_tasks if m["completion_rate"] is not None]
+    first_half_rates = [m["completion_rate"] for m in monthly_tasks[:3] if m["completion_rate"] is not None]
+    second_half_rates = [m["completion_rate"] for m in monthly_tasks[3:] if m["completion_rate"] is not None]
+    first_avg = sum(first_half_rates) / len(first_half_rates) if first_half_rates else 0.0
+    second_avg = sum(second_half_rates) / len(second_half_rates) if second_half_rates else 0.0
+    rate_delta = round(second_avg - first_avg, 1)
+    if rate_delta >= 5.0:
+        trend_direction = "improving"
+    elif rate_delta <= -5.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    best_entry = max(
+        (m for m in monthly_tasks if m["completion_rate"] is not None),
+        key=lambda x: x["completion_rate"],
+        default=None,
+    )
+    best_month = best_entry["month_label"] if best_entry else None
+    best_completion_rate = best_entry["completion_rate"] if best_entry else None
+
+    prompt = (
+        f"Task completion data for the last 6 months:\n"
+        f"Monthly data: {[{'month': m['month_label'], 'created': m['tasks_created'], 'completed': m['tasks_completed'], 'rate': m['completion_rate']} for m in monthly_tasks]}\n"
+        f"Overall: {total_tasks} tasks created, {total_completed} completed, {overall_completion_rate}% completion rate\n"
+        f"Trend: {trend_direction} ({rate_delta:+.1f}pp)\n"
+        f"Best month: {best_month} at {best_completion_rate}% completion rate\n\n"
+        "Return JSON only:\n"
+        '{"task_narrative": "2-3 sentence insight about task completion patterns and what the trend suggests for team execution", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    task_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        task_narrative = str(parsed.get("task_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        task_narrative = (
+            f"Your team created {total_tasks} tasks and completed {total_completed} "
+            f"({overall_completion_rate}%) over the last 6 months. "
+            f"The completion rate trend is {trend_direction} ({rate_delta:+.1f}pp change)."
+        )
+
+    default_recs = [
+        "Review tasks that remain open past their due date and either reassign or close them.",
+        "Set weekly completion targets to maintain team accountability on follow-up actions.",
+        "Correlate task completion rate with deal win rate to identify execution patterns that drive revenue.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_tasks": monthly_tasks,
+        "total_tasks": total_tasks,
+        "total_completed": total_completed,
+        "overall_completion_rate": overall_completion_rate,
+        "trend_direction": trend_direction,
+        "rate_delta": rate_delta,
+        "best_month": best_month,
+        "best_completion_rate": best_completion_rate,
+        "task_narrative": task_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }

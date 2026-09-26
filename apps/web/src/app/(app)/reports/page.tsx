@@ -940,6 +940,11 @@ export default function ReportsPage() {
   const [outreachTrend, setOutreachTrend] = useState<OutreachTrendData | null>(null);
   const [outreachTrendLoading, setOutreachTrendLoading] = useState(false);
   const [outreachTrendOpen, setOutreachTrendOpen] = useState(true);
+  type TaskCompletionMonth = { month_label: string; tasks_created: number; tasks_completed: number; completion_rate: number | null };
+  type TasksCompletionTrendData = { monthly_tasks: TaskCompletionMonth[]; total_tasks: number; total_completed: number; overall_completion_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_completion_rate: number | null; task_narrative: string; recommendations: string[]; generated_at: string };
+  const [tasksCompletionTrend, setTasksCompletionTrend] = useState<TasksCompletionTrendData | null>(null);
+  const [tasksCompletionTrendLoading, setTasksCompletionTrendLoading] = useState(false);
+  const [tasksCompletionTrendOpen, setTasksCompletionTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1151,6 +1156,8 @@ export default function ReportsPage() {
       apiClient.getLostRevenueTrend("demo-workspace-1", "demo-token").then(setLostRevenueTrend).catch(() => {}).finally(() => setLostRevenueTrendLoading(false));
       setOutreachTrendLoading(true);
       apiClient.getOutreachTrend("demo-workspace-1", "demo-token").then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
+      setTasksCompletionTrendLoading(true);
+      apiClient.getTasksCompletionTrend("demo-workspace-1", "demo-token").then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1366,6 +1373,8 @@ export default function ReportsPage() {
       apiClient.getLostRevenueTrend(workspaceId, session.access_token).then(setLostRevenueTrend).catch(() => {}).finally(() => setLostRevenueTrendLoading(false));
       setOutreachTrendLoading(true);
       apiClient.getOutreachTrend(workspaceId, session.access_token).then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
+      setTasksCompletionTrendLoading(true);
+      apiClient.getTasksCompletionTrend(workspaceId, session.access_token).then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
     });
   }, []);
 
@@ -2992,6 +3001,27 @@ export default function ReportsPage() {
         if (!session) { setOutreachTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setOutreachTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateTasksCompletionTrend = () => {
+    setTasksCompletionTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getTasksCompletionTrend(wid, tok)
+        .then(setTasksCompletionTrend)
+        .catch(() => {})
+        .finally(() => setTasksCompletionTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setTasksCompletionTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setTasksCompletionTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12855,6 +12885,79 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the outreach trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Tasks Completion Trend */}
+      <Card className="border-zinc-800">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+          <div className="flex items-center gap-2">
+            <ClipboardList className="h-4 w-4 text-emerald-400" />
+            <span className="text-sm font-semibold text-zinc-200">Task Completion Trend</span>
+            {tasksCompletionTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                tasksCompletionTrend.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+                tasksCompletionTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'}`}>
+                {tasksCompletionTrend.trend_direction} {tasksCompletionTrend.rate_delta > 0 ? '+' : ''}{tasksCompletionTrend.rate_delta}pp
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateTasksCompletionTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={tasksCompletionTrendLoading}>
+              {tasksCompletionTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setTasksCompletionTrendOpen(v => !v)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {tasksCompletionTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {tasksCompletionTrendOpen && (
+          tasksCompletionTrendLoading && !tasksCompletionTrend ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading task completion trend…</div>
+          ) : tasksCompletionTrend ? (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Completion Rate</p>
+                  <p className="text-xl font-bold text-emerald-300">{tasksCompletionTrend.overall_completion_rate ?? '—'}%</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Total Tasks</p>
+                  <p className="text-xl font-bold text-zinc-100">{tasksCompletionTrend.total_tasks}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Best Month</p>
+                  <p className="text-sm font-bold text-emerald-300">{tasksCompletionTrend.best_completion_rate ?? '—'}%</p>
+                  <p className="text-xs text-zinc-600">{tasksCompletionTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={120}>
+                <LineChart data={tasksCompletionTrend.monthly_tasks} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" />
+                  <Tooltip formatter={(value: any, name: any) => [`${value}%`, 'Completion Rate']} contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }} />
+                  <Line type="monotone" dataKey="completion_rate" stroke="#34D399" strokeWidth={2} dot={{ r: 3, fill: '#34D399' }} connectNulls />
+                  {tasksCompletionTrend.overall_completion_rate != null && (
+                    <ReferenceLine y={tasksCompletionTrend.overall_completion_rate} stroke="#34D399" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#34D399', fontSize: 9 }} />
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{tasksCompletionTrend.task_narrative}</p>
+              <ul className="space-y-1">
+                {tasksCompletionTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(tasksCompletionTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the task completion trend.</div>
           )
         )}
       </Card>
