@@ -20589,3 +20589,158 @@ async def get_ai_deal_health_probability_gap(
         "recommendations": recs,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20i: AI workspace deal creation rate trend
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/deals/creation-rate")
+@limiter.limit("5/minute")
+async def get_ai_deal_creation_rate(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    twelve_weeks_ago = now - datetime.timedelta(weeks=12)
+
+    result = await db.execute(
+        select(Deal.created_at, Deal.value)
+        .where(
+            Deal.workspace_id == workspace_id,
+            Deal.created_at >= twelve_weeks_ago,
+        )
+    )
+    rows = result.all()
+
+    def _week_start(dt: datetime.datetime) -> datetime.date:
+        d = dt.date() if hasattr(dt, "date") else dt
+        return d - datetime.timedelta(days=d.weekday())
+
+    week_counts: dict[datetime.date, list[float]] = {}
+    for row in rows:
+        ws = _week_start(row.created_at)
+        if ws not in week_counts:
+            week_counts[ws] = []
+        week_counts[ws].append(row.value or 0.0)
+
+    current_week_start = _week_start(now)
+    weekly_creation: list[dict] = []
+    for i in range(11, -1, -1):
+        ws = current_week_start - datetime.timedelta(weeks=i)
+        values = week_counts.get(ws, [])
+        weekly_creation.append({
+            "week_start": ws.isoformat(),
+            "new_deals": len(values),
+            "total_value": round(sum(values), 2),
+        })
+
+    total_new_deals = sum(w["new_deals"] for w in weekly_creation)
+    avg_per_week = round(total_new_deals / 12, 2)
+    peak_entry = max(weekly_creation, key=lambda x: x["new_deals"])
+    peak_week = peak_entry["week_start"]
+    peak_count = peak_entry["new_deals"]
+    peak_value = peak_entry["total_value"]
+
+    first_half = sum(w["new_deals"] for w in weekly_creation[:6])
+    second_half = sum(w["new_deals"] for w in weekly_creation[6:])
+    if first_half == 0 and second_half == 0:
+        growth_rate = 0.0
+        trend_direction = "stable"
+    elif first_half == 0:
+        growth_rate = 100.0
+        trend_direction = "accelerating"
+    else:
+        growth_rate = round(((second_half - first_half) / first_half) * 100, 1)
+        if growth_rate >= 20:
+            trend_direction = "accelerating"
+        elif growth_rate >= 5:
+            trend_direction = "growing"
+        elif growth_rate >= -5:
+            trend_direction = "stable"
+        else:
+            trend_direction = "declining"
+
+    if total_new_deals == 0:
+        return {
+            "weekly_creation": weekly_creation,
+            "total_new_deals": 0,
+            "avg_per_week": 0.0,
+            "growth_rate": 0.0,
+            "trend_direction": "stable",
+            "peak_week": peak_week,
+            "peak_count": 0,
+            "peak_value": 0.0,
+            "creation_narrative": "No new deals were created in the last 12 weeks. Consider running prospecting campaigns to grow your pipeline.",
+            "recommendations": [
+                "Review your lead sources and identify which channels generate the most qualified prospects.",
+                "Set a weekly deal creation target and track it in your team stand-up.",
+                "Run outreach campaigns to re-engage dormant leads and contacts.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    context = (
+        f"New deal creation rate over the last 12 weeks: total={total_new_deals}, "
+        f"avg={avg_per_week}/week, growth_rate={growth_rate}% "
+        f"(first 6 weeks: {first_half} deals, last 6 weeks: {second_half} deals), "
+        f"trend={trend_direction}, peak week={peak_week} with {peak_count} deals worth ${peak_value:,.0f}."
+    )
+    prompt = (
+        f"{context}\n\n"
+        "Write a 2-sentence creation_narrative summarising the deal creation trend and its pipeline health implication. "
+        "Then provide exactly 3 short, actionable recommendations to improve or sustain the deal creation rate. "
+        'Respond ONLY with valid JSON: {"creation_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+
+    creation_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        creation_narrative = str(parsed.get("creation_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        creation_narrative = (
+            f"Your pipeline gained {total_new_deals} new deals over the last 12 weeks "
+            f"({avg_per_week}/week on average), with a {trend_direction} trend "
+            f"({growth_rate:+.1f}% change from first to second half)."
+        )
+
+    default_recs = [
+        "Schedule a weekly pipeline review to ensure deal creation targets are being met.",
+        "Identify your top lead sources from the last 30 days and double down on them.",
+        "Set a personal prospecting goal of at least 2 new deals per week to sustain momentum.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "weekly_creation": weekly_creation,
+        "total_new_deals": total_new_deals,
+        "avg_per_week": avg_per_week,
+        "growth_rate": growth_rate,
+        "trend_direction": trend_direction,
+        "peak_week": peak_week,
+        "peak_count": peak_count,
+        "peak_value": peak_value,
+        "creation_narrative": creation_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat() + "Z",
+    }

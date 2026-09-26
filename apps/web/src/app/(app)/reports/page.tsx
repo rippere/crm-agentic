@@ -905,6 +905,12 @@ export default function ReportsPage() {
   const [healthProbGapLoading, setHealthProbGapLoading] = useState(false);
   const [healthProbGapOpen, setHealthProbGapOpen] = useState(true);
 
+  type DealCreationWeek = { week_start: string; new_deals: number; total_value: number };
+  type DealCreationRateData = { weekly_creation: DealCreationWeek[]; total_new_deals: number; avg_per_week: number; growth_rate: number; trend_direction: string; peak_week: string; peak_count: number; peak_value: number; creation_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealCreationRate, setDealCreationRate] = useState<DealCreationRateData | null>(null);
+  const [dealCreationRateLoading, setDealCreationRateLoading] = useState(false);
+  const [dealCreationRateOpen, setDealCreationRateOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1101,6 +1107,8 @@ export default function ReportsPage() {
       apiClient.getAIDealStageVelocity("demo-workspace-1", "demo-token").then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
       setHealthProbGapLoading(true);
       apiClient.getAIDealHealthProbabilityGap("demo-workspace-1", "demo-token").then(setHealthProbGap).catch(() => {}).finally(() => setHealthProbGapLoading(false));
+      setDealCreationRateLoading(true);
+      apiClient.getDealCreationRate("demo-workspace-1", "demo-token").then(setDealCreationRate).catch(() => {}).finally(() => setDealCreationRateLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1302,6 +1310,8 @@ export default function ReportsPage() {
       apiClient.getAIDealStageVelocity(workspaceId, session.access_token).then(setStageVelocity).catch(() => {}).finally(() => setStageVelocityLoading(false));
       setHealthProbGapLoading(true);
       apiClient.getAIDealHealthProbabilityGap(workspaceId, session.access_token).then(setHealthProbGap).catch(() => {}).finally(() => setHealthProbGapLoading(false));
+      setDealCreationRateLoading(true);
+      apiClient.getDealCreationRate(workspaceId, session.access_token).then(setDealCreationRate).catch(() => {}).finally(() => setDealCreationRateLoading(false));
     });
   }, []);
 
@@ -2781,6 +2791,27 @@ export default function ReportsPage() {
         if (!session) { setHealthProbGapLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setHealthProbGapLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealCreationRate = () => {
+    setDealCreationRateLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealCreationRate(wid, tok)
+        .then(setDealCreationRate)
+        .catch(() => {})
+        .finally(() => setDealCreationRateLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealCreationRateLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealCreationRateLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12088,6 +12119,83 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the health vs win probability gap analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Deal Creation Rate */}
+      <Card className="divide-y divide-zinc-800/60 cursor-pointer" onClick={() => setDealCreationRateOpen((o) => !o)}>
+        <div className="flex items-center justify-between px-5 py-3">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-sky-400" />
+            <span className="text-sm font-semibold text-zinc-100">Deal Creation Rate</span>
+            {dealCreationRate && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ml-1 ${dealCreationRate.trend_direction === 'accelerating' ? 'bg-emerald-500/20 text-emerald-300' : dealCreationRate.trend_direction === 'growing' ? 'bg-sky-500/20 text-sky-300' : dealCreationRate.trend_direction === 'declining' ? 'bg-rose-500/20 text-rose-300' : 'bg-zinc-700 text-zinc-400'}`}>
+                {dealCreationRate.trend_direction} · {dealCreationRate.growth_rate > 0 ? '+' : ''}{dealCreationRate.growth_rate}%
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={regenerateDealCreationRate}
+              className="text-xs text-zinc-400 hover:text-zinc-200 flex items-center gap-1 px-2 py-1 rounded hover:bg-zinc-800"
+              disabled={dealCreationRateLoading}
+            >
+              {dealCreationRateLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              Regenerate
+            </button>
+            {dealCreationRateOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {dealCreationRateOpen && (
+          dealCreationRateLoading && !dealCreationRate ? (
+            <div className="p-6 flex items-center gap-2 text-zinc-500 text-sm"><Loader2 className="h-4 w-4 animate-spin" />Loading deal creation rate…</div>
+          ) : dealCreationRate ? (
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/40 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total (12 wks)</p>
+                  <p className="text-xl font-bold text-sky-300">{dealCreationRate.total_new_deals}</p>
+                  <p className="text-xs text-zinc-500">deals created</p>
+                </div>
+                <div className="bg-zinc-800/40 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg / Week</p>
+                  <p className="text-xl font-bold text-zinc-100">{dealCreationRate.avg_per_week}</p>
+                  <p className="text-xs text-zinc-500">deals / wk</p>
+                </div>
+                <div className="bg-zinc-800/40 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Peak Week</p>
+                  <p className="text-xl font-bold text-emerald-300">{dealCreationRate.peak_count}</p>
+                  <p className="text-xs text-zinc-500">{dealCreationRate.peak_week}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <LineChart data={dealCreationRate.weekly_creation} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" />
+                  <XAxis dataKey="week_start" tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: string) => v.slice(5)} />
+                  <YAxis tick={{ fontSize: 10, fill: '#71717A' }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181B', border: '1px solid #3F3F46', borderRadius: 8 }}
+                    labelStyle={{ color: '#A1A1AA', fontSize: 11 }}
+                    formatter={(value: any, name: any) => [value, name === 'new_deals' ? 'New Deals' : 'Pipeline Value']}
+                  />
+                  <ReferenceLine y={dealCreationRate.avg_per_week} stroke="#38BDF8" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#38BDF8', fontSize: 9 }} />
+                  <Line type="monotone" dataKey="new_deals" stroke="#38BDF8" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{dealCreationRate.creation_narrative}</p>
+              <ul className="space-y-1">
+                {dealCreationRate.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-sky-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealCreationRate.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the deal creation rate trend.</div>
           )
         )}
       </Card>

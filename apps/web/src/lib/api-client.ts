@@ -7620,5 +7620,38 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/health-probability-gap`, {}, token)
   },
+
+  async getDealCreationRate(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const now = new Date();
+      const mondayOffset = now.getDay() === 0 ? 6 : now.getDay() - 1;
+      const thisMonday = new Date(now); thisMonday.setDate(now.getDate() - mondayOffset); thisMonday.setHours(0,0,0,0);
+      const weeklyCreation = Array.from({ length: 12 }, (_, i) => {
+        const ws = new Date(thisMonday); ws.setDate(thisMonday.getDate() - (11 - i) * 7);
+        // Simulate a growing trend: older weeks have fewer deals
+        const count = [1, 0, 2, 1, 3, 1, 2, 4, 3, 5, 4, 6][i];
+        const value = count * 28000;
+        return { week_start: ws.toISOString().slice(0, 10), new_deals: count, total_value: value };
+      });
+      return Promise.resolve({
+        weekly_creation: weeklyCreation,
+        total_new_deals: 32,
+        avg_per_week: 2.67,
+        growth_rate: 150.0,
+        trend_direction: 'accelerating',
+        peak_week: weeklyCreation[11].week_start,
+        peak_count: 6,
+        peak_value: 168000,
+        creation_narrative: 'Deal creation is accelerating strongly, with the most-recent 6 weeks producing 150% more deals than the prior 6 weeks — a clear sign of successful prospecting momentum. Sustaining this rate will require systematic lead nurturing and a consistent outreach cadence.',
+        recommendations: [
+          'Keep daily prospecting targets in place — the recent acceleration was driven by consistent outreach volume, not luck.',
+          'Analyse which lead sources produced the spike in the most recent weeks and allocate more budget to those channels.',
+          'Introduce a deal qualification gate so the higher deal volume translates into wins, not noise in the pipeline.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/creation-rate`, {}, token)
+  },
 }
 
