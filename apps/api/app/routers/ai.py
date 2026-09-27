@@ -21969,3 +21969,166 @@ async def get_ai_tasks_completion_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/creation-trend")
+@limiter.limit("5/minute")
+async def get_deal_creation_trend(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(tz=timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    rows = (await db.execute(
+        select(Deal.created_at, Deal.stage).where(
+            Deal.workspace_id == workspace_id,
+            Deal.created_at >= cutoff,
+        )
+    )).all()
+
+    buckets: list[dict] = []
+    for i in range(5, -1, -1):
+        month = now.month - i
+        year = now.year
+        while month <= 0:
+            month += 12
+            year -= 1
+        label = f"{year}-{month:02d}"
+        buckets.append({"year": year, "month": month, "month_label": label,
+                        "deals_created": 0, "deals_won": 0, "deals_lost": 0})
+
+    for row in rows:
+        ts = row.created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        for b in buckets:
+            if ts.year == b["year"] and ts.month == b["month"]:
+                b["deals_created"] += 1
+                if row.stage == "closed_won":
+                    b["deals_won"] += 1
+                elif row.stage == "closed_lost":
+                    b["deals_lost"] += 1
+                break
+
+    monthly_deals = []
+    for b in buckets:
+        closed = b["deals_won"] + b["deals_lost"]
+        win_rate = round(b["deals_won"] / closed * 100, 1) if closed > 0 else None
+        monthly_deals.append({
+            "month_label": b["month_label"],
+            "deals_created": b["deals_created"],
+            "deals_won": b["deals_won"],
+            "deals_lost": b["deals_lost"],
+            "win_rate": win_rate,
+        })
+
+    total_created = sum(b["deals_created"] for b in buckets)
+    total_won = sum(b["deals_won"] for b in buckets)
+    total_lost = sum(b["deals_lost"] for b in buckets)
+    total_closed = total_won + total_lost
+    overall_win_rate = round(total_won / total_closed * 100, 1) if total_closed > 0 else None
+
+    if total_created == 0:
+        return {
+            "monthly_deals": monthly_deals,
+            "total_created": 0,
+            "total_won": 0,
+            "total_lost": 0,
+            "overall_win_rate": None,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": None,
+            "best_win_rate": None,
+            "deal_narrative": "No deal data available for the last 6 months.",
+            "recommendations": [
+                "Start creating deals for your pipeline to track creation and win rate trends.",
+                "Mark deals as closed_won or closed_lost to enable win rate analysis.",
+                "Review your pipeline stages to ensure deals progress through to closure.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    first_half = [m["win_rate"] for m in monthly_deals[:3] if m["win_rate"] is not None]
+    second_half = [m["win_rate"] for m in monthly_deals[3:] if m["win_rate"] is not None]
+    first_avg = sum(first_half) / len(first_half) if first_half else 0.0
+    second_avg = sum(second_half) / len(second_half) if second_half else 0.0
+    rate_delta = round(second_avg - first_avg, 1)
+    if rate_delta >= 5.0:
+        trend_direction = "improving"
+    elif rate_delta <= -5.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    best_entry = max(
+        (m for m in monthly_deals if m["win_rate"] is not None),
+        key=lambda x: x["win_rate"],
+        default=None,
+    )
+    best_month = best_entry["month_label"] if best_entry else None
+    best_win_rate = best_entry["win_rate"] if best_entry else None
+
+    prompt = (
+        f"Deal creation and win rate data for the last 6 months:\n"
+        f"Monthly data: {[{'month': m['month_label'], 'created': m['deals_created'], 'won': m['deals_won'], 'lost': m['deals_lost'], 'win_rate': m['win_rate']} for m in monthly_deals]}\n"
+        f"Overall: {total_created} deals created, {total_won} won, {total_lost} lost, {overall_win_rate}% win rate\n"
+        f"Trend: {trend_direction} ({rate_delta:+.1f}pp)\n"
+        f"Best month: {best_month} at {best_win_rate}% win rate\n\n"
+        "Return JSON only:\n"
+        '{"deal_narrative": "2-3 sentence insight about deal creation volume and win rate trends", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    deal_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        deal_narrative = str(parsed.get("deal_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        deal_narrative = (
+            f"Your team created {total_created} deals and won {total_won} "
+            f"({overall_win_rate}%) over the last 6 months. "
+            f"The win rate trend is {trend_direction} ({rate_delta:+.1f}pp change)."
+        )
+
+    default_recs = [
+        "Review lost deals each month to identify the top objection patterns driving losses.",
+        "Set a monthly deal creation target to maintain consistent pipeline coverage.",
+        "Focus on deals in proposal and negotiation stages to improve near-term win rate.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_deals": monthly_deals,
+        "total_created": total_created,
+        "total_won": total_won,
+        "total_lost": total_lost,
+        "overall_win_rate": overall_win_rate,
+        "trend_direction": trend_direction,
+        "rate_delta": rate_delta,
+        "best_month": best_month,
+        "best_win_rate": best_win_rate,
+        "deal_narrative": deal_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
