@@ -10134,3 +10134,56 @@ async def test_pipeline_value_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-value-trend")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20q(b): AI win/loss trend
+# ---------------------------------------------------------------------------
+
+class FakeWinLossRow:
+    def __init__(self, stage: str, stage_changed_at: _dt.datetime):
+        self.stage = stage
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_win_loss_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.utcnow()
+    rows = [
+        FakeWinLossRow("closed_won",  now - _dt.timedelta(days=5)),
+        FakeWinLossRow("closed_won",  now - _dt.timedelta(days=10)),
+        FakeWinLossRow("closed_lost", now - _dt.timedelta(days=15)),
+        FakeWinLossRow("closed_won",  now - _dt.timedelta(days=60)),
+        FakeWinLossRow("closed_lost", now - _dt.timedelta(days=65)),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"win_loss_narrative": "Win rate is improving.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/win-loss-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_deals"]) == 6
+    assert data["total_closed"] == 5
+    assert data["total_won"] == 3
+    assert data["total_lost"] == 2
+    assert data["overall_win_rate"] == pytest.approx(60.0, abs=0.2)
+    assert data["win_loss_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_win_loss_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-ffffaaaabbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/win-loss-trend")
+    assert resp.status_code == 403

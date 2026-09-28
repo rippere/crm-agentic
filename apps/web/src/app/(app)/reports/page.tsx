@@ -951,6 +951,11 @@ export default function ReportsPage() {
   const [pipelineValueTrend, setPipelineValueTrend] = useState<PipelineValueTrendData | null>(null);
   const [pipelineValueTrendLoading, setPipelineValueTrendLoading] = useState(false);
   const [pipelineValueTrendOpen, setPipelineValueTrendOpen] = useState(true);
+  type WinLossMonth = { month_label: string; won: number; lost: number; total: number; win_rate: number | null };
+  type WinLossTrendData = { monthly_deals: WinLossMonth[]; total_won: number; total_lost: number; total_closed: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; win_loss_narrative: string; recommendations: string[]; generated_at: string };
+  const [winLossTrend, setWinLossTrend] = useState<WinLossTrendData | null>(null);
+  const [winLossTrendLoading, setWinLossTrendLoading] = useState(false);
+  const [winLossTrendOpen, setWinLossTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1166,6 +1171,8 @@ export default function ReportsPage() {
       apiClient.getTasksCompletionTrend("demo-workspace-1", "demo-token").then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
       setPipelineValueTrendLoading(true);
       apiClient.getPipelineValueTrend("demo-workspace-1", "demo-token").then(setPipelineValueTrend).catch(() => {}).finally(() => setPipelineValueTrendLoading(false));
+      setWinLossTrendLoading(true);
+      apiClient.getWinLossTrend("demo-workspace-1", "demo-token").then(setWinLossTrend).catch(() => {}).finally(() => setWinLossTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1385,6 +1392,8 @@ export default function ReportsPage() {
       apiClient.getTasksCompletionTrend(workspaceId, session.access_token).then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
       setPipelineValueTrendLoading(true);
       apiClient.getPipelineValueTrend(workspaceId, session.access_token).then(setPipelineValueTrend).catch(() => {}).finally(() => setPipelineValueTrendLoading(false));
+      setWinLossTrendLoading(true);
+      apiClient.getWinLossTrend(workspaceId, session.access_token).then(setWinLossTrend).catch(() => {}).finally(() => setWinLossTrendLoading(false));
     });
   }, []);
 
@@ -3053,6 +3062,27 @@ export default function ReportsPage() {
         if (!session) { setPipelineValueTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setPipelineValueTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateWinLossTrend = () => {
+    setWinLossTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getWinLossTrend(wid, tok)
+        .then(setWinLossTrend)
+        .catch(() => {})
+        .finally(() => setWinLossTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setWinLossTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setWinLossTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13064,6 +13094,86 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the pipeline value trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Win/Loss Trend */}
+      <Card className="border-zinc-800">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-zinc-200">Win/Loss Trend</span>
+            {winLossTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                winLossTrend.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+                winLossTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'}`}>
+                {winLossTrend.trend_direction} {winLossTrend.rate_delta > 0 ? '+' : ''}{winLossTrend.rate_delta}pp
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateWinLossTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={winLossTrendLoading}>
+              {winLossTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setWinLossTrendOpen(v => !v)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {winLossTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {winLossTrendOpen && (
+          winLossTrendLoading && !winLossTrend ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading win/loss trend…</div>
+          ) : winLossTrend ? (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Win Rate</p>
+                  <p className="text-xl font-bold text-indigo-300">{winLossTrend.overall_win_rate ?? '—'}%</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Total Closed</p>
+                  <p className="text-xl font-bold text-zinc-100">{winLossTrend.total_closed}</p>
+                  <p className="text-xs text-zinc-500">{winLossTrend.total_won}W / {winLossTrend.total_lost}L</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Best Month</p>
+                  <p className="text-sm font-bold text-emerald-300">{winLossTrend.best_win_rate ?? '—'}%</p>
+                  <p className="text-xs text-zinc-600">{winLossTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={130}>
+                <ComposedChart data={winLossTrend.monthly_deals} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="left" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" />
+                  <Tooltip
+                    formatter={(value: any, name: any) => name === 'win_rate' ? [`${value}%`, 'Win Rate'] : [value, name === 'won' ? 'Won' : 'Lost']}
+                    contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }}
+                  />
+                  <Bar yAxisId="left" dataKey="won" stackId="a" fill="#6366F1" name="won" />
+                  <Bar yAxisId="left" dataKey="lost" stackId="a" fill="#F43F5E" name="lost" radius={[3, 3, 0, 0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="win_rate" stroke="#A78BFA" strokeWidth={2} dot={{ r: 3, fill: '#A78BFA' }} connectNulls name="win_rate" />
+                  {winLossTrend.overall_win_rate != null && (
+                    <ReferenceLine yAxisId="right" y={winLossTrend.overall_win_rate} stroke="#A78BFA" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#A78BFA', fontSize: 9 }} />
+                  )}
+                </ComposedChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{winLossTrend.win_loss_narrative}</p>
+              <ul className="space-y-1">
+                {winLossTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(winLossTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the win/loss trend.</div>
           )
         )}
       </Card>
