@@ -10140,7 +10140,7 @@ async def test_pipeline_value_trend_wrong_workspace_returns_403(app_client):
 # Phase 20q(b): AI win/loss trend
 # ---------------------------------------------------------------------------
 
-class FakeWinLossRow:
+class FakeWinLossTrendRow:
     def __init__(self, stage: str, stage_changed_at: _dt.datetime):
         self.stage = stage
         self.stage_changed_at = stage_changed_at
@@ -10151,11 +10151,11 @@ async def test_win_loss_trend_returns_structured_response(app_client, monkeypatc
     fastapi_app, mock_db, workspace_id = app_client
     now = _dt.datetime.utcnow()
     rows = [
-        FakeWinLossRow("closed_won",  now - _dt.timedelta(days=5)),
-        FakeWinLossRow("closed_won",  now - _dt.timedelta(days=10)),
-        FakeWinLossRow("closed_lost", now - _dt.timedelta(days=15)),
-        FakeWinLossRow("closed_won",  now - _dt.timedelta(days=60)),
-        FakeWinLossRow("closed_lost", now - _dt.timedelta(days=65)),
+        FakeWinLossTrendRow("closed_won",  now - _dt.timedelta(days=5)),
+        FakeWinLossTrendRow("closed_won",  now - _dt.timedelta(days=10)),
+        FakeWinLossTrendRow("closed_lost", now - _dt.timedelta(days=15)),
+        FakeWinLossTrendRow("closed_won",  now - _dt.timedelta(days=60)),
+        FakeWinLossTrendRow("closed_lost", now - _dt.timedelta(days=65)),
     ]
 
     mock_result = MagicMock()
