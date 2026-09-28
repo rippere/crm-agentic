@@ -11,6 +11,7 @@ from typing import Any
 import anthropic
 
 from app.services.llm import get_anthropic
+from app.services.llm_json import loads_llm_json
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -56,7 +57,7 @@ async def score_clarity(message_body: str) -> dict[str, Any]:
     )
 
     try:
-        result: dict[str, Any] = json.loads(raw)
+        result: dict[str, Any] = loads_llm_json(raw)
         score = int(result.get("score", 50))
         score = max(0, min(100, score))
         rationale = str(result.get("rationale", ""))[:200]

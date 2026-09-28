@@ -42,6 +42,7 @@ from app.models.connector import Connector
 from app.models.task import Task
 from app.models.activity_event import ActivityEvent
 from app.models.deal_health_history import DealHealthHistory
+from app.services.llm_json import loads_llm_json
 
 router = APIRouter()
 
@@ -367,7 +368,7 @@ async def deal_coaching(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         urgency = data.get("urgency", "medium")
         bullets = data.get("bullets", [])
         if urgency not in ("low", "medium", "high"):
@@ -483,7 +484,7 @@ async def draft_outreach(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         subject = str(data.get("subject", f"Following up, {contact.name or 'there'}"))
         body = str(data.get("body", "Hi,\n\nI wanted to reach out and connect.\n\nBest,"))
     except Exception as exc:
@@ -605,7 +606,7 @@ async def pipeline_summary(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         headline = str(data.get("headline", "Pipeline summary unavailable."))
         opportunities = [str(b) for b in (data.get("opportunities") or [])[:3]]
         risks = [str(b) for b in (data.get("risks") or [])[:3]]
@@ -703,7 +704,7 @@ async def pipeline_pulse(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         insight = str(data.get("insight", "Pipeline health is nominal. Review at-risk deals and update next actions."))[:300]
     except Exception as exc:
         raise HTTPException(
@@ -817,7 +818,7 @@ async def suggest_contact_tasks(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         raw_suggestions = data.get("suggestions") or []
         suggestions = []
         for s in raw_suggestions[:5]:
@@ -955,7 +956,7 @@ async def deal_win_loss_analysis(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         narrative = str(data.get("narrative", "Analysis unavailable."))
         key_factors = [str(f) for f in (data.get("key_factors") or [])[:3]]
         lessons = [str(l) for l in (data.get("lessons") or [])[:3]]
@@ -1102,7 +1103,7 @@ async def deal_risk_narrative(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         risk_level = str(data.get("risk_level", "medium"))
         if risk_level not in ("low", "medium", "high"):
             risk_level = "medium"
@@ -1285,7 +1286,7 @@ async def suggest_outreach_sequence(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         raw_steps = data.get("steps") or []
         valid_channels = {"email", "slack", "call"}
         valid_timings = {"now", "3d", "7d", "14d"}
@@ -1430,7 +1431,7 @@ async def contact_relationship_health(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         health_rating = str(data.get("health_rating", "neutral"))
         if health_rating not in ("strong", "neutral", "at_risk"):
             health_rating = "neutral"
@@ -1766,7 +1767,7 @@ async def deal_momentum_check(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         momentum = str(data.get("momentum", "stalling"))
         if momentum not in ("gaining", "stalling", "declining"):
             momentum = "stalling"
@@ -1915,7 +1916,7 @@ async def deal_close_plan(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
 
         valid_labels = ("Next 30 days", "30–60 days", "60–90 days")
         phases = []
@@ -2069,7 +2070,7 @@ async def contact_summary(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
 
         valid_statuses = ("strong", "warm", "cold", "at_risk")
         relationship_status = str(data.get("relationship_status", "warm"))
@@ -2173,7 +2174,7 @@ async def compare_deals(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
 
         winner_id = str(data.get("winner_id", str(deals[0].id)))
         rationale = str(data.get("rationale", ""))[:400]
@@ -2284,7 +2285,7 @@ async def triage_messages(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "[]"
-        items_data = json.loads(raw)
+        items_data = loads_llm_json(raw)
         items = [
             _TriageItem(
                 message_id=str(i.get("message_id", "")),
@@ -2434,7 +2435,7 @@ async def contact_reengagement_plan(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "[]"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, list):
             data = []
 
@@ -2565,7 +2566,7 @@ async def deal_objection_handler(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "[]"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, list):
             data = []
 
@@ -2694,7 +2695,7 @@ async def deal_stakeholder_map(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "[]"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, list):
             data = []
 
@@ -2829,7 +2830,7 @@ async def deal_negotiation_script(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
 
         concessions_raw = data.get("concessions", [])
         if not isinstance(concessions_raw, list):
@@ -2967,7 +2968,7 @@ async def deal_sentiment_digest(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
 
         overall_sentiment = str(data.get("overall_sentiment", "neutral"))
         if overall_sentiment not in ("positive", "neutral", "negative"):
@@ -3071,7 +3072,7 @@ async def draft_message_reply(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -3181,7 +3182,7 @@ async def contact_communication_style(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -3331,7 +3332,7 @@ async def contact_lead_score_explanation(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -3460,7 +3461,7 @@ async def deal_win_probability_explainer(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -3578,7 +3579,7 @@ async def prioritize_tasks(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -3739,7 +3740,7 @@ async def pipeline_health_briefing(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -3885,7 +3886,7 @@ async def get_team_performance(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -4051,7 +4052,7 @@ async def deal_meeting_prep(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -4258,7 +4259,7 @@ async def workspace_digest(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -4433,7 +4434,7 @@ async def contact_onboarding_checklist(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg_resp.content[0].text.strip() if msg_resp.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -4566,7 +4567,7 @@ async def deal_roi_projection(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -4702,7 +4703,7 @@ async def contact_growth_forecast(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -4844,7 +4845,7 @@ async def workspace_goal_tracker(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -4981,7 +4982,7 @@ async def workspace_competitive_landscape(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -5119,7 +5120,7 @@ async def deal_followup_sequence(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -5269,7 +5270,7 @@ async def deal_champion_risk(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -5395,7 +5396,7 @@ async def get_deal_competitive_response(
             messages=[{"role": "user", "content": context}],
         )
         raw = message.content[0].text.strip()
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
 
         primary_competitor = str(parsed.get("primary_competitor", competitors[0]))
         bc = parsed.get("battle_card", {})
@@ -5530,7 +5531,7 @@ async def deal_expansion_opportunity(
             messages=[{"role": "user", "content": context}],
         )
         raw = message.content[0].text.strip()
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
 
         opportunity_score = max(0, min(100, int(parsed.get("opportunity_score", 50))))
 
@@ -5708,7 +5709,7 @@ async def contact_churn_risk(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -5870,7 +5871,7 @@ async def contact_deal_velocity_benchmark(
                 messages=[{"role": "user", "content": context}],
             )
             raw = msg.content[0].text.strip() if msg.content else "{}"
-            data = json.loads(raw)
+            data = loads_llm_json(raw)
             if not isinstance(data, dict):
                 data = {}
 
@@ -6004,7 +6005,7 @@ async def contact_deal_outcome_predictor(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -6155,7 +6156,7 @@ async def contact_deal_portfolio_overview(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -6349,7 +6350,7 @@ async def contact_competitive_positioning(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -6560,7 +6561,7 @@ async def contact_meeting_agenda(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         if not isinstance(data, dict):
             data = {}
 
@@ -6738,7 +6739,7 @@ async def contact_communication_gap_analysis(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
         recs = data.get("recommendations", []) if isinstance(data, dict) else []
         if not isinstance(recs, list):
             recs = []
@@ -6852,7 +6853,7 @@ async def contact_sentiment_trend(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
 
         raw_points = data.get("sentiment_points", []) if isinstance(data, dict) else []
         sentiment_points = []
@@ -7018,7 +7019,7 @@ async def contact_account_plan(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -7168,7 +7169,7 @@ async def pipeline_narrative(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -7313,7 +7314,7 @@ async def contact_health_summary(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -7460,7 +7461,7 @@ async def win_probability_calibration(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -7598,7 +7599,7 @@ async def agent_performance_report(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -7700,7 +7701,7 @@ async def contact_acquisition_funnel(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -7841,7 +7842,7 @@ async def contact_source_attribution(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -8007,7 +8008,7 @@ async def get_task_completion_trends(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -9058,7 +9059,7 @@ async def get_contact_inactivity_risk(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data_json = json.loads(raw)
+        data_json = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -9212,7 +9213,7 @@ async def get_deals_pipeline_momentum(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data_json = json.loads(raw)
+        data_json = loads_llm_json(raw)
         highlights = [str(h) for h in (data_json.get("highlights") or [])[:3]]
         warnings = [str(w) for w in (data_json.get("warnings") or [])[:3]]
     except Exception:
@@ -9824,7 +9825,7 @@ async def get_close_rate_by_stage(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -9999,7 +10000,7 @@ async def get_pipeline_churn(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -10184,7 +10185,7 @@ async def get_deal_conversion_quality(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -10382,7 +10383,7 @@ async def get_win_loss_patterns(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -10526,7 +10527,7 @@ async def get_avg_deal_size_trend(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -10662,7 +10663,7 @@ async def get_followup_gaps(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -10806,7 +10807,7 @@ async def get_value_at_risk(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -10968,7 +10969,7 @@ async def get_next_best_actions(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -11166,7 +11167,7 @@ async def get_coaching_digest(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -11389,7 +11390,7 @@ async def get_qbr_summary(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -11581,7 +11582,7 @@ async def get_deal_conversion_paths(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -11846,7 +11847,7 @@ async def get_deal_playbook(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -12053,7 +12054,7 @@ async def get_deal_battle_card(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -12247,7 +12248,7 @@ async def get_deal_risk_escalation(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -12447,7 +12448,7 @@ async def get_deal_momentum(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -12633,7 +12634,7 @@ async def get_pipeline_velocity_heatmap(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -12791,7 +12792,7 @@ async def get_win_loss_summary(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -12956,7 +12957,7 @@ async def get_sales_forecast(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -13122,7 +13123,7 @@ async def get_deal_age_distribution(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -13271,7 +13272,7 @@ async def get_deal_health_trend(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -13427,7 +13428,7 @@ async def get_deal_stagnation(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -13563,7 +13564,7 @@ async def get_deal_engagement_gap(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -13721,7 +13722,7 @@ async def get_deal_value_concentration(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -13851,7 +13852,7 @@ async def get_deal_close_date_accuracy(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -13979,7 +13980,7 @@ async def get_rep_performance(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -14108,7 +14109,7 @@ async def get_pipeline_conversion_funnel_ai(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -14249,7 +14250,7 @@ async def get_deal_score_distribution(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -14396,7 +14397,7 @@ async def get_deal_win_factors(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -14513,7 +14514,7 @@ async def get_contact_engagement_heatmap(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -14629,7 +14630,7 @@ async def get_deal_velocity(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -14802,7 +14803,7 @@ async def get_top_contact_opportunities(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -14947,7 +14948,7 @@ async def get_ai_contact_lifetime_value(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data_json = json.loads(raw)
+        data_json = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -15084,7 +15085,7 @@ async def get_ai_deal_reactivation_candidates(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -15214,7 +15215,7 @@ async def get_ai_deal_pipeline_gap(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -15360,7 +15361,7 @@ async def get_ai_deal_closure_probability_heatmap(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -15512,7 +15513,7 @@ async def get_ai_contact_score_recency_heatmap(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -15646,7 +15647,7 @@ async def get_ai_deal_velocity_anomalies(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -15793,7 +15794,7 @@ async def get_ai_deal_outcome_factors(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -15965,7 +15966,7 @@ async def get_ai_deal_revenue_forecast(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -16102,7 +16103,7 @@ async def get_ai_deal_value_leak(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -16269,7 +16270,7 @@ async def get_ai_pipeline_coverage(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -16465,7 +16466,7 @@ async def get_ai_quarter_readiness(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -16616,7 +16617,7 @@ async def get_ai_deal_tier_segmentation(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -16757,7 +16758,7 @@ async def get_ai_deal_seasonal_patterns(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -16926,7 +16927,7 @@ async def get_ai_deal_stall_analysis(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -17087,7 +17088,7 @@ async def get_ai_deal_priority_matrix(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -17285,7 +17286,7 @@ async def get_ai_deal_engagement_report(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -17453,7 +17454,7 @@ async def get_ai_deal_pipeline_risk_score(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         risk_narrative = str(parsed.get("risk_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -17620,7 +17621,7 @@ async def get_contact_communication_frequency(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         communication_narrative = str(parsed.get("communication_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -17770,7 +17771,7 @@ async def get_contact_acquisition_rate(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         acquisition_narrative = str(parsed.get("acquisition_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -17908,7 +17909,7 @@ async def get_contact_company_concentration(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         concentration_narrative = str(parsed.get("concentration_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -18082,7 +18083,7 @@ async def get_contact_status_distribution(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         distribution_narrative = str(parsed.get("distribution_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -18227,7 +18228,7 @@ async def get_contact_role_distribution(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         role_narrative = str(parsed.get("role_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -18399,7 +18400,7 @@ async def get_contact_deal_engagement(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         engagement_narrative = str(parsed.get("engagement_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -18575,7 +18576,7 @@ async def get_contact_win_loss_attribution(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         attribution_narrative = str(parsed.get("attribution_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -18743,7 +18744,7 @@ async def get_contact_task_backlog(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         task_narrative = str(parsed.get("task_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -19054,7 +19055,7 @@ async def get_contact_health_score_distribution(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         health_narrative = str(parsed.get("health_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -19211,7 +19212,7 @@ async def get_contact_score_tier_analysis(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         score_narrative = str(parsed.get("score_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -19545,7 +19546,7 @@ async def get_contact_churn_risk(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         churn_narrative = str(parsed.get("churn_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -19714,7 +19715,7 @@ async def get_ai_deal_next_action_overdue(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -19914,7 +19915,7 @@ async def get_ai_deal_pipeline_balance(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -20101,7 +20102,7 @@ async def get_ai_deal_quarterly_forecast(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -20258,7 +20259,7 @@ async def get_ai_deal_price_sensitivity(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -20414,7 +20415,7 @@ async def get_ai_deal_stage_velocity(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -20554,7 +20555,7 @@ async def get_ai_deal_health_probability_gap(
             messages=[{"role": "user", "content": context}],
         )
         raw = msg.content[0].text.strip() if msg.content else "{}"
-        data = json.loads(raw)
+        data = loads_llm_json(raw)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -20712,7 +20713,7 @@ async def get_ai_deal_creation_rate(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         creation_narrative = str(parsed.get("creation_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -20882,7 +20883,7 @@ async def get_ai_deal_closing_rate(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         closing_narrative = str(parsed.get("closing_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -21058,7 +21059,7 @@ async def get_ai_deal_win_rate_trend(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         win_rate_narrative = str(parsed.get("win_rate_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -21238,7 +21239,7 @@ async def get_ai_deal_cycle_time_trend(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         cycle_time_narrative = str(parsed.get("cycle_time_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -21429,7 +21430,7 @@ async def get_ai_contact_conversion_rate_trend(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         conversion_narrative = str(parsed.get("conversion_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -21602,7 +21603,7 @@ async def get_ai_lost_revenue_trend(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         revenue_efficiency_narrative = str(parsed.get("revenue_efficiency_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -21775,7 +21776,7 @@ async def get_ai_outreach_trend(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         outreach_narrative = str(parsed.get("outreach_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
@@ -21937,7 +21938,7 @@ async def get_ai_tasks_completion_trend(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
+        parsed = loads_llm_json(raw)
         task_narrative = str(parsed.get("task_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
         recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]

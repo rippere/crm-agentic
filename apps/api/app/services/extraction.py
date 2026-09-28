@@ -11,6 +11,7 @@ from typing import Any
 import anthropic
 
 from app.services.llm import get_anthropic
+from app.services.llm_json import loads_llm_json
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -54,7 +55,7 @@ async def extract_tasks(message_body: str, workspace_id: str) -> list[dict[str, 
     raw = message.content[0].text if message.content else "[]"
 
     try:
-        tasks: list[dict[str, Any]] = json.loads(raw)
+        tasks: list[dict[str, Any]] = loads_llm_json(raw)
         if not isinstance(tasks, list):
             tasks = []
     except (json.JSONDecodeError, IndexError):
