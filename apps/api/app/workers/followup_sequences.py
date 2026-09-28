@@ -1,7 +1,7 @@
 """
 Celery task: check_stale_deals_hitl
 
-For each workspace with Slack + Gmail connectors:
+For each workspace with Slack + a mailbox (Gmail or Outlook) connector:
   1. Find active deals with health_score <= 40 that haven't had a HITL request in 7 days
   2. Generate a follow-up email draft via Claude
   3. Post to Slack as an interactive Block Kit message for human approval
@@ -76,18 +76,22 @@ async def _run_hitl() -> dict[str, Any]:
     cutoff = now - timedelta(days=7)
 
     async with factory() as db:
-        # Get all workspaces that have both Slack and Gmail connectors
+        # Get all workspaces that have both Slack and a mailbox connector
         slack_result = await db.execute(
             select(Connector).where(Connector.service == "slack")
         )
         slack_connectors = {c.workspace_id: c for c in slack_result.scalars().all()}
 
-        gmail_result = await db.execute(
-            select(Connector).where(Connector.service == "gmail")
-        )
-        gmail_connectors = {c.workspace_id: c for c in gmail_result.scalars().all()}
+        # A mailbox is either provider — approval sends via whichever the
+        # workspace connected (slack_interactions._handle_approve).
+        from app.services.mailbox import MAILBOX_SERVICES
 
-        eligible_workspaces = set(slack_connectors) & set(gmail_connectors)
+        mailbox_result = await db.execute(
+            select(Connector).where(Connector.service.in_(MAILBOX_SERVICES))
+        )
+        mailbox_connectors = {c.workspace_id: c for c in mailbox_result.scalars().all()}
+
+        eligible_workspaces = set(slack_connectors) & set(mailbox_connectors)
 
         # Fan-out bound: the inner stale-deals loop is already .limit(5) per
         # workspace, but this outer loop is unbounded in tenant count — with no

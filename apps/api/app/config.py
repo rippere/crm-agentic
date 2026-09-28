@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     API_URL: str = "http://localhost:8000"
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
+    # Outlook / Microsoft 365 mailbox connector (Microsoft identity platform v2,
+    # multi-tenant + personal accounts). Optional: when unset the Outlook connect
+    # endpoints return 503 "Outlook connector not configured" — startup never
+    # depends on them.
+    MICROSOFT_CLIENT_ID: str = ""
+    MICROSOFT_CLIENT_SECRET: str = ""
     SLACK_CLIENT_ID: str = ""
     SLACK_CLIENT_SECRET: str = ""
     SLACK_SIGNING_SECRET: str = ""

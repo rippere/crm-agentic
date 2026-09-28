@@ -219,11 +219,17 @@ async def gmail_sync(
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
+    # A workspace can hold several Gmail connectors (one per mailbox address);
+    # sync the most recently connected rather than letting scalar_one_or_none
+    # raise MultipleResultsFound.
     result = await db.execute(
-        select(Connector).where(
+        select(Connector)
+        .where(
             Connector.workspace_id == workspace_id,
             Connector.service == "gmail",
         )
+        .order_by(Connector.created_at.desc())
+        .limit(1)
     )
     connector = result.scalar_one_or_none()
     if connector is None:

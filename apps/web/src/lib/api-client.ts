@@ -387,6 +387,14 @@ export const apiClient = {
     if (isDemoMode) return Promise.resolve({ status: 'ok' })
     return apiFetch(`/workspaces/${_workspaceId}/connectors/gmail/sync`, { method: 'POST' }, _token)
   },
+  getOutlookAuthUrl: (_workspaceId: string, _token: string) => {
+    if (isDemoMode) return Promise.resolve({ auth_url: '#' })
+    return apiFetch(`/workspaces/${_workspaceId}/connectors/outlook/auth`, {}, _token)
+  },
+  triggerOutlookSync: (_workspaceId: string, _token: string) => {
+    if (isDemoMode) return Promise.resolve({ status: 'ok' })
+    return apiFetch(`/workspaces/${_workspaceId}/connectors/outlook/sync`, { method: 'POST' }, _token)
+  },
   getSlackAuthUrl: (_workspaceId: string, _token: string) => {
     if (isDemoMode) return Promise.resolve({ auth_url: '#' })
     return apiFetch(`/workspaces/${_workspaceId}/connectors/slack/auth`, {}, _token)
@@ -1978,7 +1986,7 @@ export const apiClient = {
   getMessageVolumeTrends: (
     workspaceId: string,
     token: string,
-  ): Promise<Array<{ week_start: string; gmail: number; slack: number; teams: number; unknown: number; total: number }>> => {
+  ): Promise<Array<{ week_start: string; gmail: number; outlook: number; slack: number; teams: number; unknown: number; total: number }>> => {
     if (isDemoMode) {
       const today = new Date()
       const dow = today.getDay()
@@ -1997,6 +2005,7 @@ export const apiClient = {
           return {
             week_start: d.toISOString().slice(0, 10),
             gmail,
+            outlook: 0,
             slack,
             teams,
             unknown,

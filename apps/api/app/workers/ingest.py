@@ -1,9 +1,10 @@
 """
 Celery ingest worker.
 
-Task: process_gmail_sync(connector_id: str)
+Tasks: process_gmail_sync / process_outlook_sync (connector_id: str)
   1. Load connector from DB
-  2. Fetch Primary-inbox + sent messages via GmailClient (see GMAIL_DEFAULT_QUERY)
+  2. Fetch Primary-inbox + sent messages via GmailClient (see GMAIL_DEFAULT_QUERY),
+     or Inbox + Sent Items via OutlookClient (see OUTLOOK_INGEST_FOLDERS)
   3. Deduplicate against messages table (UNIQUE workspace_id + external_id)
   4. Skip automated senders outright (noreply@ must never become a graph node)
   5. Pre-filter each remaining message with Claude Haiku (deal relevance check)
@@ -274,20 +275,343 @@ def _build_ingest_query(since_days: int) -> str:
     return GMAIL_DEFAULT_QUERY
 
 
-async def _run_sync(connector_id: str) -> dict[str, Any]:
-    from app.models.connector import Connector
+async def _already_ingested(db: AsyncSession, workspace_id: uuid.UUID, external_id: str) -> bool:
+    """Dedupe against the messages table (UNIQUE workspace_id + external_id)."""
     from app.models.message import Message
+
+    dup = await db.execute(
+        select(Message).where(
+            Message.workspace_id == workspace_id,
+            Message.external_id == external_id,
+        )
+    )
+    return dup.scalar_one_or_none() is not None
+
+
+async def _collect_gmail_candidates(
+    connector: Any,
+    db: AsyncSession,
+    connector_id: str,
+    max_messages: int,
+    since_days: int,
+) -> tuple[list[dict[str, Any]], int, bool]:
+    """Stage 1 for Gmail: list, dedupe, fetch and header-parse new messages.
+
+    Returns ``(candidates, skipped_automated, truncated)``. No Claude calls — the
+    shared stages in _run_sync apply relevance, storage and the LLM budget.
+    """
     from app.services.gmail_client import GmailClient
 
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
     google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    gmail = GmailClient(connector, db, google_client_id, google_client_secret)
+    workspace_id = connector.workspace_id
+    ingest_query = _build_ingest_query(since_days)
+    truncated = False
+    skipped_automated = 0
+
+    # Bounded pagination: walk pages until nextPageToken is exhausted OR the
+    # page cap / hard message cap is reached (then flag truncated). The
+    # category:primary + recency filter is applied server-side via
+    # ingest_query. Stopping at max_messages means one run can never fan out
+    # LLM calls across an entire multi-year mailbox — the remainder is picked
+    # up on the next sync via dedupe, never silently dropped.
+    page_token: str | None = None
+    messages_to_process: list[str] = []
+    pages_walked = 0
+
+    while True:
+        try:
+            listing = await gmail.list_messages(
+                max_results=100, page_token=page_token, q=ingest_query
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ingest list_messages_failed connector=%s page=%d exc=%s",
+                connector_id, pages_walked, exc,
+            )
+            break
+        for stub in listing.get("messages", []):
+            if len(messages_to_process) >= max_messages:
+                truncated = True
+                break
+            messages_to_process.append(stub["id"])
+        pages_walked += 1
+        page_token = listing.get("nextPageToken")
+        if truncated:
+            logger.info(
+                "ingest message_cap_reached connector=%s cap=%d collected=%d — "
+                "remainder deferred to next sync",
+                connector_id, max_messages, len(messages_to_process),
+            )
+            break
+        if not page_token:
+            break
+        if pages_walked >= _MAX_INGEST_PAGES:
+            truncated = True
+            logger.info(
+                "ingest truncated connector=%s pages=%d collected=%d — more remain",
+                connector_id, pages_walked, len(messages_to_process),
+            )
+            break
+
+    # Fetch + dedupe + parse headers (no Claude). Collect candidates that
+    # survive the automated-sender gate so relevance checks can be fanned out
+    # concurrently rather than blocking on N sequential round-trips.
+    candidates: list[dict[str, Any]] = []
+    for gmail_id in messages_to_process:
+        if await _already_ingested(db, workspace_id, gmail_id):
+            continue
+
+        try:
+            msg_data = await gmail.get_message(gmail_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ingest get_message_failed connector=%s gmail_id=%s exc=%s",
+                connector_id, gmail_id, exc,
+            )
+            continue
+
+        headers: dict[str, str] = {
+            h["name"].lower(): h["value"]
+            for h in msg_data.get("payload", {}).get("headers", [])
+        }
+        subject = headers.get("subject", "")
+        sender_email = headers.get("from", "")
+        date_str = headers.get("date")
+        received_at: datetime | None = None
+        if date_str:
+            try:
+                from email.utils import parsedate_to_datetime
+                received_at = parsedate_to_datetime(date_str)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "ingest date_parse_failed gmail_id=%s date=%s exc=%s",
+                    gmail_id, date_str, exc,
+                )
+
+        if _is_automated_sender(sender_email):
+            skipped_automated += 1
+            continue
+
+        # Direction comes from Gmail's own labels rather than by comparing the
+        # From address to the account — label data is authoritative for aliases
+        # and send-as addresses, which a string compare would misclassify.
+        label_ids = msg_data.get("labelIds", []) or []
+        direction = "outbound" if "SENT" in label_ids else "inbound"
+
+        body_plain = _decode_body(msg_data.get("payload", {}))
+        snippet = msg_data.get("snippet", "")
+        candidates.append({
+            "external_id": gmail_id,
+            "subject": subject,
+            "sender_email": sender_email,
+            "received_at": received_at,
+            "body_plain": body_plain,
+            "snippet": snippet,
+            "to_emails": _parse_addresses(headers.get("to")),
+            "cc_emails": _parse_addresses(headers.get("cc")),
+            "thread_id": msg_data.get("threadId"),
+            "rfc_message_id": headers.get("message-id"),
+            # References holds the full ancestry; its last entry is the direct
+            # parent and is the fallback when In-Reply-To is absent.
+            "in_reply_to": (
+                headers.get("in-reply-to")
+                or (headers.get("references", "").split() or [None])[-1]
+            ),
+            "direction": direction,
+        })
+
+    return candidates, skipped_automated, truncated
+
+
+def _parse_graph_datetime(value: str | None) -> datetime | None:
+    """Graph timestamps are ISO-8601 UTC (``2026-07-14T09:00:00Z``)."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _graph_body_text(body: dict[str, Any] | None) -> str:
+    """Plain text from a Graph ``body``. The client asks for text bodies via the
+    ``Prefer: outlook.body-content-type="text"`` header; strip tags as a fallback
+    in case HTML comes back anyway, so markup never reaches Claude or the UI."""
+    import html
+    import re
+
+    body = body or {}
+    content = body.get("content") or ""
+    if (body.get("contentType") or "").lower() == "html":
+        content = re.sub(r"(?is)<(script|style).*?</\1>", " ", content)
+        content = html.unescape(re.sub(r"<[^>]+>", " ", content))
+        content = re.sub(r"[ \t]+", " ", content).strip()
+    return content
+
+
+async def _collect_outlook_candidates(
+    connector: Any,
+    db: AsyncSession,
+    connector_id: str,
+    max_messages: int,
+    since_days: int,
+) -> tuple[list[dict[str, Any]], int, bool]:
+    """Stage 1 for Outlook / Microsoft 365: the Graph counterpart of
+    _collect_gmail_candidates, emitting the same candidate shape so the shared
+    relevance / storage / LLM-budget stages treat both providers identically.
+
+    Walks Inbox and Sent Items (OUTLOOK_INGEST_FOLDERS — Graph's equivalent of
+    Gmail's "category:primary OR in:sent"), newest first, each bounded by the
+    same page cap as Gmail. The hard message cap is ONE budget shared by both
+    folders, so at most ``max_messages`` messages are ever listed per run: the
+    Inbox may take up to half (rounded up), and Sent Items gets whatever the
+    Inbox left unused. Returns ``(candidates, skipped_automated, truncated)``.
+    No Claude calls.
+    """
+    from datetime import timedelta
+
+    from app.services.outlook_client import (
+        OUTLOOK_INGEST_FOLDERS,
+        OutlookClient,
+        graph_address,
+        graph_address_list,
+    )
+
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", "")
+    microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", "")
+    outlook = OutlookClient(connector, db, microsoft_client_id, microsoft_client_secret)
+    workspace_id = connector.workspace_id
+    # Recency window, the Graph form of Gmail's newer_than:Nd. since_days <= 0
+    # disables it (unbounded history, opt-in), same as _build_ingest_query.
+    since = (
+        datetime.now(tz=timezone.utc) - timedelta(days=since_days)
+        if since_days and since_days > 0
+        else None
+    )
+    truncated = False
+    skipped_automated = 0
+
+    listed: list[tuple[dict[str, Any], str]] = []
+    for position, folder in enumerate(OUTLOOK_INGEST_FOLDERS):
+        direction = "outbound" if folder == "sentitems" else "inbound"
+        # Shared budget: the first folder takes at most ceil(cap/2) so Sent Items
+        # is never starved; the last folder takes everything still unspent.
+        if position < len(OUTLOOK_INGEST_FOLDERS) - 1:
+            folder_cap = max_messages - max_messages // 2
+        else:
+            folder_cap = max_messages - len(listed)
+        next_link: str | None = None
+        pages_walked = 0
+        collected = 0
+        folder_full = False
+        if folder_cap <= 0:
+            continue
+        while True:
+            try:
+                page = await outlook.list_messages(
+                    folder=folder, top=100, since=since, next_link=next_link
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "ingest list_messages_failed connector=%s folder=%s page=%d exc=%s",
+                    connector_id, folder, pages_walked, exc,
+                )
+                break
+            for msg in page.get("value", []):
+                if collected >= folder_cap:
+                    folder_full = True
+                    break
+                listed.append((msg, direction))
+                collected += 1
+            pages_walked += 1
+            next_link = page.get("@odata.nextLink")
+            if folder_full:
+                truncated = True
+                logger.info(
+                    "ingest message_cap_reached connector=%s folder=%s cap=%d — "
+                    "remainder deferred to next sync",
+                    connector_id, folder, folder_cap,
+                )
+                break
+            if not next_link:
+                break
+            if pages_walked >= _MAX_INGEST_PAGES:
+                truncated = True
+                logger.info(
+                    "ingest truncated connector=%s folder=%s pages=%d collected=%d — more remain",
+                    connector_id, folder, pages_walked, collected,
+                )
+                break
+
+    # Newest first across both folders, the order a single Gmail query over
+    # inbox + sent returns. Graph timestamps are uniform UTC ISO strings, so they
+    # sort correctly as text. The length check is a backstop: the shared budget
+    # above already keeps len(listed) <= max_messages.
+    listed.sort(key=lambda item: item[0].get("receivedDateTime") or "", reverse=True)
+    if len(listed) > max_messages:
+        truncated = True
+        logger.info(
+            "ingest message_cap_reached connector=%s cap=%d listed=%d — "
+            "remainder deferred to next sync",
+            connector_id, max_messages, len(listed),
+        )
+        listed = listed[:max_messages]
+
+    candidates: list[dict[str, Any]] = []
+    for msg, direction in listed:
+        external_id = msg.get("id")
+        if not external_id:
+            continue
+        if await _already_ingested(db, workspace_id, external_id):
+            continue
+
+        sender_email = graph_address(msg.get("from"))
+        if _is_automated_sender(sender_email):
+            skipped_automated += 1
+            continue
+
+        headers: dict[str, str] = {
+            (h.get("name") or "").lower(): h.get("value") or ""
+            for h in msg.get("internetMessageHeaders") or []
+        }
+        body_plain = _graph_body_text(msg.get("body"))
+        candidates.append({
+            "external_id": external_id,
+            "subject": msg.get("subject") or "",
+            "sender_email": sender_email,
+            # sentDateTime is the Date header's value — what Gmail's received_at
+            # is parsed from — so both providers timestamp mail the same way.
+            "received_at": _parse_graph_datetime(
+                msg.get("sentDateTime") or msg.get("receivedDateTime")
+            ),
+            "body_plain": body_plain,
+            "snippet": msg.get("bodyPreview") or "",
+            "to_emails": _parse_addresses(graph_address_list(msg.get("toRecipients"))),
+            "cc_emails": _parse_addresses(graph_address_list(msg.get("ccRecipients"))),
+            "thread_id": msg.get("conversationId"),
+            "rfc_message_id": msg.get("internetMessageId"),
+            "in_reply_to": (
+                headers.get("in-reply-to")
+                or (headers.get("references", "").split() or [None])[-1]
+            ),
+            # Direction comes from the folder (Sent Items vs Inbox), the Graph
+            # analogue of Gmail's SENT label — authoritative for aliases.
+            "direction": direction,
+        })
+
+    return candidates, skipped_automated, truncated
+
+
+async def _run_sync(connector_id: str) -> dict[str, Any]:
+    from app.models.connector import Connector
+    from app.models.message import Message
 
     SessionFactory = _get_async_session()
     new_count = 0
-    skipped_automated = 0
     skipped_irrelevant = 0
     graph_only_count = 0
-    truncated = False
     enrich_ids: list[str] = []
 
     async with SessionFactory() as db:
@@ -300,130 +624,21 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
         from app.config import settings
 
         workspace_id = connector.workspace_id
-        gmail = GmailClient(connector, db, google_client_id, google_client_secret)
 
         # Token-safety bounds for this run. The hard message cap is the primary
-        # ceiling; the page cap and date window are complementary bounds.
+        # ceiling; the page cap and date window are complementary bounds. Both
+        # providers get the SAME bounds — only stage 1 (fetching) differs.
         max_messages = settings.INGEST_MAX_MESSAGES
-        ingest_query = _build_ingest_query(settings.INGEST_SINCE_DAYS)
+        collect = (
+            _collect_outlook_candidates
+            if connector.service == "outlook"
+            else _collect_gmail_candidates
+        )
 
-        # Bounded pagination: walk pages until nextPageToken is exhausted OR the
-        # page cap / hard message cap is reached (then flag truncated). The
-        # category:primary + recency filter is applied server-side via
-        # ingest_query. Stopping at max_messages means one run can never fan out
-        # LLM calls across an entire multi-year mailbox — the remainder is picked
-        # up on the next sync via dedupe, never silently dropped.
-        page_token: str | None = None
-        messages_to_process: list[str] = []
-        pages_walked = 0
-
-        while True:
-            try:
-                listing = await gmail.list_messages(
-                    max_results=100, page_token=page_token, q=ingest_query
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "ingest list_messages_failed connector=%s page=%d exc=%s",
-                    connector_id, pages_walked, exc,
-                )
-                break
-            for stub in listing.get("messages", []):
-                if len(messages_to_process) >= max_messages:
-                    truncated = True
-                    break
-                messages_to_process.append(stub["id"])
-            pages_walked += 1
-            page_token = listing.get("nextPageToken")
-            if truncated:
-                logger.info(
-                    "ingest message_cap_reached connector=%s cap=%d collected=%d — "
-                    "remainder deferred to next sync",
-                    connector_id, max_messages, len(messages_to_process),
-                )
-                break
-            if not page_token:
-                break
-            if pages_walked >= _MAX_INGEST_PAGES:
-                truncated = True
-                logger.info(
-                    "ingest truncated connector=%s pages=%d collected=%d — more remain",
-                    connector_id, pages_walked, len(messages_to_process),
-                )
-                break
-
-        # Stage 1: fetch + dedupe + parse headers (no Claude). Collect candidates
-        # that survive the automated-sender gate so relevance checks can be fanned
-        # out concurrently rather than blocking on N sequential round-trips.
-        candidates: list[dict[str, Any]] = []
-        for gmail_id in messages_to_process:
-            dup = await db.execute(
-                select(Message).where(
-                    Message.workspace_id == workspace_id,
-                    Message.external_id == gmail_id,
-                )
-            )
-            if dup.scalar_one_or_none() is not None:
-                continue
-
-            try:
-                msg_data = await gmail.get_message(gmail_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "ingest get_message_failed connector=%s gmail_id=%s exc=%s",
-                    connector_id, gmail_id, exc,
-                )
-                continue
-
-            headers: dict[str, str] = {
-                h["name"].lower(): h["value"]
-                for h in msg_data.get("payload", {}).get("headers", [])
-            }
-            subject = headers.get("subject", "")
-            sender_email = headers.get("from", "")
-            date_str = headers.get("date")
-            received_at: datetime | None = None
-            if date_str:
-                try:
-                    from email.utils import parsedate_to_datetime
-                    received_at = parsedate_to_datetime(date_str)
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug(
-                        "ingest date_parse_failed gmail_id=%s date=%s exc=%s",
-                        gmail_id, date_str, exc,
-                    )
-
-            if _is_automated_sender(sender_email):
-                skipped_automated += 1
-                continue
-
-            # Direction comes from Gmail's own labels rather than by comparing the
-            # From address to the account — label data is authoritative for aliases
-            # and send-as addresses, which a string compare would misclassify.
-            label_ids = msg_data.get("labelIds", []) or []
-            direction = "outbound" if "SENT" in label_ids else "inbound"
-
-            body_plain = _decode_body(msg_data.get("payload", {}))
-            snippet = msg_data.get("snippet", "")
-            candidates.append({
-                "gmail_id": gmail_id,
-                "subject": subject,
-                "sender_email": sender_email,
-                "received_at": received_at,
-                "body_plain": body_plain,
-                "snippet": snippet,
-                "to_emails": _parse_addresses(headers.get("to")),
-                "cc_emails": _parse_addresses(headers.get("cc")),
-                "thread_id": msg_data.get("threadId"),
-                "rfc_message_id": headers.get("message-id"),
-                # References holds the full ancestry; its last entry is the direct
-                # parent and is the fallback when In-Reply-To is absent.
-                "in_reply_to": (
-                    headers.get("in-reply-to")
-                    or (headers.get("references", "").split() or [None])[-1]
-                ),
-                "direction": direction,
-            })
+        # Stage 1: provider-specific fetch + dedupe + parse (no Claude).
+        candidates, skipped_automated, truncated = await collect(
+            connector, db, connector_id, max_messages, settings.INGEST_SINCE_DAYS
+        )
 
         # Per-run LLM budget: a backstop that bounds total Claude dispatches even
         # if the message cap regresses. Relevance checks are counted first (1 call
@@ -465,8 +680,8 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
             if graph_only:
                 skipped_irrelevant += 1
                 logger.debug(
-                    "ingest metadata_only gmail_id=%s subject=%s",
-                    cand["gmail_id"], cand["subject"][:60],
+                    "ingest metadata_only external_id=%s subject=%s",
+                    cand["external_id"], cand["subject"][:60],
                 )
 
             # Attribute the row to the human on the far end: for outbound mail
@@ -495,7 +710,7 @@ async def _run_sync(connector_id: str) -> dict[str, Any]:
             message = Message(
                 workspace_id=workspace_id,
                 connector_id=connector.id,
-                external_id=cand["gmail_id"],
+                external_id=cand["external_id"],
                 subject=cand["subject"],
                 body_plain="" if graph_only else cand["body_plain"],
                 sender_email=cand["sender_email"],
@@ -677,6 +892,17 @@ def enrich_message(self: Any, message_id: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.ingest.process_gmail_sync", bind=True)
 def process_gmail_sync(self: Any, connector_id: str) -> dict[str, Any]:
     """Celery task: fetch and store new Gmail messages, extract tasks via Claude."""
+    return asyncio.run(_run_sync(connector_id))
+
+
+@celery_app.task(name="app.workers.ingest.process_outlook_sync", bind=True)
+def process_outlook_sync(self: Any, connector_id: str) -> dict[str, Any]:
+    """Celery task: fetch and store new Outlook / Microsoft 365 messages.
+
+    Same _run_sync pipeline — and the same INGEST_MAX_MESSAGES / INGEST_SINCE_DAYS
+    / INGEST_MAX_LLM_CALLS bounds — as process_gmail_sync; only the fetch stage
+    differs (selected by connector.service).
+    """
     return asyncio.run(_run_sync(connector_id))
 
 

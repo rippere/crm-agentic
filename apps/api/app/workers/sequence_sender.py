@@ -170,9 +170,9 @@ async def _deliver(
 ) -> dict[str, Any]:
     """Actually deliver a step. The single external boundary — fully guarded.
 
-    email -> the same Gmail path followup_sequences.py uses (GmailClient over the
-    workspace 'gmail' Connector). sms -> a stub connector for the Zach demo (log +
-    return a stub result). Never raises: a missing connector, missing recipient,
+    email -> the workspace's connected mailbox: GmailClient over a 'gmail'
+    Connector or OutlookClient over an 'outlook' one (services/mailbox.py).
+    sms -> a stub connector for the Zach demo (log + return a stub result). Never raises: a missing connector, missing recipient,
     or provider error is logged and returned as ``{"delivered": False}`` so a tick
     never crashes on one bad send. Patched wholesale in the unit tests, so it runs
     with no credentials.
@@ -195,27 +195,24 @@ async def _deliver(
         return {"delivered": False, "channel": "email", "reason": "no recipient"}
 
     try:
-        from app.models.connector import Connector
         from app.services.gmail_client import GmailClient
+        from app.services.mailbox import build_outlook_client, get_mailbox_connector, is_outlook
         from app.config import settings as _settings
 
-        result = await db.execute(
-            select(Connector).where(
-                Connector.workspace_id == workspace_id,
-                Connector.service == "gmail",
-            )
-        )
-        connector = result.scalar_one_or_none()
+        connector = await get_mailbox_connector(db, workspace_id)
         if connector is None:
             logger.info("sequence_sender email_skip_no_connector workspace=%s", workspace_id)
-            return {"delivered": False, "channel": "email", "reason": "no gmail connector"}
+            return {"delivered": False, "channel": "email", "reason": "no email connector"}
 
-        client = GmailClient(
-            connector,
-            db,
-            google_client_id=_settings.GOOGLE_CLIENT_ID,
-            google_client_secret=_settings.GOOGLE_CLIENT_SECRET,
-        )
+        if is_outlook(connector):
+            client = build_outlook_client(connector, db)
+        else:
+            client = GmailClient(
+                connector,
+                db,
+                google_client_id=_settings.GOOGLE_CLIENT_ID,
+                google_client_secret=_settings.GOOGLE_CLIENT_SECRET,
+            )
         resp = await client.send_message(to=to, subject=subject or "", body=body or "")
         return {"delivered": True, "channel": "email", "to": to, "message_id": resp.get("id")}
     except Exception as exc:  # noqa: BLE001 — guard: one bad send never fails the tick

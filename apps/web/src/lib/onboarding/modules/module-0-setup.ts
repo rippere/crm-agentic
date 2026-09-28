@@ -94,16 +94,16 @@ export const module0Setup: TourModule = {
         "Pick the one that matches your team: Sales if you're driving deals, Project Management if you're running projects. Not sure? Start with the single track that fits best — you can add the other (or switch to Both) later in Settings. Picking one keeps your first run focused.",
       whatJustHappened:
         "Continuing here creates your workspace on the server with the mode you chose, and refreshes your session so it's bound to the new workspace.",
-      forwardReference: "Next: connect Gmail and Slack so the agents have data to act on.",
+      forwardReference: "Next: connect your mailbox (Gmail or Outlook) and Slack so the agents have data to act on.",
       checkpoint: {
         confirmLabel: "Mode picked → Next",
       },
     },
     {
       id: "connect-tools",
-      title: "Connect Gmail & Slack",
+      title: "Connect your mailbox & Slack",
       whyThisExists:
-        "This is where NovaCRM earns its keep. Gmail lets it sync email and send AI-drafted replies; Slack imports conversations and powers human-in-the-loop approvals. Connect them and the agents start ingesting right away — no manual data entry.",
+        "This is where NovaCRM earns its keep. Your mailbox — Gmail for Google accounts, Outlook for Microsoft 365 — lets it sync email and send AI-drafted replies; Slack imports conversations and powers human-in-the-loop approvals. Connect them and the agents start ingesting right away — no manual data entry.",
       prerequisiteCheck: {
         label: "You're on the integrations step.",
         verify: present('[data-tour="integrations"]'),
@@ -111,14 +111,14 @@ export const module0Setup: TourModule = {
       },
       anchor: { selector: '[data-tour="integrations"]', placement: "auto", padding: 6 },
       actionGuidance:
-        "Click Connect on Gmail and Slack and approve access in the popup. You can connect one, both, or skip for now and add them later from Connectors.",
+        "Click Connect on Gmail or Outlook, and on Slack, and approve access in the popup. You can connect one, both, or skip for now and add them later from Connectors.",
       whatJustHappened:
         "Connected tools begin feeding contacts, messages, and calls into your workspace. Anything high-stakes — like sending an email — still routes through your approval.",
       forwardReference: "Next: bring your team along.",
       checkpoint: {
         confirmLabel: "Tools handled → Next",
         verify: textPresent('[data-tour="integrations"]', "connected"),
-        nudge: "No connection detected yet — that's OK, you can connect Gmail and Slack later from the Connectors page.",
+        nudge: "No connection detected yet — that's OK, you can connect your mailbox and Slack later from the Connectors page.",
       },
     },
     {
