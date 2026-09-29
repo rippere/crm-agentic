@@ -13042,7 +13042,7 @@ export default function ReportsPage() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                   <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} />
                   <YAxis domain={[0, 100]} tick={{ fill: '#71717a', fontSize: 10 }} />
-                  <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }} formatter={(v: number) => [`${v}%`, 'Success Rate']} />
+                  <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }} formatter={(v) => [v != null ? `${v}%` : '—', 'Success Rate']} />
                   {agentPerfTrend.overall_success_rate != null && (
                     <ReferenceLine y={agentPerfTrend.overall_success_rate} stroke="#A78BFA" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#A78BFA', fontSize: 9 }} />
                   )}
