@@ -21970,3 +21970,144 @@ async def get_ai_tasks_completion_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/performance-trend")
+@limiter.limit("5/minute")
+async def get_ai_agents_performance_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    stmt = (
+        select(ActivityEvent.agent_name, ActivityEvent.severity, ActivityEvent.created_at)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.type == "agent_run")
+        .where(ActivityEvent.created_at >= cutoff)
+        .where(ActivityEvent.created_at.isnot(None))
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    buckets: list[dict] = []
+    for offset in range(5, -1, -1):
+        m = now.month - offset
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        label = datetime.datetime(y, m, 1).strftime("%b %Y")
+        buckets.append({"month_label": label, "year": y, "month": m, "total_runs": 0, "successes": 0, "failures": 0})
+
+    for row in rows:
+        created = row.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        for bucket in buckets:
+            if created.year == bucket["year"] and created.month == bucket["month"]:
+                bucket["total_runs"] += 1
+                if row.severity == "error":
+                    bucket["failures"] += 1
+                else:
+                    bucket["successes"] += 1
+                break
+
+    monthly_runs = []
+    for b in buckets:
+        total = b["total_runs"]
+        success_rate = round(b["successes"] / total * 100, 1) if total > 0 else None
+        monthly_runs.append({
+            "month_label": b["month_label"],
+            "total_runs": total,
+            "successes": b["successes"],
+            "failures": b["failures"],
+            "success_rate": success_rate,
+        })
+
+    total_runs = sum(b["total_runs"] for b in buckets)
+    total_successes = sum(b["successes"] for b in buckets)
+    total_failures = sum(b["failures"] for b in buckets)
+    overall_success_rate = round(total_successes / total_runs * 100, 1) if total_runs > 0 else None
+
+    first_half_rates = [m["success_rate"] for m in monthly_runs[:3] if m["success_rate"] is not None]
+    second_half_rates = [m["success_rate"] for m in monthly_runs[3:] if m["success_rate"] is not None]
+    first_avg = sum(first_half_rates) / len(first_half_rates) if first_half_rates else 0.0
+    second_avg = sum(second_half_rates) / len(second_half_rates) if second_half_rates else 0.0
+    rate_delta = round(second_avg - first_avg, 1)
+    if rate_delta >= 5.0:
+        trend_direction = "improving"
+    elif rate_delta <= -5.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    months_with_data = [m for m in monthly_runs if m["success_rate"] is not None]
+    best_month = max(months_with_data, key=lambda m: m["success_rate"])["month_label"] if months_with_data else None
+    best_success_rate = max(months_with_data, key=lambda m: m["success_rate"])["success_rate"] if months_with_data else None
+
+    agent_narrative = ""
+    recommendations: list[str] = []
+
+    if total_runs > 0:
+        prompt = (
+            f"Agent run performance over the last 6 months: {monthly_runs}. "
+            f"Total runs: {total_runs}, successes: {total_successes}, failures: {total_failures}, "
+            f"overall success rate: {overall_success_rate}%, trend: {trend_direction} ({rate_delta:+.1f}pp). "
+            "In 2-3 sentences, describe the agent reliability trend and highlight any concerns. "
+            "Then provide exactly 3 specific recommendations to improve agent success rates. "
+            'Return ONLY valid JSON: {"agent_narrative": "...", "recommendations": ["...", "...", "..."]}'
+        )
+        try:
+            client = _mk_anthropic()
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = msg.content[0].text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            parsed = loads_llm_json(raw)
+            agent_narrative = str(parsed.get("agent_narrative", "")).strip()
+            raw_recs = parsed.get("recommendations", [])
+            recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+        except Exception:
+            agent_narrative = (
+                f"Agent runs achieved a {overall_success_rate}% success rate over the last 6 months "
+                f"with a {trend_direction} trend ({rate_delta:+.1f}pp delta)."
+            )
+
+    if not agent_narrative:
+        agent_narrative = "No agent run data is available for the selected period. Configure and run agents to begin tracking performance trends."
+
+    default_recs = [
+        "Review failed agent runs to identify common error patterns and fix root causes.",
+        "Add retry logic and fallback handlers to agents prone to transient failures.",
+        "Correlate agent success rates with deal outcomes to measure business impact.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_runs": monthly_runs,
+        "total_runs": total_runs,
+        "total_successes": total_successes,
+        "total_failures": total_failures,
+        "overall_success_rate": overall_success_rate,
+        "trend_direction": trend_direction,
+        "rate_delta": rate_delta,
+        "best_month": best_month,
+        "best_success_rate": best_success_rate,
+        "agent_narrative": agent_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
