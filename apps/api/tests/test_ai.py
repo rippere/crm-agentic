@@ -10083,3 +10083,52 @@ async def test_tasks_completion_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/completion-trend")
     assert resp.status_code == 403
+
+
+class FakeAgentPerfRow:
+    def __init__(self, agent_name: str, severity: str, created_at: _dt.datetime):
+        self.agent_name = agent_name
+        self.severity = severity
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_agents_performance_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.utcnow()
+    rows = [
+        FakeAgentPerfRow("lead_scorer", "info", now - _dt.timedelta(days=2)),
+        FakeAgentPerfRow("email_composer", "info", now - _dt.timedelta(days=5)),
+        FakeAgentPerfRow("lead_scorer", "error", now - _dt.timedelta(days=8)),
+        FakeAgentPerfRow("pipeline_optimizer", "info", now - _dt.timedelta(days=10)),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"agent_narrative": "Agent success rate is 75%.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/performance-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_runs"]) == 6
+    assert data["total_runs"] == 4
+    assert data["total_successes"] == 3
+    assert data["total_failures"] == 1
+    assert data["overall_success_rate"] == pytest.approx(75.0, abs=0.2)
+    assert data["agent_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_agents_performance_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbcccc-dddd-eeee-ffff-000011112222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/performance-trend")
+    assert resp.status_code == 403

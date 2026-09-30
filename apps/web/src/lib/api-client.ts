@@ -7921,5 +7921,49 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getAgentPerformanceTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const now = new Date();
+      const months: string[] = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        months.push(d.toLocaleString('default', { month: 'short', year: 'numeric' }));
+      }
+      const runsArr = [12, 18, 22, 28, 31, 38];
+      const successArr = [10, 16, 20, 26, 29, 37];
+      const monthly_runs = months.map((month_label, i) => ({
+        month_label,
+        total_runs: runsArr[i],
+        successes: successArr[i],
+        failures: runsArr[i] - successArr[i],
+        success_rate: Math.round((successArr[i] / runsArr[i]) * 1000) / 10,
+      }));
+      const total_runs = runsArr.reduce((a, b) => a + b, 0);
+      const total_successes = successArr.reduce((a, b) => a + b, 0);
+      const total_failures = total_runs - total_successes;
+      const overall_success_rate = Math.round((total_successes / total_runs) * 1000) / 10;
+      const best = monthly_runs.reduce((a, b) => (b.success_rate ?? 0) > (a.success_rate ?? 0) ? b : a);
+      return Promise.resolve({
+        monthly_runs,
+        total_runs,
+        total_successes,
+        total_failures,
+        overall_success_rate,
+        trend_direction: 'improving',
+        rate_delta: 11.4,
+        best_month: best.month_label,
+        best_success_rate: best.success_rate,
+        agent_narrative: 'Agent success rates have climbed from 83.3% to 97.4% over the last six months, reflecting more robust error handling and improved prompt engineering. The consistent upward trend indicates the pipeline is maturing well with only minor transient failures remaining.',
+        recommendations: [
+          'Review the 2% of remaining failures to identify and eliminate recurring error root causes.',
+          'Set up automated alerts when the monthly success rate drops below 90% to catch regressions early.',
+          'Correlate agent run success rates with deal win probability to quantify their business impact.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/performance-trend`, {}, token)
+  },
 }
 
