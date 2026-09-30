@@ -7921,5 +7921,34 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getContactAcquisitionTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const addedArr = [5, 7, 6, 9, 11, 13];
+      const months = addedArr.map((c, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toISOString().slice(0, 7);
+        return { month_label: label, contacts_added: c };
+      });
+      const totalContacts = addedArr.reduce((a, b) => a + b, 0);
+      const peak = months.reduce((a, m) => m.contacts_added > a.contacts_added ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_contacts: months,
+        total_contacts: totalContacts,
+        trend_direction: 'growing',
+        growth_delta: 44.4,
+        peak_month: peak.month_label,
+        peak_contacts: peak.contacts_added,
+        acquisition_narrative: 'Contact acquisition has grown from 5 to 13 per month over the last six months, a 44% increase that reflects improved top-of-funnel activity. The consistent upward trend suggests prospecting cadence and lead generation efforts are compounding effectively.',
+        recommendations: [
+          'Maintain the current acquisition pace by dedicating at least two prospecting sessions per week.',
+          'Enrich newly added contacts with company and role data within 48 hours to keep outreach relevant.',
+          'Track the ratio of contacts-to-deals created each month to ensure acquisition quality stays high.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/acquisition-trend`, {}, token)
+  },
 }
 

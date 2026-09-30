@@ -21970,3 +21970,138 @@ async def get_ai_tasks_completion_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/acquisition-trend")
+@limiter.limit("5/minute")
+async def get_contact_acquisition_trend(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(tz=timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    rows = (await db.execute(
+        select(Contact.created_at).where(
+            Contact.workspace_id == workspace_id,
+            Contact.created_at >= cutoff,
+        )
+    )).all()
+
+    buckets: list[dict] = []
+    for i in range(5, -1, -1):
+        month = now.month - i
+        year = now.year
+        while month <= 0:
+            month += 12
+            year -= 1
+        buckets.append({"year": year, "month": month, "month_label": f"{year}-{month:02d}", "contacts_added": 0})
+
+    for row in rows:
+        ts = row.created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        for b in buckets:
+            if ts.year == b["year"] and ts.month == b["month"]:
+                b["contacts_added"] += 1
+                break
+
+    monthly_contacts = [{"month_label": b["month_label"], "contacts_added": b["contacts_added"]} for b in buckets]
+    total_contacts = sum(b["contacts_added"] for b in buckets)
+
+    if total_contacts == 0:
+        return {
+            "monthly_contacts": monthly_contacts,
+            "total_contacts": 0,
+            "trend_direction": "stable",
+            "growth_delta": 0.0,
+            "peak_month": None,
+            "peak_contacts": None,
+            "acquisition_narrative": "No contacts have been added in the last 6 months. Start building your contact list to track acquisition trends.",
+            "recommendations": [
+                "Import your existing contacts to establish a baseline for tracking acquisition over time.",
+                "Set a monthly contact acquisition goal and track progress against it.",
+                "Use the lead discovery features to identify new prospects and add them as contacts.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    first_half = [b["contacts_added"] for b in buckets[:3]]
+    second_half = [b["contacts_added"] for b in buckets[3:]]
+    first_avg = sum(first_half) / max(len(first_half), 1)
+    second_avg = sum(second_half) / max(len(second_half), 1)
+    if first_avg > 0:
+        growth_delta = round((second_avg - first_avg) / first_avg * 100, 1)
+    else:
+        growth_delta = 0.0
+
+    if growth_delta >= 10.0:
+        trend_direction = "growing"
+    elif growth_delta <= -10.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    peak_entry = max(buckets, key=lambda x: x["contacts_added"], default=None)
+    peak_month = peak_entry["month_label"] if peak_entry and peak_entry["contacts_added"] > 0 else None
+    peak_contacts = peak_entry["contacts_added"] if peak_entry and peak_entry["contacts_added"] > 0 else None
+
+    prompt = (
+        f"Contact acquisition data for the last 6 months:\n"
+        f"Monthly data: {[{'month': b['month_label'], 'contacts_added': b['contacts_added']} for b in buckets]}\n"
+        f"Overall: {total_contacts} contacts added, trend {trend_direction} ({growth_delta:+.1f}% change)\n"
+        f"Peak month: {peak_month} with {peak_contacts} contacts\n\n"
+        "Return JSON only:\n"
+        '{"acquisition_narrative": "2-3 sentence insight about contact acquisition trends and pipeline health implications", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    acquisition_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        acquisition_narrative = str(parsed.get("acquisition_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        acquisition_narrative = (
+            f"Your team added {total_contacts} contacts over the last 6 months. "
+            f"Contact acquisition is {trend_direction} ({growth_delta:+.1f}% change). "
+            f"Peak acquisition was {peak_contacts} contacts in {peak_month}."
+        )
+
+    default_recs = [
+        "Establish a weekly contact outreach cadence to maintain a healthy pipeline of new prospects.",
+        "Review months with low acquisition and identify the campaigns or channels that were underperforming.",
+        "Correlate contact acquisition volume with deal creation rate to validate your top-of-funnel efficiency.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_contacts": monthly_contacts,
+        "total_contacts": total_contacts,
+        "trend_direction": trend_direction,
+        "growth_delta": growth_delta,
+        "peak_month": peak_month,
+        "peak_contacts": peak_contacts,
+        "acquisition_narrative": acquisition_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
