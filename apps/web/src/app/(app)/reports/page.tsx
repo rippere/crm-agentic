@@ -946,6 +946,12 @@ export default function ReportsPage() {
   const [tasksCompletionTrendLoading, setTasksCompletionTrendLoading] = useState(false);
   const [tasksCompletionTrendOpen, setTasksCompletionTrendOpen] = useState(true);
 
+  type PipelineValueMonth = { month_label: string; new_deals: number; new_pipeline_value: number; avg_deal_value: number | null };
+  type PipelineValueTrendData = { monthly_data: PipelineValueMonth[]; total_new_deals: number; total_new_pipeline: number; avg_deal_value_overall: number; trend_direction: string; value_delta_pct: number; peak_month: string | null; peak_value: number; pipeline_value_narrative: string; recommendations: string[]; generated_at: string };
+  const [pipelineValueTrend, setPipelineValueTrend] = useState<PipelineValueTrendData | null>(null);
+  const [pipelineValueTrendLoading, setPipelineValueTrendLoading] = useState(false);
+  const [pipelineValueTrendOpen, setPipelineValueTrendOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1158,6 +1164,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend("demo-workspace-1", "demo-token").then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend("demo-workspace-1", "demo-token").then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setPipelineValueTrendLoading(true);
+      apiClient.getDealPipelineValueTrend("demo-workspace-1", "demo-token").then(setPipelineValueTrend).catch(() => {}).finally(() => setPipelineValueTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1375,6 +1383,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend(workspaceId, session.access_token).then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend(workspaceId, session.access_token).then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setPipelineValueTrendLoading(true);
+      apiClient.getDealPipelineValueTrend(workspaceId, session.access_token).then(setPipelineValueTrend).catch(() => {}).finally(() => setPipelineValueTrendLoading(false));
     });
   }, []);
 
@@ -3022,6 +3032,27 @@ export default function ReportsPage() {
         if (!session) { setTasksCompletionTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTasksCompletionTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regeneratePipelineValueTrend = () => {
+    setPipelineValueTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealPipelineValueTrend(wid, tok)
+        .then(setPipelineValueTrend)
+        .catch(() => {})
+        .finally(() => setPipelineValueTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setPipelineValueTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setPipelineValueTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12961,6 +12992,86 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the task completion trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20q: Pipeline Value Trend */}
+      <Card className="border-zinc-800">
+        <div className="flex items-center justify-between px-5 py-3">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-sky-400" />
+            <span className="text-sm font-semibold text-zinc-100">Pipeline Value Trend</span>
+            {pipelineValueTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                pipelineValueTrend.trend_direction === 'accelerating' ? 'bg-emerald-900/40 text-emerald-300' :
+                pipelineValueTrend.trend_direction === 'growing' ? 'bg-sky-900/40 text-sky-300' :
+                pipelineValueTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'
+              }`}>
+                {pipelineValueTrend.trend_direction} {pipelineValueTrend.value_delta_pct > 0 ? '+' : ''}{pipelineValueTrend.value_delta_pct}%
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={regeneratePipelineValueTrend}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-100 border border-zinc-700 rounded transition-colors"
+              disabled={pipelineValueTrendLoading}>
+              {pipelineValueTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              Regenerate
+            </button>
+            <button onClick={() => setPipelineValueTrendOpen(v => !v)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {pipelineValueTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {pipelineValueTrendOpen && (
+          pipelineValueTrendLoading && !pipelineValueTrend ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading pipeline value trend…</div>
+          ) : pipelineValueTrend ? (
+            <div className="px-5 pb-5 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total New Pipeline</p>
+                  <p className="text-xl font-bold text-sky-300">${(pipelineValueTrend.total_new_pipeline / 1000).toFixed(0)}K</p>
+                </div>
+                <div className="bg-zinc-900 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Deal Value</p>
+                  <p className="text-xl font-bold text-zinc-100">${(pipelineValueTrend.avg_deal_value_overall / 1000).toFixed(0)}K</p>
+                </div>
+                <div className="bg-zinc-900 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Peak Month</p>
+                  <p className="text-sm font-bold text-zinc-100">{pipelineValueTrend.peak_month ?? '—'}</p>
+                  <p className="text-xs text-zinc-600">${(pipelineValueTrend.peak_value / 1000).toFixed(0)}K</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={160}>
+                <ComposedChart data={pipelineValueTrend.monthly_data} margin={{ top: 4, right: 36, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717a' }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#71717a' }} tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}K`} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#71717a' }} tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}K`} />
+                  <Tooltip formatter={(v: unknown) => [`$${((v as number)/1000).toFixed(1)}K`]} contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: 6 }} labelStyle={{ color: '#a1a1aa' }} />
+                  <Bar yAxisId="left" dataKey="new_pipeline_value" name="New Pipeline" fill="#38bdf8" radius={[3,3,0,0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="avg_deal_value" name="Avg Deal Value" stroke="#818cf8" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                  {pipelineValueTrend.avg_deal_value_overall > 0 && (
+                    <ReferenceLine yAxisId="right" y={pipelineValueTrend.avg_deal_value_overall} stroke="#818cf8" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#818cf8', fontSize: 9 }} />
+                  )}
+                </ComposedChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{pipelineValueTrend.pipeline_value_narrative}</p>
+              <ul className="space-y-1">
+                {pipelineValueTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-sky-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(pipelineValueTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the pipeline value trend.</div>
           )
         )}
       </Card>

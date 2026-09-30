@@ -10083,3 +10083,55 @@ async def test_tasks_completion_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/completion-trend")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20q: AI deal pipeline value trend
+# ---------------------------------------------------------------------------
+
+class FakeDealValueRow:
+    def __init__(self, deal_id: uuid.UUID, value: float, created_at):
+        self.id = deal_id
+        self.value = value
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_pipeline_value_trend_returns_structured_response(app_client, monkeypatch):
+    import datetime as _dt
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.utcnow().replace(tzinfo=_dt.timezone.utc)
+    rows = [
+        FakeDealValueRow(uuid.uuid4(), 20000.0, now - _dt.timedelta(days=2)),
+        FakeDealValueRow(uuid.uuid4(), 35000.0, now - _dt.timedelta(days=40)),
+        FakeDealValueRow(uuid.uuid4(), 15000.0, now - _dt.timedelta(days=70)),
+        FakeDealValueRow(uuid.uuid4(), 50000.0, now - _dt.timedelta(days=100)),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"pipeline_value_narrative": "Pipeline value is growing.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/pipeline-value-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_data"]) == 6
+    assert data["total_new_deals"] == 4
+    assert data["total_new_pipeline"] == pytest.approx(120000.0)
+    assert data["pipeline_value_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_pipeline_value_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbcccc-dddd-eeee-ffff-000011112222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/pipeline-value-trend")
+    assert resp.status_code == 403
