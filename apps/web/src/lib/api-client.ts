@@ -7921,5 +7921,78 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getPipelineValueTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const dealsArr = [3, 4, 5, 4, 6, 7];
+      const valuesArr = [85000, 112000, 138000, 95000, 175000, 210000];
+      const months = dealsArr.map((d, i) => {
+        const dt = new Date(); dt.setDate(1); dt.setMonth(dt.getMonth() - (5 - i));
+        const label = dt.toISOString().slice(0, 7);
+        const avg = d > 0 ? Math.round(valuesArr[i] / d) : null;
+        return { month_label: label, deals_created: d, total_value: valuesArr[i], avg_value: avg };
+      });
+      const totalDeals = dealsArr.reduce((a, b) => a + b, 0);
+      const totalValue = valuesArr.reduce((a, b) => a + b, 0);
+      const overallAvg = Math.round(totalValue / totalDeals);
+      const peak = months.reduce((a, m) => m.total_value > a.total_value ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_pipeline: months,
+        total_deals: totalDeals,
+        total_value: totalValue,
+        overall_avg_value: overallAvg,
+        trend_direction: 'growing',
+        value_delta: 59.3,
+        peak_month: peak.month_label,
+        peak_value: peak.total_value,
+        pipeline_value_narrative: 'Pipeline value has grown from $85K to $210K over the last six months, a 59% increase driven by higher-value enterprise deals entering the funnel. The consistent month-over-month growth suggests improved targeting and qualification are attracting larger opportunities.',
+        recommendations: [
+          'Focus prospecting on deal segments with the highest average deal value to maximise pipeline growth.',
+          'Review months with lower pipeline value to identify gaps in lead generation activity.',
+          'Correlate pipeline value trend with close rates to refine deal qualification criteria.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-value-trend`, {}, token)
+  },
+
+  async getWinLossTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const wonArr =  [3, 4, 5, 4, 6, 7];
+      const lostArr = [3, 3, 3, 2, 2, 2];
+      const months = wonArr.map((won, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+        const total = won + lostArr[i];
+        const win_rate = total > 0 ? Math.round(won / total * 1000) / 10 : null;
+        return { month_label: label, won, lost: lostArr[i], total, win_rate };
+      });
+      const totalWon = wonArr.reduce((a, b) => a + b, 0);
+      const totalLost = lostArr.reduce((a, b) => a + b, 0);
+      const totalClosed = totalWon + totalLost;
+      const overallWinRate = Math.round(totalWon / totalClosed * 1000) / 10;
+      const best = months.reduce((a, m) => (m.win_rate ?? 0) > (a.win_rate ?? 0) ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_deals: months,
+        total_won: totalWon,
+        total_lost: totalLost,
+        total_closed: totalClosed,
+        overall_win_rate: overallWinRate,
+        trend_direction: 'improving',
+        rate_delta: 16.7,
+        best_month: best.month_label,
+        best_win_rate: best.win_rate,
+        win_loss_narrative: 'Win rate has climbed from 50% to 78% over the last six months, driven by better deal qualification and more targeted competitive positioning. The trend suggests the team is increasingly closing higher-quality opportunities.',
+        recommendations: [
+          'Review lost deals from the last quarter to identify the most common objection patterns.',
+          'Focus coaching on the stage with the lowest stage-to-stage conversion to improve win rates.',
+          'Track competitor mentions in deal notes to surface win/loss drivers by competitive scenario.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/win-loss-trend`, {}, token)
+  },
 }
 
