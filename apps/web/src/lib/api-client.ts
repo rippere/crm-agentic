@@ -7921,5 +7921,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getDealPipelineValueTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const newDeals  = [2, 3, 4, 3, 5, 6];
+      const values    = [38000, 55000, 72000, 61000, 95000, 112000];
+      const months = newDeals.map((n, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toISOString().slice(0, 7);
+        const avg = n > 0 ? Math.round(values[i] / n) : null;
+        return { month_label: label, new_deals: n, new_pipeline_value: values[i], avg_deal_value: avg };
+      });
+      const totalDeals = newDeals.reduce((a, b) => a + b, 0);
+      const totalPipeline = values.reduce((a, b) => a + b, 0);
+      const avgOverall = Math.round(totalPipeline / totalDeals);
+      const peak = months.reduce((a, m) => m.new_pipeline_value > a.new_pipeline_value ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_data: months,
+        total_new_deals: totalDeals,
+        total_new_pipeline: totalPipeline,
+        avg_deal_value_overall: avgOverall,
+        trend_direction: 'accelerating',
+        value_delta_pct: 75.4,
+        peak_month: peak.month_label,
+        peak_value: peak.new_pipeline_value,
+        pipeline_value_narrative: 'New pipeline value has accelerated from $38K to $112K per month over the last six months, driven by both higher deal volumes and an increasing average deal size. This trajectory suggests the team is targeting larger opportunities and successfully moving them into active pipeline.',
+        recommendations: [
+          'Set a monthly new pipeline value target and review progress at the start of each week.',
+          'Focus prospecting efforts on deal sizes close to your historical average to maintain velocity.',
+          'Identify months with low new pipeline and analyse what activities drove higher-value months.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/pipeline-value-trend`, {}, token)
+  },
 }
 
