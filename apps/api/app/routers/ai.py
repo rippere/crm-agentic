@@ -8097,7 +8097,7 @@ async def get_message_response_time_benchmark(
 
     benchmark = []
     all_lags: list[float] = []
-    for service in ["gmail", "slack", "teams"]:
+    for service in ["gmail", "outlook", "slack", "teams"]:
         lags = service_lags.get(service, [])
         if lags:
             stats = _compute_stats(lags)

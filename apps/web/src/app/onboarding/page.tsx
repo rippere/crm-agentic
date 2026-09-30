@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase";
 import { apiClient } from "@/lib/api-client";
-import { Zap, TrendingUp, CheckSquare, Layers, Mail, MessageSquare, Users, ArrowRight, Check, Loader2 } from "lucide-react";
+import { Zap, TrendingUp, CheckSquare, Layers, Mail, Inbox, MessageSquare, Users, ArrowRight, Check, Loader2 } from "lucide-react";
 import type { WorkspaceMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import OnboardingTour from "@/components/onboarding/OnboardingTour";
@@ -60,6 +60,7 @@ export default function OnboardingPage() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [gmailConnected, setGmailConnected] = useState(false);
+  const [outlookConnected, setOutlookConnected] = useState(false);
   const [slackConnected, setSlackConnected] = useState(false);
 
   const slug = workspaceName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
@@ -116,6 +117,20 @@ export default function OnboardingPage() {
       if (auth_url && auth_url !== "#") {
         window.open(auth_url, "_blank");
         setGmailConnected(true);
+      }
+    }
+  };
+
+  const handleConnectOutlook = async () => {
+    if (!workspaceId || !token) return;
+    const res = await fetch(`${process.env.NEXT_PUBLIC_FASTAPI_URL}/workspaces/${workspaceId}/connectors/outlook/auth`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const { auth_url } = await res.json();
+      if (auth_url && auth_url !== "#") {
+        window.open(auth_url, "_blank");
+        setOutlookConnected(true);
       }
     }
   };
@@ -246,7 +261,7 @@ export default function OnboardingPage() {
             <div className="space-y-6">
               <div>
                 <h1 className="text-xl font-semibold text-zinc-100 mb-1">Connect your tools</h1>
-                <p className="text-sm text-zinc-500 mb-6">Connect Gmail and Slack to unlock AI-powered email drafting and messaging intelligence.</p>
+                <p className="text-sm text-zinc-500 mb-6">Connect your mailbox (Gmail or Outlook) and Slack to unlock AI-powered email drafting and messaging intelligence.</p>
                 <div data-tour="integrations" className="space-y-3">
                   <div className={cn(
                     "flex items-center gap-4 rounded-lg border p-4 transition-all",
@@ -254,14 +269,35 @@ export default function OnboardingPage() {
                   )}>
                     <Mail className={cn("h-5 w-5 flex-shrink-0", gmailConnected ? "text-emerald-400" : "text-zinc-400")} />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-zinc-200">Gmail</p>
-                      <p className="text-xs text-zinc-500">Sync emails and send AI-drafted replies</p>
+                      <p className="text-sm font-semibold text-zinc-200">Gmail / Google Workspace</p>
+                      <p className="text-xs text-zinc-500">Google accounts — sync emails and send AI-drafted replies</p>
                     </div>
                     {gmailConnected ? (
                       <span className="flex items-center gap-1 text-xs text-emerald-400 font-medium"><Check className="h-3.5 w-3.5" /> Connected</span>
                     ) : (
                       <button
                         onClick={handleConnectGmail}
+                        className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 transition"
+                      >
+                        Connect
+                      </button>
+                    )}
+                  </div>
+
+                  <div className={cn(
+                    "flex items-center gap-4 rounded-lg border p-4 transition-all",
+                    outlookConnected ? "border-emerald-500/30 bg-emerald-500/5" : "border-zinc-700 bg-zinc-800"
+                  )}>
+                    <Inbox className={cn("h-5 w-5 flex-shrink-0", outlookConnected ? "text-emerald-400" : "text-zinc-400")} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-zinc-200">Outlook / Microsoft 365</p>
+                      <p className="text-xs text-zinc-500">Microsoft work, school or personal accounts — sync emails and send AI-drafted replies</p>
+                    </div>
+                    {outlookConnected ? (
+                      <span className="flex items-center gap-1 text-xs text-emerald-400 font-medium"><Check className="h-3.5 w-3.5" /> Connected</span>
+                    ) : (
+                      <button
+                        onClick={handleConnectOutlook}
                         className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 transition"
                       >
                         Connect

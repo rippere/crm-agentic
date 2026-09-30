@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS activity_events (
 CREATE TABLE IF NOT EXISTS connectors (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id    UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  service         TEXT NOT NULL CHECK (service IN ('gmail', 'slack', 'teams')),
+  service         TEXT NOT NULL CHECK (service IN ('gmail', 'outlook', 'slack', 'teams')),
   encrypted_token TEXT NOT NULL,
   refresh_token   TEXT,
   token_expiry    TIMESTAMPTZ,

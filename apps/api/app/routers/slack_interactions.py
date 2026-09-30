@@ -29,10 +29,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models.activity_event import ActivityEvent
-from app.models.connector import Connector
 from app.models.contact import Contact
 from app.models.message import Message
 from app.services.gmail_client import GmailClient
+from app.services.mailbox import build_outlook_client, get_mailbox_connector, is_outlook, mailbox_label
 from app.services.slack_client import SlackClient
 
 router = APIRouter()
@@ -88,46 +88,45 @@ async def _handle_approve(
     response_url: str | None,
     db: AsyncSession,
 ) -> None:
-    """Send email via Gmail, update contact last_activity, emit sent event,
-    and replace the Slack message with a success notice."""
+    """Send email via the workspace mailbox (Gmail or Outlook), update contact
+    last_activity, emit sent event, and replace the Slack message with a success
+    notice."""
     workspace_id = uuid.UUID(meta["workspace_id"])
 
-    # Resolve Gmail connector
-    gmail_result = await db.execute(
-        select(Connector).where(
-            Connector.workspace_id == workspace_id,
-            Connector.service == "gmail",
-        )
-    )
-    connector = gmail_result.scalar_one_or_none()
+    # Resolve the workspace's mailbox connector (Gmail or Outlook)
+    connector = await get_mailbox_connector(db, workspace_id)
 
     if connector is None:
         # Log as error and notify Slack
         event.type = "hitl_error"
         event.severity = "error"
-        event.description = "HITL approval failed: no Gmail connector configured"
+        event.description = "HITL approval failed: no email connector configured"
         db.add(event)
         await db.commit()
         if response_url:
             try:
                 await SlackClient.ack_response_url(
                     response_url,
-                    text=":warning: Could not send — no Gmail connector found for this workspace.",
+                    text=":warning: Could not send — no Gmail or Outlook connector found for this workspace.",
                     replace_original=True,
                 )
             except Exception:
                 pass
         return
 
-    gmail = GmailClient(
-        connector=connector,
-        db=db,
-        google_client_id=settings.GOOGLE_CLIENT_ID,
-        google_client_secret=settings.GOOGLE_CLIENT_SECRET,
-    )
+    provider = mailbox_label(connector)
+    if is_outlook(connector):
+        mail_client = build_outlook_client(connector, db)
+    else:
+        mail_client = GmailClient(
+            connector=connector,
+            db=db,
+            google_client_id=settings.GOOGLE_CLIENT_ID,
+            google_client_secret=settings.GOOGLE_CLIENT_SECRET,
+        )
 
     try:
-        send_result = await gmail.send_message(
+        send_result = await mail_client.send_message(
             to=meta["to"],
             subject=meta["subject"],
             body=meta["body"],
@@ -135,7 +134,7 @@ async def _handle_approve(
     except Exception as exc:
         event.type = "hitl_error"
         event.severity = "error"
-        event.description = f"HITL approval failed (Gmail error): {exc}"
+        event.description = f"HITL approval failed ({provider} error): {exc}"
         db.add(event)
         await db.commit()
         if response_url:
@@ -158,6 +157,10 @@ async def _handle_approve(
     #
     # Non-fatal by construction: the mail is already sent, so a bookkeeping
     # failure here must never turn a successful send into an error path.
+    #
+    # Outlook's /me/sendMail returns no id (202, empty body), so no row is
+    # written here for Outlook; the saved Sent Items copy is ingested as an
+    # outbound message by the next Outlook sync instead.
     try:
         sent_id = send_result.get("id") if isinstance(send_result, dict) else None
         if sent_id:

@@ -140,7 +140,7 @@ export interface AppUser {
 }
 
 // ─── Connector ────────────────────────────────────────────────────────────────
-export type ConnectorService = "gmail" | "slack" | "teams";
+export type ConnectorService = "gmail" | "outlook" | "slack" | "teams";
 
 export interface Connector {
   id: string;

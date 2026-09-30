@@ -1028,37 +1028,36 @@ async def send_email(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Send an email via the workspace's connected Gmail account."""
+    """Send an email via the workspace's connected mailbox (Gmail or Outlook)."""
     if current_user.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    from app.models.connector import Connector
     from app.services.gmail_client import GmailClient, GmailReauthRequired
+    from app.services.mailbox import build_outlook_client, get_mailbox_connector, is_outlook, mailbox_label
+    from app.services.outlook_client import OutlookReauthRequired
     from app.config import settings
 
-    result = await db.execute(
-        select(Connector).where(
-            Connector.workspace_id == workspace_id,
-            Connector.service == "gmail",
-        )
-    )
-    connector = result.scalar_one_or_none()
+    connector = await get_mailbox_connector(db, workspace_id)
     if connector is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No Gmail connector found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No email connector found")
 
-    client = GmailClient(
-        connector=connector,
-        db=db,
-        google_client_id=settings.GOOGLE_CLIENT_ID,
-        google_client_secret=settings.GOOGLE_CLIENT_SECRET,
-    )
+    provider = mailbox_label(connector)
+    if is_outlook(connector):
+        client = build_outlook_client(connector, db)
+    else:
+        client = GmailClient(
+            connector=connector,
+            db=db,
+            google_client_id=settings.GOOGLE_CLIENT_ID,
+            google_client_secret=settings.GOOGLE_CLIENT_SECRET,
+        )
 
     try:
         sent = await client.send_message(to=body.to, subject=body.subject, body=body.body)
-    except GmailReauthRequired as exc:
+    except (GmailReauthRequired, OutlookReauthRequired) as exc:
         logger.warning(
-            "send_email gmail_reauth_required workspace_id=%s contact_id=%s connector_id=%s exc=%s",
-            workspace_id, contact_id, connector.id, exc,
+            "send_email reauth_required provider=%s workspace_id=%s contact_id=%s connector_id=%s exc=%s",
+            provider, workspace_id, contact_id, connector.id, exc,
         )
         # Persist an auth-error event so GET /connectors reports this connector as
         # "error" and the UI can steer the user to reconnect (mirrors slack_ingest).
@@ -1066,8 +1065,8 @@ async def send_email(
             db.add(ActivityEvent(
                 workspace_id=workspace_id,
                 type="connector_auth_error",
-                agent_name="Gmail",
-                description=f"Gmail connector authorization failed: {exc}. Reconnect required.",
+                agent_name=provider,
+                description=f"{provider} connector authorization failed: {exc}. Reconnect required.",
                 meta=f"connector_id={connector.id} code={getattr(exc, 'code', 'reauth_required')}",
                 severity="error",
             ))
@@ -1077,23 +1076,23 @@ async def send_email(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
-                "code": "gmail_reauth_required",
-                "message": "Gmail connection expired. Please reconnect Gmail to send email.",
+                "code": f"{provider.lower()}_reauth_required",
+                "message": f"{provider} connection expired. Please reconnect {provider} to send email.",
             },
         ) from exc
     except Exception as exc:
-        # Surface the real Gmail failure to the server log — the 502 body alone was
-        # opaque, hiding the actual cause (bad scope, quota, network, API error).
+        # Surface the real provider failure to the server log — the 502 body alone
+        # was opaque, hiding the actual cause (bad scope, quota, network, API error).
         logger.warning(
-            "send_email gmail_error workspace_id=%s contact_id=%s connector_id=%s exc_type=%s exc=%s",
-            workspace_id, contact_id, connector.id, type(exc).__name__, exc,
+            "send_email provider_error provider=%s workspace_id=%s contact_id=%s connector_id=%s exc_type=%s exc=%s",
+            provider, workspace_id, contact_id, connector.id, type(exc).__name__, exc,
         )
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Gmail error: {exc}") from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"{provider} error: {exc}") from exc
 
     event = ActivityEvent(
         workspace_id=workspace_id,
         type="email_sent",
-        agent_name="Gmail",
+        agent_name=provider,
         description=f"Email sent to {body.to}: {body.subject}",
         severity="success",
     )

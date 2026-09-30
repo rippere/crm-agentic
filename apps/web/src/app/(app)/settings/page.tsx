@@ -324,7 +324,7 @@ export default function SettingsPage() {
           <p className="text-sm font-semibold text-zinc-100">Integrations</p>
         </div>
         <p className="text-xs text-zinc-500 mb-4">
-          Connect Gmail and Slack to enable automatic message ingestion and contact enrichment.
+          Connect your mailbox (Gmail or Outlook) and Slack to enable automatic message ingestion and contact enrichment.
         </p>
         <Button variant="secondary" onClick={() => router.push("/connectors")}>
           <Plug className="h-3.5 w-3.5" />

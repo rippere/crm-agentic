@@ -91,7 +91,7 @@ export default function ReportsPage() {
     closed_won: number;
     closed_lost: number;
   }>>([]);
-  const [messageVolume, setMessageVolume] = useState<Array<{ week_start: string; gmail: number; slack: number; teams: number; unknown: number; total: number }>>([]);
+  const [messageVolume, setMessageVolume] = useState<Array<{ week_start: string; gmail: number; outlook?: number; slack: number; teams: number; unknown: number; total: number }>>([]);
   const [pipelineHealth, setPipelineHealth] = useState<{
     health_score: number;
     rating: 'strong' | 'healthy' | 'at_risk' | 'critical';
@@ -4826,6 +4826,7 @@ export default function ReportsPage() {
 
       {/* Message Volume by Source */}
       {messageVolume.length > 0 && (() => {
+        const hasOutlook = messageVolume.some((w) => (w.outlook ?? 0) > 0);
         const hasTeams = messageVolume.some((w) => w.teams > 0);
         const hasUnknown = messageVolume.some((w) => w.unknown > 0);
         const display = messageVolume.map((w) => ({
@@ -4841,6 +4842,7 @@ export default function ReportsPage() {
             </div>
             <div className="flex items-center gap-4 text-[10px]">
               <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-indigo-400" />Gmail</span>
+              {hasOutlook && <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-cyan-400"   />Outlook</span>}
               <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-violet-400" />Slack</span>
               {hasTeams   && <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-sky-400"    />Teams</span>}
               {hasUnknown && <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-zinc-500"   />Other</span>}
@@ -4856,6 +4858,7 @@ export default function ReportsPage() {
                     formatter={(v, name) => [v ?? 0, String(name).charAt(0).toUpperCase() + String(name).slice(1)]}
                   />
                   <Bar dataKey="gmail"   stackId="a" fill="#6366F1" radius={[0, 0, 0, 0]} />
+                  {hasOutlook && <Bar dataKey="outlook" stackId="a" fill="#22D3EE" radius={[0, 0, 0, 0]} />}
                   <Bar dataKey="slack"   stackId="a" fill="#8B5CF6" radius={[0, 0, 0, 0]} />
                   {hasTeams   && <Bar dataKey="teams"   stackId="a" fill="#38BDF8" radius={[0, 0, 0, 0]} />}
                   {hasUnknown && <Bar dataKey="unknown" stackId="a" fill="#52525B" radius={[2, 2, 0, 0]} />}

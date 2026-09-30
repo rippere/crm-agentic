@@ -14,7 +14,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.limiter import limiter
-from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments, webhook_logs, leads, segments, sequences, campaigns, outreach
+from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, outlook, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments, webhook_logs, leads, segments, sequences, campaigns, outreach
 
 # ── Structured logging (JSON-like key=value to stdout) ───────────────────────
 _LOG_CONFIG: dict = {
@@ -66,6 +66,13 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "event=startup_check check=gmail_webhook_secret status=missing "
             "detail=POST_/webhooks/gmail/push_will_reject_all_requests_until_set"
+        )
+    # The Outlook connector is optional: with no Microsoft app credentials its
+    # connect endpoints return 503. Log it so an unconfigured deploy is visible.
+    if not settings.MICROSOFT_CLIENT_ID or not settings.MICROSOFT_CLIENT_SECRET:
+        logger.warning(
+            "event=startup_check check=microsoft_oauth_credentials status=missing "
+            "detail=outlook_connector_disabled_until_MICROSOFT_CLIENT_ID_and_SECRET_set"
         )
     yield
     logger.info("event=shutdown")
@@ -132,6 +139,7 @@ app.include_router(agents.router, tags=["agents"])
 app.include_router(messages.router, tags=["messages"])
 app.include_router(tasks.router, tags=["tasks"])
 app.include_router(gmail.router, tags=["gmail"])
+app.include_router(outlook.router, tags=["outlook"])
 app.include_router(slack.router, tags=["slack"])
 app.include_router(calls.router, tags=["calls"])
 app.include_router(ai.router, tags=["ai"])

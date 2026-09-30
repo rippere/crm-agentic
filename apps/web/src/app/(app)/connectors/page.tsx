@@ -8,7 +8,7 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { apiClient } from "@/lib/api-client";
-import { Mail, Hash, RefreshCw, Trash2, Link, CheckCircle, Clock, MessageSquare } from "lucide-react";
+import { Mail, Inbox, Hash, RefreshCw, Trash2, Link, CheckCircle, Clock, MessageSquare } from "lucide-react";
 
 interface Connector {
   id: string;
@@ -24,20 +24,28 @@ interface Toast {
   type: "success" | "error" | "info";
 }
 
-const serviceConfig: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
+const serviceConfig: Record<string, { icon: React.ReactNode; label: string; description: string; color: string }> = {
   gmail: {
     icon: <Mail className="h-6 w-6" />,
     label: "Gmail",
+    description: "Gmail / Google Workspace",
     color: "text-rose-400 bg-rose-500/10 border-rose-500/20",
+  },
+  outlook: {
+    icon: <Inbox className="h-6 w-6" />,
+    label: "Outlook",
+    description: "Outlook / Microsoft 365",
+    color: "text-sky-400 bg-sky-500/10 border-sky-500/20",
   },
   slack: {
     icon: <Hash className="h-6 w-6" />,
     label: "Slack",
+    description: "Team messaging",
     color: "text-purple-400 bg-purple-500/10 border-purple-500/20",
   },
 };
 
-const ALL_SERVICES = ["gmail", "slack"];
+const ALL_SERVICES = ["gmail", "outlook", "slack"];
 
 function formatRelative(dateStr: string | null): string {
   if (!dateStr) return "Never";
@@ -111,11 +119,18 @@ function ConnectorsInner() {
     if (connected === "gmail") {
       addToast("Gmail connected successfully!", "success");
       fetchConnectors();
+    } else if (connected === "outlook") {
+      addToast("Outlook connected successfully!", "success");
+      fetchConnectors();
     } else if (connected === "slack") {
       addToast("Slack connected successfully!", "success");
       fetchConnectors();
     } else if (error === "slack_oauth_denied") {
       addToast("Slack connection was cancelled", "error");
+    } else if (error === "outlook_oauth_denied") {
+      addToast("Outlook connection was cancelled", "error");
+    } else if (error === "gmail_oauth_denied") {
+      addToast("Gmail connection was cancelled", "error");
     }
   }, [searchParams, addToast, fetchConnectors]);
 
@@ -126,6 +141,9 @@ function ConnectorsInner() {
       if (service === "gmail") {
         const data = await apiClient.getGmailAuthUrl(workspaceId, token);
         auth_url = data.auth_url;
+      } else if (service === "outlook") {
+        const data = await apiClient.getOutlookAuthUrl(workspaceId, token);
+        auth_url = data.auth_url;
       } else if (service === "slack") {
         const data = await apiClient.getSlackAuthUrl(workspaceId, token);
         auth_url = data.auth_url;
@@ -134,8 +152,14 @@ function ConnectorsInner() {
         return;
       }
       window.location.href = auth_url;
-    } catch {
-      addToast(`Failed to get auth URL for ${service}`, "error");
+    } catch (err) {
+      const e = err as { status?: number };
+      const label = serviceConfig[service]?.label ?? service;
+      // 503 = the server has no OAuth app credentials for this provider yet.
+      addToast(
+        e?.status === 503 ? `${label} isn't configured on the server yet` : `Failed to get auth URL for ${label}`,
+        "error",
+      );
     }
   };
 
@@ -145,6 +169,8 @@ function ConnectorsInner() {
     try {
       if (service === "gmail") {
         await apiClient.triggerGmailSync(workspaceId, token);
+      } else if (service === "outlook") {
+        await apiClient.triggerOutlookSync(workspaceId, token);
       } else if (service === "slack") {
         await apiClient.triggerSlackSync(workspaceId, token);
       }
@@ -196,14 +222,14 @@ function ConnectorsInner() {
 
       {loading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {[1, 2].map((i) => (
+          {[1, 2, 3].map((i) => (
             <div key={i} className="h-48 rounded-2xl border border-zinc-800 bg-zinc-900 animate-pulse" />
           ))}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {ALL_SERVICES.map((service) => {
-            const cfg = serviceConfig[service] ?? { icon: <Link className="h-6 w-6" />, label: service, color: "text-zinc-400 bg-zinc-800 border-zinc-700" };
+            const cfg = serviceConfig[service] ?? { icon: <Link className="h-6 w-6" />, label: service, description: "", color: "text-zinc-400 bg-zinc-800 border-zinc-700" };
             const connector = connectors.find((c) => c.service === service);
             const isConnected = connectedServices.has(service);
 
@@ -218,7 +244,7 @@ function ConnectorsInner() {
                     <div>
                       <p className="text-sm font-semibold text-zinc-100">{cfg.label}</p>
                       <p className="text-xs text-zinc-500 font-mono mt-0.5">
-                        {service === "gmail" ? "Google Workspace email" : "Team messaging"}
+                        {cfg.description}
                       </p>
                     </div>
                   </div>
@@ -302,7 +328,7 @@ export default function ConnectorsPage() {
     <Suspense fallback={
       <div className="flex flex-col gap-6 p-4 md:p-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {[1, 2].map((i) => (
+          {[1, 2, 3].map((i) => (
             <div key={i} className="h-48 rounded-2xl border border-zinc-800 bg-zinc-900 animate-pulse" />
           ))}
         </div>

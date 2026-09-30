@@ -296,18 +296,27 @@ function BulkActionBar({
   );
 }
 
+// Mailbox connectors that can send email. The API sends from whichever one the
+// workspace connected (most recent wins if both are connected).
+type MailProvider = "gmail" | "outlook";
+const MAIL_PROVIDER_LABEL: Record<MailProvider, string> = { gmail: "Gmail", outlook: "Outlook" };
+const REAUTH_CODE_PROVIDER: Record<string, MailProvider> = {
+  gmail_reauth_required: "gmail",
+  outlook_reauth_required: "outlook",
+};
+
 function EmailComposerModal({
   draft,
   contact,
   onClose,
-  hasGmailConnector,
+  mailProviders,
   workspaceId,
   token,
 }: {
   draft: EmailDraft;
   contact: Contact;
   onClose: () => void;
-  hasGmailConnector: boolean;
+  mailProviders: MailProvider[];
   workspaceId: string | null;
   token: string | null;
 }) {
@@ -315,8 +324,12 @@ function EmailComposerModal({
   const [sending, setSending] = useState(false);
   const [sendSuccess, setSendSuccess] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [needsReauth, setNeedsReauth] = useState(false);
+  // Which mailbox needs reconnecting, from the API's 409 reauth code.
+  const [reauthProvider, setReauthProvider] = useState<MailProvider | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const sendLabel = mailProviders.length === 1
+    ? `Send via ${MAIL_PROVIDER_LABEL[mailProviders[0]]}`
+    : "Send email";
 
   const handleCopy = () => {
     navigator.clipboard.writeText(`Subject: ${draft.subject}\n\n${draft.body}`);
@@ -328,7 +341,7 @@ function EmailComposerModal({
     if (!workspaceId || !token || sending || sendSuccess) return;
     setSending(true);
     setSendError(null);
-    setNeedsReauth(false);
+    setReauthProvider(null);
     try {
       await apiClient.sendEmail(workspaceId, contact.id, {
         to: contact.email,
@@ -338,11 +351,12 @@ function EmailComposerModal({
       setSendSuccess(true);
     } catch (err) {
       const e = err as { code?: string; status?: number };
-      if (e?.status === 409 && e?.code === "gmail_reauth_required") {
-        setNeedsReauth(true);
-        setSendError("Gmail connection expired — reconnect to send.");
+      const expired = e?.status === 409 && e?.code ? REAUTH_CODE_PROVIDER[e.code] : undefined;
+      if (expired) {
+        setReauthProvider(expired);
+        setSendError(`${MAIL_PROVIDER_LABEL[expired]} connection expired — reconnect to send.`);
       } else {
-        setSendError("Send failed — check Gmail connection");
+        setSendError("Send failed — check your email connection");
       }
     } finally {
       setSending(false);
@@ -350,20 +364,23 @@ function EmailComposerModal({
   };
 
   const handleReconnect = async () => {
-    if (!workspaceId || !token || reconnecting) return;
+    if (!workspaceId || !token || reconnecting || !reauthProvider) return;
     setReconnecting(true);
+    const label = MAIL_PROVIDER_LABEL[reauthProvider];
     try {
-      const { auth_url } = await apiClient.getGmailAuthUrl(workspaceId, token);
+      const { auth_url } = reauthProvider === "outlook"
+        ? await apiClient.getOutlookAuthUrl(workspaceId, token)
+        : await apiClient.getGmailAuthUrl(workspaceId, token);
       // Only navigate to a server-generated https URL — guards against an open
       // redirect if the endpoint ever returned a non-https/javascript: scheme.
       if (auth_url && /^https:\/\//.test(auth_url)) {
         window.location.href = auth_url;
       } else {
-        setSendError("Could not start Gmail reconnect. Try again from Connectors.");
+        setSendError(`Could not start ${label} reconnect. Try again from Connectors.`);
         setReconnecting(false);
       }
     } catch {
-      setSendError("Could not start Gmail reconnect. Try again from Connectors.");
+      setSendError(`Could not start ${label} reconnect. Try again from Connectors.`);
       setReconnecting(false);
     }
   };
@@ -409,7 +426,7 @@ function EmailComposerModal({
               <Copy className="h-3.5 w-3.5" />
               {copied ? "Copied!" : "Copy to Clipboard"}
             </Button>
-            {hasGmailConnector ? (
+            {mailProviders.length > 0 ? (
               <Button
                 variant="secondary"
                 className="flex-1 justify-center"
@@ -421,20 +438,20 @@ function EmailComposerModal({
                 ) : sendSuccess ? (
                   <><span className="text-emerald-400 font-bold">✓</span> Sent!</>
                 ) : (
-                  <><Mail className="h-3.5 w-3.5" /> Send via Gmail</>
+                  <><Mail className="h-3.5 w-3.5" /> {sendLabel}</>
                 )}
               </Button>
             ) : (
               <Button variant="secondary" className="flex-1 justify-center opacity-40" disabled>
                 <Mail className="h-3.5 w-3.5" />
-                No Gmail
+                No mailbox connected
               </Button>
             )}
           </div>
           {sendError && (
             <p className="text-xs text-rose-400 text-center">{sendError}</p>
           )}
-          {needsReauth && (
+          {reauthProvider && (
             <Button
               variant="primary"
               className="w-full justify-center"
@@ -444,7 +461,7 @@ function EmailComposerModal({
               {reconnecting ? (
                 <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Redirecting…</>
               ) : (
-                <><Mail className="h-3.5 w-3.5" /> Reconnect Gmail</>
+                <><Mail className="h-3.5 w-3.5" /> Reconnect {MAIL_PROVIDER_LABEL[reauthProvider]}</>
               )}
             </Button>
           )}
@@ -465,12 +482,12 @@ interface TimelineEvent {
   meta: Record<string, unknown>;
 }
 
-function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector }: {
+function ContactDrawer({ contact, onClose, workspaceId, token, mailProviders }: {
   contact: Contact;
   onClose: () => void;
   workspaceId: string | null;
   token: string | null;
-  hasGmailConnector: boolean;
+  mailProviders: MailProvider[];
 }) {
   const leadCfg = leadScoreConfig[contact.mlScore.label];
   const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
@@ -888,7 +905,7 @@ function ContactDrawer({ contact, onClose, workspaceId, token, hasGmailConnector
         draft={emailDraft}
         contact={contact}
         onClose={() => setEmailDraft(null)}
-        hasGmailConnector={hasGmailConnector}
+        mailProviders={mailProviders}
         workspaceId={workspaceId}
         token={token}
       />
@@ -1033,7 +1050,7 @@ export default function ContactsPage() {
   const [semanticLoading, setSemanticLoading] = useState(false);
   const embedPoller = useJobPoller();
   const [newContactOpen, setNewContactOpen] = useState(false);
-  const [hasGmailConnector, setHasGmailConnector] = useState(false);
+  const [mailProviders, setMailProviders] = useState<MailProvider[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -1086,9 +1103,11 @@ export default function ContactsPage() {
     apiClient.getConnectors(workspaceId, token).then((connectors: Array<{ service: string }>) => {
       // The connectors API serializes the provider under `service` (see
       // apps/api/app/routers/gmail.py), not `provider`. Reading the wrong key
-      // left hasGmailConnector permanently false, so the "No Gmail" badge and
-      // disabled Send button persisted even after Gmail was connected.
-      setHasGmailConnector(connectors.some((c) => c.service === 'gmail'));
+      // left the mailbox list permanently empty, so the "No mailbox" badge and
+      // disabled Send button persisted even after a mailbox was connected.
+      setMailProviders(
+        (["gmail", "outlook"] as const).filter((p) => connectors.some((c) => c.service === p)),
+      );
     }).catch(() => {});
   }, [token, workspaceId]);
 
@@ -2103,7 +2122,7 @@ export default function ContactsPage() {
             onClick={() => setSelected(null)}
             aria-hidden="true"
           />
-          <ContactDrawer contact={selected} onClose={() => setSelected(null)} workspaceId={workspaceId} token={token} hasGmailConnector={hasGmailConnector} />
+          <ContactDrawer contact={selected} onClose={() => setSelected(null)} workspaceId={workspaceId} token={token} mailProviders={mailProviders} />
         </>
       )}
 

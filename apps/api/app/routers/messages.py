@@ -154,7 +154,7 @@ async def get_message_volume_trends(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[dict]:
-    """Return weekly message counts broken down by connector source (gmail/slack/teams/unknown).
+    """Return weekly message counts broken down by connector source (gmail/outlook/slack/teams/unknown).
 
     Each row covers one Mon–Sun calendar week for the last `weeks` weeks.
     """
@@ -181,7 +181,7 @@ async def get_message_volume_trends(
     rows = msgs_result.all()
 
     # Build {week_start → {service → count}}
-    SERVICES = ("gmail", "slack", "teams")
+    SERVICES = ("gmail", "outlook", "slack", "teams")
     week_data: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     for msg, service in rows:
