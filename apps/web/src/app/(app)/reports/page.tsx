@@ -946,6 +946,12 @@ export default function ReportsPage() {
   const [tasksCompletionTrendLoading, setTasksCompletionTrendLoading] = useState(false);
   const [tasksCompletionTrendOpen, setTasksCompletionTrendOpen] = useState(true);
 
+  type AcquisitionMonth = { month_label: string; new_contacts: number; cumulative_total: number; mom_growth: number | null };
+  type ContactAcquisitionTrendData = { monthly_contacts: AcquisitionMonth[]; total_new_contacts: number; best_month: string | null; best_month_count: number | null; overall_growth_rate: number | null; trend_direction: string; growth_delta: number; acquisition_narrative: string; recommendations: string[]; generated_at: string };
+  const [acquisitionTrend, setAcquisitionTrend] = useState<ContactAcquisitionTrendData | null>(null);
+  const [acquisitionTrendLoading, setAcquisitionTrendLoading] = useState(false);
+  const [acquisitionTrendOpen, setAcquisitionTrendOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1158,6 +1164,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend("demo-workspace-1", "demo-token").then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend("demo-workspace-1", "demo-token").then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setAcquisitionTrendLoading(true);
+      apiClient.getContactAcquisitionTrend("demo-workspace-1", "demo-token").then(setAcquisitionTrend).catch(() => {}).finally(() => setAcquisitionTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1375,6 +1383,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend(workspaceId, session.access_token).then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend(workspaceId, session.access_token).then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setAcquisitionTrendLoading(true);
+      apiClient.getContactAcquisitionTrend(workspaceId, session.access_token).then(setAcquisitionTrend).catch(() => {}).finally(() => setAcquisitionTrendLoading(false));
     });
   }, []);
 
@@ -3022,6 +3032,27 @@ export default function ReportsPage() {
         if (!session) { setTasksCompletionTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTasksCompletionTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAcquisitionTrend = () => {
+    setAcquisitionTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getContactAcquisitionTrend(wid, tok)
+        .then(setAcquisitionTrend)
+        .catch(() => {})
+        .finally(() => setAcquisitionTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAcquisitionTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAcquisitionTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12961,6 +12992,84 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the task completion trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Contact Acquisition Trend — Phase 20q */}
+      <Card className="overflow-hidden">
+        <button
+          className="w-full flex items-center justify-between px-4 py-3 hover:bg-zinc-800/40 transition-colors"
+          onClick={() => setAcquisitionTrendOpen(o => !o)}
+        >
+          <div className="flex items-center gap-2">
+            <UserPlus className="h-4 w-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-zinc-200">Contact Acquisition Trend</span>
+            {acquisitionTrend && (
+              <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium",
+                acquisitionTrend.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+                acquisitionTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400')}>
+                {acquisitionTrend.trend_direction} {acquisitionTrend.growth_delta > 0 ? '+' : ''}{acquisitionTrend.growth_delta.toFixed(1)}/mo
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded hover:bg-zinc-700/50"
+              onClick={e => { e.stopPropagation(); regenerateAcquisitionTrend(); }}
+              disabled={acquisitionTrendLoading}>
+              {acquisitionTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              Regenerate
+            </button>
+            {acquisitionTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </button>
+        {acquisitionTrendOpen && (
+          acquisitionTrendLoading ? (
+            <div className="px-4 pb-4 space-y-3">
+              {[1,2,3].map(i => <div key={i} className="h-4 bg-zinc-800 rounded animate-pulse" />)}
+            </div>
+          ) : acquisitionTrend ? (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3 pt-1">
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Total New Contacts</p>
+                  <p className="text-xl font-bold text-zinc-100">{acquisitionTrend.total_new_contacts}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Overall Growth</p>
+                  <p className={cn("text-xl font-bold", acquisitionTrend.growth_delta >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
+                    {acquisitionTrend.growth_delta >= 0 ? '+' : ''}{acquisitionTrend.growth_delta.toFixed(1)}<span className="text-sm text-zinc-500 font-normal">/mo</span>
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Best Month</p>
+                  <p className="text-sm font-bold text-indigo-300">{acquisitionTrend.best_month_count ?? '—'}</p>
+                  <p className="text-xs text-zinc-600">{acquisitionTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={120}>
+                <BarChart data={acquisitionTrend.monthly_contacts} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} allowDecimals={false} />
+                  <Tooltip formatter={(value: any) => [value, 'New Contacts']} contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }} />
+                  <Bar dataKey="new_contacts" fill="#6366F1" radius={[3,3,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{acquisitionTrend.acquisition_narrative}</p>
+              <ul className="space-y-1">
+                {acquisitionTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(acquisitionTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the contact acquisition trend.</div>
           )
         )}
       </Card>

@@ -21970,3 +21970,150 @@ async def get_ai_tasks_completion_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/acquisition-trend")
+@limiter.limit("5/minute")
+async def get_contact_acquisition_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    stmt = (
+        select(Contact.created_at)
+        .where(Contact.workspace_id == workspace_id)
+        .where(Contact.created_at >= cutoff)
+        .where(Contact.created_at.isnot(None))
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    # Build 6 calendar-month buckets (oldest first)
+    monthly_contacts = []
+    for i in range(5, -1, -1):
+        cur_year = now.year
+        cur_month = now.month - i
+        while cur_month <= 0:
+            cur_month += 12
+            cur_year -= 1
+        label = f"{cur_year}-{cur_month:02d}"
+        count = sum(
+            1 for r in rows
+            if r.created_at.year == cur_year and r.created_at.month == cur_month
+        )
+        monthly_contacts.append({"month_label": label, "new_contacts": count, "cumulative_total": 0, "mom_growth": None})
+
+    # Fill cumulative totals
+    cumulative = 0
+    for m in monthly_contacts:
+        cumulative += m["new_contacts"]
+        m["cumulative_total"] = cumulative
+
+    # MoM growth (contacts delta from previous month)
+    for i in range(1, len(monthly_contacts)):
+        prev = monthly_contacts[i - 1]["new_contacts"]
+        curr = monthly_contacts[i]["new_contacts"]
+        monthly_contacts[i]["mom_growth"] = round(curr - prev, 1)
+
+    total_new_contacts = sum(m["new_contacts"] for m in monthly_contacts)
+
+    if total_new_contacts == 0:
+        return {
+            "monthly_contacts": monthly_contacts,
+            "total_new_contacts": 0,
+            "best_month": None,
+            "best_month_count": None,
+            "overall_growth_rate": None,
+            "trend_direction": "stable",
+            "growth_delta": 0.0,
+            "acquisition_narrative": "No contacts were acquired in the last 6 months.",
+            "recommendations": [
+                "Import existing contacts via CSV to seed your pipeline.",
+                "Connect Gmail or Slack to automatically capture new contacts from communications.",
+                "Set up lead scoring to prioritize contacts as they are added.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    # Trend: first half vs second half avg new contacts
+    first_half = [m["new_contacts"] for m in monthly_contacts[:3]]
+    second_half = [m["new_contacts"] for m in monthly_contacts[3:]]
+    first_avg = sum(first_half) / len(first_half) if first_half else 0.0
+    second_avg = sum(second_half) / len(second_half) if second_half else 0.0
+    growth_delta = round(second_avg - first_avg, 1)
+    if growth_delta >= 1.0:
+        trend_direction = "improving"
+    elif growth_delta <= -1.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    overall_growth_rate = round(growth_delta, 1)
+
+    best_entry = max(monthly_contacts, key=lambda x: x["new_contacts"])
+    best_month = best_entry["month_label"]
+    best_month_count = best_entry["new_contacts"]
+
+    prompt = (
+        f"Contact acquisition data for the last 6 months:\n"
+        f"Monthly new contacts: {[{'month': m['month_label'], 'new_contacts': m['new_contacts']} for m in monthly_contacts]}\n"
+        f"Total: {total_new_contacts} contacts added\n"
+        f"Trend: {trend_direction} ({growth_delta:+.1f} contacts/mo avg change first→second half)\n"
+        f"Best month: {best_month} with {best_month_count} contacts\n\n"
+        "Return JSON only:\n"
+        '{"acquisition_narrative": "2-3 sentence insight about contact acquisition patterns and what the trend suggests for pipeline health", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    acquisition_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = loads_llm_json(raw)
+        acquisition_narrative = str(parsed.get("acquisition_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        acquisition_narrative = (
+            f"Your workspace acquired {total_new_contacts} contacts over the last 6 months, "
+            f"with the highest intake in {best_month} ({best_month_count} contacts). "
+            f"Acquisition is trending {trend_direction} ({growth_delta:+.1f} contacts/mo change)."
+        )
+
+    default_recs = [
+        "Review which channels (email, Slack, manual) drive the most contact additions each month.",
+        "Set a monthly acquisition target and track progress on this chart.",
+        "Follow up with contacts added in the last 30 days to move them through the pipeline.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_contacts": monthly_contacts,
+        "total_new_contacts": total_new_contacts,
+        "best_month": best_month,
+        "best_month_count": best_month_count,
+        "overall_growth_rate": overall_growth_rate,
+        "trend_direction": trend_direction,
+        "growth_delta": growth_delta,
+        "acquisition_narrative": acquisition_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
