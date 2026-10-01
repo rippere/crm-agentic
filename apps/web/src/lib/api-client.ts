@@ -7921,5 +7921,41 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getContactAcquisitionTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const now = new Date();
+      const counts = [4, 6, 5, 7, 9, 11];
+      let cumulative = 0;
+      const months = counts.map((c, i) => {
+        const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+        cumulative += c;
+        const mom = i === 0 ? null : c - counts[i - 1];
+        return { month_label: d.toISOString().slice(0, 7), new_contacts: c, cumulative_total: cumulative, mom_growth: mom };
+      });
+      const total = counts.reduce((a, b) => a + b, 0);
+      const best = months.reduce((a, m) => m.new_contacts > a.new_contacts ? m : a, months[0]);
+      const firstAvg = counts.slice(0, 3).reduce((a, b) => a + b, 0) / 3;
+      const secondAvg = counts.slice(3).reduce((a, b) => a + b, 0) / 3;
+      const growthDelta = Math.round((secondAvg - firstAvg) * 10) / 10;
+      return Promise.resolve({
+        monthly_contacts: months,
+        total_new_contacts: total,
+        best_month: best.month_label,
+        best_month_count: best.new_contacts,
+        overall_growth_rate: growthDelta,
+        trend_direction: 'improving',
+        growth_delta: growthDelta,
+        acquisition_narrative: 'Contact acquisition has accelerated over the last six months, rising from 4 new contacts in the first month to 11 in the most recent month — a 175% increase that reflects growing pipeline activity. Maintaining this momentum requires systematic follow-up within the first week of contact creation.',
+        recommendations: [
+          'Review which channels (email, Slack, manual) drive the most contact additions each month.',
+          'Set a monthly acquisition target and track progress on this chart.',
+          'Follow up with contacts added in the last 30 days to move them through the pipeline.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/acquisition-trend`, {}, token)
+  },
 }
 
