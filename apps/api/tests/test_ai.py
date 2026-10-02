@@ -10083,3 +10083,57 @@ async def test_tasks_completion_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/completion-trend")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20q: AI deal avg value trend
+# ---------------------------------------------------------------------------
+
+class FakeAvgValueDeal:
+    def __init__(self, value: float, stage_changed_at: _dt.datetime):
+        self.value = value
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_deal_avg_value_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.utcnow()
+    rows = [
+        FakeAvgValueDeal(25000, now - _dt.timedelta(days=5)),
+        FakeAvgValueDeal(35000, now - _dt.timedelta(days=8)),
+        FakeAvgValueDeal(45000, now - _dt.timedelta(days=12)),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"avg_value_narrative": "Deal values are growing.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/avg-value-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_avg_value"]) == 6
+    assert data["total_won"] == 3
+    assert data["overall_avg_value"] == 35000
+    assert data["trend_direction"] in ("growing", "stable", "declining")
+    assert "pct_change" in data
+    assert "best_month" in data
+    assert "best_avg_value" in data
+    assert data["avg_value_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_deal_avg_value_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbcccc-dddd-eeee-ffff-000011112222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/avg-value-trend")
+    assert resp.status_code == 403
