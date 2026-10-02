@@ -21970,3 +21970,154 @@ async def get_ai_tasks_completion_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20q: AI deal average value trend
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/avg-value-trend")
+@limiter.limit("5/minute")
+async def get_deal_avg_value_trend(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+    cutoff = now - datetime.timedelta(days=183)
+
+    result = await db.execute(
+        select(Deal.value, Deal.stage_changed_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.stage_changed_at >= cutoff)
+    )
+    rows = result.all()
+
+    # Build 6 calendar-month buckets (oldest first)
+    monthly: dict[str, dict] = {}
+    for i in range(5, -1, -1):
+        y = now.year
+        m = now.month - i
+        while m <= 0:
+            m += 12
+            y -= 1
+        label = f"{y}-{m:02d}"
+        monthly[label] = {"month_label": label, "deal_count": 0, "total_value": 0, "avg_value": None}
+
+    for row in rows:
+        if row.stage_changed_at is None:
+            continue
+        label = f"{row.stage_changed_at.year}-{row.stage_changed_at.month:02d}"
+        if label in monthly:
+            monthly[label]["deal_count"] += 1
+            monthly[label]["total_value"] += int(row.value or 0)
+
+    monthly_list = list(monthly.values())
+    for entry in monthly_list:
+        if entry["deal_count"] > 0:
+            entry["avg_value"] = round(entry["total_value"] / entry["deal_count"])
+
+    total_deals = sum(e["deal_count"] for e in monthly_list)
+    total_value = sum(e["total_value"] for e in monthly_list)
+    overall_avg_value = round(total_value / total_deals) if total_deals > 0 else None
+
+    if total_deals == 0:
+        return {
+            "monthly_avg_value": monthly_list,
+            "total_won": 0,
+            "overall_avg_value": None,
+            "trend_direction": "stable",
+            "pct_change": 0.0,
+            "best_month": None,
+            "best_avg_value": None,
+            "avg_value_narrative": "No closed-won deals found in the last 6 months.",
+            "recommendations": [
+                "Focus on closing at least one deal per month to establish a baseline average deal size.",
+                "Review your current open pipeline to identify the highest-value deals to prioritize.",
+                "Analyze why deals may be stalling and consider moving them forward or closing lost.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    # Trend: compare first-half vs second-half avg values
+    first_half = [e["avg_value"] for e in monthly_list[:3] if e["avg_value"] is not None]
+    second_half = [e["avg_value"] for e in monthly_list[3:] if e["avg_value"] is not None]
+    first_avg = sum(first_half) / len(first_half) if first_half else 0
+    second_avg = sum(second_half) / len(second_half) if second_half else 0
+    pct_change = round((second_avg - first_avg) / first_avg * 100, 1) if first_avg > 0 else 0.0
+    if pct_change >= 10.0:
+        trend_direction = "growing"
+    elif pct_change <= -10.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    best_entry = max(
+        (e for e in monthly_list if e["avg_value"] is not None),
+        key=lambda x: x["avg_value"],
+        default=None,
+    )
+    best_month = best_entry["month_label"] if best_entry else None
+    best_avg_value = best_entry["avg_value"] if best_entry else None
+
+    prompt = (
+        f"Average deal value data for the last 6 months (closed-won deals):\n"
+        f"Monthly data: {[{'month': e['month_label'], 'count': e['deal_count'], 'avg': e['avg_value']} for e in monthly_list]}\n"
+        f"Overall: {total_deals} deals closed, overall average ${overall_avg_value:,}\n"
+        f"Trend: {trend_direction} ({pct_change:+.1f}%)\n"
+        f"Best month: {best_month} at ${best_avg_value:,} average\n\n"
+        "Return JSON only:\n"
+        '{"avg_value_narrative": "2-3 sentence insight about average deal value trends and what the trajectory suggests for pricing or deal strategy", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    avg_value_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = loads_llm_json(raw)
+        avg_value_narrative = str(parsed.get("avg_value_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        avg_value_narrative = (
+            f"Your average closed deal value is ${overall_avg_value:,}, based on {total_deals} deals "
+            f"over the last 6 months. The trend is {trend_direction} ({pct_change:+.1f}% change)."
+        )
+
+    default_recs = [
+        "Target larger accounts during prospecting to lift average deal size over the next quarter.",
+        "Review your pricing model: if avg value is declining, check for discounting patterns.",
+        "Focus on upsell opportunities with existing customers to increase average deal size without new pipeline.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_avg_value": monthly_list,
+        "total_won": total_deals,
+        "overall_avg_value": overall_avg_value,
+        "trend_direction": trend_direction,
+        "pct_change": pct_change,
+        "best_month": best_month,
+        "best_avg_value": best_avg_value,
+        "avg_value_narrative": avg_value_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }

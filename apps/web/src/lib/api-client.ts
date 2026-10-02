@@ -7921,5 +7921,39 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getDealAvgValueTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const countArr = [2, 3, 2, 4, 3, 5];
+      const totalArr = [42000, 67500, 48000, 104000, 81000, 147500];
+      const months = countArr.map((c, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toISOString().slice(0, 7);
+        const avg_value = c > 0 ? Math.round(totalArr[i] / c) : null;
+        return { month_label: label, deal_count: c, total_value: totalArr[i], avg_value };
+      });
+      const totalWon = countArr.reduce((a, b) => a + b, 0);
+      const totalVal = totalArr.reduce((a, b) => a + b, 0);
+      const overall = Math.round(totalVal / totalWon);
+      const best = months.reduce((a, m) => (m.avg_value ?? 0) > (a.avg_value ?? 0) ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_avg_value: months,
+        total_won: totalWon,
+        overall_avg_value: overall,
+        trend_direction: 'growing',
+        pct_change: 51.8,
+        best_month: best.month_label,
+        best_avg_value: best.avg_value,
+        avg_value_narrative: 'Average deal value has grown steadily from $21,000 to $29,500 over the last six months, a 51.8% increase that signals successful upmarket movement. Stronger deal sizes in the final two months suggest the team is winning larger accounts and reducing discounting.',
+        recommendations: [
+          'Target larger accounts during prospecting to sustain the upward average deal size trajectory.',
+          'Review pricing model — if average value dips, check for discounting patterns in the pipeline.',
+          'Focus on upsell opportunities with existing customers to increase average deal size without new pipeline.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/avg-value-trend`, {}, token)
+  },
 }
 

@@ -945,6 +945,11 @@ export default function ReportsPage() {
   const [tasksCompletionTrend, setTasksCompletionTrend] = useState<TasksCompletionTrendData | null>(null);
   const [tasksCompletionTrendLoading, setTasksCompletionTrendLoading] = useState(false);
   const [tasksCompletionTrendOpen, setTasksCompletionTrendOpen] = useState(true);
+  type AvgValueMonth = { month_label: string; deal_count: number; total_value: number; avg_value: number | null };
+  type AvgValueTrendData = { monthly_avg_value: AvgValueMonth[]; total_won: number; overall_avg_value: number | null; trend_direction: string; pct_change: number; best_month: string | null; best_avg_value: number | null; avg_value_narrative: string; recommendations: string[]; generated_at: string };
+  const [avgValueTrend, setAvgValueTrend] = useState<AvgValueTrendData | null>(null);
+  const [avgValueTrendLoading, setAvgValueTrendLoading] = useState(false);
+  const [avgValueTrendOpen, setAvgValueTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1158,6 +1163,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend("demo-workspace-1", "demo-token").then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend("demo-workspace-1", "demo-token").then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setAvgValueTrendLoading(true);
+      apiClient.getDealAvgValueTrend("demo-workspace-1", "demo-token").then(setAvgValueTrend).catch(() => {}).finally(() => setAvgValueTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1375,6 +1382,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend(workspaceId, session.access_token).then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend(workspaceId, session.access_token).then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setAvgValueTrendLoading(true);
+      apiClient.getDealAvgValueTrend(workspaceId, session.access_token).then(setAvgValueTrend).catch(() => {}).finally(() => setAvgValueTrendLoading(false));
     });
   }, []);
 
@@ -3022,6 +3031,27 @@ export default function ReportsPage() {
         if (!session) { setTasksCompletionTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTasksCompletionTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAvgValueTrend = () => {
+    setAvgValueTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealAvgValueTrend(wid, tok)
+        .then(setAvgValueTrend)
+        .catch(() => {})
+        .finally(() => setAvgValueTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAvgValueTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAvgValueTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12961,6 +12991,79 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the task completion trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Avg Deal Value Trend */}
+      <Card className="border-zinc-800">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+          <div className="flex items-center gap-2">
+            <DollarSign className="h-4 w-4 text-amber-400" />
+            <span className="text-sm font-semibold text-zinc-200">Avg Deal Value Trend</span>
+            {avgValueTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                avgValueTrend.trend_direction === 'growing' ? 'bg-emerald-900/40 text-emerald-300' :
+                avgValueTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'}`}>
+                {avgValueTrend.trend_direction} {avgValueTrend.pct_change > 0 ? '+' : ''}{avgValueTrend.pct_change}%
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateAvgValueTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={avgValueTrendLoading}>
+              {avgValueTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setAvgValueTrendOpen(v => !v)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {avgValueTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {avgValueTrendOpen && (
+          avgValueTrendLoading && !avgValueTrend ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading avg deal value trend…</div>
+          ) : avgValueTrend ? (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Overall Avg</p>
+                  <p className="text-xl font-bold text-amber-300">{avgValueTrend.overall_avg_value != null ? `$${avgValueTrend.overall_avg_value.toLocaleString()}` : '—'}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Deals Won</p>
+                  <p className="text-xl font-bold text-zinc-100">{avgValueTrend.total_won}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Best Month</p>
+                  <p className="text-sm font-bold text-amber-300">{avgValueTrend.best_avg_value != null ? `$${avgValueTrend.best_avg_value.toLocaleString()}` : '—'}</p>
+                  <p className="text-xs text-zinc-600">{avgValueTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={120}>
+                <LineChart data={avgValueTrend.monthly_avg_value} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}k`} />
+                  <Tooltip formatter={(value: any) => value != null ? [`$${Number(value).toLocaleString()}`, 'Avg Value'] : ['—', 'Avg Value']} contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }} />
+                  <Line type="monotone" dataKey="avg_value" stroke="#FBBF24" strokeWidth={2} dot={{ r: 3, fill: '#FBBF24' }} connectNulls />
+                  {avgValueTrend.overall_avg_value != null && (
+                    <ReferenceLine y={avgValueTrend.overall_avg_value} stroke="#FBBF24" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#FBBF24', fontSize: 9 }} />
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{avgValueTrend.avg_value_narrative}</p>
+              <ul className="space-y-1">
+                {avgValueTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(avgValueTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the avg deal value trend.</div>
           )
         )}
       </Card>
