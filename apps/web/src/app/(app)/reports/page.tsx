@@ -945,6 +945,11 @@ export default function ReportsPage() {
   const [tasksCompletionTrend, setTasksCompletionTrend] = useState<TasksCompletionTrendData | null>(null);
   const [tasksCompletionTrendLoading, setTasksCompletionTrendLoading] = useState(false);
   const [tasksCompletionTrendOpen, setTasksCompletionTrendOpen] = useState(true);
+  type LeadConversionMonth = { month_label: string; leads_created: number; leads_converted: number; conversion_rate: number };
+  type LeadConversionTrendData = { monthly_leads: LeadConversionMonth[]; total_leads: number; total_converted: number; overall_conversion_rate: number; trend_direction: string; rate_delta: number; best_month: string | null; best_rate: number | null; conversion_narrative: string; recommendations: string[]; generated_at: string };
+  const [leadConversionTrend, setLeadConversionTrend] = useState<LeadConversionTrendData | null>(null);
+  const [leadConversionTrendLoading, setLeadConversionTrendLoading] = useState(false);
+  const [leadConversionTrendOpen, setLeadConversionTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1158,6 +1163,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend("demo-workspace-1", "demo-token").then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend("demo-workspace-1", "demo-token").then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setLeadConversionTrendLoading(true);
+      apiClient.getLeadConversionTrend("demo-workspace-1", "demo-token").then(setLeadConversionTrend).catch(() => {}).finally(() => setLeadConversionTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1375,6 +1382,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend(workspaceId, session.access_token).then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend(workspaceId, session.access_token).then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setLeadConversionTrendLoading(true);
+      apiClient.getLeadConversionTrend(workspaceId, session.access_token).then(setLeadConversionTrend).catch(() => {}).finally(() => setLeadConversionTrendLoading(false));
     });
   }, []);
 
@@ -3022,6 +3031,27 @@ export default function ReportsPage() {
         if (!session) { setTasksCompletionTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTasksCompletionTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateLeadConversionTrend = () => {
+    setLeadConversionTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getLeadConversionTrend(wid, tok)
+        .then(setLeadConversionTrend)
+        .catch(() => {})
+        .finally(() => setLeadConversionTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setLeadConversionTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setLeadConversionTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12961,6 +12991,76 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the task completion trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20v: Lead Conversion Trend */}
+      <Card className="border-orange-500/15">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-orange-400" />
+            <span className="text-sm font-semibold text-zinc-100">Lead Conversion Trend</span>
+            {leadConversionTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                leadConversionTrend.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+                leadConversionTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'}`}>
+                {leadConversionTrend.trend_direction} {leadConversionTrend.rate_delta > 0 ? '+' : ''}{leadConversionTrend.rate_delta}pp
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateLeadConversionTrend} className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400"
+              disabled={leadConversionTrendLoading}>
+              {leadConversionTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setLeadConversionTrendOpen(o => !o)} className="p-1.5 rounded hover:bg-zinc-800">
+              {leadConversionTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {leadConversionTrendOpen && (
+          leadConversionTrendLoading && !leadConversionTrend ? (
+            <div className="p-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-orange-400" /></div>
+          ) : leadConversionTrend ? (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500">Conversion Rate</p>
+                  <p className="text-xl font-bold text-orange-300">{leadConversionTrend.overall_conversion_rate ?? '—'}%</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500">Total Leads</p>
+                  <p className="text-xl font-bold text-zinc-100">{leadConversionTrend.total_leads}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500">Best Month</p>
+                  <p className="text-sm font-bold text-orange-300">{leadConversionTrend.best_rate ?? '—'}%</p>
+                  <p className="text-xs text-zinc-600">{leadConversionTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={120}>
+                <LineChart data={leadConversionTrend.monthly_leads} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" />
+                  <Tooltip formatter={(value: any) => [`${value}%`, 'Conversion Rate']} contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }} />
+                  <Line type="monotone" dataKey="conversion_rate" stroke="#fb923c" strokeWidth={2} dot={{ r: 3, fill: '#fb923c' }} connectNulls />
+                  {leadConversionTrend.overall_conversion_rate != null && (
+                    <ReferenceLine y={leadConversionTrend.overall_conversion_rate} stroke="#fb923c" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#fb923c', fontSize: 9 }} />
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{leadConversionTrend.conversion_narrative}</p>
+              <ul className="space-y-1">
+                {leadConversionTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300"><span className="text-orange-400 mt-0.5">•</span>{r}</li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(leadConversionTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the lead conversion trend.</div>
           )
         )}
       </Card>
