@@ -945,6 +945,11 @@ export default function ReportsPage() {
   const [tasksCompletionTrend, setTasksCompletionTrend] = useState<TasksCompletionTrendData | null>(null);
   const [tasksCompletionTrendLoading, setTasksCompletionTrendLoading] = useState(false);
   const [tasksCompletionTrendOpen, setTasksCompletionTrendOpen] = useState(true);
+  type ClarityMonth = { month_label: string; avg_score: number | null; message_count: number; high_count: number; low_count: number };
+  type ClarityTrendData = { monthly_clarity: ClarityMonth[]; total_messages: number; overall_avg_score: number | null; trend_direction: string; score_delta: number; best_month: string | null; best_avg_score: number | null; clarity_narrative: string; recommendations: string[]; generated_at: string };
+  const [clarityTrend, setClarityTrend] = useState<ClarityTrendData | null>(null);
+  const [clarityTrendLoading, setClarityTrendLoading] = useState(false);
+  const [clarityTrendOpen, setClarityTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1158,6 +1163,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend("demo-workspace-1", "demo-token").then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend("demo-workspace-1", "demo-token").then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setClarityTrendLoading(true);
+      apiClient.getClarityScoreTrend("demo-workspace-1", "demo-token").then(setClarityTrend).catch(() => {}).finally(() => setClarityTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1375,6 +1382,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend(workspaceId, session.access_token).then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend(workspaceId, session.access_token).then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setClarityTrendLoading(true);
+      apiClient.getClarityScoreTrend(workspaceId, session.access_token).then(setClarityTrend).catch(() => {}).finally(() => setClarityTrendLoading(false));
     });
   }, []);
 
@@ -3022,6 +3031,27 @@ export default function ReportsPage() {
         if (!session) { setTasksCompletionTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTasksCompletionTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateClarityTrend = () => {
+    setClarityTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getClarityScoreTrend(wid, tok)
+        .then(setClarityTrend)
+        .catch(() => {})
+        .finally(() => setClarityTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setClarityTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setClarityTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12961,6 +12991,76 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the task completion trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20r: Message Clarity Score Trend */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Star className="h-4 w-4 text-amber-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Message Clarity Score Trend</h3>
+            {clarityTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full ${clarityTrend.trend_direction === 'improving' ? 'bg-amber-900/40 text-amber-300' : clarityTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' : 'bg-zinc-800 text-zinc-400'}`}>
+                {clarityTrend.trend_direction} {clarityTrend.score_delta > 0 ? '+' : ''}{clarityTrend.score_delta} pts
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateClarityTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={clarityTrendLoading}>
+              {clarityTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setClarityTrendOpen(v => !v)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {clarityTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {clarityTrendOpen && (
+          clarityTrendLoading && !clarityTrend ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading message clarity trend…</div>
+          ) : clarityTrend ? (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Avg Clarity Score</p>
+                  <p className="text-xl font-bold text-amber-300">{clarityTrend.overall_avg_score ?? '—'}/100</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Messages Scored</p>
+                  <p className="text-xl font-bold text-zinc-100">{clarityTrend.total_messages}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Best Month</p>
+                  <p className="text-sm font-bold text-amber-300">{clarityTrend.best_avg_score ?? '—'}/100</p>
+                  <p className="text-xs text-zinc-600">{clarityTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={120}>
+                <LineChart data={clarityTrend.monthly_clarity} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} />
+                  <Tooltip formatter={(value: any) => [value != null ? `${value}/100` : '—', 'Avg Clarity']} contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }} />
+                  <Line type="monotone" dataKey="avg_score" stroke="#FCD34D" strokeWidth={2} dot={{ r: 3, fill: '#FCD34D' }} connectNulls />
+                  {clarityTrend.overall_avg_score != null && (
+                    <ReferenceLine y={clarityTrend.overall_avg_score} stroke="#FCD34D" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#FCD34D', fontSize: 9 }} />
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{clarityTrend.clarity_narrative}</p>
+              <ul className="space-y-1">
+                {clarityTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(clarityTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the message clarity trend.</div>
           )
         )}
       </Card>

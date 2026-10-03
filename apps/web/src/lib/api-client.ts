@@ -7921,5 +7921,43 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getClarityScoreTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const scoresArr = [58, 62, 65, 70, 74, 78];
+      const countsArr = [6, 8, 7, 9, 11, 10];
+      const months = scoresArr.map((s, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+        return {
+          month_label: label,
+          avg_score: s,
+          message_count: countsArr[i],
+          high_count: Math.round(countsArr[i] * (s >= 70 ? 0.6 : 0.3)),
+          low_count: Math.round(countsArr[i] * (s < 50 ? 0.4 : 0.1)),
+        };
+      });
+      const totalMessages = countsArr.reduce((a, b) => a + b, 0);
+      const overallAvg = Math.round(scoresArr.reduce((a, b) => a + b, 0) / scoresArr.length * 10) / 10;
+      const best = months.reduce((a, m) => (m.avg_score ?? 0) > (a.avg_score ?? 0) ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_clarity: months,
+        total_messages: totalMessages,
+        overall_avg_score: overallAvg,
+        trend_direction: 'improving',
+        score_delta: 20.0,
+        best_month: best.month_label,
+        best_avg_score: best.avg_score,
+        clarity_narrative: 'Message clarity scores have climbed steadily from 58 to 78 over the last six months, reflecting improved communication discipline across the team. High-clarity messages now represent the majority of scored interactions, suggesting the team is crafting cleaner, more actionable outreach.',
+        recommendations: [
+          'Focus on shorter, action-oriented messages to sustain the clarity improvement trend.',
+          'Share high-clarity messages as templates so the team can adopt effective communication patterns.',
+          'Review messages scoring below 40 to identify unclear communication that may be hurting deal progress.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/messages/clarity-trend`, {}, token)
+  },
 }
 

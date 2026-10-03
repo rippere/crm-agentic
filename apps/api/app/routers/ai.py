@@ -21970,3 +21970,165 @@ async def get_ai_tasks_completion_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/messages/clarity-trend")
+@limiter.limit("5/minute")
+async def get_ai_messages_clarity_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    stmt = (
+        select(ClarityScore.score, ClarityScore.created_at)
+        .where(ClarityScore.workspace_id == workspace_id)
+        .where(ClarityScore.created_at >= cutoff)
+        .where(ClarityScore.score.isnot(None))
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    buckets: list[dict] = []
+    for offset in range(5, -1, -1):
+        m = now.month - offset
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        label = datetime.datetime(y, m, 1).strftime("%b %Y")
+        buckets.append({
+            "month_label": label, "year": y, "month": m,
+            "scores": [], "message_count": 0, "high_count": 0, "low_count": 0,
+        })
+
+    for row in rows:
+        if row.created_at is None:
+            continue
+        ts = row.created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        for b in buckets:
+            if ts.year == b["year"] and ts.month == b["month"]:
+                b["scores"].append(row.score)
+                b["message_count"] += 1
+                if row.score >= 70:
+                    b["high_count"] += 1
+                if row.score < 40:
+                    b["low_count"] += 1
+                break
+
+    monthly_clarity = []
+    for b in buckets:
+        avg = round(sum(b["scores"]) / len(b["scores"]), 1) if b["scores"] else None
+        monthly_clarity.append({
+            "month_label": b["month_label"],
+            "avg_score": avg,
+            "message_count": b["message_count"],
+            "high_count": b["high_count"],
+            "low_count": b["low_count"],
+        })
+
+    total_messages = sum(b["message_count"] for b in buckets)
+    all_scores = [s for b in buckets for s in b["scores"]]
+    overall_avg_score = round(sum(all_scores) / len(all_scores), 1) if all_scores else None
+
+    if total_messages == 0:
+        return {
+            "monthly_clarity": monthly_clarity,
+            "total_messages": 0,
+            "overall_avg_score": None,
+            "trend_direction": "stable",
+            "score_delta": 0.0,
+            "best_month": None,
+            "best_avg_score": None,
+            "clarity_narrative": "No clarity scores available for the last 6 months.",
+            "recommendations": [
+                "Score messages using the 'Score Clarity' button in the inbox to start tracking communication quality.",
+                "Enable automatic clarity scoring during Gmail or Slack message ingestion.",
+                "Use clarity scores to identify which contacts or deals have unclear communication patterns.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    first_half = [m["avg_score"] for m in monthly_clarity[:3] if m["avg_score"] is not None]
+    second_half = [m["avg_score"] for m in monthly_clarity[3:] if m["avg_score"] is not None]
+    first_avg = sum(first_half) / len(first_half) if first_half else 0.0
+    second_avg = sum(second_half) / len(second_half) if second_half else 0.0
+    score_delta = round(second_avg - first_avg, 1)
+    if score_delta >= 5.0:
+        trend_direction = "improving"
+    elif score_delta <= -5.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    best_entry = max(
+        (m for m in monthly_clarity if m["avg_score"] is not None),
+        key=lambda x: x["avg_score"],
+        default=None,
+    )
+    best_month = best_entry["month_label"] if best_entry else None
+    best_avg_score = best_entry["avg_score"] if best_entry else None
+
+    prompt = (
+        f"Message clarity score data for the last 6 months:\n"
+        f"Monthly data: {[{'month': m['month_label'], 'avg_score': m['avg_score'], 'count': m['message_count'], 'high': m['high_count'], 'low': m['low_count']} for m in monthly_clarity]}\n"
+        f"Overall: {total_messages} messages scored, avg score {overall_avg_score}/100\n"
+        f"Trend: {trend_direction} ({score_delta:+.1f} pts)\n"
+        f"Best month: {best_month} at avg {best_avg_score}\n\n"
+        "Return JSON only:\n"
+        '{"clarity_narrative": "2-3 sentence insight about message clarity patterns and what the trend suggests for communication quality", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    clarity_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = loads_llm_json(raw)
+        clarity_narrative = str(parsed.get("clarity_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        clarity_narrative = (
+            f"Your team has scored {total_messages} messages with an average clarity of {overall_avg_score}/100 "
+            f"over the last 6 months. Communication quality is {trend_direction} ({score_delta:+.1f} pts change)."
+        )
+
+    default_recs = [
+        "Focus on shorter, action-oriented messages to improve clarity scores for low-scoring threads.",
+        "Share high-clarity messages as templates so the team can adopt effective communication patterns.",
+        "Review messages scoring below 40 to identify unclear communication that may be hurting deal progress.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_clarity": monthly_clarity,
+        "total_messages": total_messages,
+        "overall_avg_score": overall_avg_score,
+        "trend_direction": trend_direction,
+        "score_delta": score_delta,
+        "best_month": best_month,
+        "best_avg_score": best_avg_score,
+        "clarity_narrative": clarity_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
