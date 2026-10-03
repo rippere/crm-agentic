@@ -42,6 +42,7 @@ from app.models.connector import Connector
 from app.models.task import Task
 from app.models.activity_event import ActivityEvent
 from app.models.deal_health_history import DealHealthHistory
+from app.models.lead import Lead
 from app.services.llm_json import loads_llm_json
 
 router = APIRouter()
@@ -21967,6 +21968,171 @@ async def get_ai_tasks_completion_trend(
         "best_month": best_month,
         "best_completion_rate": best_completion_rate,
         "task_narrative": task_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/leads/conversion-trend")
+@limiter.limit("5/minute")
+async def get_lead_conversion_trend(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(tz=timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    rows = (
+        await db.execute(
+            select(Lead.created_at, Lead.stage).where(
+                Lead.workspace_id == workspace_id,
+                Lead.created_at >= cutoff,
+            )
+        )
+    ).all()
+
+    # Build 6 calendar-month buckets (oldest → newest)
+    monthly_leads: list[dict] = []
+    for i in range(5, -1, -1):
+        cur_month = now.month - i
+        cur_year = now.year
+        while cur_month <= 0:
+            cur_month += 12
+            cur_year -= 1
+        import calendar as _cal
+        month_label = datetime.date(cur_year, cur_month, 1).strftime("%b %Y")
+        monthly_leads.append(
+            {
+                "month_label": month_label,
+                "year": cur_year,
+                "month": cur_month,
+                "leads_created": 0,
+                "leads_converted": 0,
+                "conversion_rate": 0.0,
+            }
+        )
+
+    for row in rows:
+        created_at = row.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        for bucket in monthly_leads:
+            if bucket["year"] == created_at.year and bucket["month"] == created_at.month:
+                bucket["leads_created"] += 1
+                if row.stage == "converted":
+                    bucket["leads_converted"] += 1
+                break
+
+    for bucket in monthly_leads:
+        if bucket["leads_created"] > 0:
+            bucket["conversion_rate"] = round(
+                bucket["leads_converted"] / bucket["leads_created"] * 100, 1
+            )
+
+    total_leads = sum(b["leads_created"] for b in monthly_leads)
+    total_converted = sum(b["leads_converted"] for b in monthly_leads)
+    overall_conversion_rate = (
+        round(total_converted / total_leads * 100, 1) if total_leads > 0 else 0.0
+    )
+
+    # Trend: compare first-half (months 0-2) vs second-half (months 3-5) avg conversion rate
+    first_half = [b["conversion_rate"] for b in monthly_leads[:3] if b["leads_created"] > 0]
+    second_half = [b["conversion_rate"] for b in monthly_leads[3:] if b["leads_created"] > 0]
+    first_avg = sum(first_half) / len(first_half) if first_half else 0.0
+    second_avg = sum(second_half) / len(second_half) if second_half else 0.0
+    rate_delta = round(second_avg - first_avg, 1)
+    if rate_delta >= 5.0:
+        trend_direction = "improving"
+    elif rate_delta <= -5.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    best_entry = max(
+        (b for b in monthly_leads if b["leads_created"] > 0),
+        key=lambda b: b["conversion_rate"],
+        default=None,
+    )
+    best_month = best_entry["month_label"] if best_entry else None
+    best_rate = best_entry["conversion_rate"] if best_entry else None
+
+    if total_leads == 0:
+        return {
+            "monthly_leads": monthly_leads,
+            "total_leads": 0,
+            "total_converted": 0,
+            "overall_conversion_rate": 0.0,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": None,
+            "best_rate": None,
+            "conversion_narrative": (
+                "No lead data found in the last 6 months. "
+                "Start capturing leads to track conversion performance over time."
+            ),
+            "recommendations": [
+                "Set up lead capture forms or import existing lead lists to populate your pipeline.",
+                "Define clear conversion criteria so leads are consistently marked as converted.",
+                "Assign owners to leads to ensure timely follow-up and improve conversion rates.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    prompt = (
+        f"Lead conversion trend for the last 6 months:\n"
+        f"Monthly data: {[{'month': b['month_label'], 'created': b['leads_created'], 'converted': b['leads_converted'], 'rate': b['conversion_rate']} for b in monthly_leads]}\n"
+        f"Overall: {total_leads} leads created, {total_converted} converted, {overall_conversion_rate}% conversion rate\n"
+        f"Trend: {trend_direction} ({rate_delta:+.1f}pp change)\n"
+        f"Best month: {best_month} at {best_rate}% conversion rate\n\n"
+        "Return JSON only:\n"
+        '{"conversion_narrative": "2-3 sentence insight about lead conversion patterns and what the trend means for sales growth", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    conversion_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        parsed = loads_llm_json(raw)
+        conversion_narrative = str(parsed.get("conversion_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        conversion_narrative = (
+            f"Your team created {total_leads} leads and converted {total_converted} "
+            f"({overall_conversion_rate}%) over the last 6 months. "
+            f"The conversion rate trend is {trend_direction} ({rate_delta:+.1f}pp change)."
+        )
+
+    default_recs = [
+        "Focus outreach on lead segments with historically higher conversion rates to maximize ROI.",
+        "Shorten the time between lead creation and first contact to improve conversion speed.",
+        "Review unconverted leads monthly to re-engage those that may be ready to convert.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_leads": monthly_leads,
+        "total_leads": total_leads,
+        "total_converted": total_converted,
+        "overall_conversion_rate": overall_conversion_rate,
+        "trend_direction": trend_direction,
+        "rate_delta": rate_delta,
+        "best_month": best_month,
+        "best_rate": best_rate,
+        "conversion_narrative": conversion_narrative,
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }

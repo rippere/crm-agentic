@@ -10083,3 +10083,54 @@ async def test_tasks_completion_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/completion-trend")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20v: AI lead conversion trend
+# ---------------------------------------------------------------------------
+
+class FakeLeadConversionRow:
+    def __init__(self, created_at: _dt.datetime, stage: str):
+        self.created_at = created_at
+        self.stage = stage
+
+
+@pytest.mark.asyncio
+async def test_lead_conversion_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.utcnow()
+    rows = [
+        FakeLeadConversionRow(now - _dt.timedelta(days=2), "converted"),
+        FakeLeadConversionRow(now - _dt.timedelta(days=5), "converted"),
+        FakeLeadConversionRow(now - _dt.timedelta(days=8), "new"),
+        FakeLeadConversionRow(now - _dt.timedelta(days=10), "contacted"),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"conversion_narrative": "Lead conversion is healthy.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/leads/conversion-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_leads"]) == 6
+    assert data["total_leads"] == 4
+    assert data["total_converted"] == 2
+    assert data["overall_conversion_rate"] == pytest.approx(50.0, abs=0.2)
+    assert data["conversion_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_lead_conversion_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbcccc-dddd-eeee-ffff-000011112222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/leads/conversion-trend")
+    assert resp.status_code == 403

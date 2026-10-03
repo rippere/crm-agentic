@@ -7921,5 +7921,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getLeadConversionTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const createdArr = [6, 8, 7, 10, 12, 14];
+      const convertedArr = [2, 3, 3, 5, 7, 9];
+      const months = createdArr.map((c, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toLocaleString('default', { month: 'short', year: 'numeric' });
+        const rate = c > 0 ? Math.round(convertedArr[i] / c * 1000) / 10 : 0;
+        return { month_label: label, leads_created: c, leads_converted: convertedArr[i], conversion_rate: rate };
+      });
+      const totalLeads = createdArr.reduce((a, b) => a + b, 0);
+      const totalConverted = convertedArr.reduce((a, b) => a + b, 0);
+      const overall = Math.round(totalConverted / totalLeads * 1000) / 10;
+      const best = months.reduce((a, m) => m.conversion_rate > a.conversion_rate ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_leads: months,
+        total_leads: totalLeads,
+        total_converted: totalConverted,
+        overall_conversion_rate: overall,
+        trend_direction: 'improving',
+        rate_delta: 30.6,
+        best_month: best.month_label,
+        best_rate: best.conversion_rate,
+        conversion_narrative: 'Lead conversion rate has climbed from 33.3% to 64.3% over the last six months, more than doubling the pipeline contribution from inbound leads. The improvement aligns with tighter lead scoring thresholds and faster first-contact response times.',
+        recommendations: [
+          'Focus outreach on lead segments with historically higher conversion rates to maximize ROI.',
+          'Shorten the time between lead creation and first contact to improve conversion speed.',
+          'Review unconverted leads monthly to re-engage those that may be ready to convert.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/leads/conversion-trend`, {}, token)
+  },
 }
 
