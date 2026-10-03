@@ -21972,6 +21972,169 @@ async def get_ai_tasks_completion_trend(
     }
 
 
+@router.get("/workspaces/{workspace_id}/ai/deals/creation-trend")
+@limiter.limit("5/minute")
+async def get_deal_creation_trend(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(tz=timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    rows = (await db.execute(
+        select(Deal.created_at, Deal.stage).where(
+            Deal.workspace_id == workspace_id,
+            Deal.created_at >= cutoff,
+        )
+    )).all()
+
+    buckets: list[dict] = []
+    for i in range(5, -1, -1):
+        month = now.month - i
+        year = now.year
+        while month <= 0:
+            month += 12
+            year -= 1
+        label = f"{year}-{month:02d}"
+        buckets.append({"year": year, "month": month, "month_label": label,
+                        "deals_created": 0, "deals_won": 0, "deals_lost": 0})
+
+    for row in rows:
+        ts = row.created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        for b in buckets:
+            if ts.year == b["year"] and ts.month == b["month"]:
+                b["deals_created"] += 1
+                if row.stage == "closed_won":
+                    b["deals_won"] += 1
+                elif row.stage == "closed_lost":
+                    b["deals_lost"] += 1
+                break
+
+    monthly_deals = []
+    for b in buckets:
+        closed = b["deals_won"] + b["deals_lost"]
+        win_rate = round(b["deals_won"] / closed * 100, 1) if closed > 0 else None
+        monthly_deals.append({
+            "month_label": b["month_label"],
+            "deals_created": b["deals_created"],
+            "deals_won": b["deals_won"],
+            "deals_lost": b["deals_lost"],
+            "win_rate": win_rate,
+        })
+
+    total_created = sum(b["deals_created"] for b in buckets)
+    total_won = sum(b["deals_won"] for b in buckets)
+    total_lost = sum(b["deals_lost"] for b in buckets)
+    total_closed = total_won + total_lost
+    overall_win_rate = round(total_won / total_closed * 100, 1) if total_closed > 0 else None
+
+    if total_created == 0:
+        return {
+            "monthly_deals": monthly_deals,
+            "total_created": 0,
+            "total_won": 0,
+            "total_lost": 0,
+            "overall_win_rate": None,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": None,
+            "best_win_rate": None,
+            "deal_narrative": "No deal data available for the last 6 months.",
+            "recommendations": [
+                "Start creating deals for your pipeline to track creation and win rate trends.",
+                "Mark deals as closed_won or closed_lost to enable win rate analysis.",
+                "Review your pipeline stages to ensure deals progress through to closure.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    first_half = [m["win_rate"] for m in monthly_deals[:3] if m["win_rate"] is not None]
+    second_half = [m["win_rate"] for m in monthly_deals[3:] if m["win_rate"] is not None]
+    first_avg = sum(first_half) / len(first_half) if first_half else 0.0
+    second_avg = sum(second_half) / len(second_half) if second_half else 0.0
+    rate_delta = round(second_avg - first_avg, 1)
+    if rate_delta >= 5.0:
+        trend_direction = "improving"
+    elif rate_delta <= -5.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    best_entry = max(
+        (m for m in monthly_deals if m["win_rate"] is not None),
+        key=lambda x: x["win_rate"],
+        default=None,
+    )
+    best_month = best_entry["month_label"] if best_entry else None
+    best_win_rate = best_entry["win_rate"] if best_entry else None
+
+    prompt = (
+        f"Deal creation and win rate data for the last 6 months:\n"
+        f"Monthly data: {[{'month': m['month_label'], 'created': m['deals_created'], 'won': m['deals_won'], 'lost': m['deals_lost'], 'win_rate': m['win_rate']} for m in monthly_deals]}\n"
+        f"Overall: {total_created} deals created, {total_won} won, {total_lost} lost, {overall_win_rate}% win rate\n"
+        f"Trend: {trend_direction} ({rate_delta:+.1f}pp)\n"
+        f"Best month: {best_month} at {best_win_rate}% win rate\n\n"
+        "Return JSON only:\n"
+        '{"deal_narrative": "2-3 sentence insight about deal creation volume and win rate trends", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    deal_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        deal_narrative = str(parsed.get("deal_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        deal_narrative = (
+            f"Your team created {total_created} deals and won {total_won} "
+            f"({overall_win_rate}%) over the last 6 months. "
+            f"The win rate trend is {trend_direction} ({rate_delta:+.1f}pp change)."
+        )
+
+    default_recs = [
+        "Review lost deals each month to identify the top objection patterns driving losses.",
+        "Set a monthly deal creation target to maintain consistent pipeline coverage.",
+        "Focus on deals in proposal and negotiation stages to improve near-term win rate.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_deals": monthly_deals,
+        "total_created": total_created,
+        "total_won": total_won,
+        "total_lost": total_lost,
+        "overall_win_rate": overall_win_rate,
+        "trend_direction": trend_direction,
+        "rate_delta": rate_delta,
+        "best_month": best_month,
+        "best_win_rate": best_win_rate,
+        "deal_narrative": deal_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
+
+
 @router.get("/workspaces/{workspace_id}/ai/messages/clarity-trend")
 @limiter.limit("5/minute")
 async def get_ai_messages_clarity_trend(
@@ -21995,7 +22158,7 @@ async def get_ai_messages_clarity_trend(
     result = await db.execute(stmt)
     rows = result.all()
 
-    buckets: list[dict] = []
+    buckets2: list[dict] = []
     for offset in range(5, -1, -1):
         m = now.month - offset
         y = now.year
@@ -22003,7 +22166,7 @@ async def get_ai_messages_clarity_trend(
             m += 12
             y -= 1
         label = datetime.datetime(y, m, 1).strftime("%b %Y")
-        buckets.append({
+        buckets2.append({
             "month_label": label, "year": y, "month": m,
             "scores": [], "message_count": 0, "high_count": 0, "low_count": 0,
         })
@@ -22014,7 +22177,7 @@ async def get_ai_messages_clarity_trend(
         ts = row.created_at
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        for b in buckets:
+        for b in buckets2:
             if ts.year == b["year"] and ts.month == b["month"]:
                 b["scores"].append(row.score)
                 b["message_count"] += 1
@@ -22025,7 +22188,7 @@ async def get_ai_messages_clarity_trend(
                 break
 
     monthly_clarity = []
-    for b in buckets:
+    for b in buckets2:
         avg = round(sum(b["scores"]) / len(b["scores"]), 1) if b["scores"] else None
         monthly_clarity.append({
             "month_label": b["month_label"],
@@ -22035,8 +22198,8 @@ async def get_ai_messages_clarity_trend(
             "low_count": b["low_count"],
         })
 
-    total_messages = sum(b["message_count"] for b in buckets)
-    all_scores = [s for b in buckets for s in b["scores"]]
+    total_messages = sum(b["message_count"] for b in buckets2)
+    all_scores = [s for b in buckets2 for s in b["scores"]]
     overall_avg_score = round(sum(all_scores) / len(all_scores), 1) if all_scores else None
 
     if total_messages == 0:
@@ -22057,45 +22220,45 @@ async def get_ai_messages_clarity_trend(
             "generated_at": now.isoformat(),
         }
 
-    first_half = [m["avg_score"] for m in monthly_clarity[:3] if m["avg_score"] is not None]
-    second_half = [m["avg_score"] for m in monthly_clarity[3:] if m["avg_score"] is not None]
-    first_avg = sum(first_half) / len(first_half) if first_half else 0.0
-    second_avg = sum(second_half) / len(second_half) if second_half else 0.0
-    score_delta = round(second_avg - first_avg, 1)
+    first_half2 = [m["avg_score"] for m in monthly_clarity[:3] if m["avg_score"] is not None]
+    second_half2 = [m["avg_score"] for m in monthly_clarity[3:] if m["avg_score"] is not None]
+    first_avg2 = sum(first_half2) / len(first_half2) if first_half2 else 0.0
+    second_avg2 = sum(second_half2) / len(second_half2) if second_half2 else 0.0
+    score_delta = round(second_avg2 - first_avg2, 1)
     if score_delta >= 5.0:
-        trend_direction = "improving"
+        trend_direction2 = "improving"
     elif score_delta <= -5.0:
-        trend_direction = "declining"
+        trend_direction2 = "declining"
     else:
-        trend_direction = "stable"
+        trend_direction2 = "stable"
 
-    best_entry = max(
+    best_entry2 = max(
         (m for m in monthly_clarity if m["avg_score"] is not None),
         key=lambda x: x["avg_score"],
         default=None,
     )
-    best_month = best_entry["month_label"] if best_entry else None
-    best_avg_score = best_entry["avg_score"] if best_entry else None
+    best_month2 = best_entry2["month_label"] if best_entry2 else None
+    best_avg_score = best_entry2["avg_score"] if best_entry2 else None
 
-    prompt = (
+    prompt2 = (
         f"Message clarity score data for the last 6 months:\n"
         f"Monthly data: {[{'month': m['month_label'], 'avg_score': m['avg_score'], 'count': m['message_count'], 'high': m['high_count'], 'low': m['low_count']} for m in monthly_clarity]}\n"
         f"Overall: {total_messages} messages scored, avg score {overall_avg_score}/100\n"
-        f"Trend: {trend_direction} ({score_delta:+.1f} pts)\n"
-        f"Best month: {best_month} at avg {best_avg_score}\n\n"
+        f"Trend: {trend_direction2} ({score_delta:+.1f} pts)\n"
+        f"Best month: {best_month2} at avg {best_avg_score}\n\n"
         "Return JSON only:\n"
         '{"clarity_narrative": "2-3 sentence insight about message clarity patterns and what the trend suggests for communication quality", '
         '"recommendations": ["rec1", "rec2", "rec3"]}'
     )
 
     clarity_narrative = ""
-    recommendations: list[str] = []
+    recommendations2: list[str] = []
     try:
         client = _mk_anthropic()
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": prompt2}],
         )
         raw = msg.content[0].text.strip()
         if raw.startswith("```"):
@@ -22105,30 +22268,30 @@ async def get_ai_messages_clarity_trend(
         parsed = loads_llm_json(raw)
         clarity_narrative = str(parsed.get("clarity_narrative", "")).strip()
         raw_recs = parsed.get("recommendations", [])
-        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+        recommendations2 = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
     except Exception:
         clarity_narrative = (
             f"Your team has scored {total_messages} messages with an average clarity of {overall_avg_score}/100 "
-            f"over the last 6 months. Communication quality is {trend_direction} ({score_delta:+.1f} pts change)."
+            f"over the last 6 months. Communication quality is {trend_direction2} ({score_delta:+.1f} pts change)."
         )
 
-    default_recs = [
+    default_recs2 = [
         "Focus on shorter, action-oriented messages to improve clarity scores for low-scoring threads.",
         "Share high-clarity messages as templates so the team can adopt effective communication patterns.",
         "Review messages scoring below 40 to identify unclear communication that may be hurting deal progress.",
     ]
-    while len(recommendations) < 3:
-        recommendations.append(default_recs[len(recommendations) % 3])
+    while len(recommendations2) < 3:
+        recommendations2.append(default_recs2[len(recommendations2) % 3])
 
     return {
         "monthly_clarity": monthly_clarity,
         "total_messages": total_messages,
         "overall_avg_score": overall_avg_score,
-        "trend_direction": trend_direction,
+        "trend_direction": trend_direction2,
         "score_delta": score_delta,
-        "best_month": best_month,
+        "best_month": best_month2,
         "best_avg_score": best_avg_score,
         "clarity_narrative": clarity_narrative,
-        "recommendations": recommendations,
+        "recommendations": recommendations2,
         "generated_at": now.isoformat(),
     }

@@ -10085,6 +10085,55 @@ async def test_tasks_completion_trend_wrong_workspace_returns_403(app_client):
     assert resp.status_code == 403
 
 
+class FakeDealCreationRow:
+    def __init__(self, stage: str, created_at: _dt.datetime):
+        self.stage = stage
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_deal_creation_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = _dt.datetime.utcnow()
+    rows = [
+        FakeDealCreationRow("closed_won", now - _dt.timedelta(days=3)),
+        FakeDealCreationRow("closed_lost", now - _dt.timedelta(days=5)),
+        FakeDealCreationRow("closed_won", now - _dt.timedelta(days=45)),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"deal_narrative": "Win rate improving.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/creation-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_deals"]) == 6
+    assert data["total_created"] == 3
+    assert data["total_won"] == 2
+    assert data["total_lost"] == 1
+    assert data["overall_win_rate"] == pytest.approx(66.7, abs=0.2)
+    assert data["deal_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "trend_direction" in data
+    assert "rate_delta" in data
+
+
+@pytest.mark.asyncio
+async def test_deal_creation_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-ffffaaaabbbb")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/creation-trend")
+    assert resp.status_code == 403
+
+
 # ---------------------------------------------------------------------------
 # Phase 20r: AI message clarity score trend
 # ---------------------------------------------------------------------------
