@@ -7921,5 +7921,30 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getDealSizeDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        buckets: [
+          { key: 'small',      label: 'Small (<$10K)',         count: 8,  total_value: 52000,   active_count: 5,  won_count: 2, pct_of_total: 22.9, win_rate: 25.0 },
+          { key: 'medium',     label: 'Medium ($10K–$50K)',    count: 14, total_value: 385000,  active_count: 10, won_count: 4, pct_of_total: 40.0, win_rate: 28.6 },
+          { key: 'large',      label: 'Large ($50K–$200K)',    count: 9,  total_value: 890000,  active_count: 6,  won_count: 3, pct_of_total: 25.7, win_rate: 33.3 },
+          { key: 'enterprise', label: 'Enterprise (>$200K)',   count: 4,  total_value: 1200000, active_count: 3,  won_count: 1, pct_of_total: 11.4, win_rate: 25.0 },
+        ],
+        total_deals: 35,
+        total_pipeline_value: 2527000,
+        dominant_segment: 'Medium ($10K–$50K)',
+        highest_value_bucket: 'Enterprise (>$200K)',
+        distribution_narrative: 'The pipeline is dominated by medium deals ($10K–$50K) which account for 40% of all deals, while enterprise deals represent the largest share of total value at $1.2M. The large deal segment shows the best win rate at 33.3%, suggesting an opportunity to shift focus toward larger accounts.',
+        recommendations: [
+          'Develop tailored sales playbooks for each deal size segment to improve win rates.',
+          'Review the active pipeline in your highest-value segment to prioritize enterprise deals.',
+          'Analyze win rates by segment to identify where your team performs best.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/size-distribution`, {}, token)
+  },
 }
 

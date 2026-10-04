@@ -10083,3 +10083,56 @@ async def test_tasks_completion_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/completion-trend")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20w: AI deal size distribution
+# ---------------------------------------------------------------------------
+
+class FakeDealSizeRow:
+    def __init__(self, value: float, stage: str):
+        self.value = value
+        self.stage = stage
+
+
+@pytest.mark.asyncio
+async def test_deal_size_distribution_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    rows = [
+        FakeDealSizeRow(5000.0,   "qualified"),      # small
+        FakeDealSizeRow(25000.0,  "closed_won"),     # medium
+        FakeDealSizeRow(75000.0,  "proposal"),       # large
+        FakeDealSizeRow(250000.0, "closed_lost"),    # enterprise
+        FakeDealSizeRow(8000.0,   "closed_won"),     # small
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"distribution_narrative": "Pipeline is concentrated in medium deals.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/size-distribution")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["buckets"]) == 4
+    assert data["total_deals"] == 5
+    small_bucket = next(b for b in data["buckets"] if b["key"] == "small")
+    assert small_bucket["count"] == 2
+    assert small_bucket["won_count"] == 1
+    assert data["dominant_segment"] == "Small (<$10K)"
+    assert data["distribution_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_deal_size_distribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aabbccdd-eeff-0011-2233-445566778899")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/size-distribution")
+    assert resp.status_code == 403
