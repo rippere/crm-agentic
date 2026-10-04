@@ -21970,3 +21970,147 @@ async def get_ai_tasks_completion_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20w: AI deal size distribution
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/deals/size-distribution")
+@limiter.limit("5/minute")
+async def get_ai_deal_size_distribution(
+    workspace_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Distribution of all workspace deals across value buckets with AI narrative."""
+    if str(current_user.workspace_id) != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+
+    BUCKETS = [
+        {"key": "small",      "label": "Small (<$10K)",         "min": 0,      "max": 10000},
+        {"key": "medium",     "label": "Medium ($10K–$50K)",    "min": 10000,  "max": 50000},
+        {"key": "large",      "label": "Large ($50K–$200K)",    "min": 50000,  "max": 200000},
+        {"key": "enterprise", "label": "Enterprise (>$200K)",   "min": 200000, "max": None},
+    ]
+
+    result = await db.execute(
+        select(Deal.value, Deal.stage)
+        .where(Deal.workspace_id == uuid.UUID(workspace_id))
+    )
+    rows = result.all()
+
+    dist: dict[str, dict] = {
+        b["key"]: {"key": b["key"], "label": b["label"], "count": 0, "total_value": 0, "won": 0, "active": 0}
+        for b in BUCKETS
+    }
+
+    for row in rows:
+        val = int(row.value or 0)
+        for b in BUCKETS:
+            hi = b["max"]
+            if val >= b["min"] and (hi is None or val < hi):
+                dist[b["key"]]["count"] += 1
+                dist[b["key"]]["total_value"] += val
+                if row.stage == "closed_won":
+                    dist[b["key"]]["won"] += 1
+                elif row.stage not in ("closed_won", "closed_lost"):
+                    dist[b["key"]]["active"] += 1
+                break
+
+    total_deals = sum(d["count"] for d in dist.values())
+    total_value = sum(d["total_value"] for d in dist.values())
+
+    buckets_list = []
+    for b in BUCKETS:
+        d = dist[b["key"]]
+        pct = round(d["count"] / total_deals * 100, 1) if total_deals > 0 else 0.0
+        win_rate = round(d["won"] / d["count"] * 100, 1) if d["count"] > 0 else None
+        buckets_list.append({
+            "key": d["key"],
+            "label": d["label"],
+            "count": d["count"],
+            "total_value": d["total_value"],
+            "active_count": d["active"],
+            "won_count": d["won"],
+            "pct_of_total": pct,
+            "win_rate": win_rate,
+        })
+
+    dominant_bucket = max(buckets_list, key=lambda x: x["count"], default=None)
+    dominant_segment = dominant_bucket["label"] if dominant_bucket and dominant_bucket["count"] > 0 else None
+    highest_value_bucket = max(buckets_list, key=lambda x: x["total_value"], default=None)
+
+    if total_deals == 0:
+        return {
+            "buckets": buckets_list,
+            "total_deals": 0,
+            "total_pipeline_value": 0,
+            "dominant_segment": None,
+            "highest_value_bucket": None,
+            "distribution_narrative": "No deals available to analyze size distribution.",
+            "recommendations": [
+                "Create deals in the pipeline to start tracking size distribution.",
+                "Set target deal values to establish benchmarks across market segments.",
+                "Review your pricing tiers to ensure they align with customer segments.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    prompt = (
+        f"Deal size distribution analysis:\n"
+        f"Buckets: {[{'label': b['label'], 'count': b['count'], 'pct': b['pct_of_total'], 'win_rate': b['win_rate'], 'active': b['active_count']} for b in buckets_list]}\n"
+        f"Total deals: {total_deals}, total pipeline value: ${total_value:,}\n"
+        f"Dominant segment: {dominant_segment}\n"
+        f"Highest value bucket: {highest_value_bucket['label'] if highest_value_bucket else 'N/A'}\n\n"
+        "Return JSON only:\n"
+        '{"distribution_narrative": "2-3 sentence insight about the deal size distribution and what it reveals about go-to-market strategy", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    distribution_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = loads_llm_json(raw)
+        distribution_narrative = str(parsed.get("distribution_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        distribution_narrative = (
+            f"Your pipeline has {total_deals} deals totaling ${total_value:,}. "
+            f"The dominant segment is {dominant_segment or 'N/A'} by deal count. "
+            f"Diversifying across size segments can reduce concentration risk."
+        )
+
+    default_recs = [
+        "Develop tailored sales playbooks for each deal size segment to improve win rates.",
+        "Review the active pipeline in your highest-value segment to prioritize enterprise deals.",
+        "Analyze win rates by segment to identify where your team performs best.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "buckets": buckets_list,
+        "total_deals": total_deals,
+        "total_pipeline_value": total_value,
+        "dominant_segment": dominant_segment,
+        "highest_value_bucket": highest_value_bucket["label"] if highest_value_bucket and highest_value_bucket["count"] > 0 else None,
+        "distribution_narrative": distribution_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }

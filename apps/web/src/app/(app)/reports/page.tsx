@@ -945,6 +945,11 @@ export default function ReportsPage() {
   const [tasksCompletionTrend, setTasksCompletionTrend] = useState<TasksCompletionTrendData | null>(null);
   const [tasksCompletionTrendLoading, setTasksCompletionTrendLoading] = useState(false);
   const [tasksCompletionTrendOpen, setTasksCompletionTrendOpen] = useState(true);
+  type SizeBucket = { key: string; label: string; count: number; total_value: number; active_count: number; won_count: number; pct_of_total: number; win_rate: number | null };
+  type DealSizeDistData = { buckets: SizeBucket[]; total_deals: number; total_pipeline_value: number; dominant_segment: string | null; highest_value_bucket: string | null; distribution_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealSizeDist, setDealSizeDist] = useState<DealSizeDistData | null>(null);
+  const [dealSizeDistLoading, setDealSizeDistLoading] = useState(false);
+  const [dealSizeDistOpen, setDealSizeDistOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1158,6 +1163,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend("demo-workspace-1", "demo-token").then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend("demo-workspace-1", "demo-token").then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setDealSizeDistLoading(true);
+      apiClient.getDealSizeDistribution("demo-workspace-1", "demo-token").then(setDealSizeDist).catch(() => {}).finally(() => setDealSizeDistLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1375,6 +1382,8 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend(workspaceId, session.access_token).then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend(workspaceId, session.access_token).then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setDealSizeDistLoading(true);
+      apiClient.getDealSizeDistribution(workspaceId, session.access_token).then(setDealSizeDist).catch(() => {}).finally(() => setDealSizeDistLoading(false));
     });
   }, []);
 
@@ -3022,6 +3031,27 @@ export default function ReportsPage() {
         if (!session) { setTasksCompletionTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTasksCompletionTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealSizeDist = () => {
+    setDealSizeDistLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealSizeDistribution(wid, tok)
+        .then(setDealSizeDist)
+        .catch(() => {})
+        .finally(() => setDealSizeDistLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealSizeDistLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealSizeDistLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12961,6 +12991,80 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the task completion trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Deal Size Distribution */}
+      <Card className="p-0 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-sky-400" />
+            <span className="text-sm font-semibold text-zinc-100">Deal Size Distribution</span>
+            {dealSizeDist?.dominant_segment && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-sky-900/40 text-sky-300">
+                {dealSizeDist.dominant_segment} dominant
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateDealSizeDist} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={dealSizeDistLoading}>
+              {dealSizeDistLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setDealSizeDistOpen(o => !o)} className="p-1 rounded hover:bg-zinc-800 text-zinc-400">
+              {dealSizeDistOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {dealSizeDistOpen && (
+          dealSizeDistLoading && !dealSizeDist ? (
+            <div className="p-4 space-y-2"><div className="h-4 bg-zinc-800 rounded animate-pulse w-2/3" /><div className="h-20 bg-zinc-800 rounded animate-pulse" /></div>
+          ) : dealSizeDist ? (
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3 mb-1">
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Total Deals</p>
+                  <p className="text-xl font-bold text-zinc-100">{dealSizeDist.total_deals}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Total Pipeline Value</p>
+                  <p className="text-xl font-bold text-sky-300">{formatCurrency(dealSizeDist.total_pipeline_value)}</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {dealSizeDist.buckets.map((b) => (
+                  <div key={b.key} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-zinc-300 font-medium">{b.label}</span>
+                      <div className="flex items-center gap-3 text-zinc-400">
+                        <span>{b.count} deals</span>
+                        <span>{formatCurrency(b.total_value)}</span>
+                        {b.win_rate != null && <span className="text-emerald-400">{b.win_rate}% won</span>}
+                      </div>
+                    </div>
+                    <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-2 rounded-full bg-sky-500 transition-all"
+                        style={{ width: `${b.pct_of_total}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{dealSizeDist.distribution_narrative}</p>
+              <ul className="space-y-1">
+                {dealSizeDist.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-sky-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealSizeDist.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the deal size distribution.</div>
           )
         )}
       </Card>
