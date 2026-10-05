@@ -945,6 +945,29 @@ export default function ReportsPage() {
   const [tasksCompletionTrend, setTasksCompletionTrend] = useState<TasksCompletionTrendData | null>(null);
   const [tasksCompletionTrendLoading, setTasksCompletionTrendLoading] = useState(false);
   const [tasksCompletionTrendOpen, setTasksCompletionTrendOpen] = useState(true);
+  type ClarityMonth = { month_label: string; avg_score: number | null; message_count: number; high_count: number; low_count: number };
+  type ClarityTrendData = { monthly_clarity: ClarityMonth[]; total_messages: number; overall_avg_score: number | null; trend_direction: string; score_delta: number; best_month: string | null; best_avg_score: number | null; clarity_narrative: string; recommendations: string[]; generated_at: string };
+  const [clarityTrend, setClarityTrend] = useState<ClarityTrendData | null>(null);
+  const [clarityTrendLoading, setClarityTrendLoading] = useState(false);
+  const [clarityTrendOpen, setClarityTrendOpen] = useState(true);
+
+  type AgentUtilMonth = Record<string, string | number> & { month_label: string; total_runs: number };
+  type AgentUtilTrendData = { monthly_utilization: AgentUtilMonth[]; agent_names: string[]; total_runs: number; top_agent: string | null; top_agent_runs: number; trend_direction: string; run_delta: number; best_month: string; best_month_runs: number; utilization_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentUtilTrend, setAgentUtilTrend] = useState<AgentUtilTrendData | null>(null);
+  const [agentUtilTrendLoading, setAgentUtilTrendLoading] = useState(false);
+  const [agentUtilTrendOpen, setAgentUtilTrendOpen] = useState(true);
+
+  type AgentErrorMonth = { month_label: string; total_runs: number; success_count: number; failure_count: number; error_rate: number };
+  type AgentErrorRateTrendData = { monthly_error_rate: AgentErrorMonth[]; total_runs: number; total_failures: number; overall_error_rate: number; trend_direction: string; rate_delta: number; best_month: string; best_error_rate: number; worst_agent: string | null; error_rate_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentErrorTrend, setAgentErrorTrend] = useState<AgentErrorRateTrendData | null>(null);
+  const [agentErrorTrendLoading, setAgentErrorTrendLoading] = useState(false);
+  const [agentErrorTrendOpen, setAgentErrorTrendOpen] = useState(true);
+
+  type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
+  type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
+  const [dealCreationTrendLoading, setDealCreationTrendLoading] = useState(false);
+  const [dealCreationTrendOpen, setDealCreationTrendOpen] = useState(true);
 
   useEffect(() => {
     if (DEMO_MODE) {
@@ -1158,6 +1181,14 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend("demo-workspace-1", "demo-token").then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend("demo-workspace-1", "demo-token").then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setDealCreationTrendLoading(true);
+      apiClient.getDealCreationTrend("demo-workspace-1", "demo-token").then(setDealCreationTrend).catch(() => {}).finally(() => setDealCreationTrendLoading(false));
+      setClarityTrendLoading(true);
+      apiClient.getClarityScoreTrend("demo-workspace-1", "demo-token").then(setClarityTrend).catch(() => {}).finally(() => setClarityTrendLoading(false));
+      setAgentUtilTrendLoading(true);
+      apiClient.getAgentUtilizationTrend("demo-workspace-1", "demo-token").then(setAgentUtilTrend).catch(() => {}).finally(() => setAgentUtilTrendLoading(false));
+      setAgentErrorTrendLoading(true);
+      apiClient.getAgentErrorRateTrend("demo-workspace-1", "demo-token").then(setAgentErrorTrend).catch(() => {}).finally(() => setAgentErrorTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1375,6 +1406,14 @@ export default function ReportsPage() {
       apiClient.getOutreachTrend(workspaceId, session.access_token).then(setOutreachTrend).catch(() => {}).finally(() => setOutreachTrendLoading(false));
       setTasksCompletionTrendLoading(true);
       apiClient.getTasksCompletionTrend(workspaceId, session.access_token).then(setTasksCompletionTrend).catch(() => {}).finally(() => setTasksCompletionTrendLoading(false));
+      setDealCreationTrendLoading(true);
+      apiClient.getDealCreationTrend(workspaceId, session.access_token).then(setDealCreationTrend).catch(() => {}).finally(() => setDealCreationTrendLoading(false));
+      setClarityTrendLoading(true);
+      apiClient.getClarityScoreTrend(workspaceId, session.access_token).then(setClarityTrend).catch(() => {}).finally(() => setClarityTrendLoading(false));
+      setAgentUtilTrendLoading(true);
+      apiClient.getAgentUtilizationTrend(workspaceId, session.access_token).then(setAgentUtilTrend).catch(() => {}).finally(() => setAgentUtilTrendLoading(false));
+      setAgentErrorTrendLoading(true);
+      apiClient.getAgentErrorRateTrend(workspaceId, session.access_token).then(setAgentErrorTrend).catch(() => {}).finally(() => setAgentErrorTrendLoading(false));
     });
   }, []);
 
@@ -3022,6 +3061,90 @@ export default function ReportsPage() {
         if (!session) { setTasksCompletionTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTasksCompletionTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealCreationTrend = () => {
+    setDealCreationTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealCreationTrend(wid, tok)
+        .then(setDealCreationTrend)
+        .catch(() => {})
+        .finally(() => setDealCreationTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealCreationTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealCreationTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateClarityTrend = () => {
+    setClarityTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getClarityScoreTrend(wid, tok)
+        .then(setClarityTrend)
+        .catch(() => {})
+        .finally(() => setClarityTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setClarityTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setClarityTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentUtilTrend = () => {
+    setAgentUtilTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentUtilizationTrend(wid, tok)
+        .then(setAgentUtilTrend)
+        .catch(() => {})
+        .finally(() => setAgentUtilTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentUtilTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentUtilTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentErrorTrend = () => {
+    setAgentErrorTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentErrorRateTrend(wid, tok)
+        .then(setAgentErrorTrend)
+        .catch(() => {})
+        .finally(() => setAgentErrorTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentErrorTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentErrorTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -12961,6 +13084,304 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the task completion trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Deal Creation Trend */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-teal-400" />
+            <span className="text-sm font-medium text-zinc-200">Deal Creation Trend</span>
+            {dealCreationTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                dealCreationTrend.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+                dealCreationTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'}`}>
+                {dealCreationTrend.trend_direction} {dealCreationTrend.rate_delta > 0 ? '+' : ''}{dealCreationTrend.rate_delta}pp
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateDealCreationTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={dealCreationTrendLoading}>
+              {dealCreationTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setDealCreationTrendOpen(v => !v)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {dealCreationTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {dealCreationTrendOpen && (
+          dealCreationTrendLoading && !dealCreationTrend ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading deal creation trend…</div>
+          ) : dealCreationTrend ? (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Win Rate</p>
+                  <p className="text-xl font-bold text-teal-300">{dealCreationTrend.overall_win_rate ?? '—'}%</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Deals Created</p>
+                  <p className="text-xl font-bold text-zinc-100">{dealCreationTrend.total_created}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Best Month</p>
+                  <p className="text-sm font-bold text-teal-300">{dealCreationTrend.best_win_rate ?? '—'}%</p>
+                  <p className="text-xs text-zinc-600">{dealCreationTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={130}>
+                <ComposedChart data={dealCreationTrend.monthly_deals} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="left" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" />
+                  <Tooltip
+                    formatter={(value: any, name: any) => name === 'win_rate' ? [`${value}%`, 'Win Rate'] : [value, name === 'deals_created' ? 'Created' : name === 'deals_won' ? 'Won' : 'Lost']}
+                    contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }}
+                  />
+                  <Bar yAxisId="left" dataKey="deals_created" fill="#2dd4bf" opacity={0.6} radius={[2, 2, 0, 0]} name="deals_created" />
+                  <Bar yAxisId="left" dataKey="deals_won" fill="#34d399" opacity={0.5} radius={[2, 2, 0, 0]} name="deals_won" />
+                  <Line yAxisId="right" type="monotone" dataKey="win_rate" stroke="#f0abfc" strokeWidth={2} dot={{ r: 3, fill: '#f0abfc' }} connectNulls name="win_rate" />
+                  {dealCreationTrend.overall_win_rate != null && (
+                    <ReferenceLine yAxisId="right" y={dealCreationTrend.overall_win_rate} stroke="#f0abfc" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#f0abfc', fontSize: 9 }} />
+                  )}
+                </ComposedChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{dealCreationTrend.deal_narrative}</p>
+              <ul className="space-y-1">
+                {dealCreationTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealCreationTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the deal creation trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20r: Message Clarity Score Trend */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Star className="h-4 w-4 text-amber-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Message Clarity Score Trend</h3>
+            {clarityTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full ${clarityTrend.trend_direction === 'improving' ? 'bg-amber-900/40 text-amber-300' : clarityTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' : 'bg-zinc-800 text-zinc-400'}`}>
+                {clarityTrend.trend_direction} {clarityTrend.score_delta > 0 ? '+' : ''}{clarityTrend.score_delta} pts
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateClarityTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              disabled={clarityTrendLoading}>
+              {clarityTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setClarityTrendOpen(v => !v)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {clarityTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {clarityTrendOpen && (
+          clarityTrendLoading && !clarityTrend ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading message clarity trend…</div>
+          ) : clarityTrend ? (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Avg Clarity Score</p>
+                  <p className="text-xl font-bold text-amber-300">{clarityTrend.overall_avg_score ?? '—'}/100</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Messages Scored</p>
+                  <p className="text-xl font-bold text-zinc-100">{clarityTrend.total_messages}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500 mb-1">Best Month</p>
+                  <p className="text-sm font-bold text-amber-300">{clarityTrend.best_avg_score ?? '—'}/100</p>
+                  <p className="text-xs text-zinc-600">{clarityTrend.best_month ?? ''}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={120}>
+                <LineChart data={clarityTrend.monthly_clarity} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fill: '#71717a', fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} />
+                  <Tooltip formatter={(value: any) => [value != null ? `${value}/100` : '—', 'Avg Clarity']} contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }} />
+                  <Line type="monotone" dataKey="avg_score" stroke="#FCD34D" strokeWidth={2} dot={{ r: 3, fill: '#FCD34D' }} connectNulls />
+                  {clarityTrend.overall_avg_score != null && (
+                    <ReferenceLine y={clarityTrend.overall_avg_score} stroke="#FCD34D" strokeDasharray="4 2" strokeWidth={1} label={{ value: 'avg', position: 'right', fill: '#FCD34D', fontSize: 9 }} />
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{clarityTrend.clarity_narrative}</p>
+              <ul className="space-y-1">
+                {clarityTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(clarityTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the message clarity trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20s — Agent Utilization Trend */}
+      <Card className="border-zinc-800 space-y-3 p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Bot className="h-4 w-4 text-violet-400" />
+            <span className="text-sm font-semibold text-zinc-100">Agent Utilization Trend</span>
+            {agentUtilTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                agentUtilTrend.trend_direction === 'increasing' ? 'bg-emerald-900/40 text-emerald-300' :
+                agentUtilTrend.trend_direction === 'decreasing' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'
+              }`}>
+                {agentUtilTrend.trend_direction} {agentUtilTrend.run_delta >= 0 ? '+' : ''}{agentUtilTrend.run_delta.toFixed(1)} runs/mo
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateAgentUtilTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentUtilTrendLoading}>
+              {agentUtilTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setAgentUtilTrendOpen(o => !o)} className="p-1 rounded hover:bg-zinc-800 text-zinc-400">
+              {agentUtilTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {agentUtilTrendOpen && (
+          agentUtilTrendLoading && !agentUtilTrend ? (
+            <div className="h-24 bg-zinc-800/40 animate-pulse rounded" />
+          ) : agentUtilTrend ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-0.5">Total Runs</p>
+                  <p className="text-xl font-bold text-violet-300">{agentUtilTrend.total_runs}</p>
+                  <p className="text-xs text-zinc-500">last 6 months</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-0.5">Top Agent</p>
+                  <p className="text-sm font-bold text-zinc-100 truncate">{agentUtilTrend.top_agent ?? '—'}</p>
+                  <p className="text-xs text-zinc-500">{agentUtilTrend.top_agent_runs} runs</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-0.5">Best Month</p>
+                  <p className="text-xl font-bold text-zinc-100">{agentUtilTrend.best_month_runs}</p>
+                  <p className="text-xs text-zinc-500">{agentUtilTrend.best_month}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <BarChart data={agentUtilTrend.monthly_utilization} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: string) => v.slice(5)} />
+                  <YAxis tick={{ fontSize: 10, fill: '#71717A' }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181B', border: '1px solid #3F3F46', borderRadius: 8 }}
+                    labelStyle={{ color: '#A1A1AA', fontSize: 11 }}
+                  />
+                  {agentUtilTrend.agent_names.map((ag: string, i: number) => {
+                    const colors = ['#A78BFA', '#818CF8', '#6EE7B7', '#FCD34D', '#F9A8D4', '#7DD3FC']
+                    return <Bar key={ag} dataKey={ag} stackId="a" fill={colors[i % colors.length]} radius={i === agentUtilTrend.agent_names.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]} />
+                  })}
+                </BarChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{agentUtilTrend.utilization_narrative}</p>
+              <ul className="space-y-1">
+                {agentUtilTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-violet-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentUtilTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent utilization trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Agent Error Rate Trend */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+          <AlertTriangle className="h-4 w-4 text-rose-400" />
+          <h3 className="text-sm font-semibold text-zinc-100 flex-1">Agent Error Rate Trend</h3>
+          {agentErrorTrend && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              agentErrorTrend.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+              agentErrorTrend.trend_direction === 'worsening' ? 'bg-rose-900/40 text-rose-300' :
+              'bg-zinc-800 text-zinc-400'
+            }`}>
+              {agentErrorTrend.trend_direction} {agentErrorTrend.rate_delta >= 0 ? '+' : ''}{agentErrorTrend.rate_delta.toFixed(1)}pp
+            </span>
+          )}
+          <button onClick={regenerateAgentErrorTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentErrorTrendLoading}>
+            {agentErrorTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          </button>
+          <button onClick={() => setAgentErrorTrendOpen(o => !o)} className="p-1 rounded hover:bg-zinc-800 text-zinc-400">
+            {agentErrorTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </button>
+        </div>
+        {agentErrorTrendOpen && (
+          agentErrorTrendLoading && !agentErrorTrend ? (
+            <div className="p-6 space-y-2">{[1,2,3].map(i => <div key={i} className="h-4 bg-zinc-800 rounded animate-pulse" />)}</div>
+          ) : agentErrorTrend ? (
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900 rounded-lg p-2 text-center">
+                  <p className="text-xs text-zinc-500">Error Rate</p>
+                  <p className={`text-xl font-bold ${agentErrorTrend.overall_error_rate >= 20 ? 'text-rose-300' : agentErrorTrend.overall_error_rate >= 10 ? 'text-amber-300' : 'text-emerald-300'}`}>{agentErrorTrend.overall_error_rate.toFixed(1)}%</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-2 text-center">
+                  <p className="text-xs text-zinc-500">Worst Agent</p>
+                  <p className="text-sm font-bold text-zinc-100 truncate">{agentErrorTrend.worst_agent ?? '—'}</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-2 text-center">
+                  <p className="text-xs text-zinc-500">Best Month</p>
+                  <p className="text-xl font-bold text-emerald-300">{agentErrorTrend.best_error_rate.toFixed(1)}%</p>
+                  <p className="text-xs text-zinc-500">{agentErrorTrend.best_month}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <ComposedChart data={agentErrorTrend.monthly_error_rate} margin={{ top: 4, right: 32, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717a' }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#71717a' }} />
+                  <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: 10, fill: '#71717a' }} tickFormatter={(v: number) => `${v}%`} />
+                  <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }} formatter={(value: unknown, name: unknown) => [name === 'error_rate' ? `${Number(value ?? 0)}%` : Number(value ?? 0), name === 'error_rate' ? 'Error Rate' : name === 'success_count' ? 'Success' : 'Failure']} />
+                  <Bar yAxisId="left" dataKey="success_count" stackId="a" fill="#6ee7b7" radius={[0,0,0,0]} />
+                  <Bar yAxisId="left" dataKey="failure_count" stackId="a" fill="#fca5a5" radius={[3,3,0,0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="error_rate" stroke="#f87171" strokeWidth={2} dot={{ r: 3, fill: '#f87171' }} connectNulls />
+                </ComposedChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{agentErrorTrend.error_rate_narrative}</p>
+              <ul className="space-y-1">
+                {agentErrorTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentErrorTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent error rate trend.</div>
           )
         )}
       </Card>

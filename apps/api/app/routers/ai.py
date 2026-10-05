@@ -21970,3 +21970,670 @@ async def get_ai_tasks_completion_trend(
         "recommendations": recommendations,
         "generated_at": now.isoformat(),
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/creation-trend")
+@limiter.limit("5/minute")
+async def get_deal_creation_trend(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    now = datetime.datetime.now(tz=timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    rows = (await db.execute(
+        select(Deal.created_at, Deal.stage).where(
+            Deal.workspace_id == workspace_id,
+            Deal.created_at >= cutoff,
+        )
+    )).all()
+
+    buckets: list[dict] = []
+    for i in range(5, -1, -1):
+        month = now.month - i
+        year = now.year
+        while month <= 0:
+            month += 12
+            year -= 1
+        label = f"{year}-{month:02d}"
+        buckets.append({"year": year, "month": month, "month_label": label,
+                        "deals_created": 0, "deals_won": 0, "deals_lost": 0})
+
+    for row in rows:
+        ts = row.created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        for b in buckets:
+            if ts.year == b["year"] and ts.month == b["month"]:
+                b["deals_created"] += 1
+                if row.stage == "closed_won":
+                    b["deals_won"] += 1
+                elif row.stage == "closed_lost":
+                    b["deals_lost"] += 1
+                break
+
+    monthly_deals = []
+    for b in buckets:
+        closed = b["deals_won"] + b["deals_lost"]
+        win_rate = round(b["deals_won"] / closed * 100, 1) if closed > 0 else None
+        monthly_deals.append({
+            "month_label": b["month_label"],
+            "deals_created": b["deals_created"],
+            "deals_won": b["deals_won"],
+            "deals_lost": b["deals_lost"],
+            "win_rate": win_rate,
+        })
+
+    total_created = sum(b["deals_created"] for b in buckets)
+    total_won = sum(b["deals_won"] for b in buckets)
+    total_lost = sum(b["deals_lost"] for b in buckets)
+    total_closed = total_won + total_lost
+    overall_win_rate = round(total_won / total_closed * 100, 1) if total_closed > 0 else None
+
+    if total_created == 0:
+        return {
+            "monthly_deals": monthly_deals,
+            "total_created": 0,
+            "total_won": 0,
+            "total_lost": 0,
+            "overall_win_rate": None,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": None,
+            "best_win_rate": None,
+            "deal_narrative": "No deal data available for the last 6 months.",
+            "recommendations": [
+                "Start creating deals for your pipeline to track creation and win rate trends.",
+                "Mark deals as closed_won or closed_lost to enable win rate analysis.",
+                "Review your pipeline stages to ensure deals progress through to closure.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    first_half = [m["win_rate"] for m in monthly_deals[:3] if m["win_rate"] is not None]
+    second_half = [m["win_rate"] for m in monthly_deals[3:] if m["win_rate"] is not None]
+    first_avg = sum(first_half) / len(first_half) if first_half else 0.0
+    second_avg = sum(second_half) / len(second_half) if second_half else 0.0
+    rate_delta = round(second_avg - first_avg, 1)
+    if rate_delta >= 5.0:
+        trend_direction = "improving"
+    elif rate_delta <= -5.0:
+        trend_direction = "declining"
+    else:
+        trend_direction = "stable"
+
+    best_entry = max(
+        (m for m in monthly_deals if m["win_rate"] is not None),
+        key=lambda x: x["win_rate"],
+        default=None,
+    )
+    best_month = best_entry["month_label"] if best_entry else None
+    best_win_rate = best_entry["win_rate"] if best_entry else None
+
+    prompt = (
+        f"Deal creation and win rate data for the last 6 months:\n"
+        f"Monthly data: {[{'month': m['month_label'], 'created': m['deals_created'], 'won': m['deals_won'], 'lost': m['deals_lost'], 'win_rate': m['win_rate']} for m in monthly_deals]}\n"
+        f"Overall: {total_created} deals created, {total_won} won, {total_lost} lost, {overall_win_rate}% win rate\n"
+        f"Trend: {trend_direction} ({rate_delta:+.1f}pp)\n"
+        f"Best month: {best_month} at {best_win_rate}% win rate\n\n"
+        "Return JSON only:\n"
+        '{"deal_narrative": "2-3 sentence insight about deal creation volume and win rate trends", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    deal_narrative = ""
+    recommendations: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        deal_narrative = str(parsed.get("deal_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        deal_narrative = (
+            f"Your team created {total_created} deals and won {total_won} "
+            f"({overall_win_rate}%) over the last 6 months. "
+            f"The win rate trend is {trend_direction} ({rate_delta:+.1f}pp change)."
+        )
+
+    default_recs = [
+        "Review lost deals each month to identify the top objection patterns driving losses.",
+        "Set a monthly deal creation target to maintain consistent pipeline coverage.",
+        "Focus on deals in proposal and negotiation stages to improve near-term win rate.",
+    ]
+    while len(recommendations) < 3:
+        recommendations.append(default_recs[len(recommendations) % 3])
+
+    return {
+        "monthly_deals": monthly_deals,
+        "total_created": total_created,
+        "total_won": total_won,
+        "total_lost": total_lost,
+        "overall_win_rate": overall_win_rate,
+        "trend_direction": trend_direction,
+        "rate_delta": rate_delta,
+        "best_month": best_month,
+        "best_win_rate": best_win_rate,
+        "deal_narrative": deal_narrative,
+        "recommendations": recommendations,
+        "generated_at": now.isoformat(),
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/messages/clarity-trend")
+@limiter.limit("5/minute")
+async def get_ai_messages_clarity_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    cutoff = now - datetime.timedelta(days=183)
+
+    stmt = (
+        select(ClarityScore.score, ClarityScore.created_at)
+        .where(ClarityScore.workspace_id == workspace_id)
+        .where(ClarityScore.created_at >= cutoff)
+        .where(ClarityScore.score.isnot(None))
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    buckets2: list[dict] = []
+    for offset in range(5, -1, -1):
+        m = now.month - offset
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        label = datetime.datetime(y, m, 1).strftime("%b %Y")
+        buckets2.append({
+            "month_label": label, "year": y, "month": m,
+            "scores": [], "message_count": 0, "high_count": 0, "low_count": 0,
+        })
+
+    for row in rows:
+        if row.created_at is None:
+            continue
+        ts = row.created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        for b in buckets2:
+            if ts.year == b["year"] and ts.month == b["month"]:
+                b["scores"].append(row.score)
+                b["message_count"] += 1
+                if row.score >= 70:
+                    b["high_count"] += 1
+                if row.score < 40:
+                    b["low_count"] += 1
+                break
+
+    monthly_clarity = []
+    for b in buckets2:
+        avg = round(sum(b["scores"]) / len(b["scores"]), 1) if b["scores"] else None
+        monthly_clarity.append({
+            "month_label": b["month_label"],
+            "avg_score": avg,
+            "message_count": b["message_count"],
+            "high_count": b["high_count"],
+            "low_count": b["low_count"],
+        })
+
+    total_messages = sum(b["message_count"] for b in buckets2)
+    all_scores = [s for b in buckets2 for s in b["scores"]]
+    overall_avg_score = round(sum(all_scores) / len(all_scores), 1) if all_scores else None
+
+    if total_messages == 0:
+        return {
+            "monthly_clarity": monthly_clarity,
+            "total_messages": 0,
+            "overall_avg_score": None,
+            "trend_direction": "stable",
+            "score_delta": 0.0,
+            "best_month": None,
+            "best_avg_score": None,
+            "clarity_narrative": "No clarity scores available for the last 6 months.",
+            "recommendations": [
+                "Score messages using the 'Score Clarity' button in the inbox to start tracking communication quality.",
+                "Enable automatic clarity scoring during Gmail or Slack message ingestion.",
+                "Use clarity scores to identify which contacts or deals have unclear communication patterns.",
+            ],
+            "generated_at": now.isoformat(),
+        }
+
+    first_half2 = [m["avg_score"] for m in monthly_clarity[:3] if m["avg_score"] is not None]
+    second_half2 = [m["avg_score"] for m in monthly_clarity[3:] if m["avg_score"] is not None]
+    first_avg2 = sum(first_half2) / len(first_half2) if first_half2 else 0.0
+    second_avg2 = sum(second_half2) / len(second_half2) if second_half2 else 0.0
+    score_delta = round(second_avg2 - first_avg2, 1)
+    if score_delta >= 5.0:
+        trend_direction2 = "improving"
+    elif score_delta <= -5.0:
+        trend_direction2 = "declining"
+    else:
+        trend_direction2 = "stable"
+
+    best_entry2 = max(
+        (m for m in monthly_clarity if m["avg_score"] is not None),
+        key=lambda x: x["avg_score"],
+        default=None,
+    )
+    best_month2 = best_entry2["month_label"] if best_entry2 else None
+    best_avg_score = best_entry2["avg_score"] if best_entry2 else None
+
+    prompt2 = (
+        f"Message clarity score data for the last 6 months:\n"
+        f"Monthly data: {[{'month': m['month_label'], 'avg_score': m['avg_score'], 'count': m['message_count'], 'high': m['high_count'], 'low': m['low_count']} for m in monthly_clarity]}\n"
+        f"Overall: {total_messages} messages scored, avg score {overall_avg_score}/100\n"
+        f"Trend: {trend_direction2} ({score_delta:+.1f} pts)\n"
+        f"Best month: {best_month2} at avg {best_avg_score}\n\n"
+        "Return JSON only:\n"
+        '{"clarity_narrative": "2-3 sentence insight about message clarity patterns and what the trend suggests for communication quality", '
+        '"recommendations": ["rec1", "rec2", "rec3"]}'
+    )
+
+    clarity_narrative = ""
+    recommendations2: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt2}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = loads_llm_json(raw)
+        clarity_narrative = str(parsed.get("clarity_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations2 = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        clarity_narrative = (
+            f"Your team has scored {total_messages} messages with an average clarity of {overall_avg_score}/100 "
+            f"over the last 6 months. Communication quality is {trend_direction2} ({score_delta:+.1f} pts change)."
+        )
+
+    default_recs2 = [
+        "Focus on shorter, action-oriented messages to improve clarity scores for low-scoring threads.",
+        "Share high-clarity messages as templates so the team can adopt effective communication patterns.",
+        "Review messages scoring below 40 to identify unclear communication that may be hurting deal progress.",
+    ]
+    while len(recommendations2) < 3:
+        recommendations2.append(default_recs2[len(recommendations2) % 3])
+
+    return {
+        "monthly_clarity": monthly_clarity,
+        "total_messages": total_messages,
+        "overall_avg_score": overall_avg_score,
+        "trend_direction": trend_direction2,
+        "score_delta": score_delta,
+        "best_month": best_month2,
+        "best_avg_score": best_avg_score,
+        "clarity_narrative": clarity_narrative,
+        "recommendations": recommendations2,
+        "generated_at": now.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20s — AI Agent Utilization Trend
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/agents/utilization-trend")
+@limiter.limit("5/minute")
+async def get_ai_agent_utilization_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.now(timezone.utc)
+    six_months_ago = now - datetime.timedelta(days=183)
+
+    result = await db.execute(
+        select(ActivityEvent.agent_name, ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.agent_name.isnot(None),
+            ActivityEvent.created_at >= six_months_ago,
+        )
+    )
+    rows = result.all()
+
+    cur_year, cur_month = now.year, now.month
+    month_keys: list[str] = []
+    for offset in range(5, -1, -1):
+        m = cur_month - offset
+        y = cur_year
+        while m <= 0:
+            m += 12
+            y -= 1
+        month_keys.append(f"{y:04d}-{m:02d}")
+
+    all_agents: set[str] = set()
+    for row in rows:
+        if row.agent_name:
+            all_agents.add(str(row.agent_name))
+
+    buckets: dict[str, dict[str, int]] = {mk: {} for mk in month_keys}
+    for row in rows:
+        ts = row.created_at
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        mk = ts.strftime("%Y-%m")
+        if mk not in buckets:
+            continue
+        name = str(row.agent_name)
+        buckets[mk][name] = buckets[mk].get(name, 0) + 1
+
+    monthly_utilization = []
+    for mk in month_keys:
+        b = buckets[mk]
+        total = sum(b.values())
+        entry: dict = {"month_label": mk, "total_runs": total}
+        for ag in all_agents:
+            entry[ag] = b.get(ag, 0)
+        monthly_utilization.append(entry)
+
+    total_runs = sum(m["total_runs"] for m in monthly_utilization)
+
+    agent_totals: Counter = Counter()
+    for row in rows:
+        if row.agent_name:
+            agent_totals[str(row.agent_name)] += 1
+    top_agent = agent_totals.most_common(1)[0][0] if agent_totals else None
+    top_agent_runs = agent_totals[top_agent] if top_agent else 0
+
+    filled = [m for m in monthly_utilization if m["total_runs"] > 0]
+    if len(filled) >= 2:
+        mid = len(filled) // 2
+        first_avg = sum(m["total_runs"] for m in filled[:mid]) / mid
+        second_avg = sum(m["total_runs"] for m in filled[mid:]) / (len(filled) - mid)
+        run_delta = round(second_avg - first_avg, 1)
+        if run_delta >= 3:
+            trend_direction3 = "increasing"
+        elif run_delta <= -3:
+            trend_direction3 = "decreasing"
+        else:
+            trend_direction3 = "stable"
+    else:
+        run_delta = 0.0
+        trend_direction3 = "stable"
+
+    best_month3_entry = max(monthly_utilization, key=lambda m: m["total_runs"], default=None)
+    best_month3 = best_month3_entry["month_label"] if best_month3_entry else month_keys[-1]
+    best_month3_runs = best_month3_entry["total_runs"] if best_month3_entry else 0
+
+    if total_runs == 0:
+        return {
+            "monthly_utilization": monthly_utilization,
+            "agent_names": sorted(all_agents),
+            "total_runs": 0,
+            "top_agent": None,
+            "top_agent_runs": 0,
+            "trend_direction": "stable",
+            "run_delta": 0.0,
+            "best_month": best_month3,
+            "best_month_runs": 0,
+            "utilization_narrative": "No agent runs recorded in the last 6 months — trigger an agent to start tracking utilization.",
+            "recommendations": [
+                "Run the Lead Scorer agent weekly to keep contact scores fresh.",
+                "Enable the Email Composer for outreach tasks to boost automation.",
+                "Schedule the Pipeline Optimizer quarterly for deal health reviews.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    agent_summary = ", ".join(
+        f"{ag} ({cnt} runs)" for ag, cnt in agent_totals.most_common(5)
+    )
+    prompt = (
+        f"You are a CRM analytics assistant. A sales workspace ran {total_runs} agent jobs "
+        f"over the last 6 months. Top agents by usage: {agent_summary}. "
+        f"The trend is {trend_direction3} (avg run delta: {run_delta:+.1f} runs/month). "
+        f"Best month was {best_month3} with {best_month3_runs} runs. "
+        "Respond ONLY with JSON: "
+        "{\"utilization_narrative\": \"2-sentence insight on agent adoption and automation health\", "
+        "\"recommendations\": [\"action 1\", \"action 2\", \"action 3\"]}"
+    )
+
+    utilization_narrative = ""
+    recommendations3: list[str] = []
+    try:
+        client = _mk_anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = loads_llm_json(raw)
+        utilization_narrative = str(parsed.get("utilization_narrative", "")).strip()
+        raw_recs = parsed.get("recommendations", [])
+        recommendations3 = [str(r) for r in (raw_recs if isinstance(raw_recs, list) else [])[:3]]
+    except Exception:
+        utilization_narrative = (
+            f"Your team ran {total_runs} agent jobs over the last 6 months, "
+            f"with {top_agent} leading at {top_agent_runs} runs. "
+            f"Utilization is {trend_direction3} ({run_delta:+.1f} runs/month delta)."
+        )
+
+    default_recs3 = [
+        "Run the Lead Scorer on all contacts monthly to keep pipeline quality high.",
+        "Automate Clarity Scorer on every inbound message for consistent communication insights.",
+        "Schedule the Pipeline Optimizer quarterly to surface stalled deals before they go cold.",
+    ]
+    while len(recommendations3) < 3:
+        recommendations3.append(default_recs3[len(recommendations3) % 3])
+
+    return {
+        "monthly_utilization": monthly_utilization,
+        "agent_names": sorted(all_agents),
+        "total_runs": total_runs,
+        "top_agent": top_agent,
+        "top_agent_runs": top_agent_runs,
+        "trend_direction": trend_direction3,
+        "run_delta": run_delta,
+        "best_month": best_month3,
+        "best_month_runs": best_month3_runs,
+        "utilization_narrative": utilization_narrative,
+        "recommendations": recommendations3,
+        "generated_at": now.isoformat() + "Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20y: AI agent error rate trend
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/agents/error-rate-trend")
+@limiter.limit("5/minute")
+async def get_ai_agent_error_rate_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+    cutoff4 = now - datetime.timedelta(days=183)
+
+    from sqlalchemy import select as sa_select4
+    result4 = await db.execute(
+        sa_select4(ActivityEvent.agent_name, ActivityEvent.severity, ActivityEvent.created_at)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.agent_name.isnot(None))
+        .where(ActivityEvent.created_at >= cutoff4)
+        .order_by(ActivityEvent.created_at)
+    )
+    rows4 = result4.all()
+
+    buckets4: list[dict] = []
+    for offset4 in range(5, -1, -1):
+        target_month4 = now.month - offset4
+        target_year4 = now.year
+        while target_month4 <= 0:
+            target_month4 += 12
+            target_year4 -= 1
+        label4 = f"{target_year4}-{target_month4:02d}"
+        buckets4.append({"month_label": label4, "total_runs": 0, "success_count": 0, "failure_count": 0, "error_rate": 0.0})
+
+    agent_errors4: dict[str, int] = {}
+    agent_totals4: dict[str, int] = {}
+    for row4 in rows4:
+        row_month4 = f"{row4.created_at.year}-{row4.created_at.month:02d}"
+        for b4 in buckets4:
+            if b4["month_label"] == row_month4:
+                b4["total_runs"] += 1
+                if row4.severity == "error":
+                    b4["failure_count"] += 1
+                    agent_errors4[row4.agent_name] = agent_errors4.get(row4.agent_name, 0) + 1
+                else:
+                    b4["success_count"] += 1
+                agent_totals4[row4.agent_name] = agent_totals4.get(row4.agent_name, 0) + 1
+                break
+
+    for b4 in buckets4:
+        if b4["total_runs"] > 0:
+            b4["error_rate"] = round(b4["failure_count"] / b4["total_runs"] * 100, 1)
+
+    total_runs4 = sum(b4["total_runs"] for b4 in buckets4)
+    total_failures4 = sum(b4["failure_count"] for b4 in buckets4)
+    overall_error_rate4 = round(total_failures4 / total_runs4 * 100, 1) if total_runs4 > 0 else 0.0
+
+    worst_agent4 = None
+    if agent_totals4:
+        worst_agent4 = max(agent_errors4, key=lambda a: agent_errors4.get(a, 0) / agent_totals4[a]) if agent_errors4 else None
+
+    half4 = len(buckets4) // 2
+    first_half_rates4 = [b4["error_rate"] for b4 in buckets4[:half4] if b4["total_runs"] > 0]
+    second_half_rates4 = [b4["error_rate"] for b4 in buckets4[half4:] if b4["total_runs"] > 0]
+    first_avg4 = sum(first_half_rates4) / len(first_half_rates4) if first_half_rates4 else 0.0
+    second_avg4 = sum(second_half_rates4) / len(second_half_rates4) if second_half_rates4 else 0.0
+    rate_delta4 = round(second_avg4 - first_avg4, 1)
+    if rate_delta4 <= -3:
+        trend_direction4 = "improving"
+    elif rate_delta4 >= 3:
+        trend_direction4 = "worsening"
+    else:
+        trend_direction4 = "stable"
+
+    active_buckets4 = [b4 for b4 in buckets4 if b4["total_runs"] > 0]
+    best_month4 = min(active_buckets4, key=lambda b4: b4["error_rate"])["month_label"] if active_buckets4 else buckets4[-1]["month_label"]
+    best_error_rate4 = min(b4["error_rate"] for b4 in active_buckets4) if active_buckets4 else 0.0
+
+    if total_runs4 == 0:
+        return {
+            "monthly_error_rate": buckets4,
+            "total_runs": 0,
+            "total_failures": 0,
+            "overall_error_rate": 0.0,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": best_month4,
+            "best_error_rate": 0.0,
+            "worst_agent": None,
+            "error_rate_narrative": "No agent runs recorded in the last 6 months — trigger an agent to start tracking reliability.",
+            "recommendations": [
+                "Run agents in a staging environment first to catch errors before production.",
+                "Add alerting on agent severity=error events to catch failures early.",
+                "Review agent configurations monthly to reduce error rates over time.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    agent_error_summary4 = ", ".join(
+        f"{ag} ({agent_errors4.get(ag, 0)}/{agent_totals4[ag]} errors)"
+        for ag in sorted(agent_totals4, key=lambda a: -agent_totals4[a])[:5]
+    )
+    prompt4 = (
+        f"You are a CRM analytics assistant. A sales workspace ran {total_runs4} agent jobs "
+        f"over the last 6 months with an overall error rate of {overall_error_rate4:.1f}%. "
+        f"Per-agent breakdown: {agent_error_summary4}. "
+        f"The error rate trend is {trend_direction4} (delta: {rate_delta4:+.1f}pp). "
+        f"Best month was {best_month4} at {best_error_rate4:.1f}% error rate. "
+        "Respond ONLY with JSON: "
+        "{\"error_rate_narrative\": \"2-sentence insight on agent reliability and error trends\", "
+        "\"recommendations\": [\"action 1\", \"action 2\", \"action 3\"]}"
+    )
+
+    error_rate_narrative4 = ""
+    recommendations4: list[str] = []
+    try:
+        client4 = _mk_anthropic()
+        msg4 = client4.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt4}],
+        )
+        raw4 = msg4.content[0].text.strip()
+        if raw4.startswith("```"):
+            raw4 = raw4.split("```")[1]
+            if raw4.startswith("json"):
+                raw4 = raw4[4:]
+        parsed4 = loads_llm_json(raw4)
+        error_rate_narrative4 = str(parsed4.get("error_rate_narrative", "")).strip()
+        raw_recs4 = parsed4.get("recommendations", [])
+        recommendations4 = [str(r) for r in (raw_recs4 if isinstance(raw_recs4, list) else [])[:3]]
+    except Exception:
+        error_rate_narrative4 = (
+            f"Your agents recorded a {overall_error_rate4:.1f}% error rate over the last 6 months "
+            f"across {total_runs4} total runs. "
+            f"The trend is {trend_direction4} ({rate_delta4:+.1f}pp change)."
+        )
+
+    default_recs4 = [
+        "Investigate the highest-error-rate agent's recent logs to identify root causes.",
+        "Add input validation to agents that handle external data to reduce parse failures.",
+        "Schedule a monthly reliability review for agents with error rates above 10%.",
+    ]
+    while len(recommendations4) < 3:
+        recommendations4.append(default_recs4[len(recommendations4) % 3])
+
+    return {
+        "monthly_error_rate": buckets4,
+        "total_runs": total_runs4,
+        "total_failures": total_failures4,
+        "overall_error_rate": overall_error_rate4,
+        "trend_direction": trend_direction4,
+        "rate_delta": rate_delta4,
+        "best_month": best_month4,
+        "best_error_rate": best_error_rate4,
+        "worst_agent": worst_agent4,
+        "error_rate_narrative": error_rate_narrative4,
+        "recommendations": recommendations4,
+        "generated_at": now.isoformat() + "Z",
+    }
