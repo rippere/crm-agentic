@@ -10563,3 +10563,74 @@ async def test_agent_dow_distribution_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/dow-distribution")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20ae – AI agent week-over-week comparison
+# ---------------------------------------------------------------------------
+
+class FakeWowRow:
+    def __init__(self, agent_name: str, days_ago: int):
+        import datetime
+        self.agent_name = agent_name
+        self.created_at = datetime.datetime.utcnow() - datetime.timedelta(days=days_ago)
+
+
+@pytest.mark.asyncio
+async def test_agent_wow_comparison_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Current week (days_ago 0-6): Lead Scorer×3, Email Composer×1
+    # Prior week (days_ago 7-13): Lead Scorer×1, Pipeline Optimizer×2
+    fake_rows = [
+        FakeWowRow("Lead Scorer", 1),
+        FakeWowRow("Lead Scorer", 3),
+        FakeWowRow("Lead Scorer", 5),
+        FakeWowRow("Email Composer", 2),
+        FakeWowRow("Lead Scorer", 8),
+        FakeWowRow("Pipeline Optimizer", 9),
+        FakeWowRow("Pipeline Optimizer", 11),
+    ]
+
+    async def fake_execute(stmt):
+        class FakeResult:
+            def all(self_):
+                return fake_rows
+        return FakeResult()
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    import anthropic as _ant
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"wow_narrative": "Up 33% WoW.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/wow-comparison")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_runs_this_week"] == 4
+    assert data["total_runs_prior_week"] == 3
+    assert data["most_active_agent"] == "Lead Scorer"
+    assert len(data["agents"]) == 3
+    lead = next(a for a in data["agents"] if a["agent_name"] == "Lead Scorer")
+    assert lead["current_week_runs"] == 3
+    assert lead["prior_week_runs"] == 1
+    assert lead["delta"] == 2
+    assert data["wow_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_agent_wow_comparison_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ffff0000-1111-2222-3333-444455556666")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/wow-comparison")
+    assert resp.status_code == 403

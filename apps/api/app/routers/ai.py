@@ -23372,3 +23372,136 @@ async def get_ai_agent_dow_distribution(
         "recommendations": recommendations9,
         "generated_at": now9.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/wow-comparison")
+@limiter.limit("5/minute")
+async def get_ai_agent_wow_comparison(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    import datetime as _dt10
+
+    now10 = _dt10.datetime.utcnow()
+    week_start10 = now10 - _dt10.timedelta(days=7)
+    prior_start10 = now10 - _dt10.timedelta(days=14)
+
+    result10 = await db.execute(
+        select(ActivityEvent.agent_name, ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.agent_name.isnot(None),
+            ActivityEvent.created_at >= prior_start10,
+        )
+    )
+    rows10 = result10.all()
+
+    if not rows10:
+        return {
+            "agents": [],
+            "total_runs_this_week": 0,
+            "total_runs_prior_week": 0,
+            "wow_pct": 0.0,
+            "most_active_agent": None,
+            "wow_narrative": "No agent runs recorded in the last 14 days.",
+            "recommendations": [
+                "Deploy an agent to start tracking week-over-week performance trends.",
+                "Schedule regular agent runs to build a baseline for comparison.",
+                "Review agent configurations to ensure they are triggering as expected.",
+            ],
+            "generated_at": now10.isoformat() + "Z",
+        }
+
+    current10: dict = {}
+    prior10: dict = {}
+    for row10 in rows10:
+        name10 = row10.agent_name
+        if row10.created_at >= week_start10:
+            current10[name10] = current10.get(name10, 0) + 1
+        else:
+            prior10[name10] = prior10.get(name10, 0) + 1
+
+    all_agents10 = sorted(set(list(current10.keys()) + list(prior10.keys())))
+    agents10 = []
+    for name10 in all_agents10:
+        cur10 = current10.get(name10, 0)
+        pri10 = prior10.get(name10, 0)
+        delta10 = cur10 - pri10
+        pct10 = round((delta10 / pri10 * 100), 1) if pri10 > 0 else (100.0 if cur10 > 0 else 0.0)
+        agents10.append({
+            "agent_name": name10,
+            "current_week_runs": cur10,
+            "prior_week_runs": pri10,
+            "delta": delta10,
+            "pct_change": pct10,
+        })
+
+    agents10.sort(key=lambda x: x["current_week_runs"], reverse=True)
+
+    total_current10 = sum(a["current_week_runs"] for a in agents10)
+    total_prior10 = sum(a["prior_week_runs"] for a in agents10)
+    total_delta10 = total_current10 - total_prior10
+    wow_pct10 = round((total_delta10 / total_prior10 * 100), 1) if total_prior10 > 0 else (100.0 if total_current10 > 0 else 0.0)
+    most_active10 = agents10[0]["agent_name"] if agents10 else None
+
+    wow_narrative10 = ""
+    recommendations10: list = []
+    try:
+        client10 = _mk_anthropic()
+        agent_summary10 = "; ".join(
+            f"{a['agent_name']} cur={a['current_week_runs']} pri={a['prior_week_runs']} delta={a['delta']:+d}"
+            for a in agents10[:8]
+        )
+        prompt10 = (
+            f"You are analyzing AI agent week-over-week usage for a CRM workspace.\n"
+            f"This week: {total_current10} runs. Prior week: {total_prior10} runs. Change: {wow_pct10:+.1f}%.\n"
+            f"Per-agent breakdown: {agent_summary10}\n\n"
+            "Return JSON with exactly:\n"
+            '{"wow_narrative": "2-sentence insight about week-over-week trends", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp10 = client10.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt10}],
+        )
+        raw10 = resp10.content[0].text.strip()
+        if "```" in raw10:
+            raw10 = raw10.split("```")[1]
+            if raw10.startswith("json"):
+                raw10 = raw10[4:]
+        parsed10 = loads_llm_json(raw10)
+        wow_narrative10 = str(parsed10.get("wow_narrative", "")).strip()
+        raw_recs10 = parsed10.get("recommendations", [])
+        recommendations10 = [str(r) for r in (raw_recs10 if isinstance(raw_recs10, list) else [])[:3]]
+    except Exception:
+        direction10 = "up" if wow_pct10 > 0 else ("down" if wow_pct10 < 0 else "flat")
+        wow_narrative10 = (
+            f"Agent activity is {direction10} {abs(wow_pct10):.1f}% week-over-week "
+            f"({total_current10} runs this week vs {total_prior10} last week). "
+            f"{'Most active this week: ' + most_active10 + '.' if most_active10 else ''}"
+        )
+
+    default_recs10 = [
+        "Investigate agents with declining run counts to ensure they are still triggering correctly.",
+        "Agents with large week-over-week spikes may indicate unexpected automation — review their triggers.",
+        "Use weekly trends to right-size agent compute budgets before peak periods.",
+    ]
+    while len(recommendations10) < 3:
+        recommendations10.append(default_recs10[len(recommendations10) % 3])
+
+    return {
+        "agents": agents10,
+        "total_runs_this_week": total_current10,
+        "total_runs_prior_week": total_prior10,
+        "wow_pct": wow_pct10,
+        "most_active_agent": most_active10,
+        "wow_narrative": wow_narrative10,
+        "recommendations": recommendations10,
+        "generated_at": now10.isoformat() + "Z",
+    }

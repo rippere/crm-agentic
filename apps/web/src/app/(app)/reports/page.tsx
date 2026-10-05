@@ -988,6 +988,12 @@ export default function ReportsPage() {
   const [agentDowLoading, setAgentDowLoading] = useState(false);
   const [agentDowOpen, setAgentDowOpen] = useState(true);
 
+  type AgentWowAgent = { agent_name: string; current_week_runs: number; prior_week_runs: number; delta: number; pct_change: number };
+  type AgentWowData = { agents: AgentWowAgent[]; total_runs_this_week: number; total_runs_prior_week: number; wow_pct: number; most_active_agent: string | null; wow_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentWow, setAgentWow] = useState<AgentWowData | null>(null);
+  const [agentWowLoading, setAgentWowLoading] = useState(false);
+  const [agentWowOpen, setAgentWowOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1224,6 +1230,8 @@ export default function ReportsPage() {
       apiClient.getAgentHourlyDistribution("demo-workspace-1", "demo-token").then(setAgentHourly).catch(() => {}).finally(() => setAgentHourlyLoading(false));
       setAgentDowLoading(true);
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
+      setAgentWowLoading(true);
+      apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1459,6 +1467,8 @@ export default function ReportsPage() {
       apiClient.getAgentHourlyDistribution(workspaceId, session.access_token).then(setAgentHourly).catch(() => {}).finally(() => setAgentHourlyLoading(false));
       setAgentDowLoading(true);
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
+      setAgentWowLoading(true);
+      apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
     });
   }, []);
 
@@ -3232,6 +3242,27 @@ export default function ReportsPage() {
         if (!session) { setAgentSeverityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentSeverityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentWow = () => {
+    setAgentWowLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentWowComparison(wid, tok)
+        .then(setAgentWow)
+        .catch(() => {})
+        .finally(() => setAgentWowLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentWowLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentWowLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13842,6 +13873,89 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the hourly distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20ae – Agent Week-over-Week Comparison */}
+      <Card className="border-zinc-700/50">
+        <div
+          className="flex items-center justify-between p-4 cursor-pointer select-none"
+          onClick={() => setAgentWowOpen(v => !v)}
+        >
+          <div className="flex items-center gap-3">
+            <TrendingUp className="h-4 w-4 text-teal-400" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Agent Week-over-Week</p>
+              <p className="text-xs text-zinc-500">This week vs prior week run counts per agent</p>
+            </div>
+            {agentWow && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${agentWow.wow_pct >= 0 ? 'bg-teal-900/40 text-teal-300' : 'bg-rose-900/40 text-rose-300'}`}>
+                {agentWow.wow_pct >= 0 ? '+' : ''}{agentWow.wow_pct.toFixed(1)}% WoW
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateAgentWow(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentWowLoading}>
+              {agentWowLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {agentWowOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {agentWowOpen && (
+          agentWowLoading && !agentWow ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading week-over-week comparison…</div>
+          ) : agentWow ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Most Active</p>
+                  <p className="text-sm font-bold text-teal-300 truncate">{agentWow.most_active_agent ?? '—'}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">This Week</p>
+                  <p className="text-xl font-bold text-zinc-200">{agentWow.total_runs_this_week}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Prior Week</p>
+                  <p className="text-xl font-bold text-zinc-400">{agentWow.total_runs_prior_week}</p>
+                </div>
+              </div>
+              {agentWow.agents.length > 0 ? (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 pb-1">
+                    <span className="text-xs text-zinc-600 flex-1 text-right">Agent</span>
+                    <span className="text-xs font-medium text-teal-400 w-16 text-center">This wk</span>
+                    <span className="text-xs font-medium text-zinc-500 w-16 text-center">Prior wk</span>
+                    <span className="text-xs font-medium text-zinc-500 w-16 text-center">Change</span>
+                  </div>
+                  {agentWow.agents.map((a: AgentWowAgent) => (
+                    <div key={a.agent_name} className="flex items-center gap-2 py-0.5">
+                      <span className="text-xs text-zinc-300 flex-1 truncate">{a.agent_name}</span>
+                      <span className="text-xs font-bold text-teal-300 w-16 text-center">{a.current_week_runs}</span>
+                      <span className="text-xs text-zinc-500 w-16 text-center">{a.prior_week_runs}</span>
+                      <span className={`text-xs font-medium w-16 text-center ${a.delta > 0 ? 'text-emerald-400' : a.delta < 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
+                        {a.delta > 0 ? '+' : ''}{a.delta} ({a.pct_change > 0 ? '+' : ''}{a.pct_change.toFixed(0)}%)
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center">No agent runs in the last 14 days.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{agentWow.wow_narrative}</p>
+              <ul className="space-y-1">
+                {agentWow.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentWow.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the week-over-week comparison.</div>
           )
         )}
       </Card>
