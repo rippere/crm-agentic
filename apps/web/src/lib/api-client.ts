@@ -8199,5 +8199,36 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/leaderboard`, {}, token)
   },
+
+  async getAgentHourlyDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      // Bell curve peaking at 10-14 UTC (business hours), low at night
+      const hourCounts = [1,0,0,0,0,1,2,4,7,11,15,14,13,16,12,9,7,5,4,3,2,2,1,1]
+      const totalRuns = hourCounts.reduce((a, c) => a + c, 0)
+      const peakHour = hourCounts.indexOf(Math.max(...hourCounts))
+      const quietestHour = hourCounts.indexOf(Math.min(...hourCounts))
+      const businessRuns = hourCounts.slice(9, 18).reduce((a, c) => a + c, 0)
+      return Promise.resolve({
+        hours: hourCounts.map((run_count, hour) => ({
+          hour,
+          run_count,
+          pct_of_total: Math.round(run_count / totalRuns * 1000) / 10,
+        })),
+        total_runs: totalRuns,
+        peak_hour: peakHour,
+        peak_count: hourCounts[peakHour],
+        quietest_hour: quietestHour,
+        business_hours_pct: Math.round(businessRuns / totalRuns * 1000) / 10,
+        hourly_narrative: 'Agent runs peak at 13:00 UTC, aligning with early-afternoon business hours when your team is most active. Over 78% of all runs occur during the 09:00–17:59 UTC window, indicating well-aligned automated workflows.',
+        recommendations: [
+          'Schedule heavy analytics agents at 06:00–08:00 UTC to complete before business hours begin.',
+          'Consider off-peak runs for non-urgent enrichment tasks to reduce system load.',
+          'Add monitoring alerts for unexpected after-hours agent activity above your baseline.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/hourly-distribution`, {}, token)
+  },
 }
 
