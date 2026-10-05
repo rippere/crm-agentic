@@ -10506,3 +10506,60 @@ async def test_agent_hourly_distribution_wrong_workspace_returns_403(app_client)
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/hourly-distribution")
     assert resp.status_code == 403
+
+
+class FakeDowRow:
+    def __init__(self, isoweekday: int):
+        """isoweekday: 1=Mon ... 7=Sun"""
+        import datetime
+        # Use a fixed date that has the desired isoweekday
+        base = datetime.date(2026, 9, 7)  # Monday
+        offset = isoweekday - 1
+        d = base + datetime.timedelta(days=offset)
+        self.created_at = datetime.datetime(d.year, d.month, d.day, 10, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_agent_dow_distribution_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    rows = [
+        FakeDowRow(1),  # Monday
+        FakeDowRow(1),  # Monday
+        FakeDowRow(1),  # Monday
+        FakeDowRow(3),  # Wednesday
+        FakeDowRow(3),  # Wednesday
+        FakeDowRow(7),  # Sunday
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"dow_narrative": "Monday dominates.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/dow-distribution")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["days"]) == 7
+    assert data["total_runs"] == 6
+    assert data["busiest_day"] == "Monday"
+    assert data["days"][0]["run_count"] == 3  # Monday
+    assert data["weekday_pct"] == round(5 / 6 * 100, 1)
+    assert data["weekend_pct"] == round(1 / 6 * 100, 1)
+    assert data["dow_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_agent_dow_distribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeffff-0000-1111-2222-333344445555")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/dow-distribution")
+    assert resp.status_code == 403

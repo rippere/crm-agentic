@@ -23248,3 +23248,127 @@ async def get_ai_agent_hourly_distribution(
         "recommendations": recommendations8,
         "generated_at": now8.isoformat() + "Z",
     }
+
+
+_DOW_NAMES9 = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/dow-distribution")
+@limiter.limit("5/minute")
+async def get_ai_agent_dow_distribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    import datetime as _dt9
+
+    now9 = _dt9.datetime.utcnow()
+    cutoff9 = now9 - _dt9.timedelta(days=183)
+
+    result9 = await db.execute(
+        select(ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.agent_name.isnot(None),
+            ActivityEvent.created_at >= cutoff9,
+        )
+    )
+    rows9 = result9.all()
+
+    if not rows9:
+        return {
+            "days": [{"day_name": _DOW_NAMES9[i], "day_index": i, "run_count": 0, "pct_of_total": 0.0} for i in range(7)],
+            "total_runs": 0,
+            "busiest_day": None,
+            "quietest_day": None,
+            "weekday_pct": 0.0,
+            "weekend_pct": 0.0,
+            "dow_narrative": "No agent runs recorded in the last 6 months.",
+            "recommendations": [
+                "Schedule your first agent runs on weekdays to align with your team's work patterns.",
+                "Configure agents to trigger automatically on key CRM events.",
+                "Review agent setup to ensure they are properly connected to your workspace.",
+            ],
+            "generated_at": now9.isoformat() + "Z",
+        }
+
+    dow_counts9 = [0] * 7
+    for row9 in rows9:
+        dow_counts9[row9.created_at.isoweekday() - 1] += 1
+
+    total_runs9 = len(rows9)
+    busiest_idx9 = dow_counts9.index(max(dow_counts9))
+    quietest_idx9 = dow_counts9.index(min(dow_counts9))
+    weekday_runs9 = sum(dow_counts9[:5])
+    weekend_runs9 = sum(dow_counts9[5:])
+    weekday_pct9 = round(weekday_runs9 / total_runs9 * 100, 1) if total_runs9 > 0 else 0.0
+    weekend_pct9 = round(weekend_runs9 / total_runs9 * 100, 1) if total_runs9 > 0 else 0.0
+
+    days9 = [
+        {
+            "day_name": _DOW_NAMES9[i],
+            "day_index": i,
+            "run_count": dow_counts9[i],
+            "pct_of_total": round(dow_counts9[i] / total_runs9 * 100, 1) if total_runs9 > 0 else 0.0,
+        }
+        for i in range(7)
+    ]
+
+    dow_narrative9 = ""
+    recommendations9: list = []
+    try:
+        client9 = _mk_anthropic()
+        prompt9 = (
+            f"You are analyzing AI agent run day-of-week patterns for a CRM workspace.\n"
+            f"Total runs: {total_runs9} over the last 6 months.\n"
+            f"Busiest day: {_DOW_NAMES9[busiest_idx9]} ({dow_counts9[busiest_idx9]} runs).\n"
+            f"Weekday runs: {weekday_pct9}%, Weekend runs: {weekend_pct9}%.\n"
+            f"Daily breakdown: "
+            + ", ".join(f"{_DOW_NAMES9[i]}:{dow_counts9[i]}" for i in range(7))
+            + "\n\nReturn JSON with exactly:\n"
+            '{"dow_narrative": "2-sentence insight about day-of-week patterns", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp9 = client9.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt9}],
+        )
+        raw9 = resp9.content[0].text.strip()
+        if "```" in raw9:
+            raw9 = raw9.split("```")[1]
+            if raw9.startswith("json"):
+                raw9 = raw9[4:]
+        parsed9 = loads_llm_json(raw9)
+        dow_narrative9 = str(parsed9.get("dow_narrative", "")).strip()
+        raw_recs9 = parsed9.get("recommendations", [])
+        recommendations9 = [str(r) for r in (raw_recs9 if isinstance(raw_recs9, list) else [])[:3]]
+    except Exception:
+        dow_narrative9 = (
+            f"Your agents ran {total_runs9} times with {weekday_pct9}% of activity on weekdays. "
+            f"{_DOW_NAMES9[busiest_idx9]} is the busiest day."
+        )
+
+    default_recs9 = [
+        "Schedule batch processing agents on Monday mornings to set up the week.",
+        "Use weekend off-peak hours for non-urgent data enrichment runs.",
+        "Review Friday's agent activity to ensure nothing critical is queued over the weekend.",
+    ]
+    while len(recommendations9) < 3:
+        recommendations9.append(default_recs9[len(recommendations9) % 3])
+
+    return {
+        "days": days9,
+        "total_runs": total_runs9,
+        "busiest_day": _DOW_NAMES9[busiest_idx9],
+        "quietest_day": _DOW_NAMES9[quietest_idx9],
+        "weekday_pct": weekday_pct9,
+        "weekend_pct": weekend_pct9,
+        "dow_narrative": dow_narrative9,
+        "recommendations": recommendations9,
+        "generated_at": now9.isoformat() + "Z",
+    }
