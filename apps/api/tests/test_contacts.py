@@ -323,6 +323,94 @@ async def test_list_contacts_limit_over_cap_returns_422(app_client):
     assert resp.status_code == 422
 
 
+def _compiled_stmt(mock_db) -> str:
+    stmt = mock_db.execute.call_args.args[0]
+    return str(stmt.compile(compile_kwargs={"literal_binds": True}))
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_orders_newest_first(app_client):
+    """Without ORDER BY, LIMIT keeps an arbitrary subset, so a just-imported
+    contact can be missing from the page even after a refetch (onboarding item #3)."""
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts?limit=500")
+
+    assert resp.status_code == 200
+    compiled = _compiled_stmt(mock_db)
+    # Newest first, with id as a tiebreaker so paging is stable.
+    assert "ORDER BY contacts.created_at DESC, contacts.id DESC" in compiled
+    assert compiled.index("ORDER BY") < compiled.index("LIMIT 500")
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_q_matches_role_and_is_trimmed(app_client):
+    """Server-side search covers the same fields as the page's client filter
+    (name, email, company, role) and ignores surrounding whitespace."""
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts", params={"q": "  owner "})
+
+    assert resp.status_code == 200
+    compiled = _compiled_stmt(mock_db).lower()
+    for col in ("name", "email", "company", "role"):
+        assert f"lower(contacts.{col}) like lower('%owner%')" in compiled
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_blank_q_does_not_filter(app_client):
+    fastapi_app, mock_db, workspace_id = app_client
+    mock_db.execute = AsyncMock(return_value=_make_scalars_result([]))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts", params={"q": "   "})
+
+    assert resp.status_code == 200
+    assert " like " not in _compiled_stmt(mock_db).lower()
+
+
+# ---------------------------------------------------------------------------
+# GET /workspaces/{wid}/contacts/counts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_contact_counts_returns_total_and_by_status(app_client):
+    """The list is capped, so the page's totals come from this endpoint."""
+    fastapi_app, mock_db, workspace_id = app_client
+    result = MagicMock()
+    result.all.return_value = [("lead", 412), ("prospect", 120), ("customer", 30)]
+    mock_db.execute = AsyncMock(return_value=result)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/contacts/counts")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "total": 562,
+        "by_status": {"lead": 412, "prospect": 120, "customer": 30},
+    }
+    compiled = _compiled_stmt(mock_db)
+    assert "count(contacts.id)" in compiled
+    assert "WHERE contacts.workspace_id =" in compiled
+    assert "GROUP BY contacts.status" in compiled
+
+
+@pytest.mark.asyncio
+async def test_contact_counts_wrong_workspace_returns_403(app_client):
+    fastapi_app, _, _ = app_client
+    wrong_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/contacts/counts")
+
+    assert resp.status_code == 403
+
+
 # ---------------------------------------------------------------------------
 # POST /workspaces/{wid}/contacts/{cid}/score
 # ---------------------------------------------------------------------------

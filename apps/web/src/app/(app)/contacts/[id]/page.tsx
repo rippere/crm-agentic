@@ -11,6 +11,7 @@ import { cn, formatCurrency, leadScoreConfig, stageConfig } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
 import { useJobPoller } from "@/hooks/useJobPoller";
+import { fetchContactById } from "@/hooks/useContacts";
 import type { Contact, ContactStatus, LeadScore, Deal, DealStage } from "@/lib/types";
 import {
   ArrowLeft, Mail, Brain, Zap, TrendingUp, TrendingDown, Minus,
@@ -585,12 +586,8 @@ export default function ContactDetailPage() {
       return;
     }
 
-    apiClient
-      .listContacts(workspaceId, token)
-      .then((data: Contact[]) => {
-        const found = (Array.isArray(data) ? data : []).find((c) => c.id === contactId);
-        setContact(found ?? null);
-      })
+    fetchContactById(workspaceId, contactId, token)
+      .then(setContact)
       .catch(() => setContact(null))
       .finally(() => setLoading(false));
   }, [token, workspaceId, contactId]);

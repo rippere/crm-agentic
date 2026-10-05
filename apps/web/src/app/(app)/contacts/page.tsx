@@ -11,6 +11,10 @@ import LogActivityModal from "@/components/ui/LogActivityModal";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { cn, formatCurrency, leadScoreConfig } from "@/lib/utils";
 import { useContacts } from "@/hooks/useContacts";
+import { matchesContactSearch } from "@/lib/contacts-search";
+import { CONTACTS_PAGE_LIMIT, formatCount, summarizeContactCounts } from "@/lib/contacts-list";
+import { patchById, summarizeEnrichResults, updateEachWithRollback, waitForJobs } from "@/lib/contacts-mutations";
+import { isDemoMode } from "@/lib/demo-mode";
 import { useJobPoller } from "@/hooks/useJobPoller";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
@@ -482,12 +486,13 @@ interface TimelineEvent {
   meta: Record<string, unknown>;
 }
 
-function ContactDrawer({ contact, onClose, workspaceId, token, mailProviders }: {
+function ContactDrawer({ contact, onClose, workspaceId, token, mailProviders, onStatusChanged }: {
   contact: Contact;
   onClose: () => void;
   workspaceId: string | null;
   token: string | null;
   mailProviders: MailProvider[];
+  onStatusChanged?: (id: string, status: ContactStatus) => void;
 }) {
   const leadCfg = leadScoreConfig[contact.mlScore.label];
   const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
@@ -582,7 +587,9 @@ function ContactDrawer({ contact, onClose, workspaceId, token, mailProviders }: 
           <Avatar initials={contact.avatar} size="lg" />
           <div>
             <h2 className="text-base font-bold text-zinc-100">{contact.name}</h2>
-            <p className="text-sm text-zinc-400">{contact.role} at {contact.company}</p>
+            <p className="text-sm text-zinc-400">
+              {[contact.role, contact.company].filter(Boolean).join(" at ")}
+            </p>
             <p className="text-xs text-zinc-500 font-mono mt-1">{contact.email}</p>
           </div>
         </div>
@@ -779,7 +786,8 @@ function ContactDrawer({ contact, onClose, workspaceId, token, mailProviders }: 
               if (!workspaceId || !token) return;
               try {
                 await apiClient.updateContactStatus(workspaceId, contact.id, "churned", token);
-              } catch { /* silent — contact list will refresh on next visit */ }
+                onStatusChanged?.(contact.id, "churned");
+              } catch { /* silent — the status is unchanged, so the list stays accurate */ }
             }}
             onClose={() => setFlagConfirmOpen(false)}
           />
@@ -1034,6 +1042,9 @@ const LS_SCORE_KEY = "contacts_filter_score";
 
 export default function ContactsPage() {
   const [search, setSearch] = useState("");
+  // Keyword search also runs on the server (debounced), because the loaded list
+  // is capped and the contact being searched for may be older than its rows.
+  const [serverSearch, setServerSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<ContactStatus | "all">(() => {
     if (typeof window === "undefined") return "all";
     return (localStorage.getItem(LS_STATUS_KEY) as ContactStatus | "all") ?? "all";
@@ -1056,10 +1067,18 @@ export default function ContactsPage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeResult, setMergeResult] = useState<{ tasks: number; messages: number; deals: number } | null>(null);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [mergeError, setMergeError] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  // Lets background work (waiting on enrich jobs) stop once the page is gone.
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => { unmountedRef.current = true; };
+  }, []);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [suggestedMerges, setSuggestedMerges] = useState<SuggestedMergePair[]>([]);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
@@ -1081,7 +1100,46 @@ export default function ContactsPage() {
   const [contactHealthLoading, setContactHealthLoading] = useState(false);
   const [contactHealthOpen, setContactHealthOpen] = useState(true);
 
-  const { contacts, createContact } = useContacts();
+  useEffect(() => {
+    // Demo mode loads every demo contact, so the client filter is enough there,
+    // and a demo "refetch" would undo local edits. Semantic mode has its own search.
+    const next = isDemoMode || semanticMode ? "" : search.trim();
+    const t = setTimeout(() => setServerSearch(next), 250);
+    return () => clearTimeout(t);
+  }, [search, semanticMode]);
+
+  const {
+    contacts,
+    loading: contactsLoading,
+    error: contactsError,
+    truncated: contactsTruncated,
+    narrowed: contactsNarrowed,
+    counts: serverCounts,
+    refetch: refetchContacts,
+    createContact,
+    patchContacts,
+    removeContacts,
+  } = useContacts({ search: serverSearch });
+
+  // After a mutation, reload from the API in the background. Skipped in demo
+  // mode, where refetch reloads the static demo data and would undo the local
+  // update.
+  const refreshContacts = useCallback(() => {
+    if (!isDemoMode) void refetchContacts();
+  }, [refetchContacts]);
+
+  // Apply a status locally everywhere a contact can be shown: the list, the
+  // semantic-search rows and the open drawer.
+  const applyStatus = useCallback((ids: string[], status: ContactStatus) => {
+    patchContacts(ids, { status });
+    setSemanticResults((prev) => patchById(prev, ids, { status }));
+    setSelected((prev) => (prev && ids.includes(prev.id) ? { ...prev, status } : prev));
+  }, [patchContacts]);
+
+  const showBulkError = useCallback((message: string) => {
+    setBulkError(message);
+    setTimeout(() => setBulkError(null), 6000);
+  }, []);
 
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') {
@@ -1127,7 +1185,6 @@ export default function ContactsPage() {
 
   useEffect(() => {
     setContactHealthLoading(true);
-    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
     if (isDemoMode) {
       apiClient.getContactHealthSummary("demo-workspace-1", "demo-token")
         .then((data) => setContactHealth(data))
@@ -1179,14 +1236,19 @@ export default function ContactsPage() {
   const handleMergeSuggestion = useCallback(async (pair: SuggestedMergePair) => {
     if (!workspaceId || !token || mergeSugBusy) return;
     setMergeSugBusy(true);
+    setMergeError(null);
     try {
       await apiClient.mergeContacts(workspaceId, { primary_id: pair.contact_a.id, duplicate_id: pair.contact_b.id }, token);
       setSuggestedMerges((prev) => prev.filter((p) => p.contact_a.id !== pair.contact_a.id || p.contact_b.id !== pair.contact_b.id));
       setMergeSuggestion(null);
       setMergeResult({ tasks: 0, messages: 0, deals: 0 });
-    } catch { /* silent */ }
+      removeContacts([pair.contact_b.id]);
+      refreshContacts();
+    } catch {
+      setMergeError("Couldn't merge these contacts. Nothing was changed.");
+    }
     finally { setMergeSugBusy(false); }
-  }, [workspaceId, token, mergeSugBusy]);
+  }, [workspaceId, token, mergeSugBusy, removeContacts, refreshContacts]);
 
   const handleSelect = useCallback((id: string, checked: boolean) => {
     setSelectedIds((prev) => {
@@ -1205,47 +1267,94 @@ export default function ContactsPage() {
 
   const handleBulkStatus = useCallback(async (status: ContactStatus) => {
     if (!workspaceId || !token || bulkBusy) return;
+    const ids = [...selectedIds];
+    // Snapshot each contact's current status so a failed PATCH can be undone.
+    const prior = new Map<string, ContactStatus>();
+    for (const r of semanticResults) if (ids.includes(r.id)) prior.set(r.id, r.status as ContactStatus);
+    for (const c of contacts) if (ids.includes(c.id)) prior.set(c.id, c.status);
+
     setBulkBusy(true);
-    await Promise.allSettled(
-      [...selectedIds].map((id) => apiClient.updateContactStatus(workspaceId, id, status, token))
-    );
+    const failed = await updateEachWithRollback({
+      ids,
+      value: status,
+      prior,
+      apply: applyStatus,
+      request: (id) => apiClient.updateContactStatus(workspaceId, id, status, token),
+    });
+    if (failed.length > 0) {
+      showBulkError(`Couldn't update the status of ${failed.length} of ${ids.length} contact${ids.length !== 1 ? "s" : ""}. They were left unchanged.`);
+    }
     setSelectedIds(new Set());
     setBulkBusy(false);
-  }, [workspaceId, token, selectedIds, bulkBusy]);
+    refreshContacts();
+  }, [workspaceId, token, selectedIds, bulkBusy, contacts, semanticResults, applyStatus, showBulkError, refreshContacts]);
 
   const handleBulkEnrich = useCallback(async () => {
     if (!workspaceId || !token || bulkBusy) return;
+    const ids = [...selectedIds];
     setBulkBusy(true);
-    await Promise.allSettled(
-      [...selectedIds].map((id) => apiClient.enrichContact(workspaceId, id, token))
+    const results = await Promise.allSettled(
+      ids.map((id) => apiClient.enrichContact(workspaceId, id, token))
     );
     setSelectedIds(new Set());
     setBulkBusy(false);
-  }, [workspaceId, token, selectedIds, bulkBusy]);
+
+    const { jobIds, failed, rateLimited } = summarizeEnrichResults(ids, results);
+    if (failed.length > 0) {
+      showBulkError(
+        `Couldn't start enrichment for ${failed.length} of ${ids.length} contact${ids.length !== 1 ? "s" : ""}.` +
+        (rateLimited > 0 ? " Enrichment is limited to 5 contacts a minute; try the rest again in a minute." : "")
+      );
+    }
+    // Enrich answers 202 and runs as a background job, so reload the list once
+    // the jobs finish rather than straight away (when nothing has changed yet).
+    if (jobIds.length > 0 && !isDemoMode) {
+      void waitForJobs(
+        jobIds,
+        async (jobId) => (await apiClient.getJob(workspaceId, jobId, token)).state,
+        { cancelled: () => unmountedRef.current },
+      ).then(() => {
+        if (!unmountedRef.current) refreshContacts();
+      });
+    }
+  }, [workspaceId, token, selectedIds, bulkBusy, showBulkError, refreshContacts]);
 
   const handleBulkDelete = useCallback(async () => {
     if (!workspaceId || !token || bulkBusy) return;
+    const ids = [...selectedIds];
     setBulkBusy(true);
     try {
-      await apiClient.bulkContactAction(workspaceId, { action: "delete", contact_ids: [...selectedIds] }, token);
-    } catch { /* silent — list refreshes on next render */ }
+      await apiClient.bulkContactAction(workspaceId, { action: "delete", contact_ids: ids }, token);
+      removeContacts(ids);
+      setSemanticResults((prev) => prev.filter((r) => !ids.includes(r.id)));
+      setSelected((prev) => (prev && ids.includes(prev.id) ? null : prev));
+      refreshContacts();
+    } catch {
+      showBulkError(`Couldn't delete ${ids.length} contact${ids.length !== 1 ? "s" : ""}. Nothing was removed.`);
+    }
     setSelectedIds(new Set());
     setDeleteConfirmOpen(false);
     setBulkBusy(false);
-  }, [workspaceId, token, selectedIds, bulkBusy]);
+  }, [workspaceId, token, selectedIds, bulkBusy, removeContacts, showBulkError, refreshContacts]);
 
   const handleMerge = useCallback(async () => {
     if (!workspaceId || !token || bulkBusy || selectedIds.size !== 2) return;
     const [primaryId, duplicateId] = [...selectedIds];
     setBulkBusy(true);
+    setMergeError(null);
     try {
       const res = await apiClient.mergeContacts(workspaceId, { primary_id: primaryId, duplicate_id: duplicateId }, token);
       setMergeResult({ tasks: res.tasks_reassigned, messages: res.messages_reassigned, deals: res.deals_reassigned });
       setSelectedIds(new Set());
       setMergeOpen(false);
-    } catch { /* silent */ }
+      removeContacts([duplicateId]);
+      setSelected((prev) => (prev?.id === duplicateId ? null : prev));
+      refreshContacts();
+    } catch {
+      setMergeError("Couldn't merge these contacts. Nothing was changed.");
+    }
     setBulkBusy(false);
-  }, [workspaceId, token, selectedIds, bulkBusy]);
+  }, [workspaceId, token, selectedIds, bulkBusy, removeContacts, refreshContacts]);
 
   // Persist filter state to localStorage
   useEffect(() => { localStorage.setItem(LS_STATUS_KEY, filterStatus); }, [filterStatus]);
@@ -1309,32 +1418,39 @@ export default function ContactsPage() {
       const result = await apiClient.importContactsCsv(workspaceId, file, token);
       setImportResult(result);
       setTimeout(() => setImportResult(null), 6000);
+      if (result.imported > 0) refreshContacts();
     } catch {
       setImportResult({ imported: 0, skipped: 0, errors: ["Upload failed — check file format"] });
       setTimeout(() => setImportResult(null), 6000);
     } finally {
       setImportLoading(false);
     }
-  }, [workspaceId, token, importLoading]);
+  }, [workspaceId, token, importLoading, refreshContacts]);
 
   const filtered = useMemo(() => {
     return contacts.filter((c) => {
-      const matchSearch =
-        !search ||
-        c.name.toLowerCase().includes(search.toLowerCase()) ||
-        c.company.toLowerCase().includes(search.toLowerCase()) ||
-        c.email.toLowerCase().includes(search.toLowerCase());
+      const matchSearch = matchesContactSearch(c, search);
       const matchStatus = filterStatus === "all" || c.status === filterStatus;
       const matchScore = filterScore === "all" || c.mlScore.label === filterScore;
       return matchSearch && matchStatus && matchScore;
     });
   }, [contacts, search, filterStatus, filterScore]);
 
+  const counts = useMemo(
+    () => summarizeContactCounts({
+      contacts,
+      server: serverCounts,
+      complete: !contactsTruncated && !contactsNarrowed,
+    }),
+    [contacts, serverCounts, contactsTruncated, contactsNarrowed],
+  );
+  const totalLabel = formatCount(counts.total, counts.lowerBound);
+
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header
         title="Contacts"
-        subtitle={`${contacts.length} total · AI-classified`}
+        subtitle={`${totalLabel} total · AI-classified`}
       />
 
       {/* Stats row */}
@@ -1342,8 +1458,8 @@ export default function ContactsPage() {
         {(["all", "lead", "prospect", "customer"] as const).map((status) => {
           const count =
             status === "all"
-              ? contacts.length
-              : contacts.filter((c) => c.status === status).length;
+              ? totalLabel
+              : formatCount(counts.byStatus[status] ?? 0, counts.lowerBound);
           return (
             <button
               key={status}
@@ -1494,7 +1610,7 @@ export default function ContactsPage() {
                   {Math.round(pair.similarity_score * 100)}%
                 </span>
                 <button
-                  onClick={() => setMergeSuggestion(pair)}
+                  onClick={() => { setMergeError(null); setMergeSuggestion(pair); }}
                   className="shrink-0 flex items-center gap-1 rounded-lg border border-indigo-500/40 bg-indigo-600/10 px-2.5 py-1 text-xs font-medium text-indigo-400 hover:bg-indigo-600/20 transition cursor-pointer"
                 >
                   <GitMerge className="h-3 w-3" />
@@ -1821,6 +1937,35 @@ export default function ContactsPage() {
         </div>
       )}
 
+      {/* Bulk action error toast (same look as the import failure toast) */}
+      {bulkError && (
+        <div role="alert" className="flex items-start gap-3 rounded-xl border px-4 py-3 text-sm border-rose-500/20 bg-rose-500/5 text-rose-300">
+          <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0 text-rose-400" />
+          <p className="flex-1 min-w-0 font-medium">{bulkError}</p>
+          <button onClick={() => setBulkError(null)} className="text-zinc-500 hover:text-zinc-300" aria-label="Dismiss">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {/* A background reload failed but the list on screen is still valid, so
+          say so without replacing the table. */}
+      {contactsError && contacts.length > 0 && (
+        <div role="status" className="flex items-start gap-3 rounded-xl border px-4 py-3 text-sm border-amber-500/20 bg-amber-500/5 text-amber-300">
+          <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0 text-amber-400" />
+          <p className="flex-1 min-w-0 font-medium">
+            Couldn&apos;t refresh contacts ({contactsError}). The list may be out of date.
+          </p>
+          <button
+            onClick={() => refetchContacts()}
+            className="inline-flex items-center gap-1.5 text-xs text-zinc-300 hover:text-zinc-100 cursor-pointer"
+          >
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       <Card data-tour="contacts-list" className="overflow-hidden p-0">
         <div className="overflow-x-auto">
@@ -1922,6 +2067,25 @@ export default function ContactsPage() {
                     </td>
                   </tr>
                 )
+              ) : contactsError && contacts.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-12 text-center text-sm" role="alert">
+                    <p className="text-rose-400">Couldn&apos;t load contacts: {contactsError}</p>
+                    <button
+                      onClick={() => refetchContacts()}
+                      className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors cursor-pointer"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                      Retry
+                    </button>
+                  </td>
+                </tr>
+              ) : contactsLoading && contacts.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-10 text-center">
+                    <Loader2 className="h-5 w-5 text-indigo-400 mx-auto animate-spin" aria-label="Loading contacts" />
+                  </td>
+                </tr>
               ) : filtered.length > 0 ? (
                 filtered.map((contact) => (
                   <ContactRow
@@ -1948,7 +2112,9 @@ export default function ContactsPage() {
               ? semanticResults.length > 0
                 ? `${semanticResults.length} semantic matches`
                 : "Semantic search active"
-              : `${filtered.length} of ${contacts.length} contacts`}
+              : `${filtered.length} of ${totalLabel} contacts${
+                  contactsTruncated && !contactsNarrowed ? ` · newest ${CONTACTS_PAGE_LIMIT} shown, search to find older` : ""
+                }`}
           </p>
           <div className="flex items-center gap-2">
             {semanticMode ? (
@@ -1973,7 +2139,7 @@ export default function ContactsPage() {
           onStatusChange={handleBulkStatus}
           onEnrich={handleBulkEnrich}
           onDelete={() => setDeleteConfirmOpen(true)}
-          onMerge={selectedIds.size === 2 ? () => setMergeOpen(true) : undefined}
+          onMerge={selectedIds.size === 2 ? () => { setMergeError(null); setMergeOpen(true); } : undefined}
           onClear={() => setSelectedIds(new Set())}
           busy={bulkBusy}
         />
@@ -2024,6 +2190,7 @@ export default function ContactsPage() {
               <p className="text-xs text-zinc-600">
                 Tip: the first contact you selected becomes the primary. Deselect and re-select to change order.
               </p>
+              {mergeError && <p role="alert" className="text-xs text-rose-400">{mergeError}</p>}
               <div className="flex gap-2 pt-1">
                 <button
                   onClick={handleMerge}
@@ -2077,6 +2244,7 @@ export default function ContactsPage() {
             <p className="text-xs text-zinc-600">
               Match reason: <span className="text-zinc-500">{mergeSuggestion.reason}</span> · {Math.round(mergeSuggestion.similarity_score * 100)}% similarity
             </p>
+            {mergeError && <p role="alert" className="text-xs text-rose-400">{mergeError}</p>}
             <div className="flex gap-2 pt-1">
               <button
                 onClick={() => handleMergeSuggestion(mergeSuggestion)}
@@ -2122,7 +2290,7 @@ export default function ContactsPage() {
             onClick={() => setSelected(null)}
             aria-hidden="true"
           />
-          <ContactDrawer contact={selected} onClose={() => setSelected(null)} workspaceId={workspaceId} token={token} mailProviders={mailProviders} />
+          <ContactDrawer contact={selected} onClose={() => setSelected(null)} workspaceId={workspaceId} token={token} mailProviders={mailProviders} onStatusChanged={(id, status) => { applyStatus([id], status); refreshContacts(); }} />
         </>
       )}
 

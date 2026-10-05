@@ -12,7 +12,7 @@ from typing import Literal
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import or_, select, insert, update
+from sqlalchemy import func, or_, select, insert, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -139,17 +139,45 @@ async def list_contacts(
     stmt = select(Contact).where(Contact.workspace_id == workspace_id)
     if contact_status and contact_status != "all":
         stmt = stmt.where(Contact.status == contact_status)
+    q = (q or "").strip()
     if q:
+        # Same fields as the contacts page's client-side filter (matchesContactSearch).
         pattern = f"%{q}%"
         stmt = stmt.where(or_(
             Contact.name.ilike(pattern),
             Contact.email.ilike(pattern),
             Contact.company.ilike(pattern),
+            Contact.role.ilike(pattern),
         ))
-    stmt = stmt.limit(limit).offset(offset)
+    # Newest first, so a capped page always holds the latest imports; id breaks
+    # ties (bulk inserts share created_at) to keep limit/offset paging stable.
+    stmt = stmt.order_by(Contact.created_at.desc(), Contact.id.desc()).limit(limit).offset(offset)
     result = await db.execute(stmt)
     contacts = result.scalars().all()
     return [ContactResponse.model_validate(c) for c in contacts]
+
+
+@router.get("/workspaces/{workspace_id}/contacts/counts")
+async def contact_counts(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Total and per-status contact counts for the workspace.
+
+    The list endpoint is capped (limit <= 500), so the contacts page reads its
+    header and stat-card totals from here once a workspace outgrows one page.
+    """
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    result = await db.execute(
+        select(Contact.status, func.count(Contact.id))
+        .where(Contact.workspace_id == workspace_id)
+        .group_by(Contact.status)
+    )
+    by_status = {row[0]: row[1] for row in result.all()}
+    return {"total": sum(by_status.values()), "by_status": by_status}
 
 
 @router.get("/workspaces/{workspace_id}/contacts/export")

@@ -37,6 +37,9 @@ jobs:
       - name: TypeScript type-check
         run: pnpm exec tsc --noEmit
 
+      - name: Unit tests
+        run: pnpm test:unit
+
       - name: Build
         run: pnpm build
         env:
