@@ -12,6 +12,8 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { cn, formatCurrency, leadScoreConfig } from "@/lib/utils";
 import { useContacts } from "@/hooks/useContacts";
 import { matchesContactSearch } from "@/lib/contacts-search";
+import { patchById, rejectedIds } from "@/lib/contacts-mutations";
+import { isDemoMode } from "@/lib/demo-mode";
 import { useJobPoller } from "@/hooks/useJobPoller";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
@@ -483,12 +485,13 @@ interface TimelineEvent {
   meta: Record<string, unknown>;
 }
 
-function ContactDrawer({ contact, onClose, workspaceId, token, mailProviders }: {
+function ContactDrawer({ contact, onClose, workspaceId, token, mailProviders, onStatusChanged }: {
   contact: Contact;
   onClose: () => void;
   workspaceId: string | null;
   token: string | null;
   mailProviders: MailProvider[];
+  onStatusChanged?: (id: string, status: ContactStatus) => void;
 }) {
   const leadCfg = leadScoreConfig[contact.mlScore.label];
   const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
@@ -782,7 +785,8 @@ function ContactDrawer({ contact, onClose, workspaceId, token, mailProviders }: 
               if (!workspaceId || !token) return;
               try {
                 await apiClient.updateContactStatus(workspaceId, contact.id, "churned", token);
-              } catch { /* silent — contact list will refresh on next visit */ }
+                onStatusChanged?.(contact.id, "churned");
+              } catch { /* silent — the status is unchanged, so the list stays accurate */ }
             }}
             onClose={() => setFlagConfirmOpen(false)}
           />
@@ -1059,6 +1063,7 @@ export default function ContactsPage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeResult, setMergeResult] = useState<{ tasks: number; messages: number; deals: number } | null>(null);
+  const [bulkError, setBulkError] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
@@ -1090,7 +1095,29 @@ export default function ContactsPage() {
     error: contactsError,
     refetch: refetchContacts,
     createContact,
+    patchContacts,
+    removeContacts,
   } = useContacts();
+
+  // After a mutation, reload from the API in the background. Skipped in demo
+  // mode, where refetch reloads the static demo data and would undo the local
+  // update.
+  const refreshContacts = useCallback(() => {
+    if (!isDemoMode) void refetchContacts();
+  }, [refetchContacts]);
+
+  // Apply a status locally everywhere a contact can be shown: the list, the
+  // semantic-search rows and the open drawer.
+  const applyStatus = useCallback((ids: string[], status: ContactStatus) => {
+    patchContacts(ids, { status });
+    setSemanticResults((prev) => patchById(prev, ids, { status }));
+    setSelected((prev) => (prev && ids.includes(prev.id) ? { ...prev, status } : prev));
+  }, [patchContacts]);
+
+  const showBulkError = useCallback((message: string) => {
+    setBulkError(message);
+    setTimeout(() => setBulkError(null), 6000);
+  }, []);
 
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') {
@@ -1136,7 +1163,6 @@ export default function ContactsPage() {
 
   useEffect(() => {
     setContactHealthLoading(true);
-    const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
     if (isDemoMode) {
       apiClient.getContactHealthSummary("demo-workspace-1", "demo-token")
         .then((data) => setContactHealth(data))
@@ -1193,9 +1219,11 @@ export default function ContactsPage() {
       setSuggestedMerges((prev) => prev.filter((p) => p.contact_a.id !== pair.contact_a.id || p.contact_b.id !== pair.contact_b.id));
       setMergeSuggestion(null);
       setMergeResult({ tasks: 0, messages: 0, deals: 0 });
+      removeContacts([pair.contact_b.id]);
+      refreshContacts();
     } catch { /* silent */ }
     finally { setMergeSugBusy(false); }
-  }, [workspaceId, token, mergeSugBusy]);
+  }, [workspaceId, token, mergeSugBusy, removeContacts, refreshContacts]);
 
   const handleSelect = useCallback((id: string, checked: boolean) => {
     setSelectedIds((prev) => {
@@ -1214,13 +1242,29 @@ export default function ContactsPage() {
 
   const handleBulkStatus = useCallback(async (status: ContactStatus) => {
     if (!workspaceId || !token || bulkBusy) return;
+    const ids = [...selectedIds];
+    // Snapshot each contact's current status so a failed PATCH can be undone.
+    const prior = new Map<string, ContactStatus>();
+    for (const r of semanticResults) if (ids.includes(r.id)) prior.set(r.id, r.status as ContactStatus);
+    for (const c of contacts) if (ids.includes(c.id)) prior.set(c.id, c.status);
+
+    applyStatus(ids, status);
     setBulkBusy(true);
-    await Promise.allSettled(
-      [...selectedIds].map((id) => apiClient.updateContactStatus(workspaceId, id, status, token))
+    const results = await Promise.allSettled(
+      ids.map((id) => apiClient.updateContactStatus(workspaceId, id, status, token))
     );
+    const failed = rejectedIds(ids, results);
+    for (const id of failed) {
+      const was = prior.get(id);
+      if (was) applyStatus([id], was);
+    }
+    if (failed.length > 0) {
+      showBulkError(`Couldn't update the status of ${failed.length} of ${ids.length} contact${ids.length !== 1 ? "s" : ""}. They were left unchanged.`);
+    }
     setSelectedIds(new Set());
     setBulkBusy(false);
-  }, [workspaceId, token, selectedIds, bulkBusy]);
+    refreshContacts();
+  }, [workspaceId, token, selectedIds, bulkBusy, contacts, semanticResults, applyStatus, showBulkError, refreshContacts]);
 
   const handleBulkEnrich = useCallback(async () => {
     if (!workspaceId || !token || bulkBusy) return;
@@ -1230,18 +1274,26 @@ export default function ContactsPage() {
     );
     setSelectedIds(new Set());
     setBulkBusy(false);
-  }, [workspaceId, token, selectedIds, bulkBusy]);
+    refreshContacts();
+  }, [workspaceId, token, selectedIds, bulkBusy, refreshContacts]);
 
   const handleBulkDelete = useCallback(async () => {
     if (!workspaceId || !token || bulkBusy) return;
+    const ids = [...selectedIds];
     setBulkBusy(true);
     try {
-      await apiClient.bulkContactAction(workspaceId, { action: "delete", contact_ids: [...selectedIds] }, token);
-    } catch { /* silent — list refreshes on next render */ }
+      await apiClient.bulkContactAction(workspaceId, { action: "delete", contact_ids: ids }, token);
+      removeContacts(ids);
+      setSemanticResults((prev) => prev.filter((r) => !ids.includes(r.id)));
+      setSelected((prev) => (prev && ids.includes(prev.id) ? null : prev));
+      refreshContacts();
+    } catch {
+      showBulkError(`Couldn't delete ${ids.length} contact${ids.length !== 1 ? "s" : ""}. Nothing was removed.`);
+    }
     setSelectedIds(new Set());
     setDeleteConfirmOpen(false);
     setBulkBusy(false);
-  }, [workspaceId, token, selectedIds, bulkBusy]);
+  }, [workspaceId, token, selectedIds, bulkBusy, removeContacts, showBulkError, refreshContacts]);
 
   const handleMerge = useCallback(async () => {
     if (!workspaceId || !token || bulkBusy || selectedIds.size !== 2) return;
@@ -1252,9 +1304,12 @@ export default function ContactsPage() {
       setMergeResult({ tasks: res.tasks_reassigned, messages: res.messages_reassigned, deals: res.deals_reassigned });
       setSelectedIds(new Set());
       setMergeOpen(false);
+      removeContacts([duplicateId]);
+      setSelected((prev) => (prev?.id === duplicateId ? null : prev));
+      refreshContacts();
     } catch { /* silent */ }
     setBulkBusy(false);
-  }, [workspaceId, token, selectedIds, bulkBusy]);
+  }, [workspaceId, token, selectedIds, bulkBusy, removeContacts, refreshContacts]);
 
   // Persist filter state to localStorage
   useEffect(() => { localStorage.setItem(LS_STATUS_KEY, filterStatus); }, [filterStatus]);
@@ -1318,13 +1373,14 @@ export default function ContactsPage() {
       const result = await apiClient.importContactsCsv(workspaceId, file, token);
       setImportResult(result);
       setTimeout(() => setImportResult(null), 6000);
+      if (result.imported > 0) refreshContacts();
     } catch {
       setImportResult({ imported: 0, skipped: 0, errors: ["Upload failed — check file format"] });
       setTimeout(() => setImportResult(null), 6000);
     } finally {
       setImportLoading(false);
     }
-  }, [workspaceId, token, importLoading]);
+  }, [workspaceId, token, importLoading, refreshContacts]);
 
   const filtered = useMemo(() => {
     return contacts.filter((c) => {
@@ -1826,6 +1882,17 @@ export default function ContactsPage() {
         </div>
       )}
 
+      {/* Bulk action error toast (same look as the import failure toast) */}
+      {bulkError && (
+        <div role="alert" className="flex items-start gap-3 rounded-xl border px-4 py-3 text-sm border-rose-500/20 bg-rose-500/5 text-rose-300">
+          <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0 text-rose-400" />
+          <p className="flex-1 min-w-0 font-medium">{bulkError}</p>
+          <button onClick={() => setBulkError(null)} className="text-zinc-500 hover:text-zinc-300" aria-label="Dismiss">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       <Card data-tour="contacts-list" className="overflow-hidden p-0">
         <div className="overflow-x-auto">
@@ -2146,7 +2213,7 @@ export default function ContactsPage() {
             onClick={() => setSelected(null)}
             aria-hidden="true"
           />
-          <ContactDrawer contact={selected} onClose={() => setSelected(null)} workspaceId={workspaceId} token={token} mailProviders={mailProviders} />
+          <ContactDrawer contact={selected} onClose={() => setSelected(null)} workspaceId={workspaceId} token={token} mailProviders={mailProviders} onStatusChanged={(id, status) => { applyStatus([id], status); refreshContacts(); }} />
         </>
       )}
 

@@ -8,6 +8,7 @@ import type { ContactRow } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/demo-mode";
 import { demoContacts } from "@/lib/demo-data";
 import { matchesContactSearch } from "@/lib/contacts-search";
+import { patchById, removeById } from "@/lib/contacts-mutations";
 
 // Matches the Contact model's server-side default (apps/api/app/models/contact.py).
 const DEFAULT_ML_SCORE: Contact["mlScore"] = { value: 50, label: "warm", trend: "stable", signals: [] };
@@ -158,5 +159,19 @@ export function useContacts(options: UseContactsOptions = {}) {
     await fetchContacts();
   };
 
-  return { contacts, loading, error, refetch: fetchContacts, createContact, updateContact, deleteContact };
+  // Local, optimistic list updates. Callers that also want server truth call
+  // refetch() afterwards — except in demo mode, where fetchContacts reloads the
+  // static demo data and would undo the change.
+  const patchContacts = useCallback((ids: Iterable<string>, patch: Partial<Contact>) => {
+    setContacts((prev) => patchById(prev, ids, patch));
+  }, []);
+
+  const removeContacts = useCallback((ids: Iterable<string>) => {
+    setContacts((prev) => removeById(prev, ids));
+  }, []);
+
+  return {
+    contacts, loading, error, refetch: fetchContacts,
+    createContact, updateContact, deleteContact, patchContacts, removeContacts,
+  };
 }
