@@ -22991,3 +22991,141 @@ async def get_ai_agent_severity_breakdown(
         "recommendations": recommendations6,
         "generated_at": now6.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/leaderboard")
+@limiter.limit("5/minute")
+async def get_ai_agent_leaderboard(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    import datetime as _dt7
+    import math as _math7
+
+    now7 = _dt7.datetime.utcnow()
+    cutoff7 = now7 - _dt7.timedelta(days=183)
+
+    result7 = await db.execute(
+        select(ActivityEvent.agent_name, ActivityEvent.severity)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.agent_name.isnot(None),
+            ActivityEvent.created_at >= cutoff7,
+        )
+    )
+    rows7 = result7.all()
+
+    if not rows7:
+        return {
+            "agents": [],
+            "top_agent": None,
+            "total_agents": 0,
+            "total_runs": 0,
+            "overall_success_rate": 0.0,
+            "leaderboard_narrative": "No agent runs recorded in the last 6 months.",
+            "recommendations": [
+                "Configure and activate agents to start tracking performance.",
+                "Run agents on your highest-priority deals to generate leaderboard data.",
+                "Review agent setup and ensure they are properly connected to your workspace.",
+            ],
+            "generated_at": now7.isoformat() + "Z",
+        }
+
+    from collections import defaultdict as _dd7
+    agent_stats7 = _dd7(lambda: {"success": 0, "failure": 0})
+    for row7 in rows7:
+        name7 = row7.agent_name
+        if row7.severity == "error":
+            agent_stats7[name7]["failure"] += 1
+        else:
+            agent_stats7[name7]["success"] += 1
+
+    total_runs7 = len(rows7)
+    total_success7 = sum(v["success"] for v in agent_stats7.values())
+    overall_success_rate7 = round(total_success7 / total_runs7 * 100, 1) if total_runs7 > 0 else 0.0
+
+    max_runs7 = max((v["success"] + v["failure"]) for v in agent_stats7.values()) if agent_stats7 else 1
+
+    leaderboard7 = []
+    for name7, stats7 in agent_stats7.items():
+        runs7 = stats7["success"] + stats7["failure"]
+        rate7 = round(stats7["success"] / runs7 * 100, 1) if runs7 > 0 else 0.0
+        score7 = round(rate7 * _math7.log(runs7 + 1) / _math7.log(max_runs7 + 1), 1)
+        leaderboard7.append({
+            "agent_name": name7,
+            "total_runs": runs7,
+            "success_count": stats7["success"],
+            "failure_count": stats7["failure"],
+            "success_rate": rate7,
+            "score": score7,
+        })
+
+    leaderboard7.sort(key=lambda x: (-x["score"], -x["total_runs"]))
+    for i7, entry7 in enumerate(leaderboard7):
+        entry7["rank"] = i7 + 1
+
+    top_agent7 = leaderboard7[0]["agent_name"] if leaderboard7 else None
+    total_agents7 = len(leaderboard7)
+
+    leaderboard_narrative7 = ""
+    recommendations7: list = []
+    try:
+        client7 = _mk_anthropic()
+        prompt7 = (
+            f"You are analyzing an AI agent leaderboard for a CRM workspace.\n"
+            f"Total agents: {total_agents7}, total runs: {total_runs7}, "
+            f"overall success rate: {overall_success_rate7}%.\n"
+            f"Top agent: {top_agent7}.\n"
+            f"Agent breakdown:\n"
+            + "\n".join(
+                f"- {e['agent_name']}: rank {e['rank']}, {e['total_runs']} runs, {e['success_rate']}% success, score {e['score']}"
+                for e in leaderboard7
+            )
+            + "\n\nReturn JSON with exactly:\n"
+            '{"leaderboard_narrative": "2-sentence insight about agent performance", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp7 = client7.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt7}],
+        )
+        raw7 = resp7.content[0].text.strip()
+        if "```" in raw7:
+            raw7 = raw7.split("```")[1]
+            if raw7.startswith("json"):
+                raw7 = raw7[4:]
+        parsed7 = loads_llm_json(raw7)
+        leaderboard_narrative7 = str(parsed7.get("leaderboard_narrative", "")).strip()
+        raw_recs7 = parsed7.get("recommendations", [])
+        recommendations7 = [str(r) for r in (raw_recs7 if isinstance(raw_recs7, list) else [])[:3]]
+    except Exception:
+        leaderboard_narrative7 = (
+            f"Your workspace has {total_agents7} active agents with {total_runs7} total runs "
+            f"and an overall success rate of {overall_success_rate7}%. "
+            f"{top_agent7} leads the leaderboard."
+        )
+
+    default_recs7 = [
+        "Focus additional runs on your top-performing agents to maximise success outcomes.",
+        "Investigate lower-ranked agents to identify configuration issues or training gaps.",
+        "Schedule regular agent runs across all active agents to maintain leaderboard freshness.",
+    ]
+    while len(recommendations7) < 3:
+        recommendations7.append(default_recs7[len(recommendations7) % 3])
+
+    return {
+        "agents": leaderboard7,
+        "top_agent": top_agent7,
+        "total_agents": total_agents7,
+        "total_runs": total_runs7,
+        "overall_success_rate": overall_success_rate7,
+        "leaderboard_narrative": leaderboard_narrative7,
+        "recommendations": recommendations7,
+        "generated_at": now7.isoformat() + "Z",
+    }

@@ -8170,5 +8170,34 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/severity-breakdown`, {}, token)
   },
+
+  async getAgentLeaderboard(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const agents = [
+        { rank: 1, agent_name: 'Lead Scorer', total_runs: 42, success_count: 40, failure_count: 2, success_rate: 95.2, score: 95.2 },
+        { rank: 2, agent_name: 'Pipeline Optimizer', total_runs: 38, success_count: 35, failure_count: 3, success_rate: 92.1, score: 88.3 },
+        { rank: 3, agent_name: 'Email Composer', total_runs: 51, success_count: 44, failure_count: 7, success_rate: 86.3, score: 86.3 },
+        { rank: 4, agent_name: 'Sentiment Analyzer', total_runs: 29, success_count: 23, failure_count: 6, success_rate: 79.3, score: 72.4 },
+        { rank: 5, agent_name: 'Call Summarizer', total_runs: 18, success_count: 13, failure_count: 5, success_rate: 72.2, score: 60.1 },
+      ]
+      const totalRuns = agents.reduce((a, g) => a + g.total_runs, 0)
+      const totalSuccess = agents.reduce((a, g) => a + g.success_count, 0)
+      return Promise.resolve({
+        agents,
+        top_agent: 'Lead Scorer',
+        total_agents: agents.length,
+        total_runs: totalRuns,
+        overall_success_rate: Math.round(totalSuccess / totalRuns * 1000) / 10,
+        leaderboard_narrative: 'Lead Scorer and Pipeline Optimizer consistently top the leaderboard with success rates above 92%, while Call Summarizer lags behind at 72% and warrants a configuration review to improve reliability.',
+        recommendations: [
+          'Run Lead Scorer and Pipeline Optimizer on all high-value deals to maximise outcomes.',
+          'Audit Call Summarizer\'s failure cases — 5 errors in 18 runs suggests a configuration issue.',
+          'Schedule weekly leaderboard reviews to track agent improvement over time.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/leaderboard`, {}, token)
+  },
 }
 
