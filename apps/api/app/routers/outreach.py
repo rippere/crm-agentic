@@ -588,4 +588,18 @@ async def engagement_webhook(
     except Exception as exc:  # noqa: BLE001 — scoring is best-effort
         logger.warning("engagement_webhook score_enqueue_failed lead_id=%s exc=%s", payload.lead_id, exc)
 
+    # Reply-sentiment classification (Inc 2, R9): on an inbound reply, enqueue the
+    # classifier that writes engagement_event.metadata.sentiment beside the scorer.
+    # Same guarded try/except pattern — a missing worker never 500s the webhook.
+    if payload.type == "replied":
+        try:
+            from app.workers.reply_sentiment import classify_reply
+
+            classify_reply.delay(str(workspace_id), str(event.id))
+        except Exception as exc:  # noqa: BLE001 — classification is best-effort
+            logger.warning(
+                "engagement_webhook sentiment_enqueue_failed lead_id=%s exc=%s",
+                payload.lead_id, exc,
+            )
+
     return {"status": "accepted", "type": payload.type, "job_id": job_id}

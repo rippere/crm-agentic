@@ -429,3 +429,63 @@ CREATE TABLE IF NOT EXISTS discovery_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_discovery_runs_ws_status  ON discovery_runs (workspace_id, status);
 CREATE INDEX IF NOT EXISTS idx_discovery_runs_ws_created ON discovery_runs (workspace_id, created_at DESC);
+
+-- ─── ESCALATION CONTROLS (mirror of 025_escalation_controls.sql) ──────────────
+-- stage_controls (per-workspace × per-stage auto/ask/off cap), workspace_autonomy
+-- (the master switch, defaults FALSE), escalation_decisions (append-only audit).
+-- Docker path has no migration runner, so the same CREATE TABLE / CREATE INDEX
+-- DDL is mirrored here (RLS ENABLE / policy lines intentionally omitted). The
+-- legacy sequence_steps.requires_approval column is untouched (additive). FK-safe
+-- create order: all three reference only workspaces/leads/sequence_enrollments,
+-- all defined above.
+
+CREATE TABLE IF NOT EXISTS stage_controls (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  stage         TEXT NOT NULL
+                  CHECK (stage IN ('new','contacted','engaged','qualified','converted','lost')),
+  mode          TEXT NOT NULL DEFAULT 'ask'
+                  CHECK (mode IN ('auto','ask','off')),
+  config        JSONB NOT NULL DEFAULT '{}',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (workspace_id, stage)
+);
+CREATE INDEX IF NOT EXISTS idx_stage_controls_ws ON stage_controls (workspace_id, stage);
+
+CREATE TABLE IF NOT EXISTS workspace_autonomy (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id      UUID NOT NULL UNIQUE REFERENCES workspaces(id) ON DELETE CASCADE,
+  autonomy_enabled  BOOLEAN NOT NULL DEFAULT FALSE,
+  settings          JSONB NOT NULL DEFAULT '{}',
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_autonomy_ws ON workspace_autonomy (workspace_id);
+
+CREATE TABLE IF NOT EXISTS escalation_decisions (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id    UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  lead_id         UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  enrollment_id   UUID REFERENCES sequence_enrollments(id) ON DELETE SET NULL,
+  stage           TEXT NOT NULL
+                    CHECK (stage IN ('new','contacted','engaged','qualified','converted','lost')),
+  proposed_action TEXT NOT NULL
+                    CHECK (proposed_action IN ('send','escalate','stop','hold')),
+  final_action    TEXT NOT NULL
+                    CHECK (final_action IN ('send','park','escalate','stop','hold')),
+  mode            TEXT NOT NULL
+                    CHECK (mode IN ('auto','ask','off')),
+  score           INTEGER,
+  sentiment       TEXT
+                    CHECK (sentiment IN ('positive','neutral','negative','objection','booking','unsubscribe')),
+  reason          TEXT,
+  decided_by      TEXT NOT NULL DEFAULT 'threshold'
+                    CHECK (decided_by IN ('threshold','model','human')),
+  metadata        JSONB NOT NULL DEFAULT '{}',
+  occurred_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_escalation_decisions_lead ON escalation_decisions (workspace_id, lead_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_escalation_decisions_enr  ON escalation_decisions (workspace_id, enrollment_id);
+CREATE INDEX IF NOT EXISTS idx_escalation_decisions_final ON escalation_decisions (workspace_id, final_action);

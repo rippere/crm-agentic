@@ -14,7 +14,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.limiter import limiter
-from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments, webhook_logs, leads, segments, sequences, campaigns, outreach, discovery
+from app.routers import auth, workspaces, contacts, deals, agents, messages, tasks, gmail, slack, search, calls, ai, events, slack_interactions, mcp_server, projects, kpi, commitments, webhook_logs, leads, segments, sequences, campaigns, outreach, discovery, escalation
 
 # ── Structured logging (JSON-like key=value to stdout) ───────────────────────
 _LOG_CONFIG: dict = {
@@ -154,6 +154,9 @@ app.include_router(outreach.router, tags=["outreach"])
 # Autonomous Lead Engine — Increment 1 (Discovery). Namespaced under
 # /workspaces/{workspace_id}/discovery/...; static /runs before /runs/{run_id}.
 app.include_router(discovery.router, tags=["discovery"])
+# Autonomous Lead Engine — Increment 2 (Escalation controls + reply-sentiment).
+# Operator control-plane: stage caps, autonomy switch, queue, call-outcome (R15).
+app.include_router(escalation.router, tags=["escalation"])
 
 
 @app.get("/health")

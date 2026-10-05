@@ -118,13 +118,21 @@ def _in_quiet_hours(now: datetime, settings: dict[str, Any] | None) -> bool:
 
 # ─── Guarded external-send boundary (patchable in tests) ──────────────────────
 
-async def _draft_body(step: Any, lead: Any) -> tuple[str, bool]:
+async def _draft_body(
+    step: Any, lead: Any, *, workspace_id: uuid.UUID | None = None, db: AsyncSession | None = None
+) -> tuple[str, bool]:
     """Return ``(body, ai_generated)`` for a step.
 
     Claude only fires when ``step.ai_generate`` is True AND an ANTHROPIC_API_KEY
     is present; any failure falls back to the deterministic template render — so
     tests exercise this with no key and no network. Mirrors
     routers/outreach.py::_draft_for_step.
+
+    ``workspace_id`` / ``db`` are keyword-optional (R13): the escalation tick
+    (Inc 2) passes them so this signature is future-proof, and Inc 3 will load the
+    active sales playbook here to prepend ``render_draft_context(...)`` and stamp
+    ``playbook_version`` on the engagement_event. Until Inc 3 lands they are
+    accepted and ignored; a DB-less caller (tests, SMS) still works unchanged.
     """
     if step is None:
         return "", False
@@ -309,16 +317,64 @@ async def _has_event_after_last_send(
     return result.first() is not None
 
 
+async def _load_stage_mode(db: AsyncSession, workspace_id: uuid.UUID, stage: str) -> str:
+    """Resolve the per-stage authority clamp (``'auto'``/``'ask'``/``'off'``) (R11).
+
+    Delegates to the ONE shared resolver ``app.services.authority.resolve_authority``
+    — the SAME resolver ``action_bus.dispatch`` calls — so a send driven by the tick
+    resolves against the same ``stage_controls`` + ``workspace_autonomy`` as a send
+    driven through the chatbot (closing the clamp-bypass hole, R11/C11). Fail-closed
+    to ``'ask'`` if the resolver is somehow unavailable or raises.
+    """
+    try:
+        from app.services.authority import resolve_authority
+
+        return await resolve_authority(workspace_id, stage, "send", db)
+    except Exception as exc:  # noqa: BLE001 — a resolver fault must never widen access
+        logger.warning("sequence_sender authority_resolve_failed stage=%s exc=%s", stage, exc)
+        return "ask"
+
+
+async def _latest_sentiment(db: AsyncSession, workspace_id: uuid.UUID, enrollment: Any) -> str | None:
+    """The sentiment of this lead's most recent ``replied`` event, or None.
+
+    Reads ``engagement_event.metadata.sentiment`` (written by the reply_sentiment
+    classifier, R9) from the newest ``replied`` event for the enrollment's lead.
+    None when there is no reply, or the reply is not yet classified — the decider
+    treats None as neutral (no escalation forced by sentiment).
+    """
+    from app.models.engagement_event import EngagementEvent
+
+    result = await db.execute(
+        select(EngagementEvent.metadata_)
+        .where(
+            EngagementEvent.workspace_id == workspace_id,
+            EngagementEvent.lead_id == enrollment.lead_id,
+            EngagementEvent.type == "replied",
+        )
+        .order_by(EngagementEvent.occurred_at.desc())
+        .limit(1)
+    )
+    row = result.first()
+    if row is None:
+        return None
+    meta = row[0] or {}
+    sentiment = meta.get("sentiment") if isinstance(meta, dict) else None
+    return sentiment or None
+
+
 # ─── Core tick ────────────────────────────────────────────────────────────────
 
 async def _run_tick(workspace_id: str) -> dict[str, Any]:
     from app.models.engagement_event import EngagementEvent
     from app.models.activity_event import ActivityEvent
+    from app.models.escalation_decision import EscalationDecision as EscalationDecisionRow
+    from app.services.escalation import decide_action
 
     ws_uuid = uuid.UUID(workspace_id)
     now = datetime.now(timezone.utc)
 
-    sent = queued = completed = stopped = skipped = 0
+    sent = queued = completed = stopped = skipped = escalated = 0
 
     SessionFactory = _get_async_session()
     async with SessionFactory() as db:
@@ -352,13 +408,75 @@ async def _run_tick(workspace_id: str) -> dict[str, Any]:
 
             lead = await _load_lead(db, ws_uuid, enr.lead_id)
 
-            # HITL gate — a step that requires approval only sends once approved.
-            if getattr(step, "requires_approval", True) and not await _has_event_after_last_send(
-                db, ws_uuid, enr, "approved"
-            ):
+            # ── Escalation graph (R13 step 1): PROPOSE from signals → CLAMP by the
+            # per-stage operator cap. Replaces the binary requires_approval gate.
+            stage = (getattr(lead, "stage", None) or "new")
+            mode = await _load_stage_mode(db, ws_uuid, stage)
+            sentiment = await _latest_sentiment(db, ws_uuid, enr)
+            score = int(getattr(lead, "score", 0) or 0)
+
+            decision = decide_action(stage=stage, mode=mode, sentiment=sentiment, score=score)
+            final = decision.final_action
+
+            # A prior operator approval short-circuits to send — UNLESS the stage is
+            # 'off' (the kill switch wins even over a stale approval, critique low-1).
+            approved = await _has_event_after_last_send(db, ws_uuid, enr, "approved")
+            if approved and mode != "off":
+                final = "send"
+                decision.final_action = "send"
+                decision.reason = "operator-approved"
+
+            # Append-only audit: one decision row per enrollment per tick.
+            db.add(EscalationDecisionRow(
+                workspace_id=ws_uuid,
+                lead_id=enr.lead_id,
+                enrollment_id=enr.id,
+                stage=stage,
+                proposed_action=decision.proposed_action,
+                final_action=final,
+                mode=mode,
+                score=score,
+                sentiment=sentiment,
+                reason=decision.reason,
+                decided_by="threshold",
+            ))
+
+            if final == "stop":
+                # A terminal signal (unsubscribe) — halt the drip.
+                enr.status = "stopped"
+                db.add(enr)
+                stopped += 1
+                continue
+
+            if final == "hold":
+                # 'off' kill switch (or a below-floor hold) — leave the row for a
+                # later tick once the operator changes the cap. No send, no draft.
+                skipped += 1
+                continue
+
+            if final == "escalate":
+                # Needs human judgment — park so it surfaces on /outreach/pending.
                 if enr.status != "waiting":
-                    # First encounter → produce a pending draft and park it.
-                    body, ai_generated = await _draft_body(step, lead)
+                    enr.status = "waiting"
+                    db.add(enr)
+                    db.add(ActivityEvent(
+                        workspace_id=ws_uuid,
+                        type="escalation_raised",
+                        agent_name="Escalation Graph",
+                        description=(
+                            f"Escalated lead {getattr(lead, 'name', None) or enr.lead_id} "
+                            f"at stage {stage} (sentiment={sentiment or 'n/a'})"
+                        ),
+                        severity="info",
+                    ))
+                escalated += 1
+                continue
+
+            if final == "park":
+                # 'ask' clamp on a proposed send — produce a pending draft and park
+                # it for human approval (same surface as the old HITL gate).
+                if enr.status != "waiting":
+                    body, ai_generated = await _draft_body(step, lead, workspace_id=ws_uuid, db=db)
                     db.add(EngagementEvent(
                         workspace_id=ws_uuid,
                         lead_id=enr.lead_id,
@@ -380,9 +498,9 @@ async def _run_tick(workspace_id: str) -> dict[str, Any]:
                 # else: already waiting on the human — leave it on /outreach/pending.
                 continue
 
-            # ── SEND ────────────────────────────────────────────────────────────
+            # ── SEND (final == "send") ───────────────────────────────────────────
             subject = getattr(step, "subject", None)
-            body, ai_generated = await _draft_body(step, lead)
+            body, ai_generated = await _draft_body(step, lead, workspace_id=ws_uuid, db=db)
             delivery = await _deliver(db, ws_uuid, step, lead, subject, body)
 
             db.add(EngagementEvent(
@@ -424,14 +542,14 @@ async def _run_tick(workspace_id: str) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001 — scoring is best-effort
                 logger.warning("sequence_sender score_enqueue_failed lead_id=%s exc=%s", enr.lead_id, exc)
 
-        if sent or queued or completed or stopped:
+        if sent or queued or completed or stopped or escalated:
             db.add(ActivityEvent(
                 workspace_id=ws_uuid,
                 type="sequence_tick",
                 agent_name="Sequence Sender",
                 description=(
                     f"Sequence tick: {sent} sent, {queued} queued for approval, "
-                    f"{completed} completed, {stopped} stopped"
+                    f"{escalated} escalated, {completed} completed, {stopped} stopped"
                 ),
                 severity="info",
             ))
@@ -441,6 +559,7 @@ async def _run_tick(workspace_id: str) -> dict[str, Any]:
         "workspace_id": workspace_id,
         "sent": sent,
         "queued": queued,
+        "escalated": escalated,
         "completed": completed,
         "stopped": stopped,
         "skipped": skipped,

@@ -24,6 +24,9 @@ from app.models.sequence_enrollment import SequenceEnrollment
 from app.models.engagement_event import EngagementEvent
 from app.models.deal_health_history import DealHealthHistory
 from app.models.discovery_run import DiscoveryRun
+from app.models.stage_control import StageControl
+from app.models.workspace_autonomy import WorkspaceAutonomy
+from app.models.escalation_decision import EscalationDecision
 
 __all__ = [
     "Workspace",
@@ -52,4 +55,7 @@ __all__ = [
     "EngagementEvent",
     "DealHealthHistory",
     "DiscoveryRun",
+    "StageControl",
+    "WorkspaceAutonomy",
+    "EscalationDecision",
 ]
