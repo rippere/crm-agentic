@@ -22823,3 +22823,171 @@ async def get_ai_agent_success_rate_by_agent(
         "recommendations": recommendations5,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/severity-breakdown")
+@limiter.limit("5/minute")
+async def get_ai_agent_severity_breakdown(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    import datetime as _dt6
+
+    now6 = _dt6.datetime.utcnow()
+    cutoff6 = now6 - _dt6.timedelta(days=183)
+
+    result6 = await db.execute(
+        select(ActivityEvent.severity, ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.agent_name.isnot(None),
+            ActivityEvent.created_at >= cutoff6,
+        )
+    )
+    rows6 = result6.all()
+
+    month_buckets6: list[dict] = []
+    for i6 in range(5, -1, -1):
+        target_month6 = now6.month - i6
+        target_year6 = now6.year
+        while target_month6 <= 0:
+            target_month6 += 12
+            target_year6 -= 1
+        month_buckets6.append({
+            "month_label": f"{target_year6}-{target_month6:02d}",
+            "info_count": 0,
+            "warning_count": 0,
+            "error_count": 0,
+        })
+
+    for row6 in rows6:
+        ml6 = f"{row6.created_at.year}-{row6.created_at.month:02d}"
+        for bucket6 in month_buckets6:
+            if bucket6["month_label"] == ml6:
+                sev6 = (row6.severity or "").lower()
+                if sev6 == "error":
+                    bucket6["error_count"] += 1
+                elif sev6 == "warning":
+                    bucket6["warning_count"] += 1
+                else:
+                    bucket6["info_count"] += 1
+                break
+
+    monthly_severity6: list[dict] = []
+    for bucket6 in month_buckets6:
+        total6 = bucket6["info_count"] + bucket6["warning_count"] + bucket6["error_count"]
+        monthly_severity6.append({
+            "month_label": bucket6["month_label"],
+            "info_count": bucket6["info_count"],
+            "warning_count": bucket6["warning_count"],
+            "error_count": bucket6["error_count"],
+            "total_runs": total6,
+            "info_rate": round(bucket6["info_count"] / total6 * 100, 1) if total6 > 0 else 0.0,
+            "warning_rate": round(bucket6["warning_count"] / total6 * 100, 1) if total6 > 0 else 0.0,
+            "error_rate": round(bucket6["error_count"] / total6 * 100, 1) if total6 > 0 else 0.0,
+        })
+
+    total_runs6 = sum(m["total_runs"] for m in monthly_severity6)
+
+    if total_runs6 == 0:
+        return {
+            "monthly_severity": monthly_severity6,
+            "total_runs": 0,
+            "avg_info_rate": 0.0,
+            "avg_warning_rate": 0.0,
+            "avg_error_rate": 0.0,
+            "most_common_severity": "info",
+            "trend_direction": "stable",
+            "severity_narrative": "No agent runs recorded in the last 6 months.",
+            "recommendations": [
+                "Configure and activate your AI agents to start collecting performance data.",
+                "Review agent setup to ensure events are being logged correctly.",
+                "Check workspace settings to confirm agent integrations are enabled.",
+            ],
+            "generated_at": now6.isoformat() + "Z",
+        }
+
+    total_info6 = sum(m["info_count"] for m in monthly_severity6)
+    total_warning6 = sum(m["warning_count"] for m in monthly_severity6)
+    total_error6 = sum(m["error_count"] for m in monthly_severity6)
+
+    avg_info_rate6 = round(total_info6 / total_runs6 * 100, 1)
+    avg_warning_rate6 = round(total_warning6 / total_runs6 * 100, 1)
+    avg_error_rate6 = round(total_error6 / total_runs6 * 100, 1)
+
+    most_common_severity6 = "info"
+    if total_warning6 > total_info6 and total_warning6 > total_error6:
+        most_common_severity6 = "warning"
+    elif total_error6 > total_info6:
+        most_common_severity6 = "error"
+
+    non_zero6 = [m for m in monthly_severity6 if m["total_runs"] > 0]
+    trend_direction6 = "stable"
+    if len(non_zero6) >= 2:
+        half6 = len(non_zero6) // 2
+        first_err6 = sum(m["error_rate"] for m in non_zero6[:half6]) / half6
+        second_err6 = sum(m["error_rate"] for m in non_zero6[half6:]) / (len(non_zero6) - half6)
+        delta6 = second_err6 - first_err6
+        if delta6 <= -3.0:
+            trend_direction6 = "improving"
+        elif delta6 >= 3.0:
+            trend_direction6 = "worsening"
+
+    prompt6 = (
+        f"You are an AI operations analyst. Summarize this agent severity breakdown over 6 months:\n"
+        f"Total runs: {total_runs6}. Info rate: {avg_info_rate6}%, Warning rate: {avg_warning_rate6}%, "
+        f"Error rate: {avg_error_rate6}%. Most common: {most_common_severity6}. Trend: {trend_direction6}.\n"
+        f"Monthly data: {monthly_severity6}\n"
+        f'Return JSON: {{"severity_narrative": "2-sentence summary", "recommendations": ["r1","r2","r3"]}}'
+    )
+
+    severity_narrative6 = ""
+    recommendations6: list[str] = []
+    try:
+        client6 = _mk_anthropic()
+        msg6 = client6.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt6}],
+        )
+        raw6 = msg6.content[0].text.strip()
+        if raw6.startswith("```"):
+            raw6 = raw6.split("```")[1]
+            if raw6.startswith("json"):
+                raw6 = raw6[4:]
+        parsed6 = loads_llm_json(raw6)
+        severity_narrative6 = str(parsed6.get("severity_narrative", "")).strip()
+        raw_recs6 = parsed6.get("recommendations", [])
+        recommendations6 = [str(r) for r in (raw_recs6 if isinstance(raw_recs6, list) else [])[:3]]
+    except Exception:
+        severity_narrative6 = (
+            f"Your agents completed {total_runs6} runs over the last 6 months with "
+            f"{avg_info_rate6}% success, {avg_warning_rate6}% warnings, and {avg_error_rate6}% errors. "
+            f"The severity trend is {trend_direction6}."
+        )
+
+    default_recs6 = [
+        "Investigate warning-level events to prevent them from escalating to errors.",
+        "Set up automated alerts when the error rate exceeds 15% in any single month.",
+        "Review agent configurations for those producing the most warning events.",
+    ]
+    while len(recommendations6) < 3:
+        recommendations6.append(default_recs6[len(recommendations6) % 3])
+
+    return {
+        "monthly_severity": monthly_severity6,
+        "total_runs": total_runs6,
+        "avg_info_rate": avg_info_rate6,
+        "avg_warning_rate": avg_warning_rate6,
+        "avg_error_rate": avg_error_rate6,
+        "most_common_severity": most_common_severity6,
+        "trend_direction": trend_direction6,
+        "severity_narrative": severity_narrative6,
+        "recommendations": recommendations6,
+        "generated_at": now6.isoformat() + "Z",
+    }

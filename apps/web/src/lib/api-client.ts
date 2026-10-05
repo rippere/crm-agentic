@@ -8126,5 +8126,49 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/success-rate-by-agent`, {}, token)
   },
+
+  async getAgentSeverityBreakdown(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i))
+        const label = d.toISOString().slice(0, 7)
+        const total = 10 + i * 2
+        const errorCount = Math.max(0, 4 - i)
+        const warningCount = Math.round(total * 0.15)
+        const infoCount = total - errorCount - warningCount
+        return {
+          month_label: label,
+          info_count: infoCount,
+          warning_count: warningCount,
+          error_count: errorCount,
+          total_runs: total,
+          info_rate: Math.round(infoCount / total * 1000) / 10,
+          warning_rate: Math.round(warningCount / total * 1000) / 10,
+          error_rate: Math.round(errorCount / total * 1000) / 10,
+        }
+      })
+      const totalRuns = months.reduce((a, m) => a + m.total_runs, 0)
+      const totalInfo = months.reduce((a, m) => a + m.info_count, 0)
+      const totalWarning = months.reduce((a, m) => a + m.warning_count, 0)
+      const totalError = months.reduce((a, m) => a + m.error_count, 0)
+      return Promise.resolve({
+        monthly_severity: months,
+        total_runs: totalRuns,
+        avg_info_rate: Math.round(totalInfo / totalRuns * 1000) / 10,
+        avg_warning_rate: Math.round(totalWarning / totalRuns * 1000) / 10,
+        avg_error_rate: Math.round(totalError / totalRuns * 1000) / 10,
+        most_common_severity: 'info',
+        trend_direction: 'improving',
+        severity_narrative: 'Agent severity distribution has improved significantly over the last 6 months, with error rates dropping from 40% to near zero. Info-level completions now account for over 80% of all runs, indicating robust and reliable pipeline execution.',
+        recommendations: [
+          'Continue monitoring warning-level events to prevent future error escalations.',
+          'Document the changes that led to error rate improvements for future reference.',
+          'Establish a monthly severity review cadence to maintain current performance levels.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/severity-breakdown`, {}, token)
+  },
 }
 
