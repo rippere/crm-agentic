@@ -962,6 +962,11 @@ export default function ReportsPage() {
   const [agentErrorTrend, setAgentErrorTrend] = useState<AgentErrorRateTrendData | null>(null);
   const [agentErrorTrendLoading, setAgentErrorTrendLoading] = useState(false);
   const [agentErrorTrendOpen, setAgentErrorTrendOpen] = useState(true);
+  type AgentSuccessTrend = { agent_name: string; avg_success_rate: number; trend: string };
+  type AgentSuccessRateData = { monthly_agent_rates: { month_label: string; rates: Record<string, number> }[]; agent_names: string[]; agent_trends: AgentSuccessTrend[]; best_agent: string | null; best_agent_avg_rate: number; most_improved_agent: string | null; overall_avg_success_rate: number; total_runs: number; success_rate_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentSuccessRate, setAgentSuccessRate] = useState<AgentSuccessRateData | null>(null);
+  const [agentSuccessRateLoading, setAgentSuccessRateLoading] = useState(false);
+  const [agentSuccessRateOpen, setAgentSuccessRateOpen] = useState(true);
 
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
@@ -1189,6 +1194,8 @@ export default function ReportsPage() {
       apiClient.getAgentUtilizationTrend("demo-workspace-1", "demo-token").then(setAgentUtilTrend).catch(() => {}).finally(() => setAgentUtilTrendLoading(false));
       setAgentErrorTrendLoading(true);
       apiClient.getAgentErrorRateTrend("demo-workspace-1", "demo-token").then(setAgentErrorTrend).catch(() => {}).finally(() => setAgentErrorTrendLoading(false));
+      setAgentSuccessRateLoading(true);
+      apiClient.getAgentSuccessRateByAgent("demo-workspace-1", "demo-token").then(setAgentSuccessRate).catch(() => {}).finally(() => setAgentSuccessRateLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1414,6 +1421,8 @@ export default function ReportsPage() {
       apiClient.getAgentUtilizationTrend(workspaceId, session.access_token).then(setAgentUtilTrend).catch(() => {}).finally(() => setAgentUtilTrendLoading(false));
       setAgentErrorTrendLoading(true);
       apiClient.getAgentErrorRateTrend(workspaceId, session.access_token).then(setAgentErrorTrend).catch(() => {}).finally(() => setAgentErrorTrendLoading(false));
+      setAgentSuccessRateLoading(true);
+      apiClient.getAgentSuccessRateByAgent(workspaceId, session.access_token).then(setAgentSuccessRate).catch(() => {}).finally(() => setAgentSuccessRateLoading(false));
     });
   }, []);
 
@@ -3145,6 +3154,27 @@ export default function ReportsPage() {
         if (!session) { setAgentErrorTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentErrorTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentSuccessRate = () => {
+    setAgentSuccessRateLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentSuccessRateByAgent(wid, tok)
+        .then(setAgentSuccessRate)
+        .catch(() => {})
+        .finally(() => setAgentSuccessRateLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentSuccessRateLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentSuccessRateLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13382,6 +13412,89 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent error rate trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Agent Success Rate by Agent */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+          <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+          <h3 className="text-sm font-semibold text-zinc-100 flex-1">Agent Success Rate by Agent</h3>
+          {agentSuccessRate && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              agentSuccessRate.overall_avg_success_rate >= 80 ? 'bg-emerald-900/40 text-emerald-300' :
+              agentSuccessRate.overall_avg_success_rate >= 60 ? 'bg-amber-900/40 text-amber-300' :
+              'bg-rose-900/40 text-rose-300'
+            }`}>
+              {agentSuccessRate.overall_avg_success_rate.toFixed(1)}% overall
+            </span>
+          )}
+          <button onClick={regenerateAgentSuccessRate} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentSuccessRateLoading}>
+            {agentSuccessRateLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          </button>
+          <button onClick={() => setAgentSuccessRateOpen(o => !o)} className="p-1 rounded hover:bg-zinc-800 text-zinc-400">
+            {agentSuccessRateOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </button>
+        </div>
+        {agentSuccessRateOpen && (
+          agentSuccessRateLoading && !agentSuccessRate ? (
+            <div className="p-6 space-y-2">{[1,2,3].map(i => <div key={i} className="h-4 bg-zinc-800 rounded animate-pulse" />)}</div>
+          ) : agentSuccessRate ? (
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900 rounded-lg p-2 text-center">
+                  <p className="text-xs text-zinc-500">Overall Avg</p>
+                  <p className={`text-xl font-bold ${agentSuccessRate.overall_avg_success_rate >= 80 ? 'text-emerald-300' : agentSuccessRate.overall_avg_success_rate >= 60 ? 'text-amber-300' : 'text-rose-300'}`}>{agentSuccessRate.overall_avg_success_rate.toFixed(1)}%</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-2 text-center">
+                  <p className="text-xs text-zinc-500">Best Agent</p>
+                  <p className="text-sm font-bold text-zinc-100 truncate">{agentSuccessRate.best_agent ?? '—'}</p>
+                  <p className="text-xs text-emerald-400">{agentSuccessRate.best_agent_avg_rate.toFixed(1)}%</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-2 text-center">
+                  <p className="text-xs text-zinc-500">Most Improved</p>
+                  <p className="text-sm font-bold text-zinc-100 truncate">{agentSuccessRate.most_improved_agent ?? '—'}</p>
+                </div>
+              </div>
+              {agentSuccessRate.agent_names.length > 0 && (
+                <ResponsiveContainer width="100%" height={160}>
+                  <LineChart data={agentSuccessRate.monthly_agent_rates.map(m => ({ month_label: m.month_label, ...m.rates }))} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717a' }} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#71717a' }} tickFormatter={(v: number) => `${v}%`} />
+                    <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }} formatter={(value: unknown, name: unknown) => [`${Number(value ?? 0).toFixed(1)}%`, String(name)]} />
+                    {agentSuccessRate.agent_names.map((ag: string, i: number) => {
+                      const colors = ['#6ee7b7', '#7dd3fc', '#a78bfa', '#fcd34d', '#fca5a5', '#a3e635'];
+                      return <Line key={ag} type="monotone" dataKey={ag} stroke={colors[i % colors.length]} strokeWidth={2} dot={{ r: 2, fill: colors[i % colors.length] }} connectNulls />;
+                    })}
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+              <div className="space-y-1">
+                {agentSuccessRate.agent_trends.map((t: AgentSuccessTrend) => (
+                  <div key={t.agent_name} className="flex items-center justify-between text-xs">
+                    <span className="text-zinc-300">{t.agent_name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`font-medium ${t.avg_success_rate >= 80 ? 'text-emerald-400' : t.avg_success_rate >= 60 ? 'text-amber-400' : 'text-rose-400'}`}>{t.avg_success_rate.toFixed(1)}%</span>
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${t.trend === 'improving' ? 'bg-emerald-900/40 text-emerald-300' : t.trend === 'declining' ? 'bg-rose-900/40 text-rose-300' : 'bg-zinc-800 text-zinc-400'}`}>{t.trend === 'improving' ? '↑' : t.trend === 'declining' ? '↓' : '→'} {t.trend}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{agentSuccessRate.success_rate_narrative}</p>
+              <ul className="space-y-1">
+                {agentSuccessRate.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentSuccessRate.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent success rate breakdown.</div>
           )
         )}
       </Card>

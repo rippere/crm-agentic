@@ -10295,3 +10295,56 @@ async def test_agent_error_rate_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/error-rate-trend")
     assert resp.status_code == 403
+
+
+class FakeAgentSuccessRow:
+    def __init__(self, agent_name: str, severity: str, created_at: datetime.datetime):
+        self.agent_name = agent_name
+        self.severity = severity
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_agent_success_rate_by_agent_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = datetime.datetime.utcnow()
+    rows = [
+        FakeAgentSuccessRow("Lead Scorer", "info", now - datetime.timedelta(days=2)),
+        FakeAgentSuccessRow("Lead Scorer", "info", now - datetime.timedelta(days=3)),
+        FakeAgentSuccessRow("Lead Scorer", "error", now - datetime.timedelta(days=4)),
+        FakeAgentSuccessRow("Email Composer", "info", now - datetime.timedelta(days=5)),
+        FakeAgentSuccessRow("Email Composer", "error", now - datetime.timedelta(days=6)),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"success_rate_narrative": "Agents are performing well.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/success-rate-by-agent")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_agent_rates"]) == 6
+    assert data["total_runs"] == 5
+    # Lead Scorer: 2 success + 1 failure = 66.7%; Email Composer: 1 success + 1 failure = 50%
+    # Overall: 3 success / 5 total = 60.0%
+    assert data["overall_avg_success_rate"] == 60.0
+    assert data["best_agent"] == "Lead Scorer"
+    assert len(data["agent_trends"]) == 2
+    assert data["success_rate_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_agent_success_rate_by_agent_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-ffff00001111")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/success-rate-by-agent")
+    assert resp.status_code == 403
