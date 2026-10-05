@@ -8043,5 +8043,39 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/utilization-trend`, {}, token)
   },
+
+  async getAgentErrorRateTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i))
+        const label = d.toISOString().slice(0, 7)
+        const totalRuns = 8 + i * 2
+        const failures = Math.max(0, Math.round(totalRuns * (0.40 - i * 0.05)))
+        const successes = totalRuns - failures
+        return { month_label: label, total_runs: totalRuns, success_count: successes, failure_count: failures, error_rate: Math.round(failures / totalRuns * 1000) / 10 }
+      })
+      const totalRuns = months.reduce((a, m) => a + m.total_runs, 0)
+      const totalFailures = months.reduce((a, m) => a + m.failure_count, 0)
+      return Promise.resolve({
+        monthly_error_rate: months,
+        total_runs: totalRuns,
+        total_failures: totalFailures,
+        overall_error_rate: Math.round(totalFailures / totalRuns * 1000) / 10,
+        trend_direction: 'improving',
+        rate_delta: -12.5,
+        best_month: months[months.length - 1].month_label,
+        best_error_rate: months[months.length - 1].error_rate,
+        worst_agent: 'Pipeline Optimizer',
+        error_rate_narrative: 'Agent error rates have improved significantly over the past 6 months, dropping from 40% to 15% as configurations have been refined. Pipeline Optimizer remains the highest-error agent and would benefit from additional input validation.',
+        recommendations: [
+          'Add structured error logging to Pipeline Optimizer to surface the most common failure modes.',
+          'Run high-error agents against a test dataset weekly to catch regressions before production.',
+          'Set up automated alerts when any agent error rate exceeds 20% in a given week.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/error-rate-trend`, {}, token)
+  },
 }
 

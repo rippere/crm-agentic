@@ -957,6 +957,12 @@ export default function ReportsPage() {
   const [agentUtilTrendLoading, setAgentUtilTrendLoading] = useState(false);
   const [agentUtilTrendOpen, setAgentUtilTrendOpen] = useState(true);
 
+  type AgentErrorMonth = { month_label: string; total_runs: number; success_count: number; failure_count: number; error_rate: number };
+  type AgentErrorRateTrendData = { monthly_error_rate: AgentErrorMonth[]; total_runs: number; total_failures: number; overall_error_rate: number; trend_direction: string; rate_delta: number; best_month: string; best_error_rate: number; worst_agent: string | null; error_rate_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentErrorTrend, setAgentErrorTrend] = useState<AgentErrorRateTrendData | null>(null);
+  const [agentErrorTrendLoading, setAgentErrorTrendLoading] = useState(false);
+  const [agentErrorTrendOpen, setAgentErrorTrendOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1181,6 +1187,8 @@ export default function ReportsPage() {
       apiClient.getClarityScoreTrend("demo-workspace-1", "demo-token").then(setClarityTrend).catch(() => {}).finally(() => setClarityTrendLoading(false));
       setAgentUtilTrendLoading(true);
       apiClient.getAgentUtilizationTrend("demo-workspace-1", "demo-token").then(setAgentUtilTrend).catch(() => {}).finally(() => setAgentUtilTrendLoading(false));
+      setAgentErrorTrendLoading(true);
+      apiClient.getAgentErrorRateTrend("demo-workspace-1", "demo-token").then(setAgentErrorTrend).catch(() => {}).finally(() => setAgentErrorTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1404,6 +1412,8 @@ export default function ReportsPage() {
       apiClient.getClarityScoreTrend(workspaceId, session.access_token).then(setClarityTrend).catch(() => {}).finally(() => setClarityTrendLoading(false));
       setAgentUtilTrendLoading(true);
       apiClient.getAgentUtilizationTrend(workspaceId, session.access_token).then(setAgentUtilTrend).catch(() => {}).finally(() => setAgentUtilTrendLoading(false));
+      setAgentErrorTrendLoading(true);
+      apiClient.getAgentErrorRateTrend(workspaceId, session.access_token).then(setAgentErrorTrend).catch(() => {}).finally(() => setAgentErrorTrendLoading(false));
     });
   }, []);
 
@@ -3114,6 +3124,27 @@ export default function ReportsPage() {
         if (!session) { setAgentUtilTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentUtilTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentErrorTrend = () => {
+    setAgentErrorTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentErrorRateTrend(wid, tok)
+        .then(setAgentErrorTrend)
+        .catch(() => {})
+        .finally(() => setAgentErrorTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentErrorTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentErrorTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13281,6 +13312,76 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent utilization trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Agent Error Rate Trend */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+          <AlertTriangle className="h-4 w-4 text-rose-400" />
+          <h3 className="text-sm font-semibold text-zinc-100 flex-1">Agent Error Rate Trend</h3>
+          {agentErrorTrend && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              agentErrorTrend.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+              agentErrorTrend.trend_direction === 'worsening' ? 'bg-rose-900/40 text-rose-300' :
+              'bg-zinc-800 text-zinc-400'
+            }`}>
+              {agentErrorTrend.trend_direction} {agentErrorTrend.rate_delta >= 0 ? '+' : ''}{agentErrorTrend.rate_delta.toFixed(1)}pp
+            </span>
+          )}
+          <button onClick={regenerateAgentErrorTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentErrorTrendLoading}>
+            {agentErrorTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          </button>
+          <button onClick={() => setAgentErrorTrendOpen(o => !o)} className="p-1 rounded hover:bg-zinc-800 text-zinc-400">
+            {agentErrorTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </button>
+        </div>
+        {agentErrorTrendOpen && (
+          agentErrorTrendLoading && !agentErrorTrend ? (
+            <div className="p-6 space-y-2">{[1,2,3].map(i => <div key={i} className="h-4 bg-zinc-800 rounded animate-pulse" />)}</div>
+          ) : agentErrorTrend ? (
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900 rounded-lg p-2 text-center">
+                  <p className="text-xs text-zinc-500">Error Rate</p>
+                  <p className={`text-xl font-bold ${agentErrorTrend.overall_error_rate >= 20 ? 'text-rose-300' : agentErrorTrend.overall_error_rate >= 10 ? 'text-amber-300' : 'text-emerald-300'}`}>{agentErrorTrend.overall_error_rate.toFixed(1)}%</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-2 text-center">
+                  <p className="text-xs text-zinc-500">Worst Agent</p>
+                  <p className="text-sm font-bold text-zinc-100 truncate">{agentErrorTrend.worst_agent ?? '—'}</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-2 text-center">
+                  <p className="text-xs text-zinc-500">Best Month</p>
+                  <p className="text-xl font-bold text-emerald-300">{agentErrorTrend.best_error_rate.toFixed(1)}%</p>
+                  <p className="text-xs text-zinc-500">{agentErrorTrend.best_month}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <ComposedChart data={agentErrorTrend.monthly_error_rate} margin={{ top: 4, right: 32, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717a' }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#71717a' }} />
+                  <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: 10, fill: '#71717a' }} tickFormatter={(v: number) => `${v}%`} />
+                  <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }} formatter={(value: number, name: string) => [name === 'error_rate' ? `${value}%` : value, name === 'error_rate' ? 'Error Rate' : name === 'success_count' ? 'Success' : 'Failure']} />
+                  <Bar yAxisId="left" dataKey="success_count" stackId="a" fill="#6ee7b7" radius={[0,0,0,0]} />
+                  <Bar yAxisId="left" dataKey="failure_count" stackId="a" fill="#fca5a5" radius={[3,3,0,0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="error_rate" stroke="#f87171" strokeWidth={2} dot={{ r: 3, fill: '#f87171' }} connectNulls />
+                </ComposedChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{agentErrorTrend.error_rate_narrative}</p>
+              <ul className="space-y-1">
+                {agentErrorTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentErrorTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent error rate trend.</div>
           )
         )}
       </Card>

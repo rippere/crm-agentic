@@ -22471,3 +22471,169 @@ async def get_ai_agent_utilization_trend(
         "recommendations": recommendations3,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20y: AI agent error rate trend
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/agents/error-rate-trend")
+@limiter.limit("5/minute")
+async def get_ai_agent_error_rate_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+    cutoff4 = now - datetime.timedelta(days=183)
+
+    from sqlalchemy import select as sa_select4
+    result4 = await db.execute(
+        sa_select4(ActivityEvent.agent_name, ActivityEvent.severity, ActivityEvent.created_at)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.agent_name.isnot(None))
+        .where(ActivityEvent.created_at >= cutoff4)
+        .order_by(ActivityEvent.created_at)
+    )
+    rows4 = result4.all()
+
+    buckets4: list[dict] = []
+    for offset4 in range(5, -1, -1):
+        target_month4 = now.month - offset4
+        target_year4 = now.year
+        while target_month4 <= 0:
+            target_month4 += 12
+            target_year4 -= 1
+        label4 = f"{target_year4}-{target_month4:02d}"
+        buckets4.append({"month_label": label4, "total_runs": 0, "success_count": 0, "failure_count": 0, "error_rate": 0.0})
+
+    agent_errors4: dict[str, int] = {}
+    agent_totals4: dict[str, int] = {}
+    for row4 in rows4:
+        row_month4 = f"{row4.created_at.year}-{row4.created_at.month:02d}"
+        for b4 in buckets4:
+            if b4["month_label"] == row_month4:
+                b4["total_runs"] += 1
+                if row4.severity == "error":
+                    b4["failure_count"] += 1
+                    agent_errors4[row4.agent_name] = agent_errors4.get(row4.agent_name, 0) + 1
+                else:
+                    b4["success_count"] += 1
+                agent_totals4[row4.agent_name] = agent_totals4.get(row4.agent_name, 0) + 1
+                break
+
+    for b4 in buckets4:
+        if b4["total_runs"] > 0:
+            b4["error_rate"] = round(b4["failure_count"] / b4["total_runs"] * 100, 1)
+
+    total_runs4 = sum(b4["total_runs"] for b4 in buckets4)
+    total_failures4 = sum(b4["failure_count"] for b4 in buckets4)
+    overall_error_rate4 = round(total_failures4 / total_runs4 * 100, 1) if total_runs4 > 0 else 0.0
+
+    worst_agent4 = None
+    if agent_totals4:
+        worst_agent4 = max(agent_errors4, key=lambda a: agent_errors4.get(a, 0) / agent_totals4[a]) if agent_errors4 else None
+
+    half4 = len(buckets4) // 2
+    first_half_rates4 = [b4["error_rate"] for b4 in buckets4[:half4] if b4["total_runs"] > 0]
+    second_half_rates4 = [b4["error_rate"] for b4 in buckets4[half4:] if b4["total_runs"] > 0]
+    first_avg4 = sum(first_half_rates4) / len(first_half_rates4) if first_half_rates4 else 0.0
+    second_avg4 = sum(second_half_rates4) / len(second_half_rates4) if second_half_rates4 else 0.0
+    rate_delta4 = round(second_avg4 - first_avg4, 1)
+    if rate_delta4 <= -3:
+        trend_direction4 = "improving"
+    elif rate_delta4 >= 3:
+        trend_direction4 = "worsening"
+    else:
+        trend_direction4 = "stable"
+
+    active_buckets4 = [b4 for b4 in buckets4 if b4["total_runs"] > 0]
+    best_month4 = min(active_buckets4, key=lambda b4: b4["error_rate"])["month_label"] if active_buckets4 else buckets4[-1]["month_label"]
+    best_error_rate4 = min(b4["error_rate"] for b4 in active_buckets4) if active_buckets4 else 0.0
+
+    if total_runs4 == 0:
+        return {
+            "monthly_error_rate": buckets4,
+            "total_runs": 0,
+            "total_failures": 0,
+            "overall_error_rate": 0.0,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "best_month": best_month4,
+            "best_error_rate": 0.0,
+            "worst_agent": None,
+            "error_rate_narrative": "No agent runs recorded in the last 6 months — trigger an agent to start tracking reliability.",
+            "recommendations": [
+                "Run agents in a staging environment first to catch errors before production.",
+                "Add alerting on agent severity=error events to catch failures early.",
+                "Review agent configurations monthly to reduce error rates over time.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    agent_error_summary4 = ", ".join(
+        f"{ag} ({agent_errors4.get(ag, 0)}/{agent_totals4[ag]} errors)"
+        for ag in sorted(agent_totals4, key=lambda a: -agent_totals4[a])[:5]
+    )
+    prompt4 = (
+        f"You are a CRM analytics assistant. A sales workspace ran {total_runs4} agent jobs "
+        f"over the last 6 months with an overall error rate of {overall_error_rate4:.1f}%. "
+        f"Per-agent breakdown: {agent_error_summary4}. "
+        f"The error rate trend is {trend_direction4} (delta: {rate_delta4:+.1f}pp). "
+        f"Best month was {best_month4} at {best_error_rate4:.1f}% error rate. "
+        "Respond ONLY with JSON: "
+        "{\"error_rate_narrative\": \"2-sentence insight on agent reliability and error trends\", "
+        "\"recommendations\": [\"action 1\", \"action 2\", \"action 3\"]}"
+    )
+
+    error_rate_narrative4 = ""
+    recommendations4: list[str] = []
+    try:
+        client4 = _mk_anthropic()
+        msg4 = client4.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt4}],
+        )
+        raw4 = msg4.content[0].text.strip()
+        if raw4.startswith("```"):
+            raw4 = raw4.split("```")[1]
+            if raw4.startswith("json"):
+                raw4 = raw4[4:]
+        parsed4 = loads_llm_json(raw4)
+        error_rate_narrative4 = str(parsed4.get("error_rate_narrative", "")).strip()
+        raw_recs4 = parsed4.get("recommendations", [])
+        recommendations4 = [str(r) for r in (raw_recs4 if isinstance(raw_recs4, list) else [])[:3]]
+    except Exception:
+        error_rate_narrative4 = (
+            f"Your agents recorded a {overall_error_rate4:.1f}% error rate over the last 6 months "
+            f"across {total_runs4} total runs. "
+            f"The trend is {trend_direction4} ({rate_delta4:+.1f}pp change)."
+        )
+
+    default_recs4 = [
+        "Investigate the highest-error-rate agent's recent logs to identify root causes.",
+        "Add input validation to agents that handle external data to reduce parse failures.",
+        "Schedule a monthly reliability review for agents with error rates above 10%.",
+    ]
+    while len(recommendations4) < 3:
+        recommendations4.append(default_recs4[len(recommendations4) % 3])
+
+    return {
+        "monthly_error_rate": buckets4,
+        "total_runs": total_runs4,
+        "total_failures": total_failures4,
+        "overall_error_rate": overall_error_rate4,
+        "trend_direction": trend_direction4,
+        "rate_delta": rate_delta4,
+        "best_month": best_month4,
+        "best_error_rate": best_error_rate4,
+        "worst_agent": worst_agent4,
+        "error_rate_narrative": error_rate_narrative4,
+        "recommendations": recommendations4,
+        "generated_at": now.isoformat() + "Z",
+    }
