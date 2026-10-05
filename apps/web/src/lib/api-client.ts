@@ -8263,5 +8263,42 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/dow-distribution`, {}, token)
   },
+
+  async getAgentWowComparison(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const AGENT_NAMES = ['Lead Scorer', 'Pipeline Optimizer', 'Email Composer', 'Sentiment Analyzer', 'Call Summarizer']
+      const currentCounts = [18, 14, 11, 7, 4]
+      const priorCounts  = [12, 16,  9, 5, 6]
+      const totalCurrent = currentCounts.reduce((a, c) => a + c, 0)
+      const totalPrior   = priorCounts.reduce((a, c) => a + c, 0)
+      const totalDelta   = totalCurrent - totalPrior
+      const wowPct       = Math.round(totalDelta / totalPrior * 1000) / 10
+      const agents = AGENT_NAMES.map((agent_name, i) => {
+        const cur = currentCounts[i], pri = priorCounts[i], delta = cur - pri
+        return {
+          agent_name,
+          current_week_runs: cur,
+          prior_week_runs: pri,
+          delta,
+          pct_change: pri > 0 ? Math.round(delta / pri * 1000) / 10 : (cur > 0 ? 100.0 : 0.0),
+        }
+      })
+      return Promise.resolve({
+        agents,
+        total_runs_this_week: totalCurrent,
+        total_runs_prior_week: totalPrior,
+        wow_pct: wowPct,
+        most_active_agent: 'Lead Scorer',
+        wow_narrative: 'Overall agent activity rose 18.5% week-over-week, with Lead Scorer driving the biggest absolute gain (+6 runs). Pipeline Optimizer dipped slightly, suggesting deal flow was lighter this week — worth monitoring heading into the next sprint.',
+        recommendations: [
+          'Lead Scorer\'s surge aligns with a higher contact intake — verify scoring quality on the new batch.',
+          'Pipeline Optimizer\'s dip may reflect fewer stage transitions; check whether deals are stalling.',
+          'Call Summarizer activity dropped 33% — confirm recordings are still being ingested correctly.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
+  },
 }
 
