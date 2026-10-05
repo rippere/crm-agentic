@@ -967,6 +967,11 @@ export default function ReportsPage() {
   const [agentSuccessRate, setAgentSuccessRate] = useState<AgentSuccessRateData | null>(null);
   const [agentSuccessRateLoading, setAgentSuccessRateLoading] = useState(false);
   const [agentSuccessRateOpen, setAgentSuccessRateOpen] = useState(true);
+  type AgentSeverityMonth = { month_label: string; info_count: number; warning_count: number; error_count: number; total_runs: number; info_rate: number; warning_rate: number; error_rate: number };
+  type AgentSeverityBreakdownData = { monthly_severity: AgentSeverityMonth[]; total_runs: number; avg_info_rate: number; avg_warning_rate: number; avg_error_rate: number; most_common_severity: string; trend_direction: string; severity_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentSeverity, setAgentSeverity] = useState<AgentSeverityBreakdownData | null>(null);
+  const [agentSeverityLoading, setAgentSeverityLoading] = useState(false);
+  const [agentSeverityOpen, setAgentSeverityOpen] = useState(true);
 
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
@@ -1196,6 +1201,8 @@ export default function ReportsPage() {
       apiClient.getAgentErrorRateTrend("demo-workspace-1", "demo-token").then(setAgentErrorTrend).catch(() => {}).finally(() => setAgentErrorTrendLoading(false));
       setAgentSuccessRateLoading(true);
       apiClient.getAgentSuccessRateByAgent("demo-workspace-1", "demo-token").then(setAgentSuccessRate).catch(() => {}).finally(() => setAgentSuccessRateLoading(false));
+      setAgentSeverityLoading(true);
+      apiClient.getAgentSeverityBreakdown("demo-workspace-1", "demo-token").then(setAgentSeverity).catch(() => {}).finally(() => setAgentSeverityLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1423,6 +1430,8 @@ export default function ReportsPage() {
       apiClient.getAgentErrorRateTrend(workspaceId, session.access_token).then(setAgentErrorTrend).catch(() => {}).finally(() => setAgentErrorTrendLoading(false));
       setAgentSuccessRateLoading(true);
       apiClient.getAgentSuccessRateByAgent(workspaceId, session.access_token).then(setAgentSuccessRate).catch(() => {}).finally(() => setAgentSuccessRateLoading(false));
+      setAgentSeverityLoading(true);
+      apiClient.getAgentSeverityBreakdown(workspaceId, session.access_token).then(setAgentSeverity).catch(() => {}).finally(() => setAgentSeverityLoading(false));
     });
   }, []);
 
@@ -3175,6 +3184,27 @@ export default function ReportsPage() {
         if (!session) { setAgentSuccessRateLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentSuccessRateLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentSeverity = () => {
+    setAgentSeverityLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentSeverityBreakdown(wid, tok)
+        .then(setAgentSeverity)
+        .catch(() => {})
+        .finally(() => setAgentSeverityLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentSeverityLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentSeverityLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13495,6 +13525,83 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent success rate breakdown.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20aa: Agent Severity Breakdown */}
+      <Card className="border-zinc-700/50">
+        <div className="p-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-sky-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Agent Severity Breakdown</h3>
+            {agentSeverity && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                agentSeverity.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+                agentSeverity.trend_direction === 'worsening' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'
+              }`}>
+                {agentSeverity.trend_direction}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={regenerateAgentSeverity} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentSeverityLoading}>
+              {agentSeverityLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setAgentSeverityOpen(o => !o)} className="p-1 rounded hover:bg-zinc-800 transition-colors">
+              {agentSeverityOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {agentSeverityOpen && (
+          agentSeverityLoading && !agentSeverity ? (
+            <div className="px-4 pb-4 h-24 flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-zinc-600" /></div>
+          ) : agentSeverity ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Success</p>
+                  <p className="text-xl font-bold text-emerald-300">{agentSeverity.avg_info_rate.toFixed(1)}%</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Warning</p>
+                  <p className="text-xl font-bold text-amber-300">{agentSeverity.avg_warning_rate.toFixed(1)}%</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Error</p>
+                  <p className={`text-xl font-bold ${agentSeverity.avg_error_rate >= 20 ? 'text-rose-300' : agentSeverity.avg_error_rate >= 10 ? 'text-amber-300' : 'text-emerald-300'}`}>{agentSeverity.avg_error_rate.toFixed(1)}%</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={160}>
+                <BarChart data={agentSeverity.monthly_severity} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} />
+                  <YAxis tick={{ fill: '#71717a', fontSize: 10 }} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '6px' }}
+                    labelStyle={{ color: '#e4e4e7', fontSize: 11 }}
+                    itemStyle={{ color: '#a1a1aa', fontSize: 11 }}
+                    formatter={(value: unknown, name: unknown) => [`${Number(value ?? 0)}`, String(name)]}
+                  />
+                  <Bar dataKey="info_count" name="Success" stackId="a" fill="#6ee7b7" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="warning_count" name="Warning" stackId="a" fill="#fcd34d" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="error_count" name="Error" stackId="a" fill="#fca5a5" radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{agentSeverity.severity_narrative}</p>
+              <ul className="space-y-1">
+                {agentSeverity.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-sky-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentSeverity.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent severity breakdown.</div>
           )
         )}
       </Card>

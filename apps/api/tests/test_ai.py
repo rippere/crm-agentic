@@ -10348,3 +10348,56 @@ async def test_agent_success_rate_by_agent_wrong_workspace_returns_403(app_clien
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/success-rate-by-agent")
     assert resp.status_code == 403
+
+
+# Phase 20aa: agent severity breakdown
+
+
+class FakeSeverityRow:
+    def __init__(self, severity: str, created_at: datetime.datetime):
+        self.severity = severity
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_agent_severity_breakdown_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now = datetime.datetime.utcnow()
+    rows = [
+        FakeSeverityRow("info", now - datetime.timedelta(days=2)),
+        FakeSeverityRow("info", now - datetime.timedelta(days=3)),
+        FakeSeverityRow("warning", now - datetime.timedelta(days=4)),
+        FakeSeverityRow("error", now - datetime.timedelta(days=5)),
+        FakeSeverityRow("error", now - datetime.timedelta(days=6)),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"severity_narrative": "Good performance.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/severity-breakdown")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_severity"]) == 6
+    assert data["total_runs"] == 5
+    assert data["avg_info_rate"] == 40.0
+    assert data["avg_warning_rate"] == 20.0
+    assert data["avg_error_rate"] == 40.0
+    assert data["severity_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_agent_severity_breakdown_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbcccc-dddd-eeee-ffff-000011112222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/severity-breakdown")
+    assert resp.status_code == 403
