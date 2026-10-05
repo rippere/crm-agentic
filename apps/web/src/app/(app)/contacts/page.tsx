@@ -12,6 +12,7 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { cn, formatCurrency, leadScoreConfig } from "@/lib/utils";
 import { useContacts } from "@/hooks/useContacts";
 import { matchesContactSearch } from "@/lib/contacts-search";
+import { CONTACTS_PAGE_LIMIT, formatCount, summarizeContactCounts } from "@/lib/contacts-list";
 import { patchById, summarizeEnrichResults, updateEachWithRollback, waitForJobs } from "@/lib/contacts-mutations";
 import { isDemoMode } from "@/lib/demo-mode";
 import { useJobPoller } from "@/hooks/useJobPoller";
@@ -1041,6 +1042,9 @@ const LS_SCORE_KEY = "contacts_filter_score";
 
 export default function ContactsPage() {
   const [search, setSearch] = useState("");
+  // Keyword search also runs on the server (debounced), because the loaded list
+  // is capped and the contact being searched for may be older than its rows.
+  const [serverSearch, setServerSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<ContactStatus | "all">(() => {
     if (typeof window === "undefined") return "all";
     return (localStorage.getItem(LS_STATUS_KEY) as ContactStatus | "all") ?? "all";
@@ -1096,15 +1100,26 @@ export default function ContactsPage() {
   const [contactHealthLoading, setContactHealthLoading] = useState(false);
   const [contactHealthOpen, setContactHealthOpen] = useState(true);
 
+  useEffect(() => {
+    // Demo mode loads every demo contact, so the client filter is enough there,
+    // and a demo "refetch" would undo local edits. Semantic mode has its own search.
+    const next = isDemoMode || semanticMode ? "" : search.trim();
+    const t = setTimeout(() => setServerSearch(next), 250);
+    return () => clearTimeout(t);
+  }, [search, semanticMode]);
+
   const {
     contacts,
     loading: contactsLoading,
     error: contactsError,
+    truncated: contactsTruncated,
+    narrowed: contactsNarrowed,
+    counts: serverCounts,
     refetch: refetchContacts,
     createContact,
     patchContacts,
     removeContacts,
-  } = useContacts();
+  } = useContacts({ search: serverSearch });
 
   // After a mutation, reload from the API in the background. Skipped in demo
   // mode, where refetch reloads the static demo data and would undo the local
@@ -1421,11 +1436,21 @@ export default function ContactsPage() {
     });
   }, [contacts, search, filterStatus, filterScore]);
 
+  const counts = useMemo(
+    () => summarizeContactCounts({
+      contacts,
+      server: serverCounts,
+      complete: !contactsTruncated && !contactsNarrowed,
+    }),
+    [contacts, serverCounts, contactsTruncated, contactsNarrowed],
+  );
+  const totalLabel = formatCount(counts.total, counts.lowerBound);
+
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
       <Header
         title="Contacts"
-        subtitle={`${contacts.length} total · AI-classified`}
+        subtitle={`${totalLabel} total · AI-classified`}
       />
 
       {/* Stats row */}
@@ -1433,8 +1458,8 @@ export default function ContactsPage() {
         {(["all", "lead", "prospect", "customer"] as const).map((status) => {
           const count =
             status === "all"
-              ? contacts.length
-              : contacts.filter((c) => c.status === status).length;
+              ? totalLabel
+              : formatCount(counts.byStatus[status] ?? 0, counts.lowerBound);
           return (
             <button
               key={status}
@@ -2087,7 +2112,9 @@ export default function ContactsPage() {
               ? semanticResults.length > 0
                 ? `${semanticResults.length} semantic matches`
                 : "Semantic search active"
-              : `${filtered.length} of ${contacts.length} contacts`}
+              : `${filtered.length} of ${totalLabel} contacts${
+                  contactsTruncated && !contactsNarrowed ? ` · newest ${CONTACTS_PAGE_LIMIT} shown, search to find older` : ""
+                }`}
           </p>
           <div className="flex items-center gap-2">
             {semanticMode ? (

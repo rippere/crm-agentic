@@ -506,13 +506,25 @@ export const apiClient = {
   },
 
   // Contacts
-  listContacts: (workspaceId: string, token: string, opts?: { status?: string; q?: string }) => {
+  listContacts: (workspaceId: string, token: string, opts?: { status?: string; q?: string; limit?: number; offset?: number }) => {
     if (isDemoMode) return Promise.resolve([])
     const params = new URLSearchParams()
     if (opts?.status && opts.status !== 'all') params.set('status', opts.status)
-    if (opts?.q) params.set('q', opts.q)
+    const q = opts?.q?.trim()
+    if (q) params.set('q', q)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.offset) params.set('offset', String(opts.offset))
     const qs = params.toString()
     return apiFetch(`/workspaces/${workspaceId}/contacts${qs ? `?${qs}` : ''}`, {}, token)
+  },
+  // Workspace-wide totals; the list above is capped, so its length isn't the total.
+  getContactCounts: (workspaceId: string, token: string): Promise<{ total: number; by_status: Record<string, number> }> => {
+    if (isDemoMode) {
+      const by_status: Record<string, number> = {}
+      for (const c of demoContacts) by_status[c.status] = (by_status[c.status] ?? 0) + 1
+      return Promise.resolve({ total: demoContacts.length, by_status })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/contacts/counts`, {}, token)
   },
   composeEmail: (workspaceId: string, contactId: string, token: string) => {
     if (isDemoMode) {

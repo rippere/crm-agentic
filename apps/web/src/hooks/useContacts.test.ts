@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rowToContact } from "@/hooks/useContacts";
+import { rowToContact, fetchContactById } from "@/hooks/useContacts";
+import { apiClient } from "@/lib/api-client";
 import type { ContactRow } from "@/lib/supabase";
 
 function row(overrides: Partial<ContactRow> = {}): ContactRow {
@@ -59,4 +60,27 @@ test("defaults a missing ml_score and semantic_tags", () => {
 
 test("passes a real ml_score through", () => {
   assert.deepEqual(rowToContact(row()).mlScore, { value: 72, label: "hot", trend: "up", signals: ["opened"] });
+});
+
+// The detail page used to scan listContacts() (capped at 100, unordered) and
+// treat the raw snake_case row as a camelCase Contact, so any contact past the
+// cap showed "not found" and mlScore/semanticTags were undefined.
+test("fetchContactById loads one contact by id and maps it to a Contact", async (t) => {
+  const getContact = t.mock.method(apiClient, "getContact", async () => row({ id: "c-741", name: "Dana Reyes", email: null }));
+  const listContacts = t.mock.method(apiClient, "listContacts", async () => []);
+
+  const c = await fetchContactById("ws1", "c-741", "tok");
+
+  assert.equal(getContact.mock.callCount(), 1);
+  assert.deepEqual(getContact.mock.calls[0].arguments, ["ws1", "c-741", "tok"]);
+  assert.equal(listContacts.mock.callCount(), 0);
+  assert.equal(c?.id, "c-741");
+  assert.equal(c?.email, "");
+  assert.equal(c?.mlScore.label, "hot");
+  assert.deepEqual(c?.semanticTags, []);
+});
+
+test("fetchContactById returns null when the API has no such contact", async (t) => {
+  t.mock.method(apiClient, "getContact", async () => null);
+  assert.equal(await fetchContactById("ws1", "missing", "tok"), null);
 });
