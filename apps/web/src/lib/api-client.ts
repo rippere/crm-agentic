@@ -8077,5 +8077,54 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/error-rate-trend`, {}, token)
   },
+
+  async getAgentSuccessRateByAgent(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const AGENT_NAMES = ['Lead Scorer', 'Email Composer', 'Pipeline Optimizer', 'Sentiment Analyzer', 'Call Summarizer']
+      const BASE_RATES: Record<string, number> = {
+        'Lead Scorer': 82, 'Email Composer': 68, 'Pipeline Optimizer': 55,
+        'Sentiment Analyzer': 78, 'Call Summarizer': 73,
+      }
+      const months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i))
+        const label = d.toISOString().slice(0, 7)
+        const rates: Record<string, number> = {}
+        AGENT_NAMES.forEach(ag => {
+          const base = BASE_RATES[ag]
+          const trend = ag === 'Pipeline Optimizer' ? 0 : i * 1.5
+          rates[ag] = Math.round(Math.min(99, base + trend) * 10) / 10
+        })
+        return { month_label: label, rates }
+      })
+      const agentTrends = AGENT_NAMES.map(ag => ({
+        agent_name: ag,
+        avg_success_rate: Math.round(months.reduce((a, m) => a + (m.rates[ag] ?? 0), 0) / months.length * 10) / 10,
+        trend: ag === 'Pipeline Optimizer' ? 'stable' : 'improving',
+      }))
+      const best = agentTrends.reduce((a, t) => t.avg_success_rate > a.avg_success_rate ? t : a)
+      const improving = agentTrends.filter(t => t.trend === 'improving')
+      const mostImproved = improving.length ? improving.reduce((a, t) => t.avg_success_rate > a.avg_success_rate ? t : a).agent_name : null
+      const allRates = agentTrends.map(t => t.avg_success_rate)
+      const overallAvg = Math.round(allRates.reduce((a, r) => a + r, 0) / allRates.length * 10) / 10
+      return Promise.resolve({
+        monthly_agent_rates: months,
+        agent_names: AGENT_NAMES,
+        agent_trends: agentTrends,
+        best_agent: best.agent_name,
+        best_agent_avg_rate: best.avg_success_rate,
+        most_improved_agent: mostImproved,
+        overall_avg_success_rate: overallAvg,
+        total_runs: months.reduce((a, m) => a + AGENT_NAMES.length, 0),
+        success_rate_narrative: 'Most agents are showing improving success rates over the last 6 months, with Lead Scorer consistently leading at over 90% success. Pipeline Optimizer remains the weakest performer and would benefit from additional error handling improvements.',
+        recommendations: [
+          "Replicate Lead Scorer's input validation patterns in other agents to improve success rates.",
+          'Add automated retry logic to Pipeline Optimizer for transient failures.',
+          'Schedule weekly success rate reviews for any agent below 75% to catch regressions early.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/success-rate-by-agent`, {}, token)
+  },
 }
 

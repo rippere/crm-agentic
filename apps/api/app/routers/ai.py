@@ -22637,3 +22637,189 @@ async def get_ai_agent_error_rate_trend(
         "recommendations": recommendations4,
         "generated_at": now.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/success-rate-by-agent")
+@limiter.limit("5/minute")
+async def get_ai_agent_success_rate_by_agent(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now = datetime.datetime.utcnow()
+    cutoff5 = now - datetime.timedelta(days=183)
+
+    from sqlalchemy import select as sa_select5
+    result5 = await db.execute(
+        sa_select5(ActivityEvent.agent_name, ActivityEvent.severity, ActivityEvent.created_at)
+        .where(ActivityEvent.workspace_id == workspace_id)
+        .where(ActivityEvent.agent_name.isnot(None))
+        .where(ActivityEvent.created_at >= cutoff5)
+        .order_by(ActivityEvent.created_at)
+    )
+    rows5 = result5.all()
+
+    month_labels5: list[str] = []
+    for offset5 in range(5, -1, -1):
+        target_month5 = now.month - offset5
+        target_year5 = now.year
+        while target_month5 <= 0:
+            target_month5 += 12
+            target_year5 -= 1
+        month_labels5.append(f"{target_year5}-{target_month5:02d}")
+
+    agent_month_data5: dict[str, dict[str, dict]] = {}
+    for row5 in rows5:
+        agent5 = row5.agent_name
+        row_month5 = f"{row5.created_at.year}-{row5.created_at.month:02d}"
+        if row_month5 not in month_labels5:
+            continue
+        if agent5 not in agent_month_data5:
+            agent_month_data5[agent5] = {}
+        if row_month5 not in agent_month_data5[agent5]:
+            agent_month_data5[agent5][row_month5] = {"success": 0, "failure": 0}
+        if row5.severity == "error":
+            agent_month_data5[agent5][row_month5]["failure"] += 1
+        else:
+            agent_month_data5[agent5][row_month5]["success"] += 1
+
+    agent_names5 = sorted(agent_month_data5.keys())
+    total_runs5 = sum(
+        v["success"] + v["failure"]
+        for am in agent_month_data5.values()
+        for v in am.values()
+    )
+
+    if total_runs5 == 0:
+        empty_monthly5 = [{"month_label": ml, "rates": {}} for ml in month_labels5]
+        return {
+            "monthly_agent_rates": empty_monthly5,
+            "agent_names": [],
+            "agent_trends": [],
+            "best_agent": None,
+            "best_agent_avg_rate": 0.0,
+            "most_improved_agent": None,
+            "overall_avg_success_rate": 0.0,
+            "total_runs": 0,
+            "success_rate_narrative": "No agent runs recorded in the last 6 months — trigger agents to start tracking per-agent success rates.",
+            "recommendations": [
+                "Run agents regularly so success rate benchmarks can be established.",
+                "Review each agent's configuration before first run to reduce initial failure rates.",
+                "Monitor per-agent success rates weekly once runs are established.",
+            ],
+            "generated_at": now.isoformat() + "Z",
+        }
+
+    monthly_agent_rates5: list[dict] = []
+    for ml5 in month_labels5:
+        rates5: dict[str, float] = {}
+        for ag5 in agent_names5:
+            if ml5 in agent_month_data5.get(ag5, {}):
+                counts5 = agent_month_data5[ag5][ml5]
+                total5 = counts5["success"] + counts5["failure"]
+                rates5[ag5] = round(counts5["success"] / total5 * 100, 1) if total5 > 0 else 0.0
+        monthly_agent_rates5.append({"month_label": ml5, "rates": rates5})
+
+    agent_trends5: list[dict] = []
+    agent_avg_rates5: dict[str, float] = {}
+    for ag5 in agent_names5:
+        agent_rates_by_month5 = []
+        for ml5 in month_labels5:
+            if ml5 in agent_month_data5.get(ag5, {}):
+                counts5 = agent_month_data5[ag5][ml5]
+                total5 = counts5["success"] + counts5["failure"]
+                agent_rates_by_month5.append(counts5["success"] / total5 * 100 if total5 > 0 else 0.0)
+        avg5 = round(sum(agent_rates_by_month5) / len(agent_rates_by_month5), 1) if agent_rates_by_month5 else 0.0
+        agent_avg_rates5[ag5] = avg5
+        half5 = len(agent_rates_by_month5) // 2
+        if half5 >= 1:
+            first5 = sum(agent_rates_by_month5[:half5]) / half5
+            second5 = sum(agent_rates_by_month5[half5:]) / (len(agent_rates_by_month5) - half5)
+            delta5 = second5 - first5
+            if delta5 >= 3:
+                trend5 = "improving"
+            elif delta5 <= -3:
+                trend5 = "declining"
+            else:
+                trend5 = "stable"
+        else:
+            trend5 = "stable"
+        agent_trends5.append({"agent_name": ag5, "avg_success_rate": avg5, "trend": trend5})
+
+    best_agent5 = max(agent_avg_rates5, key=lambda a: agent_avg_rates5[a]) if agent_avg_rates5 else None
+    best_agent_avg_rate5 = agent_avg_rates5[best_agent5] if best_agent5 else 0.0
+
+    improving_agents5 = [t5 for t5 in agent_trends5 if t5["trend"] == "improving"]
+    most_improved_agent5 = max(improving_agents5, key=lambda t5: t5["avg_success_rate"])["agent_name"] if improving_agents5 else None
+
+    all_successes5 = sum(
+        v["success"]
+        for am in agent_month_data5.values()
+        for v in am.values()
+    )
+    overall_avg_success_rate5 = round(all_successes5 / total_runs5 * 100, 1) if total_runs5 > 0 else 0.0
+
+    agent_summary5 = ", ".join(
+        f"{t5['agent_name']} ({t5['avg_success_rate']:.1f}% avg, {t5['trend']})"
+        for t5 in sorted(agent_trends5, key=lambda t: -t["avg_success_rate"])[:5]
+    )
+    prompt5 = (
+        f"You are a CRM analytics assistant. A sales workspace ran {total_runs5} agent jobs "
+        f"over 6 months with an overall success rate of {overall_avg_success_rate5:.1f}%. "
+        f"Per-agent performance: {agent_summary5}. "
+        f"Best agent: {best_agent5} at {best_agent_avg_rate5:.1f}% avg success rate. "
+        "Respond ONLY with JSON: "
+        "{\"success_rate_narrative\": \"2-sentence insight on per-agent success rates and which agents to prioritise\", "
+        "\"recommendations\": [\"action 1\", \"action 2\", \"action 3\"]}"
+    )
+
+    success_rate_narrative5 = ""
+    recommendations5: list[str] = []
+    try:
+        client5 = _mk_anthropic()
+        msg5 = client5.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt5}],
+        )
+        raw5 = msg5.content[0].text.strip()
+        if raw5.startswith("```"):
+            raw5 = raw5.split("```")[1]
+            if raw5.startswith("json"):
+                raw5 = raw5[4:]
+        parsed5 = loads_llm_json(raw5)
+        success_rate_narrative5 = str(parsed5.get("success_rate_narrative", "")).strip()
+        raw_recs5 = parsed5.get("recommendations", [])
+        recommendations5 = [str(r) for r in (raw_recs5 if isinstance(raw_recs5, list) else [])[:3]]
+    except Exception:
+        success_rate_narrative5 = (
+            f"Your agents achieved an overall success rate of {overall_avg_success_rate5:.1f}% "
+            f"across {total_runs5} runs over the last 6 months. "
+            + (f"{best_agent5} leads with {best_agent_avg_rate5:.1f}% average success." if best_agent5 else "")
+        )
+
+    default_recs5 = [
+        "Focus on agents with declining trends to diagnose and fix root causes.",
+        "Replicate the configuration of your best-performing agent to improve others.",
+        "Schedule monthly cross-agent success rate reviews to maintain performance standards.",
+    ]
+    while len(recommendations5) < 3:
+        recommendations5.append(default_recs5[len(recommendations5) % 3])
+
+    return {
+        "monthly_agent_rates": monthly_agent_rates5,
+        "agent_names": agent_names5,
+        "agent_trends": agent_trends5,
+        "best_agent": best_agent5,
+        "best_agent_avg_rate": best_agent_avg_rate5,
+        "most_improved_agent": most_improved_agent5,
+        "overall_avg_success_rate": overall_avg_success_rate5,
+        "total_runs": total_runs5,
+        "success_rate_narrative": success_rate_narrative5,
+        "recommendations": recommendations5,
+        "generated_at": now.isoformat() + "Z",
+    }
