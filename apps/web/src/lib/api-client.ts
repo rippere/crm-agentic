@@ -7921,5 +7921,127 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-trend`, {}, token)
   },
+
+  async getDealCreationTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const createdArr = [4, 6, 5, 8, 7, 9];
+      const wonArr =     [2, 3, 2, 5, 4, 6];
+      const lostArr =    [1, 2, 2, 2, 2, 2];
+      const months = createdArr.map((c, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toISOString().slice(0, 7);
+        const closed = wonArr[i] + lostArr[i];
+        const win_rate = closed > 0 ? Math.round(wonArr[i] / closed * 1000) / 10 : null;
+        return { month_label: label, deals_created: c, deals_won: wonArr[i], deals_lost: lostArr[i], win_rate };
+      });
+      const totalCreated = createdArr.reduce((a, b) => a + b, 0);
+      const totalWon = wonArr.reduce((a, b) => a + b, 0);
+      const totalLost = lostArr.reduce((a, b) => a + b, 0);
+      const totalClosed = totalWon + totalLost;
+      const overall = Math.round(totalWon / totalClosed * 1000) / 10;
+      const best = months.reduce((a, m) => (m.win_rate ?? 0) > (a.win_rate ?? 0) ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_deals: months,
+        total_created: totalCreated,
+        total_won: totalWon,
+        total_lost: totalLost,
+        overall_win_rate: overall,
+        trend_direction: 'improving',
+        rate_delta: 16.7,
+        best_month: best.month_label,
+        best_win_rate: best.win_rate,
+        deal_narrative: 'Deal creation has grown from 4 to 9 per month while win rates have climbed from 50% to 75%. The improving close ratio suggests better lead qualification and more targeted outreach in recent months.',
+        recommendations: [
+          'Review lost deals each month to identify the top objection patterns driving losses.',
+          'Set a monthly deal creation target to maintain consistent pipeline coverage.',
+          'Focus on deals in proposal and negotiation stages to improve near-term win rate.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/creation-trend`, {}, token)
+  },
+
+  async getClarityScoreTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const scoresArr = [58, 62, 65, 70, 74, 78];
+      const countsArr = [6, 8, 7, 9, 11, 10];
+      const months = scoresArr.map((s, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+        const label = d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+        return {
+          month_label: label,
+          avg_score: s,
+          message_count: countsArr[i],
+          high_count: Math.round(countsArr[i] * (s >= 70 ? 0.6 : 0.3)),
+          low_count: Math.round(countsArr[i] * (s < 50 ? 0.4 : 0.1)),
+        };
+      });
+      const totalMessages = countsArr.reduce((a, b) => a + b, 0);
+      const overallAvg = Math.round(scoresArr.reduce((a, b) => a + b, 0) / scoresArr.length * 10) / 10;
+      const best = months.reduce((a, m) => (m.avg_score ?? 0) > (a.avg_score ?? 0) ? m : a, months[0]);
+      return Promise.resolve({
+        monthly_clarity: months,
+        total_messages: totalMessages,
+        overall_avg_score: overallAvg,
+        trend_direction: 'improving',
+        score_delta: 20.0,
+        best_month: best.month_label,
+        best_avg_score: best.avg_score,
+        clarity_narrative: 'Message clarity scores have climbed steadily from 58 to 78 over the last six months, reflecting improved communication discipline across the team. High-clarity messages now represent the majority of scored interactions, suggesting the team is crafting cleaner, more actionable outreach.',
+        recommendations: [
+          'Focus on shorter, action-oriented messages to sustain the clarity improvement trend.',
+          'Share high-clarity messages as templates so the team can adopt effective communication patterns.',
+          'Review messages scoring below 40 to identify unclear communication that may be hurting deal progress.',
+        ],
+        generated_at: new Date().toISOString(),
+      });
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/messages/clarity-trend`, {}, token)
+  },
+
+  async getAgentUtilizationTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const agentNames = ['Lead Scorer', 'Email Composer', 'Pipeline Optimizer', 'Sentiment Analyzer', 'Call Summarizer']
+      const runMatrix = [
+        [2, 1, 0, 1, 0],
+        [3, 2, 1, 0, 1],
+        [4, 2, 1, 1, 0],
+        [3, 3, 2, 1, 1],
+        [5, 3, 2, 2, 1],
+        [6, 4, 3, 2, 2],
+      ]
+      const months = runMatrix.map((row, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i))
+        const label = d.toISOString().slice(0, 7)
+        const total_runs = row.reduce((a, b) => a + b, 0)
+        const entry: Record<string, string | number> = { month_label: label, total_runs }
+        agentNames.forEach((ag, j) => { entry[ag] = row[j] })
+        return entry
+      })
+      const totalRuns = months.reduce((a, m) => a + (m.total_runs as number), 0)
+      const agentTotals = agentNames.map((ag, j) => ({ ag, total: runMatrix.reduce((a, r) => a + r[j], 0) }))
+      agentTotals.sort((a, b) => b.total - a.total)
+      return Promise.resolve({
+        monthly_utilization: months,
+        agent_names: agentNames,
+        total_runs: totalRuns,
+        top_agent: agentTotals[0].ag,
+        top_agent_runs: agentTotals[0].total,
+        trend_direction: 'increasing',
+        run_delta: 3.2,
+        best_month: months[months.length - 1].month_label,
+        best_month_runs: months[months.length - 1].total_runs,
+        utilization_narrative: 'Agent utilization has grown steadily over the past 6 months, with Lead Scorer leading adoption at 23 runs. The increasing trend signals stronger automation habits across the team.',
+        recommendations: [
+          'Schedule Lead Scorer to run automatically every Monday morning for a fresh pipeline view.',
+          'Add Email Composer to your outreach workflow to reduce manual drafting time.',
+          'Use Pipeline Optimizer before each quarterly business review for targeted deal focus.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/utilization-trend`, {}, token)
+  },
 }
 
