@@ -977,6 +977,11 @@ export default function ReportsPage() {
   const [agentLeaderboard, setAgentLeaderboard] = useState<AgentLeaderboardData | null>(null);
   const [agentLeaderboardLoading, setAgentLeaderboardLoading] = useState(false);
   const [agentLeaderboardOpen, setAgentLeaderboardOpen] = useState(true);
+  type AgentHourlyBucket = { hour: number; run_count: number; pct_of_total: number };
+  type AgentHourlyDistributionData = { hours: AgentHourlyBucket[]; total_runs: number; peak_hour: number | null; peak_count: number; quietest_hour: number | null; business_hours_pct: number; hourly_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentHourly, setAgentHourly] = useState<AgentHourlyDistributionData | null>(null);
+  const [agentHourlyLoading, setAgentHourlyLoading] = useState(false);
+  const [agentHourlyOpen, setAgentHourlyOpen] = useState(true);
 
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
@@ -1210,6 +1215,8 @@ export default function ReportsPage() {
       apiClient.getAgentSeverityBreakdown("demo-workspace-1", "demo-token").then(setAgentSeverity).catch(() => {}).finally(() => setAgentSeverityLoading(false));
       setAgentLeaderboardLoading(true);
       apiClient.getAgentLeaderboard("demo-workspace-1", "demo-token").then(setAgentLeaderboard).catch(() => {}).finally(() => setAgentLeaderboardLoading(false));
+      setAgentHourlyLoading(true);
+      apiClient.getAgentHourlyDistribution("demo-workspace-1", "demo-token").then(setAgentHourly).catch(() => {}).finally(() => setAgentHourlyLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1441,6 +1448,8 @@ export default function ReportsPage() {
       apiClient.getAgentSeverityBreakdown(workspaceId, session.access_token).then(setAgentSeverity).catch(() => {}).finally(() => setAgentSeverityLoading(false));
       setAgentLeaderboardLoading(true);
       apiClient.getAgentLeaderboard(workspaceId, session.access_token).then(setAgentLeaderboard).catch(() => {}).finally(() => setAgentLeaderboardLoading(false));
+      setAgentHourlyLoading(true);
+      apiClient.getAgentHourlyDistribution(workspaceId, session.access_token).then(setAgentHourly).catch(() => {}).finally(() => setAgentHourlyLoading(false));
     });
   }, []);
 
@@ -3214,6 +3223,27 @@ export default function ReportsPage() {
         if (!session) { setAgentSeverityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentSeverityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentHourly = () => {
+    setAgentHourlyLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentHourlyDistribution(wid, tok)
+        .then(setAgentHourly)
+        .catch(() => {})
+        .finally(() => setAgentHourlyLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentHourlyLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentHourlyLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13708,6 +13738,80 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent leaderboard.</div>
+          )
+        )}
+      </Card>
+
+      {/* Agent Hourly Distribution */}
+      <Card className="border-zinc-700/50">
+        <div className="p-4 flex items-center justify-between cursor-pointer" onClick={() => setAgentHourlyOpen(o => !o)}>
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-violet-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Agent Run Timing Distribution</h3>
+            {agentHourly && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-violet-900/40 text-violet-300">
+                peak {agentHourly.peak_hour !== null ? `${String(agentHourly.peak_hour).padStart(2,'0')}:00 UTC` : '—'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateAgentHourly(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentHourlyLoading}>
+              {agentHourlyLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {agentHourlyOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {agentHourlyOpen && (
+          agentHourlyLoading && !agentHourly ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading hourly distribution…</div>
+          ) : agentHourly ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Peak Hour (UTC)</p>
+                  <p className="text-sm font-bold text-violet-300">{agentHourly.peak_hour !== null ? `${String(agentHourly.peak_hour).padStart(2,'0')}:00` : '—'}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Business Hours</p>
+                  <p className={`text-xl font-bold ${agentHourly.business_hours_pct >= 70 ? 'text-emerald-300' : agentHourly.business_hours_pct >= 40 ? 'text-amber-300' : 'text-rose-300'}`}>{agentHourly.business_hours_pct.toFixed(1)}%</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Runs</p>
+                  <p className="text-xl font-bold text-zinc-200">{agentHourly.total_runs}</p>
+                </div>
+              </div>
+              {agentHourly.total_runs > 0 ? (
+                <div className="space-y-0.5">
+                  {agentHourly.hours.map((b: AgentHourlyBucket) => (
+                    <div key={b.hour} className="flex items-center gap-2">
+                      <span className="text-xs text-zinc-500 w-10 text-right">{String(b.hour).padStart(2,'0')}:00</span>
+                      <div className="flex-1 bg-zinc-800 rounded-full h-2">
+                        <div
+                          className={`h-2 rounded-full ${b.hour >= 9 && b.hour < 18 ? 'bg-violet-500' : 'bg-zinc-600'}`}
+                          style={{ width: agentHourly.peak_count > 0 ? `${Math.round(b.run_count / agentHourly.peak_count * 100)}%` : '0%' }}
+                        />
+                      </div>
+                      <span className="text-xs text-zinc-400 w-8 text-right">{b.run_count}</span>
+                    </div>
+                  ))}
+                  <p className="text-xs text-zinc-600 pt-1">Violet bars = business hours (09:00–17:59 UTC)</p>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center">No agent run data in the last 6 months.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{agentHourly.hourly_narrative}</p>
+              <ul className="space-y-1">
+                {agentHourly.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-violet-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentHourly.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the hourly distribution.</div>
           )
         )}
       </Card>

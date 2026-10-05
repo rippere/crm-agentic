@@ -10454,3 +10454,55 @@ async def test_agent_leaderboard_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/leaderboard")
     assert resp.status_code == 403
+
+
+class FakeHourlyRow:
+    def __init__(self, hour: int):
+        import datetime
+        self.created_at = datetime.datetime(2026, 9, 1, hour, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_agent_hourly_distribution_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    rows = [
+        FakeHourlyRow(10),
+        FakeHourlyRow(10),
+        FakeHourlyRow(10),
+        FakeHourlyRow(14),
+        FakeHourlyRow(14),
+        FakeHourlyRow(22),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"hourly_narrative": "Peak at 10:00 UTC.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/hourly-distribution")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["hours"]) == 24
+    assert data["total_runs"] == 6
+    assert data["peak_hour"] == 10
+    assert data["peak_count"] == 3
+    assert data["business_hours_pct"] == round(5 / 6 * 100, 1)
+    assert data["hourly_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_agent_hourly_distribution_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ddddeee-ffff-0000-1111-222233334444".replace("-", "").ljust(32, "0"))
+    wrong_id = uuid.UUID("ddddeee0-ffff-0000-1111-222233334444")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/hourly-distribution")
+    assert resp.status_code == 403

@@ -23129,3 +23129,122 @@ async def get_ai_agent_leaderboard(
         "recommendations": recommendations7,
         "generated_at": now7.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/hourly-distribution")
+@limiter.limit("5/minute")
+async def get_ai_agent_hourly_distribution(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    import datetime as _dt8
+
+    now8 = _dt8.datetime.utcnow()
+    cutoff8 = now8 - _dt8.timedelta(days=183)
+
+    result8 = await db.execute(
+        select(ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.agent_name.isnot(None),
+            ActivityEvent.created_at >= cutoff8,
+        )
+    )
+    rows8 = result8.all()
+
+    if not rows8:
+        return {
+            "hours": [{"hour": h, "run_count": 0, "pct_of_total": 0.0} for h in range(24)],
+            "total_runs": 0,
+            "peak_hour": None,
+            "peak_count": 0,
+            "quietest_hour": None,
+            "business_hours_pct": 0.0,
+            "hourly_narrative": "No agent runs recorded in the last 6 months.",
+            "recommendations": [
+                "Schedule your first agent runs during business hours for immediate observability.",
+                "Configure agents to trigger automatically on key CRM events.",
+                "Review agent setup to ensure they are properly connected to your workspace.",
+            ],
+            "generated_at": now8.isoformat() + "Z",
+        }
+
+    hour_counts8 = [0] * 24
+    for row8 in rows8:
+        hour_counts8[row8.created_at.hour] += 1
+
+    total_runs8 = len(rows8)
+    peak_hour8 = hour_counts8.index(max(hour_counts8))
+    peak_count8 = hour_counts8[peak_hour8]
+    quietest_hour8 = hour_counts8.index(min(hour_counts8))
+    business_runs8 = sum(hour_counts8[9:18])
+    business_hours_pct8 = round(business_runs8 / total_runs8 * 100, 1) if total_runs8 > 0 else 0.0
+
+    hours8 = [
+        {
+            "hour": h,
+            "run_count": hour_counts8[h],
+            "pct_of_total": round(hour_counts8[h] / total_runs8 * 100, 1) if total_runs8 > 0 else 0.0,
+        }
+        for h in range(24)
+    ]
+
+    hourly_narrative8 = ""
+    recommendations8: list = []
+    try:
+        client8 = _mk_anthropic()
+        prompt8 = (
+            f"You are analyzing AI agent run timing for a CRM workspace.\n"
+            f"Total runs: {total_runs8} over the last 6 months.\n"
+            f"Peak hour (UTC): {peak_hour8}:00 with {peak_count8} runs.\n"
+            f"Business hours (09:00-17:59 UTC) percentage: {business_hours_pct8}%.\n"
+            f"Hourly distribution (hour: count):\n"
+            + ", ".join(f"{h}:{hour_counts8[h]}" for h in range(24))
+            + "\n\nReturn JSON with exactly:\n"
+            '{"hourly_narrative": "2-sentence insight about timing patterns", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp8 = client8.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt8}],
+        )
+        raw8 = resp8.content[0].text.strip()
+        if "```" in raw8:
+            raw8 = raw8.split("```")[1]
+            if raw8.startswith("json"):
+                raw8 = raw8[4:]
+        parsed8 = loads_llm_json(raw8)
+        hourly_narrative8 = str(parsed8.get("hourly_narrative", "")).strip()
+        raw_recs8 = parsed8.get("recommendations", [])
+        recommendations8 = [str(r) for r in (raw_recs8 if isinstance(raw_recs8, list) else [])[:3]]
+    except Exception:
+        hourly_narrative8 = (
+            f"Your agents completed {total_runs8} runs with peak activity at {peak_hour8}:00 UTC. "
+            f"{business_hours_pct8}% of runs occurred during business hours (09:00–17:59 UTC)."
+        )
+
+    default_recs8 = [
+        "Schedule compute-intensive agents during off-peak hours to reduce contention.",
+        "Align agent run peaks with your team's active hours for faster review of results.",
+        "Monitor off-hours agent activity to catch any unexpected automated triggers.",
+    ]
+    while len(recommendations8) < 3:
+        recommendations8.append(default_recs8[len(recommendations8) % 3])
+
+    return {
+        "hours": hours8,
+        "total_runs": total_runs8,
+        "peak_hour": peak_hour8,
+        "peak_count": peak_count8,
+        "quietest_hour": quietest_hour8,
+        "business_hours_pct": business_hours_pct8,
+        "hourly_narrative": hourly_narrative8,
+        "recommendations": recommendations8,
+        "generated_at": now8.isoformat() + "Z",
+    }
