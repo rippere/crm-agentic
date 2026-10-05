@@ -972,6 +972,11 @@ export default function ReportsPage() {
   const [agentSeverity, setAgentSeverity] = useState<AgentSeverityBreakdownData | null>(null);
   const [agentSeverityLoading, setAgentSeverityLoading] = useState(false);
   const [agentSeverityOpen, setAgentSeverityOpen] = useState(true);
+  type AgentLeaderboardAgent = { rank: number; agent_name: string; total_runs: number; success_count: number; failure_count: number; success_rate: number; score: number };
+  type AgentLeaderboardData = { agents: AgentLeaderboardAgent[]; top_agent: string | null; total_agents: number; total_runs: number; overall_success_rate: number; leaderboard_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentLeaderboard, setAgentLeaderboard] = useState<AgentLeaderboardData | null>(null);
+  const [agentLeaderboardLoading, setAgentLeaderboardLoading] = useState(false);
+  const [agentLeaderboardOpen, setAgentLeaderboardOpen] = useState(true);
 
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
@@ -1203,6 +1208,8 @@ export default function ReportsPage() {
       apiClient.getAgentSuccessRateByAgent("demo-workspace-1", "demo-token").then(setAgentSuccessRate).catch(() => {}).finally(() => setAgentSuccessRateLoading(false));
       setAgentSeverityLoading(true);
       apiClient.getAgentSeverityBreakdown("demo-workspace-1", "demo-token").then(setAgentSeverity).catch(() => {}).finally(() => setAgentSeverityLoading(false));
+      setAgentLeaderboardLoading(true);
+      apiClient.getAgentLeaderboard("demo-workspace-1", "demo-token").then(setAgentLeaderboard).catch(() => {}).finally(() => setAgentLeaderboardLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1432,6 +1439,8 @@ export default function ReportsPage() {
       apiClient.getAgentSuccessRateByAgent(workspaceId, session.access_token).then(setAgentSuccessRate).catch(() => {}).finally(() => setAgentSuccessRateLoading(false));
       setAgentSeverityLoading(true);
       apiClient.getAgentSeverityBreakdown(workspaceId, session.access_token).then(setAgentSeverity).catch(() => {}).finally(() => setAgentSeverityLoading(false));
+      setAgentLeaderboardLoading(true);
+      apiClient.getAgentLeaderboard(workspaceId, session.access_token).then(setAgentLeaderboard).catch(() => {}).finally(() => setAgentLeaderboardLoading(false));
     });
   }, []);
 
@@ -3205,6 +3214,27 @@ export default function ReportsPage() {
         if (!session) { setAgentSeverityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentSeverityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentLeaderboard = () => {
+    setAgentLeaderboardLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentLeaderboard(wid, tok)
+        .then(setAgentLeaderboard)
+        .catch(() => {})
+        .finally(() => setAgentLeaderboardLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentLeaderboardLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentLeaderboardLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13602,6 +13632,82 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent severity breakdown.</div>
+          )
+        )}
+      </Card>
+
+      {/* Agent Performance Leaderboard */}
+      <Card className="border-zinc-700/50">
+        <div className="p-4 flex items-center justify-between cursor-pointer" onClick={() => setAgentLeaderboardOpen(o => !o)}>
+          <div className="flex items-center gap-2">
+            <Trophy className="h-4 w-4 text-amber-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">Agent Performance Leaderboard</h3>
+            {agentLeaderboard && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                agentLeaderboard.overall_success_rate >= 80 ? 'bg-emerald-900/40 text-emerald-300' :
+                agentLeaderboard.overall_success_rate >= 60 ? 'bg-amber-900/40 text-amber-300' :
+                'bg-rose-900/40 text-rose-300'
+              }`}>{agentLeaderboard.overall_success_rate.toFixed(1)}% overall</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateAgentLeaderboard(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentLeaderboardLoading}>
+              {agentLeaderboardLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {agentLeaderboardOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {agentLeaderboardOpen && (
+          agentLeaderboardLoading && !agentLeaderboard ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading leaderboard…</div>
+          ) : agentLeaderboard ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Top Agent</p>
+                  <p className="text-sm font-bold text-amber-300 truncate">{agentLeaderboard.top_agent ?? '—'}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Agents</p>
+                  <p className="text-xl font-bold text-zinc-200">{agentLeaderboard.total_agents}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Runs</p>
+                  <p className="text-xl font-bold text-zinc-200">{agentLeaderboard.total_runs}</p>
+                </div>
+              </div>
+              {agentLeaderboard.agents.length > 0 ? (
+                <div className="space-y-2">
+                  {agentLeaderboard.agents.map((agent: AgentLeaderboardAgent) => (
+                    <div key={agent.agent_name} className="flex items-center gap-3 bg-zinc-800/30 rounded-lg px-3 py-2">
+                      <span className={`text-xs font-bold w-5 text-center ${agent.rank === 1 ? 'text-amber-400' : agent.rank === 2 ? 'text-zinc-300' : agent.rank === 3 ? 'text-amber-700' : 'text-zinc-500'}`}>#{agent.rank}</span>
+                      <span className="flex-1 text-sm text-zinc-200 truncate">{agent.agent_name}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="w-20 bg-zinc-700 rounded-full h-1.5">
+                          <div className={`h-1.5 rounded-full ${agent.success_rate >= 80 ? 'bg-emerald-500' : agent.success_rate >= 60 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${agent.success_rate}%` }} />
+                        </div>
+                        <span className={`text-xs font-medium w-12 text-right ${agent.success_rate >= 80 ? 'text-emerald-400' : agent.success_rate >= 60 ? 'text-amber-400' : 'text-rose-400'}`}>{agent.success_rate.toFixed(1)}%</span>
+                        <span className="text-xs text-zinc-500 w-14 text-right">{agent.total_runs} runs</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center">No agent data in the last 6 months.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{agentLeaderboard.leaderboard_narrative}</p>
+              <ul className="space-y-1">
+                {agentLeaderboard.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentLeaderboard.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent leaderboard.</div>
           )
         )}
       </Card>

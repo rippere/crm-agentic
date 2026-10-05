@@ -10401,3 +10401,56 @@ async def test_agent_severity_breakdown_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/severity-breakdown")
     assert resp.status_code == 403
+
+
+class FakeLeaderboardRow:
+    def __init__(self, agent_name: str, severity: str):
+        self.agent_name = agent_name
+        self.severity = severity
+
+
+@pytest.mark.asyncio
+async def test_agent_leaderboard_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    rows = [
+        FakeLeaderboardRow("Lead Scorer", "info"),
+        FakeLeaderboardRow("Lead Scorer", "info"),
+        FakeLeaderboardRow("Lead Scorer", "info"),
+        FakeLeaderboardRow("Email Composer", "error"),
+        FakeLeaderboardRow("Email Composer", "info"),
+        FakeLeaderboardRow("Pipeline Optimizer", "warning"),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.all = MagicMock(return_value=rows)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"leaderboard_narrative": "Lead Scorer dominates.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/leaderboard")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_runs"] == 6
+    assert data["total_agents"] == 3
+    assert data["overall_success_rate"] == round(5 / 6 * 100, 1)
+    assert data["top_agent"] == "Lead Scorer"
+    assert data["agents"][0]["rank"] == 1
+    assert data["agents"][0]["agent_name"] == "Lead Scorer"
+    assert data["agents"][0]["success_rate"] == 100.0
+    assert len(data["recommendations"]) == 3
+    assert data["leaderboard_narrative"] != ""
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_agent_leaderboard_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ccccdddd-eeee-ffff-0000-111122223333")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/leaderboard")
+    assert resp.status_code == 403
