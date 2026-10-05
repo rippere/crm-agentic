@@ -11,6 +11,7 @@ import LogActivityModal from "@/components/ui/LogActivityModal";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { cn, formatCurrency, leadScoreConfig } from "@/lib/utils";
 import { useContacts } from "@/hooks/useContacts";
+import { matchesContactSearch } from "@/lib/contacts-search";
 import { useJobPoller } from "@/hooks/useJobPoller";
 import { apiClient } from "@/lib/api-client";
 import { createBrowserClient } from "@/lib/supabase";
@@ -582,7 +583,9 @@ function ContactDrawer({ contact, onClose, workspaceId, token, mailProviders }: 
           <Avatar initials={contact.avatar} size="lg" />
           <div>
             <h2 className="text-base font-bold text-zinc-100">{contact.name}</h2>
-            <p className="text-sm text-zinc-400">{contact.role} at {contact.company}</p>
+            <p className="text-sm text-zinc-400">
+              {[contact.role, contact.company].filter(Boolean).join(" at ")}
+            </p>
             <p className="text-xs text-zinc-500 font-mono mt-1">{contact.email}</p>
           </div>
         </div>
@@ -1081,7 +1084,13 @@ export default function ContactsPage() {
   const [contactHealthLoading, setContactHealthLoading] = useState(false);
   const [contactHealthOpen, setContactHealthOpen] = useState(true);
 
-  const { contacts, createContact } = useContacts();
+  const {
+    contacts,
+    loading: contactsLoading,
+    error: contactsError,
+    refetch: refetchContacts,
+    createContact,
+  } = useContacts();
 
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') {
@@ -1319,11 +1328,7 @@ export default function ContactsPage() {
 
   const filtered = useMemo(() => {
     return contacts.filter((c) => {
-      const matchSearch =
-        !search ||
-        c.name.toLowerCase().includes(search.toLowerCase()) ||
-        c.company.toLowerCase().includes(search.toLowerCase()) ||
-        c.email.toLowerCase().includes(search.toLowerCase());
+      const matchSearch = matchesContactSearch(c, search);
       const matchStatus = filterStatus === "all" || c.status === filterStatus;
       const matchScore = filterScore === "all" || c.mlScore.label === filterScore;
       return matchSearch && matchStatus && matchScore;
@@ -1922,6 +1927,25 @@ export default function ContactsPage() {
                     </td>
                   </tr>
                 )
+              ) : contactsError ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-12 text-center text-sm" role="alert">
+                    <p className="text-rose-400">Couldn&apos;t load contacts: {contactsError}</p>
+                    <button
+                      onClick={() => refetchContacts()}
+                      className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors cursor-pointer"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                      Retry
+                    </button>
+                  </td>
+                </tr>
+              ) : contactsLoading && contacts.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-10 text-center">
+                    <Loader2 className="h-5 w-5 text-indigo-400 mx-auto animate-spin" aria-label="Loading contacts" />
+                  </td>
+                </tr>
               ) : filtered.length > 0 ? (
                 filtered.map((contact) => (
                   <ContactRow

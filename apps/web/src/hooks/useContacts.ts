@@ -7,19 +7,27 @@ import type { Contact } from "@/lib/types";
 import type { ContactRow } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/demo-mode";
 import { demoContacts } from "@/lib/demo-data";
+import { matchesContactSearch } from "@/lib/contacts-search";
 
-// Map DB snake_case row → frontend camelCase Contact type
-function rowToContact(row: ContactRow): Contact {
+// Matches the Contact model's server-side default (apps/api/app/models/contact.py).
+const DEFAULT_ML_SCORE: Contact["mlScore"] = { value: 50, label: "warm", trend: "stable", signals: [] };
+
+// Map DB snake_case row → frontend camelCase Contact type.
+// The API returns NULL name/email/company/role; normalize them to "" here so
+// display and search code never call string methods on null.
+export function rowToContact(row: ContactRow): Contact {
+  const name = row.name ?? "";
+  const initials = name.split(" ").filter(Boolean).map((n) => n[0]).join("").slice(0, 2).toUpperCase();
   return {
     id: row.id,
-    name: row.name,
-    email: row.email,
-    company: row.company,
-    role: row.role,
-    avatar: row.avatar || row.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase(),
+    name,
+    email: row.email ?? "",
+    company: row.company ?? "",
+    role: row.role ?? "",
+    avatar: row.avatar || initials || "?",
     status: row.status,
-    mlScore: row.ml_score,
-    semanticTags: row.semantic_tags,
+    mlScore: { ...DEFAULT_ML_SCORE, ...(row.ml_score ?? {}) },
+    semanticTags: row.semantic_tags ?? [],
     lastActivity: row.last_activity,
     deals: row.deal_count,
     revenue: row.revenue,
@@ -33,13 +41,8 @@ function filterDemoContacts(contacts: Contact[], options: UseContactsOptions): C
     filtered = filtered.filter((c) => c.status === options.status);
   }
   if (options.search) {
-    const q = options.search.toLowerCase();
-    filtered = filtered.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.email.toLowerCase().includes(q) ||
-        c.company.toLowerCase().includes(q)
-    );
+    const q = options.search;
+    filtered = filtered.filter((c) => matchesContactSearch(c, q));
   }
   if (options.score && options.score !== "all") {
     filtered = filtered.filter((c) => c.mlScore.label === options.score);

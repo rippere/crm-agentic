@@ -24,26 +24,30 @@ export type UserRow = {
   created_at: string;
 };
 
+// name/email/company/role/avatar are nullable in the DB and in the API's
+// ContactResponse (CSV import, manual create and inbound auto-create all store
+// NULLs). ml_score/semantic_tags are NOT NULL in the model but are typed
+// nullable so the mapper keeps defaulting them. Normalize via rowToContact.
 export type ContactRow = {
   id: string;
   workspace_id: string;
-  name: string;
-  email: string;
-  company: string;
-  role: string;
-  avatar: string;
+  name: string | null;
+  email: string | null;
+  company: string | null;
+  role: string | null;
+  avatar: string | null;
   status: "lead" | "prospect" | "customer" | "churned";
   ml_score: {
     value: number;
     label: "hot" | "warm" | "cold";
     trend: "up" | "down" | "stable";
     signals: string[];
-  };
+  } | null;
   semantic_tags: Array<{
     label: string;
     confidence: number;
     color: "indigo" | "emerald" | "amber" | "rose";
-  }>;
+  }> | null;
   last_activity: string;
   revenue: number;
   deal_count: number;
