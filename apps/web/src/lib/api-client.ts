@@ -7999,5 +7999,49 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/messages/clarity-trend`, {}, token)
   },
+
+  async getAgentUtilizationTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const agentNames = ['Lead Scorer', 'Email Composer', 'Pipeline Optimizer', 'Sentiment Analyzer', 'Call Summarizer']
+      const runMatrix = [
+        [2, 1, 0, 1, 0],
+        [3, 2, 1, 0, 1],
+        [4, 2, 1, 1, 0],
+        [3, 3, 2, 1, 1],
+        [5, 3, 2, 2, 1],
+        [6, 4, 3, 2, 2],
+      ]
+      const months = runMatrix.map((row, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i))
+        const label = d.toISOString().slice(0, 7)
+        const total_runs = row.reduce((a, b) => a + b, 0)
+        const entry: Record<string, string | number> = { month_label: label, total_runs }
+        agentNames.forEach((ag, j) => { entry[ag] = row[j] })
+        return entry
+      })
+      const totalRuns = months.reduce((a, m) => a + (m.total_runs as number), 0)
+      const agentTotals = agentNames.map((ag, j) => ({ ag, total: runMatrix.reduce((a, r) => a + r[j], 0) }))
+      agentTotals.sort((a, b) => b.total - a.total)
+      return Promise.resolve({
+        monthly_utilization: months,
+        agent_names: agentNames,
+        total_runs: totalRuns,
+        top_agent: agentTotals[0].ag,
+        top_agent_runs: agentTotals[0].total,
+        trend_direction: 'increasing',
+        run_delta: 3.2,
+        best_month: months[months.length - 1].month_label,
+        best_month_runs: months[months.length - 1].total_runs,
+        utilization_narrative: 'Agent utilization has grown steadily over the past 6 months, with Lead Scorer leading adoption at 23 runs. The increasing trend signals stronger automation habits across the team.',
+        recommendations: [
+          'Schedule Lead Scorer to run automatically every Monday morning for a fresh pipeline view.',
+          'Add Email Composer to your outreach workflow to reduce manual drafting time.',
+          'Use Pipeline Optimizer before each quarterly business review for targeted deal focus.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/utilization-trend`, {}, token)
+  },
 }
 

@@ -951,6 +951,12 @@ export default function ReportsPage() {
   const [clarityTrendLoading, setClarityTrendLoading] = useState(false);
   const [clarityTrendOpen, setClarityTrendOpen] = useState(true);
 
+  type AgentUtilMonth = Record<string, string | number> & { month_label: string; total_runs: number };
+  type AgentUtilTrendData = { monthly_utilization: AgentUtilMonth[]; agent_names: string[]; total_runs: number; top_agent: string | null; top_agent_runs: number; trend_direction: string; run_delta: number; best_month: string; best_month_runs: number; utilization_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentUtilTrend, setAgentUtilTrend] = useState<AgentUtilTrendData | null>(null);
+  const [agentUtilTrendLoading, setAgentUtilTrendLoading] = useState(false);
+  const [agentUtilTrendOpen, setAgentUtilTrendOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1173,6 +1179,8 @@ export default function ReportsPage() {
       apiClient.getDealCreationTrend("demo-workspace-1", "demo-token").then(setDealCreationTrend).catch(() => {}).finally(() => setDealCreationTrendLoading(false));
       setClarityTrendLoading(true);
       apiClient.getClarityScoreTrend("demo-workspace-1", "demo-token").then(setClarityTrend).catch(() => {}).finally(() => setClarityTrendLoading(false));
+      setAgentUtilTrendLoading(true);
+      apiClient.getAgentUtilizationTrend("demo-workspace-1", "demo-token").then(setAgentUtilTrend).catch(() => {}).finally(() => setAgentUtilTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1394,6 +1402,8 @@ export default function ReportsPage() {
       apiClient.getDealCreationTrend(workspaceId, session.access_token).then(setDealCreationTrend).catch(() => {}).finally(() => setDealCreationTrendLoading(false));
       setClarityTrendLoading(true);
       apiClient.getClarityScoreTrend(workspaceId, session.access_token).then(setClarityTrend).catch(() => {}).finally(() => setClarityTrendLoading(false));
+      setAgentUtilTrendLoading(true);
+      apiClient.getAgentUtilizationTrend(workspaceId, session.access_token).then(setAgentUtilTrend).catch(() => {}).finally(() => setAgentUtilTrendLoading(false));
     });
   }, []);
 
@@ -3083,6 +3093,27 @@ export default function ReportsPage() {
         if (!session) { setClarityTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setClarityTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentUtilTrend = () => {
+    setAgentUtilTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentUtilizationTrend(wid, tok)
+        .then(setAgentUtilTrend)
+        .catch(() => {})
+        .finally(() => setAgentUtilTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentUtilTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentUtilTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13171,6 +13202,85 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the message clarity trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20s — Agent Utilization Trend */}
+      <Card className="border-zinc-800 space-y-3 p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Bot className="h-4 w-4 text-violet-400" />
+            <span className="text-sm font-semibold text-zinc-100">Agent Utilization Trend</span>
+            {agentUtilTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                agentUtilTrend.trend_direction === 'increasing' ? 'bg-emerald-900/40 text-emerald-300' :
+                agentUtilTrend.trend_direction === 'decreasing' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'
+              }`}>
+                {agentUtilTrend.trend_direction} {agentUtilTrend.run_delta >= 0 ? '+' : ''}{agentUtilTrend.run_delta.toFixed(1)} runs/mo
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={regenerateAgentUtilTrend} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentUtilTrendLoading}>
+              {agentUtilTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            <button onClick={() => setAgentUtilTrendOpen(o => !o)} className="p-1 rounded hover:bg-zinc-800 text-zinc-400">
+              {agentUtilTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+            </button>
+          </div>
+        </div>
+        {agentUtilTrendOpen && (
+          agentUtilTrendLoading && !agentUtilTrend ? (
+            <div className="h-24 bg-zinc-800/40 animate-pulse rounded" />
+          ) : agentUtilTrend ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-0.5">Total Runs</p>
+                  <p className="text-xl font-bold text-violet-300">{agentUtilTrend.total_runs}</p>
+                  <p className="text-xs text-zinc-500">last 6 months</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-0.5">Top Agent</p>
+                  <p className="text-sm font-bold text-zinc-100 truncate">{agentUtilTrend.top_agent ?? '—'}</p>
+                  <p className="text-xs text-zinc-500">{agentUtilTrend.top_agent_runs} runs</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-0.5">Best Month</p>
+                  <p className="text-xl font-bold text-zinc-100">{agentUtilTrend.best_month_runs}</p>
+                  <p className="text-xs text-zinc-500">{agentUtilTrend.best_month}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <BarChart data={agentUtilTrend.monthly_utilization} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717A' }} tickFormatter={(v: string) => v.slice(5)} />
+                  <YAxis tick={{ fontSize: 10, fill: '#71717A' }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181B', border: '1px solid #3F3F46', borderRadius: 8 }}
+                    labelStyle={{ color: '#A1A1AA', fontSize: 11 }}
+                  />
+                  {agentUtilTrend.agent_names.map((ag: string, i: number) => {
+                    const colors = ['#A78BFA', '#818CF8', '#6EE7B7', '#FCD34D', '#F9A8D4', '#7DD3FC']
+                    return <Bar key={ag} dataKey={ag} stackId="a" fill={colors[i % colors.length]} radius={i === agentUtilTrend.agent_names.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]} />
+                  })}
+                </BarChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{agentUtilTrend.utilization_narrative}</p>
+              <ul className="space-y-1">
+                {agentUtilTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-violet-400 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentUtilTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the agent utilization trend.</div>
           )
         )}
       </Card>
