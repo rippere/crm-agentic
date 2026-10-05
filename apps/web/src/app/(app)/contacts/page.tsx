@@ -12,7 +12,7 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { cn, formatCurrency, leadScoreConfig } from "@/lib/utils";
 import { useContacts } from "@/hooks/useContacts";
 import { matchesContactSearch } from "@/lib/contacts-search";
-import { patchById, rejectedIds } from "@/lib/contacts-mutations";
+import { patchById, summarizeEnrichResults, updateEachWithRollback, waitForJobs } from "@/lib/contacts-mutations";
 import { isDemoMode } from "@/lib/demo-mode";
 import { useJobPoller } from "@/hooks/useJobPoller";
 import { apiClient } from "@/lib/api-client";
@@ -1064,10 +1064,17 @@ export default function ContactsPage() {
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeResult, setMergeResult] = useState<{ tasks: number; messages: number; deals: number } | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [mergeError, setMergeError] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  // Lets background work (waiting on enrich jobs) stop once the page is gone.
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => { unmountedRef.current = true; };
+  }, []);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [suggestedMerges, setSuggestedMerges] = useState<SuggestedMergePair[]>([]);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
@@ -1214,6 +1221,7 @@ export default function ContactsPage() {
   const handleMergeSuggestion = useCallback(async (pair: SuggestedMergePair) => {
     if (!workspaceId || !token || mergeSugBusy) return;
     setMergeSugBusy(true);
+    setMergeError(null);
     try {
       await apiClient.mergeContacts(workspaceId, { primary_id: pair.contact_a.id, duplicate_id: pair.contact_b.id }, token);
       setSuggestedMerges((prev) => prev.filter((p) => p.contact_a.id !== pair.contact_a.id || p.contact_b.id !== pair.contact_b.id));
@@ -1221,7 +1229,9 @@ export default function ContactsPage() {
       setMergeResult({ tasks: 0, messages: 0, deals: 0 });
       removeContacts([pair.contact_b.id]);
       refreshContacts();
-    } catch { /* silent */ }
+    } catch {
+      setMergeError("Couldn't merge these contacts. Nothing was changed.");
+    }
     finally { setMergeSugBusy(false); }
   }, [workspaceId, token, mergeSugBusy, removeContacts, refreshContacts]);
 
@@ -1248,16 +1258,14 @@ export default function ContactsPage() {
     for (const r of semanticResults) if (ids.includes(r.id)) prior.set(r.id, r.status as ContactStatus);
     for (const c of contacts) if (ids.includes(c.id)) prior.set(c.id, c.status);
 
-    applyStatus(ids, status);
     setBulkBusy(true);
-    const results = await Promise.allSettled(
-      ids.map((id) => apiClient.updateContactStatus(workspaceId, id, status, token))
-    );
-    const failed = rejectedIds(ids, results);
-    for (const id of failed) {
-      const was = prior.get(id);
-      if (was) applyStatus([id], was);
-    }
+    const failed = await updateEachWithRollback({
+      ids,
+      value: status,
+      prior,
+      apply: applyStatus,
+      request: (id) => apiClient.updateContactStatus(workspaceId, id, status, token),
+    });
     if (failed.length > 0) {
       showBulkError(`Couldn't update the status of ${failed.length} of ${ids.length} contact${ids.length !== 1 ? "s" : ""}. They were left unchanged.`);
     }
@@ -1268,14 +1276,33 @@ export default function ContactsPage() {
 
   const handleBulkEnrich = useCallback(async () => {
     if (!workspaceId || !token || bulkBusy) return;
+    const ids = [...selectedIds];
     setBulkBusy(true);
-    await Promise.allSettled(
-      [...selectedIds].map((id) => apiClient.enrichContact(workspaceId, id, token))
+    const results = await Promise.allSettled(
+      ids.map((id) => apiClient.enrichContact(workspaceId, id, token))
     );
     setSelectedIds(new Set());
     setBulkBusy(false);
-    refreshContacts();
-  }, [workspaceId, token, selectedIds, bulkBusy, refreshContacts]);
+
+    const { jobIds, failed, rateLimited } = summarizeEnrichResults(ids, results);
+    if (failed.length > 0) {
+      showBulkError(
+        `Couldn't start enrichment for ${failed.length} of ${ids.length} contact${ids.length !== 1 ? "s" : ""}.` +
+        (rateLimited > 0 ? " Enrichment is limited to 5 contacts a minute; try the rest again in a minute." : "")
+      );
+    }
+    // Enrich answers 202 and runs as a background job, so reload the list once
+    // the jobs finish rather than straight away (when nothing has changed yet).
+    if (jobIds.length > 0 && !isDemoMode) {
+      void waitForJobs(
+        jobIds,
+        async (jobId) => (await apiClient.getJob(workspaceId, jobId, token)).state,
+        { cancelled: () => unmountedRef.current },
+      ).then(() => {
+        if (!unmountedRef.current) refreshContacts();
+      });
+    }
+  }, [workspaceId, token, selectedIds, bulkBusy, showBulkError, refreshContacts]);
 
   const handleBulkDelete = useCallback(async () => {
     if (!workspaceId || !token || bulkBusy) return;
@@ -1299,6 +1326,7 @@ export default function ContactsPage() {
     if (!workspaceId || !token || bulkBusy || selectedIds.size !== 2) return;
     const [primaryId, duplicateId] = [...selectedIds];
     setBulkBusy(true);
+    setMergeError(null);
     try {
       const res = await apiClient.mergeContacts(workspaceId, { primary_id: primaryId, duplicate_id: duplicateId }, token);
       setMergeResult({ tasks: res.tasks_reassigned, messages: res.messages_reassigned, deals: res.deals_reassigned });
@@ -1307,7 +1335,9 @@ export default function ContactsPage() {
       removeContacts([duplicateId]);
       setSelected((prev) => (prev?.id === duplicateId ? null : prev));
       refreshContacts();
-    } catch { /* silent */ }
+    } catch {
+      setMergeError("Couldn't merge these contacts. Nothing was changed.");
+    }
     setBulkBusy(false);
   }, [workspaceId, token, selectedIds, bulkBusy, removeContacts, refreshContacts]);
 
@@ -1555,7 +1585,7 @@ export default function ContactsPage() {
                   {Math.round(pair.similarity_score * 100)}%
                 </span>
                 <button
-                  onClick={() => setMergeSuggestion(pair)}
+                  onClick={() => { setMergeError(null); setMergeSuggestion(pair); }}
                   className="shrink-0 flex items-center gap-1 rounded-lg border border-indigo-500/40 bg-indigo-600/10 px-2.5 py-1 text-xs font-medium text-indigo-400 hover:bg-indigo-600/20 transition cursor-pointer"
                 >
                   <GitMerge className="h-3 w-3" />
@@ -1893,6 +1923,24 @@ export default function ContactsPage() {
         </div>
       )}
 
+      {/* A background reload failed but the list on screen is still valid, so
+          say so without replacing the table. */}
+      {contactsError && contacts.length > 0 && (
+        <div role="status" className="flex items-start gap-3 rounded-xl border px-4 py-3 text-sm border-amber-500/20 bg-amber-500/5 text-amber-300">
+          <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0 text-amber-400" />
+          <p className="flex-1 min-w-0 font-medium">
+            Couldn&apos;t refresh contacts ({contactsError}). The list may be out of date.
+          </p>
+          <button
+            onClick={() => refetchContacts()}
+            className="inline-flex items-center gap-1.5 text-xs text-zinc-300 hover:text-zinc-100 cursor-pointer"
+          >
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       <Card data-tour="contacts-list" className="overflow-hidden p-0">
         <div className="overflow-x-auto">
@@ -1994,7 +2042,7 @@ export default function ContactsPage() {
                     </td>
                   </tr>
                 )
-              ) : contactsError ? (
+              ) : contactsError && contacts.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-4 py-12 text-center text-sm" role="alert">
                     <p className="text-rose-400">Couldn&apos;t load contacts: {contactsError}</p>
@@ -2064,7 +2112,7 @@ export default function ContactsPage() {
           onStatusChange={handleBulkStatus}
           onEnrich={handleBulkEnrich}
           onDelete={() => setDeleteConfirmOpen(true)}
-          onMerge={selectedIds.size === 2 ? () => setMergeOpen(true) : undefined}
+          onMerge={selectedIds.size === 2 ? () => { setMergeError(null); setMergeOpen(true); } : undefined}
           onClear={() => setSelectedIds(new Set())}
           busy={bulkBusy}
         />
@@ -2115,6 +2163,7 @@ export default function ContactsPage() {
               <p className="text-xs text-zinc-600">
                 Tip: the first contact you selected becomes the primary. Deselect and re-select to change order.
               </p>
+              {mergeError && <p role="alert" className="text-xs text-rose-400">{mergeError}</p>}
               <div className="flex gap-2 pt-1">
                 <button
                   onClick={handleMerge}
@@ -2168,6 +2217,7 @@ export default function ContactsPage() {
             <p className="text-xs text-zinc-600">
               Match reason: <span className="text-zinc-500">{mergeSuggestion.reason}</span> · {Math.round(mergeSuggestion.similarity_score * 100)}% similarity
             </p>
+            {mergeError && <p role="alert" className="text-xs text-rose-400">{mergeError}</p>}
             <div className="flex gap-2 pt-1">
               <button
                 onClick={() => handleMergeSuggestion(mergeSuggestion)}
