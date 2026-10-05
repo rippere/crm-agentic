@@ -13363,7 +13363,7 @@ export default function ReportsPage() {
                   <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717a' }} />
                   <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#71717a' }} />
                   <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: 10, fill: '#71717a' }} tickFormatter={(v: number) => `${v}%`} />
-                  <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }} formatter={(value: number | undefined, name: string) => [name === 'error_rate' ? `${value ?? 0}%` : (value ?? 0), name === 'error_rate' ? 'Error Rate' : name === 'success_count' ? 'Success' : 'Failure']} />
+                  <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }} formatter={(value: unknown, name: unknown) => [name === 'error_rate' ? `${Number(value ?? 0)}%` : Number(value ?? 0), name === 'error_rate' ? 'Error Rate' : name === 'success_count' ? 'Success' : 'Failure']} />
                   <Bar yAxisId="left" dataKey="success_count" stackId="a" fill="#6ee7b7" radius={[0,0,0,0]} />
                   <Bar yAxisId="left" dataKey="failure_count" stackId="a" fill="#fca5a5" radius={[3,3,0,0]} />
                   <Line yAxisId="right" type="monotone" dataKey="error_rate" stroke="#f87171" strokeWidth={2} dot={{ r: 3, fill: '#f87171' }} connectNulls />
