@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, MessageCircle, UserPlus, Building2, LayoutList, SplitSquareHorizontal, Loader2, UserCheck,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, CalendarDays, MessageCircle, UserPlus, Building2, LayoutList, SplitSquareHorizontal, Loader2, UserCheck,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -982,6 +982,11 @@ export default function ReportsPage() {
   const [agentHourly, setAgentHourly] = useState<AgentHourlyDistributionData | null>(null);
   const [agentHourlyLoading, setAgentHourlyLoading] = useState(false);
   const [agentHourlyOpen, setAgentHourlyOpen] = useState(true);
+  type AgentDowBucket = { day_name: string; day_index: number; run_count: number; pct_of_total: number };
+  type AgentDowDistributionData = { days: AgentDowBucket[]; total_runs: number; busiest_day: string | null; quietest_day: string | null; weekday_pct: number; weekend_pct: number; dow_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentDow, setAgentDow] = useState<AgentDowDistributionData | null>(null);
+  const [agentDowLoading, setAgentDowLoading] = useState(false);
+  const [agentDowOpen, setAgentDowOpen] = useState(true);
 
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
@@ -1217,6 +1222,8 @@ export default function ReportsPage() {
       apiClient.getAgentLeaderboard("demo-workspace-1", "demo-token").then(setAgentLeaderboard).catch(() => {}).finally(() => setAgentLeaderboardLoading(false));
       setAgentHourlyLoading(true);
       apiClient.getAgentHourlyDistribution("demo-workspace-1", "demo-token").then(setAgentHourly).catch(() => {}).finally(() => setAgentHourlyLoading(false));
+      setAgentDowLoading(true);
+      apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1450,6 +1457,8 @@ export default function ReportsPage() {
       apiClient.getAgentLeaderboard(workspaceId, session.access_token).then(setAgentLeaderboard).catch(() => {}).finally(() => setAgentLeaderboardLoading(false));
       setAgentHourlyLoading(true);
       apiClient.getAgentHourlyDistribution(workspaceId, session.access_token).then(setAgentHourly).catch(() => {}).finally(() => setAgentHourlyLoading(false));
+      setAgentDowLoading(true);
+      apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
     });
   }, []);
 
@@ -3223,6 +3232,27 @@ export default function ReportsPage() {
         if (!session) { setAgentSeverityLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentSeverityLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentDow = () => {
+    setAgentDowLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentDowDistribution(wid, tok)
+        .then(setAgentDow)
+        .catch(() => {})
+        .finally(() => setAgentDowLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentDowLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentDowLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13812,6 +13842,90 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the hourly distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20ad – Agent Day-of-Week Distribution */}
+      <Card className="border-zinc-700/50">
+        <div
+          className="flex items-center justify-between p-4 cursor-pointer select-none"
+          onClick={() => setAgentDowOpen(v => !v)}
+        >
+          <div className="flex items-center gap-3">
+            <CalendarDays className="h-4 w-4 text-emerald-400" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Agent Day-of-Week Distribution</p>
+              <p className="text-xs text-zinc-500">Busiest and quietest days for AI agent runs</p>
+            </div>
+            {agentDow && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-900/40 text-emerald-300">
+                busiest {agentDow.busiest_day ?? '—'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateAgentDow(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentDowLoading}>
+              {agentDowLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {agentDowOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {agentDowOpen && (
+          agentDowLoading && !agentDow ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading day-of-week distribution…</div>
+          ) : agentDow ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Busiest Day</p>
+                  <p className="text-sm font-bold text-emerald-300">{agentDow.busiest_day ?? '—'}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Weekday Runs</p>
+                  <p className={`text-xl font-bold ${agentDow.weekday_pct >= 70 ? 'text-emerald-300' : agentDow.weekday_pct >= 40 ? 'text-amber-300' : 'text-rose-300'}`}>{agentDow.weekday_pct.toFixed(1)}%</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Runs</p>
+                  <p className="text-xl font-bold text-zinc-200">{agentDow.total_runs}</p>
+                </div>
+              </div>
+              {agentDow.total_runs > 0 ? (
+                <div className="space-y-0.5">
+                  {agentDow.days.map((b: AgentDowBucket) => {
+                    const isWeekend = b.day_index >= 5;
+                    const maxCount = Math.max(...agentDow.days.map((d: AgentDowBucket) => d.run_count));
+                    return (
+                      <div key={b.day_index} className="flex items-center gap-2">
+                        <span className="text-xs text-zinc-500 w-12 text-right">{b.day_name.slice(0, 3)}</span>
+                        <div className="flex-1 bg-zinc-800 rounded-full h-2">
+                          <div
+                            className={`h-2 rounded-full ${isWeekend ? 'bg-zinc-600' : 'bg-emerald-500'}`}
+                            style={{ width: maxCount > 0 ? `${Math.round(b.run_count / maxCount * 100)}%` : '0%' }}
+                          />
+                        </div>
+                        <span className="text-xs text-zinc-400 w-8 text-right">{b.run_count}</span>
+                      </div>
+                    );
+                  })}
+                  <p className="text-xs text-zinc-600 pt-1">Emerald bars = weekdays (Mon–Fri)</p>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center">No agent run data in the last 6 months.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{agentDow.dow_narrative}</p>
+              <ul className="space-y-1">
+                {agentDow.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentDow.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the day-of-week distribution.</div>
           )
         )}
       </Card>

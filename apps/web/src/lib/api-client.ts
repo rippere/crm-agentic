@@ -8230,5 +8230,38 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/hourly-distribution`, {}, token)
   },
+
+  async getAgentDowDistribution(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+      const counts = [18, 24, 22, 20, 16, 5, 3]
+      const totalRuns = counts.reduce((a, c) => a + c, 0)
+      const weekdayRuns = counts.slice(0, 5).reduce((a, c) => a + c, 0)
+      const weekendRuns = counts.slice(5).reduce((a, c) => a + c, 0)
+      const busiestIdx = counts.indexOf(Math.max(...counts))
+      const quietestIdx = counts.indexOf(Math.min(...counts))
+      return Promise.resolve({
+        days: counts.map((run_count, day_index) => ({
+          day_name: DAY_NAMES[day_index],
+          day_index,
+          run_count,
+          pct_of_total: Math.round(run_count / totalRuns * 1000) / 10,
+        })),
+        total_runs: totalRuns,
+        busiest_day: DAY_NAMES[busiestIdx],
+        quietest_day: DAY_NAMES[quietestIdx],
+        weekday_pct: Math.round(weekdayRuns / totalRuns * 1000) / 10,
+        weekend_pct: Math.round(weekendRuns / totalRuns * 1000) / 10,
+        dow_narrative: 'Agent runs peak on Tuesday with 24 runs, and weekdays account for over 92% of all activity — suggesting agents are largely triggered by your team\'s active work sessions. Weekend activity is minimal at 6%, indicating few automated or scheduled weekend workflows.',
+        recommendations: [
+          'Schedule Monday batch-processing agents to prepare data for the week ahead.',
+          'Consider adding Saturday morning lightweight enrichment jobs to use available capacity.',
+          'Review Friday\'s agent runs to ensure critical tasks are not left pending over the weekend.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/dow-distribution`, {}, token)
+  },
 }
 
