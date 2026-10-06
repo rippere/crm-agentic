@@ -14139,7 +14139,7 @@ export default function ReportsPage() {
                     <YAxis domain={[0, 100]} tick={{ fontSize: 9, fill: '#71717a' }} />
                     <Tooltip
                       contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }}
-                      formatter={(value: number, name: string) => [`${value}`, name.replace('_score', '').replace('_', ' ')]}
+                      formatter={(value: any, name: any) => [`${value}`, String(name).replace('_score', '').replace('_', ' ')]}
                     />
                     <Area type="monotone" dataKey="score" stroke="#6366f1" strokeWidth={2} fill="url(#prodGrad)" name="total" />
                   </AreaChart>
