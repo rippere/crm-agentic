@@ -23505,3 +23505,173 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/touch-coverage-trend")
+@limiter.limit("5/minute")
+async def get_ai_contact_touch_coverage_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now14 = datetime.datetime.now(timezone.utc)
+    six_months_ago14 = now14 - datetime.timedelta(days=183)
+
+    total_contacts14 = (await db.execute(
+        select(func.count(Contact.id)).where(Contact.workspace_id == workspace_id)
+    )).scalar() or 0
+
+    msg_rows14 = (await db.execute(
+        select(Message.contact_id, Message.created_at)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.created_at >= six_months_ago14,
+            Message.contact_id.isnot(None),
+        )
+    )).all()
+
+    cn_rows14 = (await db.execute(
+        select(ContactNote.contact_id, ContactNote.created_at)
+        .where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.created_at >= six_months_ago14,
+        )
+    )).all()
+
+    cur_month14 = now14.month
+    cur_year14 = now14.year
+    month_keys14 = []
+    for offset14 in range(5, -1, -1):
+        m14 = cur_month14 - offset14
+        y14 = cur_year14
+        while m14 <= 0:
+            m14 += 12
+            y14 -= 1
+        month_keys14.append(f"{y14:04d}-{m14:02d}")
+
+    def _mk14(dt):
+        if dt is None:
+            return None
+        if hasattr(dt, "tzinfo") and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return f"{dt.year:04d}-{dt.month:02d}"
+
+    touched14: dict[str, set] = {k: set() for k in month_keys14}
+    for cid14, ts14 in msg_rows14:
+        mk14 = _mk14(ts14)
+        if mk14 in touched14 and cid14:
+            touched14[mk14].add(cid14)
+    for cid14, ts14 in cn_rows14:
+        mk14 = _mk14(ts14)
+        if mk14 in touched14 and cid14:
+            touched14[mk14].add(cid14)
+
+    monthly_coverage14 = []
+    for mk14 in month_keys14:
+        y14_s, m14_s = int(mk14[:4]), int(mk14[5:7])
+        month_label14 = datetime.datetime(y14_s, m14_s, 1).strftime("%b %Y")
+        count14 = len(touched14[mk14])
+        pct14 = round(count14 / total_contacts14 * 100, 1) if total_contacts14 > 0 else 0.0
+        monthly_coverage14.append({
+            "month_label": month_label14,
+            "contacts_touched": count14,
+            "total_contacts": total_contacts14,
+            "engagement_pct": pct14,
+        })
+
+    total_touched14 = sum(r["contacts_touched"] for r in monthly_coverage14)
+    if total_touched14 == 0:
+        return {
+            "monthly_coverage": monthly_coverage14,
+            "total_contacts": total_contacts14,
+            "avg_engagement_pct": 0.0,
+            "growth_rate": 0.0,
+            "trend_direction": "stable",
+            "peak_month": None,
+            "peak_pct": 0.0,
+            "coverage_narrative": "No contact interactions found in the past 6 months. Begin reaching out to contacts to build engagement history.",
+            "recommendations": [
+                "Start logging notes after every contact interaction.",
+                "Send at least one message to each active contact this month.",
+                "Use the Re-engagement Plan feature to identify contacts to reconnect with.",
+            ],
+            "generated_at": now14.isoformat() + "Z",
+        }
+
+    avg_engagement_pct14 = round(sum(r["engagement_pct"] for r in monthly_coverage14) / 6, 1)
+    first_half14 = [r["engagement_pct"] for r in monthly_coverage14[:3]]
+    second_half14 = [r["engagement_pct"] for r in monthly_coverage14[3:]]
+    avg_first14 = sum(first_half14) / 3
+    avg_second14 = sum(second_half14) / 3
+    rate_delta14 = round(avg_second14 - avg_first14, 1)
+    if rate_delta14 >= 5:
+        trend_direction14 = "improving"
+    elif rate_delta14 <= -5:
+        trend_direction14 = "declining"
+    else:
+        trend_direction14 = "stable"
+
+    peak_month14 = None
+    peak_pct14 = 0.0
+    for r14 in monthly_coverage14:
+        if r14["engagement_pct"] > peak_pct14:
+            peak_pct14 = r14["engagement_pct"]
+            peak_month14 = r14["month_label"]
+
+    first_pct14 = monthly_coverage14[0]["engagement_pct"]
+    last_pct14 = monthly_coverage14[-1]["engagement_pct"]
+    growth_rate14 = round((last_pct14 - first_pct14) / first_pct14 * 100, 1) if first_pct14 > 0 else 0.0
+
+    client14 = _mk_anthropic()
+    prompt14 = (
+        "Contact touch coverage trend for the past 6 months:\n"
+        + "\n".join(
+            f"- {r['month_label']}: {r['contacts_touched']}/{r['total_contacts']} contacts touched ({r['engagement_pct']}%)"
+            for r in monthly_coverage14
+        )
+        + f"\n\nOverall: avg engagement {avg_engagement_pct14}%, trend {trend_direction14} ({rate_delta14:+.1f}pp), peak {peak_month14} at {peak_pct14}%."
+        + "\n\nWrite a 2-sentence coverage_narrative and 3 specific recommendations as JSON: "
+        + '{"coverage_narrative": "...", "recommendations": ["...", "...", "..."]}'
+    )
+    coverage_narrative14 = ""
+    recommendations14: list[str] = []
+    try:
+        resp14 = client14.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt14}],
+        )
+        parsed14 = loads_llm_json(resp14.content[0].text)
+        coverage_narrative14 = str(parsed14.get("coverage_narrative", ""))
+        raw_recs14 = parsed14.get("recommendations", [])
+        recommendations14 = [str(r) for r in (raw_recs14 if isinstance(raw_recs14, list) else [])[:3]]
+    except Exception:
+        coverage_narrative14 = (
+            f"Contact touch coverage is {trend_direction14} over the past 6 months, "
+            f"averaging {avg_engagement_pct14}% of contacts engaged per month."
+        )
+
+    default_recs14 = [
+        "Set a monthly goal to touch at least 80% of active contacts through notes or messages.",
+        "Identify contacts with no activity in 30+ days and prioritize outreach.",
+        "Use the Re-engagement Plan to systematically reconnect with dormant contacts.",
+    ]
+    while len(recommendations14) < 3:
+        recommendations14.append(default_recs14[len(recommendations14) % 3])
+
+    return {
+        "monthly_coverage": monthly_coverage14,
+        "total_contacts": total_contacts14,
+        "avg_engagement_pct": avg_engagement_pct14,
+        "growth_rate": growth_rate14,
+        "trend_direction": trend_direction14,
+        "peak_month": peak_month14,
+        "peak_pct": peak_pct14,
+        "coverage_narrative": coverage_narrative14,
+        "recommendations": recommendations14,
+        "generated_at": now14.isoformat() + "Z",
+    }

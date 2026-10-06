@@ -8300,5 +8300,37 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getContactTouchCoverageTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const months = ['May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026', 'Sep 2026', 'Oct 2026']
+      const touchedCounts = [18, 22, 26, 31, 35, 38]
+      const totalContacts = 47
+      const monthly_coverage = months.map((month_label, i) => ({
+        month_label,
+        contacts_touched: touchedCounts[i],
+        total_contacts: totalContacts,
+        engagement_pct: Math.round(touchedCounts[i] / totalContacts * 1000) / 10,
+      }))
+      const avgPct = Math.round(monthly_coverage.reduce((a, r) => a + r.engagement_pct, 0) / 6 * 10) / 10
+      return Promise.resolve({
+        monthly_coverage,
+        total_contacts: totalContacts,
+        avg_engagement_pct: avgPct,
+        growth_rate: 111.1,
+        trend_direction: 'improving',
+        peak_month: 'Oct 2026',
+        peak_pct: Math.round(38 / 47 * 1000) / 10,
+        coverage_narrative: 'Contact touch coverage has improved steadily over the past 6 months, reaching 80.9% of contacts engaged in October — a strong signal that the team is maintaining proactive outreach. Continued investment in structured follow-up routines will help sustain this momentum.',
+        recommendations: [
+          'Set a monthly goal to touch at least 85% of active contacts through notes or messages.',
+          'Identify the 7 contacts not yet touched this month and prioritize outreach this week.',
+          'Use the Re-engagement Plan to systematically reconnect with contacts who have been dormant.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/touch-coverage-trend`, {}, token)
+  },
 }
 
