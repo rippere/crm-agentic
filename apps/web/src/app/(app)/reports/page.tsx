@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, CalendarDays, MessageCircle, UserPlus, Building2, LayoutList, SplitSquareHorizontal, Loader2, UserCheck,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, CalendarDays, MessageCircle, UserPlus, Building2, LayoutList, SplitSquareHorizontal, Loader2, UserCheck, PenLine,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -994,6 +994,12 @@ export default function ReportsPage() {
   const [agentWowLoading, setAgentWowLoading] = useState(false);
   const [agentWowOpen, setAgentWowOpen] = useState(true);
 
+  type NoteMonth = { month_label: string; contact_notes: number; deal_notes: number; total_notes: number };
+  type NoteCreationTrendData = { monthly_notes: NoteMonth[]; total_notes: number; contact_notes_total: number; deal_notes_total: number; avg_per_month: number; growth_rate: number; trend_direction: string; peak_month: string | null; peak_count: number; note_narrative: string; recommendations: string[]; generated_at: string };
+  const [noteCreationTrend, setNoteCreationTrend] = useState<NoteCreationTrendData | null>(null);
+  const [noteCreationTrendLoading, setNoteCreationTrendLoading] = useState(false);
+  const [noteCreationTrendOpen, setNoteCreationTrendOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1232,6 +1238,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setNoteCreationTrendLoading(true);
+      apiClient.getNoteCreationTrend("demo-workspace-1", "demo-token").then(setNoteCreationTrend).catch(() => {}).finally(() => setNoteCreationTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1469,6 +1477,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setNoteCreationTrendLoading(true);
+      apiClient.getNoteCreationTrend(workspaceId, session.access_token).then(setNoteCreationTrend).catch(() => {}).finally(() => setNoteCreationTrendLoading(false));
     });
   }, []);
 
@@ -3263,6 +3273,27 @@ export default function ReportsPage() {
         if (!session) { setAgentWowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentWowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateNoteCreationTrend = () => {
+    setNoteCreationTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getNoteCreationTrend(wid, tok)
+        .then(setNoteCreationTrend)
+        .catch(() => {})
+        .finally(() => setNoteCreationTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setNoteCreationTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setNoteCreationTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14040,6 +14071,78 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the day-of-week distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Note Creation Trend */}
+      <Card className="overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 cursor-pointer select-none" onClick={() => setNoteCreationTrendOpen(v => !v)}>
+          <div className="flex items-center gap-2">
+            <PenLine className="h-4 w-4 text-amber-400" />
+            <span className="text-sm font-medium text-zinc-200">Note Creation Trend</span>
+            {noteCreationTrend && (
+              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${noteCreationTrend.growth_rate >= 10 ? 'bg-emerald-500/20 text-emerald-300' : noteCreationTrend.growth_rate <= -10 ? 'bg-rose-500/20 text-rose-300' : 'bg-zinc-700 text-zinc-400'}`}>
+                {noteCreationTrend.growth_rate >= 0 ? '+' : ''}{noteCreationTrend.growth_rate.toFixed(1)}% · {noteCreationTrend.trend_direction}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateNoteCreationTrend(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={noteCreationTrendLoading}>
+              {noteCreationTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {noteCreationTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {noteCreationTrendOpen && (
+          noteCreationTrendLoading && !noteCreationTrend ? (
+            <div className="p-6"><div className="h-40 bg-zinc-800/50 rounded animate-pulse" /></div>
+          ) : noteCreationTrend ? (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/40 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Notes</p>
+                  <p className="text-xl font-bold text-zinc-200">{noteCreationTrend.total_notes}</p>
+                </div>
+                <div className="bg-zinc-800/40 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg / Month</p>
+                  <p className="text-xl font-bold text-amber-300">{noteCreationTrend.avg_per_month}</p>
+                </div>
+                <div className="bg-zinc-800/40 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Peak Month</p>
+                  <p className="text-sm font-bold text-zinc-200 truncate">{noteCreationTrend.peak_month ?? '—'}</p>
+                  <p className="text-xs text-zinc-500">{noteCreationTrend.peak_count} notes</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <ComposedChart data={noteCreationTrend.monthly_notes} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" />
+                  <XAxis dataKey="month_label" tick={{ fill: '#71717A', fontSize: 10 }} />
+                  <YAxis tick={{ fill: '#71717A', fontSize: 10 }} allowDecimals={false} />
+                  <Tooltip contentStyle={{ background: '#18181B', border: '1px solid #3F3F46', borderRadius: '8px', fontSize: '12px' }} />
+                  <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '4px' }} />
+                  <Bar dataKey="contact_notes" name="Contact Notes" stackId="notes" fill="#6366F1" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="deal_notes" name="Deal Notes" stackId="notes" fill="#FBBF24" radius={[3, 3, 0, 0]} />
+                  <Line type="monotone" dataKey="total_notes" name="Total" stroke="#A78BFA" strokeWidth={2} dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+              <div className="flex gap-4 text-xs text-zinc-400">
+                <span><span className="inline-block h-2 w-2 rounded-sm bg-indigo-500 mr-1" />Contact: {noteCreationTrend.contact_notes_total}</span>
+                <span><span className="inline-block h-2 w-2 rounded-sm bg-amber-400 mr-1" />Deal: {noteCreationTrend.deal_notes_total}</span>
+              </div>
+              <p className="text-xs text-zinc-400 italic">{noteCreationTrend.note_narrative}</p>
+              <ul className="space-y-1">
+                {noteCreationTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(noteCreationTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the note creation trend.</div>
           )
         )}
       </Card>
