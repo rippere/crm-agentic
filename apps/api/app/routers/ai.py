@@ -23505,3 +23505,160 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/workspace/activity-summary")
+@limiter.limit("5/minute")
+async def get_ai_workspace_activity_summary(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now12 = datetime.datetime.now(timezone.utc)
+    weekday12 = now12.isoweekday() % 7
+    curr_start12 = (now12 - datetime.timedelta(days=weekday12)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    prior_start12 = curr_start12 - datetime.timedelta(days=7)
+
+    async def _count12(model, col, start, end, extra=None):
+        q = select(func.count()).select_from(model).where(
+            model.workspace_id == workspace_id,
+            col >= start,
+            col < end,
+        )
+        if extra is not None:
+            q = q.where(extra)
+        return (await db.execute(q)).scalar() or 0
+
+    new_contacts_curr12 = await _count12(Contact, Contact.created_at, curr_start12, now12)
+    new_contacts_prior12 = await _count12(Contact, Contact.created_at, prior_start12, curr_start12)
+
+    new_deals_curr12 = await _count12(Deal, Deal.created_at, curr_start12, now12)
+    new_deals_prior12 = await _count12(Deal, Deal.created_at, prior_start12, curr_start12)
+
+    tasks_done_curr12 = await _count12(
+        Task, Task.updated_at, curr_start12, now12,
+        Task.status == "done",
+    )
+    tasks_done_prior12 = await _count12(
+        Task, Task.updated_at, prior_start12, curr_start12,
+        Task.status == "done",
+    )
+
+    msgs_curr12 = await _count12(Message, Message.created_at, curr_start12, now12)
+    msgs_prior12 = await _count12(Message, Message.created_at, prior_start12, curr_start12)
+
+    agent_runs_curr12 = await _count12(
+        ActivityEvent, ActivityEvent.created_at, curr_start12, now12,
+        ActivityEvent.agent_name.isnot(None),
+    )
+    agent_runs_prior12 = await _count12(
+        ActivityEvent, ActivityEvent.created_at, prior_start12, curr_start12,
+        ActivityEvent.agent_name.isnot(None),
+    )
+
+    def _delta12(curr, prior):
+        d = curr - prior
+        pct = round((d / prior * 100), 1) if prior else (100.0 if curr else 0.0)
+        return d, pct
+
+    metrics12 = []
+    for name12, curr12, prior12 in [
+        ("New Contacts", new_contacts_curr12, new_contacts_prior12),
+        ("New Deals", new_deals_curr12, new_deals_prior12),
+        ("Tasks Completed", tasks_done_curr12, tasks_done_prior12),
+        ("Messages", msgs_curr12, msgs_prior12),
+        ("Agent Runs", agent_runs_curr12, agent_runs_prior12),
+    ]:
+        d12, p12 = _delta12(curr12, prior12)
+        metrics12.append({
+            "name": name12,
+            "current_week": curr12,
+            "prior_week": prior12,
+            "delta": d12,
+            "pct_change": p12,
+        })
+
+    total_curr12 = new_contacts_curr12 + new_deals_curr12 + tasks_done_curr12 + msgs_curr12 + agent_runs_curr12
+    total_prior12 = new_contacts_prior12 + new_deals_prior12 + tasks_done_prior12 + msgs_prior12 + agent_runs_prior12
+    total_delta12, total_pct12 = _delta12(total_curr12, total_prior12)
+
+    overall_trend12 = "up" if total_pct12 >= 5 else ("down" if total_pct12 <= -5 else "flat")
+
+    if total_curr12 == 0 and total_prior12 == 0:
+        return {
+            "metrics": metrics12,
+            "total_current_week": 0,
+            "total_prior_week": 0,
+            "total_delta": 0,
+            "total_pct_change": 0.0,
+            "overall_trend": "flat",
+            "summary_narrative": "No activity recorded this week or last week. Start connecting your CRM integrations to see activity data.",
+            "recommendations": [
+                "Connect Gmail or Slack to start ingesting messages automatically.",
+                "Create and complete tasks to track team productivity week over week.",
+                "Run AI agents on your deals to generate insights and activity events.",
+            ],
+            "generated_at": now12.isoformat() + "Z",
+        }
+
+    summary_narrative12 = ""
+    recommendations12: list = []
+
+    try:
+        client12 = _mk_anthropic()
+        metrics_text12 = "\n".join(
+            f"  {m['name']}: {m['current_week']} this week vs {m['prior_week']} prior ({m['pct_change']:+.1f}%)"
+            for m in metrics12
+        )
+        prompt12 = (
+            "You are analyzing week-over-week team activity for a CRM workspace.\n"
+            f"This week vs prior week:\n{metrics_text12}\n"
+            f"Overall activity change: {total_pct12:+.1f}% ({overall_trend12}).\n\n"
+            "Return JSON with exactly:\n"
+            '{"summary_narrative": "2-sentence insight", "recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp12 = client12.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt12}],
+        )
+        raw12 = resp12.content[0].text.strip()
+        if "```" in raw12:
+            raw12 = raw12.split("```")[1]
+            if raw12.startswith("json"):
+                raw12 = raw12[4:]
+        parsed12 = loads_llm_json(raw12)
+        summary_narrative12 = str(parsed12.get("summary_narrative", "")).strip()
+        raw_recs12 = parsed12.get("recommendations", [])
+        recommendations12 = [str(r) for r in (raw_recs12 if isinstance(raw_recs12, list) else [])[:3]]
+    except Exception:
+        summary_narrative12 = (
+            f"Team activity is {overall_trend12} this week with a {total_pct12:+.1f}% change across all CRM metrics. "
+            f"This week recorded {total_curr12} total actions versus {total_prior12} last week."
+        )
+
+    default_recs12 = [
+        "Review the metrics with the largest week-over-week drops and identify blockers.",
+        "Schedule a weekly team sync to review CRM activity trends together.",
+        "Set activity targets for each metric to drive consistent engagement.",
+    ]
+    while len(recommendations12) < 3:
+        recommendations12.append(default_recs12[len(recommendations12) % 3])
+
+    return {
+        "metrics": metrics12,
+        "total_current_week": total_curr12,
+        "total_prior_week": total_prior12,
+        "total_delta": total_delta12,
+        "total_pct_change": total_pct12,
+        "overall_trend": overall_trend12,
+        "summary_narrative": summary_narrative12,
+        "recommendations": recommendations12,
+        "generated_at": now12.isoformat() + "Z",
+    }

@@ -8300,5 +8300,33 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getWorkspaceActivitySummary(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const metrics = [
+        { name: 'New Contacts', current_week: 8, prior_week: 5, delta: 3, pct_change: 60.0 },
+        { name: 'New Deals', current_week: 4, prior_week: 6, delta: -2, pct_change: -33.3 },
+        { name: 'Tasks Completed', current_week: 14, prior_week: 11, delta: 3, pct_change: 27.3 },
+        { name: 'Messages', current_week: 32, prior_week: 28, delta: 4, pct_change: 14.3 },
+        { name: 'Agent Runs', current_week: 19, prior_week: 16, delta: 3, pct_change: 18.8 },
+      ]
+      return Promise.resolve({
+        metrics,
+        total_current_week: 77,
+        total_prior_week: 66,
+        total_delta: 11,
+        total_pct_change: 16.7,
+        overall_trend: 'up',
+        summary_narrative: 'Team activity is up 16.7% this week, driven by strong contact acquisition and agent run volume. New deal creation dipped slightly — consider reviewing the top-of-funnel to ensure qualified leads are converting.',
+        recommendations: [
+          'Investigate the 33% drop in new deals and identify if any lead sources have dried up.',
+          'Capitalise on the 27% task completion surge by assigning follow-up tasks for the 8 new contacts.',
+          'Continue the agent run momentum and check that Lead Scorer has processed all new contacts.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/workspace/activity-summary`, {}, token)
+  },
 }
 
