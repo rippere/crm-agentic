@@ -994,6 +994,12 @@ export default function ReportsPage() {
   const [agentWowLoading, setAgentWowLoading] = useState(false);
   const [agentWowOpen, setAgentWowOpen] = useState(true);
 
+  type ProductivityWeek = { week_start: string; score: number; agent_score: number; deal_score: number; task_score: number; message_score: number };
+  type ProductivityScoreData = { weekly_scores: ProductivityWeek[]; current_score: number; avg_score: number; trend_direction: string; score_delta: number; peak_week: string; productivity_narrative: string; recommendations: string[]; generated_at: string };
+  const [productivityScore, setProductivityScore] = useState<ProductivityScoreData | null>(null);
+  const [productivityScoreLoading, setProductivityScoreLoading] = useState(false);
+  const [productivityScoreOpen, setProductivityScoreOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1232,6 +1238,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setProductivityScoreLoading(true);
+      apiClient.getWorkspaceProductivityScore("demo-workspace-1", "demo-token").then(setProductivityScore).catch(() => {}).finally(() => setProductivityScoreLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1469,6 +1477,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setProductivityScoreLoading(true);
+      apiClient.getWorkspaceProductivityScore(workspaceId, session.access_token).then(setProductivityScore).catch(() => {}).finally(() => setProductivityScoreLoading(false));
     });
   }, []);
 
@@ -3263,6 +3273,27 @@ export default function ReportsPage() {
         if (!session) { setAgentWowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentWowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateProductivityScore = () => {
+    setProductivityScoreLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getWorkspaceProductivityScore(wid, tok)
+        .then(setProductivityScore)
+        .catch(() => {})
+        .finally(() => setProductivityScoreLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setProductivityScoreLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setProductivityScoreLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14040,6 +14071,108 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the day-of-week distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20af – AI Workspace Productivity Score Trend */}
+      <Card className="border-zinc-700/50">
+        <div
+          className="flex items-center justify-between p-4 cursor-pointer select-none"
+          onClick={() => setProductivityScoreOpen(v => !v)}
+        >
+          <div className="flex items-center gap-3">
+            <Activity className="h-4 w-4 text-indigo-400" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Workspace Productivity Score</p>
+              <p className="text-xs text-zinc-500">12-week composite score from agents, deals, tasks &amp; messages</p>
+            </div>
+            {productivityScore && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                productivityScore.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-300' :
+                productivityScore.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-700/60 text-zinc-300'
+              }`}>
+                {productivityScore.trend_direction} ({productivityScore.score_delta > 0 ? '+' : ''}{productivityScore.score_delta.toFixed(1)} pts)
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateProductivityScore(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={productivityScoreLoading}>
+              {productivityScoreLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {productivityScoreOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {productivityScoreOpen && (
+          productivityScoreLoading && !productivityScore ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading productivity score trend…</div>
+          ) : productivityScore ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Current Score</p>
+                  <p className={`text-2xl font-bold ${productivityScore.current_score >= 70 ? 'text-emerald-300' : productivityScore.current_score >= 40 ? 'text-amber-300' : 'text-rose-300'}`}>
+                    {productivityScore.current_score}<span className="text-xs font-normal text-zinc-500">/100</span>
+                  </p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">12-Week Avg</p>
+                  <p className="text-2xl font-bold text-zinc-200">{productivityScore.avg_score}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Peak Week</p>
+                  <p className="text-sm font-bold text-indigo-300 truncate">{productivityScore.peak_week}</p>
+                </div>
+              </div>
+              {productivityScore.weekly_scores.length > 0 ? (
+                <ResponsiveContainer width="100%" height={160}>
+                  <AreaChart data={productivityScore.weekly_scores} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                    <defs>
+                      <linearGradient id="prodGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#6366f1" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <XAxis dataKey="week_start" tick={{ fontSize: 9, fill: '#71717a' }} tickFormatter={(v: string) => v.slice(5)} interval={2} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 9, fill: '#71717a' }} />
+                    <Tooltip
+                      contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }}
+                      formatter={(value: any, name: any) => [`${value}`, String(name).replace('_score', '').replace('_', ' ')]}
+                    />
+                    <Area type="monotone" dataKey="score" stroke="#6366f1" strokeWidth={2} fill="url(#prodGrad)" name="total" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center">No activity data in the last 12 weeks.</p>
+              )}
+              <div className="grid grid-cols-4 gap-2 text-center">
+                {[
+                  { label: 'Agent', key: 'agent_score' as const, color: 'text-violet-300' },
+                  { label: 'Deal', key: 'deal_score' as const, color: 'text-sky-300' },
+                  { label: 'Task', key: 'task_score' as const, color: 'text-emerald-300' },
+                  { label: 'Message', key: 'message_score' as const, color: 'text-amber-300' },
+                ].map(({ label, key, color }) => (
+                  <div key={key} className="bg-zinc-800/40 rounded p-2">
+                    <p className="text-xs text-zinc-500">{label}</p>
+                    <p className={`text-base font-bold ${color}`}>{productivityScore.weekly_scores[productivityScore.weekly_scores.length - 1]?.[key] ?? 0}<span className="text-xs font-normal text-zinc-600">/25</span></p>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-400 italic">{productivityScore.productivity_narrative}</p>
+              <ul className="space-y-1">
+                {productivityScore.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(productivityScore.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the productivity score trend.</div>
           )
         )}
       </Card>

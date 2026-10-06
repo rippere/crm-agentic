@@ -10634,3 +10634,105 @@ async def test_agent_wow_comparison_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/wow-comparison")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20af – AI workspace productivity score trend
+# ---------------------------------------------------------------------------
+
+class FakeProdAERow:
+    """ActivityEvent row: agent_name (may be None), description, created_at."""
+    def __init__(self, agent_name, description, created_at):
+        self.agent_name = agent_name
+        self.description = description
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_workspace_productivity_score_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+    now = _dt.datetime.utcnow()
+    # Find current Monday 00:00 UTC
+    mon = now - _dt.timedelta(days=now.weekday())
+    mon = mon.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # All events pinned to current week (Mon+1h, Mon+2h, Mon+3h, Mon+4h, Mon+5h)
+    def _cw(hours: int) -> _dt.datetime:
+        return mon + _dt.timedelta(hours=hours)
+
+    ae_rows = [
+        FakeProdAERow("Lead Scorer", "Agent run completed", _cw(1)),
+        FakeProdAERow("Email Composer", "Agent run completed", _cw(2)),
+        FakeProdAERow("Lead Scorer", "Agent run completed", _cw(3)),
+        FakeProdAERow(None, "Deal moved to Proposal stage", _cw(4)),
+        FakeProdAERow(None, "Deal moved to Closed Won stage", _cw(5)),
+    ]
+
+    task_scalars = [_cw(6), _cw(7)]
+    msg_scalars = [_cw(8), _cw(9), _cw(10)]
+
+    call_count = [0]
+
+    class FakeAEResult:
+        def all(self):
+            return ae_rows
+
+    class FakeScalarsResultWithScalars:
+        def __init__(self, vals):
+            self._vals = vals
+        def scalars(self):
+            return self
+        def all(self):
+            return self._vals
+
+    async def fake_execute2(stmt):
+        n = call_count[0]
+        call_count[0] += 1
+        if n == 0:
+            return FakeAEResult()
+        elif n == 1:
+            return FakeScalarsResultWithScalars(task_scalars)
+        else:
+            return FakeScalarsResultWithScalars(msg_scalars)
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute2)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"productivity_narrative": "Productivity is improving.", "recommendations": ["r1", "r2", "r3"]}')]
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: MagicMock(messages=MagicMock(create=MagicMock(return_value=mock_msg))))
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/workspace/productivity-score")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["weekly_scores"]) == 12
+    assert data["current_score"] >= 0
+    assert data["avg_score"] >= 0
+    assert data["trend_direction"] in ("improving", "stable", "declining")
+    assert "score_delta" in data
+    assert "peak_week" in data
+    assert data["productivity_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+    # Current week agent_score: 3 runs × 5 = 15 (capped at 25)
+    current_week = data["weekly_scores"][-1]
+    assert current_week["agent_score"] == 15
+    # Current week deal_score: 2 events × 5 = 10
+    assert current_week["deal_score"] == 10
+    # Current week task_score: 2 × 5 = 10
+    assert current_week["task_score"] == 10
+    # Current week message_score: 3 × 2 = 6
+    assert current_week["message_score"] == 6
+    assert current_week["score"] == 41
+
+
+@pytest.mark.asyncio
+async def test_workspace_productivity_score_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("00001111-2222-3333-4444-555566667777")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/workspace/productivity-score")
+    assert resp.status_code == 403
