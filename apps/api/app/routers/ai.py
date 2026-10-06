@@ -23505,3 +23505,211 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20af – AI workspace productivity score trend
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/workspace/productivity-score")
+@limiter.limit("5/minute")
+async def get_ai_workspace_productivity_score(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """12-week composite productivity score (0-100) from agent runs, deal activity,
+    task completions, and message volume — one score per Mon-aligned week bucket."""
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    import datetime as _dt11
+
+    now11 = _dt11.datetime.utcnow()
+    cutoff11 = now11 - _dt11.timedelta(weeks=12)
+
+    # Mon-aligned week buckets (oldest first)
+    def _week_start11(dt: _dt11.datetime) -> _dt11.datetime:
+        return (dt - _dt11.timedelta(days=dt.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+    current_monday11 = _week_start11(now11)
+    weeks11 = [current_monday11 - _dt11.timedelta(weeks=i) for i in range(11, -1, -1)]
+
+    def _bucket11(dt: _dt11.datetime) -> _dt11.datetime | None:
+        ws = _week_start11(dt)
+        if ws in weeks11_set11:
+            return ws
+        return None
+
+    weeks11_set11 = set(weeks11)
+
+    # Query 1: ActivityEvent — agent runs + deal-moved events
+    ae_result11 = await db.execute(
+        select(ActivityEvent.agent_name, ActivityEvent.description, ActivityEvent.created_at)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.created_at >= cutoff11,
+        )
+    )
+    ae_rows11 = ae_result11.all()
+
+    # Query 2: Tasks completed (status='done') updated in last 12 weeks
+    task_result11 = await db.execute(
+        select(Task.updated_at)
+        .where(
+            Task.workspace_id == workspace_id,
+            Task.status == "done",
+            Task.updated_at >= cutoff11,
+        )
+    )
+    task_rows11 = task_result11.scalars().all()
+
+    # Query 3: Messages created in last 12 weeks
+    msg_result11 = await db.execute(
+        select(Message.created_at)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.created_at >= cutoff11,
+        )
+    )
+    msg_rows11 = msg_result11.scalars().all()
+
+    # Bucket counts
+    agent_counts11: dict = {w: 0 for w in weeks11}
+    deal_counts11: dict = {w: 0 for w in weeks11}
+    task_counts11: dict = {w: 0 for w in weeks11}
+    msg_counts11: dict = {w: 0 for w in weeks11}
+
+    for row11 in ae_rows11:
+        b11 = _bucket11(row11.created_at) if row11.created_at else None
+        if b11 is None:
+            continue
+        if row11.agent_name is not None:
+            agent_counts11[b11] = agent_counts11.get(b11, 0) + 1
+        desc_lower11 = (row11.description or "").lower()
+        if "moved" in desc_lower11 or "deal" in desc_lower11 or "stage" in desc_lower11:
+            deal_counts11[b11] = deal_counts11.get(b11, 0) + 1
+
+    for ts11 in task_rows11:
+        b11 = _bucket11(ts11) if ts11 else None
+        if b11 is not None:
+            task_counts11[b11] = task_counts11.get(b11, 0) + 1
+
+    for ts11 in msg_rows11:
+        b11 = _bucket11(ts11) if ts11 else None
+        if b11 is not None:
+            msg_counts11[b11] = msg_counts11.get(b11, 0) + 1
+
+    # Compute per-week scores
+    weekly_scores11 = []
+    for w11 in weeks11:
+        agent_s11 = min(25, agent_counts11.get(w11, 0) * 5)
+        deal_s11 = min(25, deal_counts11.get(w11, 0) * 5)
+        task_s11 = min(25, task_counts11.get(w11, 0) * 5)
+        msg_s11 = min(25, msg_counts11.get(w11, 0) * 2)
+        total_s11 = agent_s11 + deal_s11 + task_s11 + msg_s11
+        weekly_scores11.append({
+            "week_start": w11.strftime("%Y-%m-%d"),
+            "score": total_s11,
+            "agent_score": agent_s11,
+            "deal_score": deal_s11,
+            "task_score": task_s11,
+            "message_score": msg_s11,
+        })
+
+    current_score11 = weekly_scores11[-1]["score"] if weekly_scores11 else 0
+    avg_score11 = round(sum(w["score"] for w in weekly_scores11) / 12, 1)
+    peak11 = max(weekly_scores11, key=lambda w: w["score"])
+    peak_week11 = peak11["week_start"]
+    first_half_avg11 = sum(w["score"] for w in weekly_scores11[:6]) / 6
+    second_half_avg11 = sum(w["score"] for w in weekly_scores11[6:]) / 6
+    score_delta11 = round(second_half_avg11 - first_half_avg11, 1)
+    if score_delta11 > 5:
+        trend_direction11 = "improving"
+    elif score_delta11 < -5:
+        trend_direction11 = "declining"
+    else:
+        trend_direction11 = "stable"
+
+    productivity_narrative11 = ""
+    recommendations11: list = []
+    total_any11 = sum(
+        agent_counts11.get(w, 0) + deal_counts11.get(w, 0) + task_counts11.get(w, 0) + msg_counts11.get(w, 0)
+        for w in weeks11
+    )
+    if total_any11 == 0:
+        return {
+            "weekly_scores": weekly_scores11,
+            "current_score": 0,
+            "avg_score": 0.0,
+            "trend_direction": "stable",
+            "score_delta": 0.0,
+            "peak_week": peak_week11,
+            "productivity_narrative": "No workspace activity recorded in the last 12 weeks.",
+            "recommendations": [
+                "Start running agents to build a productivity baseline.",
+                "Connect a Gmail or Slack connector to track message volume.",
+                "Create and complete tasks to improve your productivity score.",
+            ],
+            "generated_at": now11.isoformat() + "Z",
+        }
+
+    try:
+        client11 = _mk_anthropic()
+        score_summary11 = "; ".join(
+            f"{w['week_start']}={w['score']}" for w in weekly_scores11[-6:]
+        )
+        prompt11 = (
+            "You are analyzing workspace productivity for a CRM platform.\n"
+            f"Composite score (0-100) last 6 weeks: {score_summary11}\n"
+            f"Current score: {current_score11}. Avg: {avg_score11}. Trend: {trend_direction11} ({score_delta11:+.1f} pts).\n"
+            f"Components this week — agent: {weekly_scores11[-1]['agent_score']}/25, "
+            f"deal: {weekly_scores11[-1]['deal_score']}/25, "
+            f"task: {weekly_scores11[-1]['task_score']}/25, "
+            f"message: {weekly_scores11[-1]['message_score']}/25\n\n"
+            "Return JSON with exactly:\n"
+            '{"productivity_narrative": "2-sentence insight", "recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp11 = client11.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt11}],
+        )
+        raw11 = resp11.content[0].text.strip()
+        if "```" in raw11:
+            raw11 = raw11.split("```")[1]
+            if raw11.startswith("json"):
+                raw11 = raw11[4:]
+        parsed11 = loads_llm_json(raw11)
+        productivity_narrative11 = str(parsed11.get("productivity_narrative", "")).strip()
+        raw_recs11 = parsed11.get("recommendations", [])
+        recommendations11 = [str(r) for r in (raw_recs11 if isinstance(raw_recs11, list) else [])[:3]]
+    except Exception:
+        productivity_narrative11 = (
+            f"Workspace productivity is {trend_direction11} with a current score of {current_score11}/100 "
+            f"(12-week avg: {avg_score11}). "
+            f"{'The trend is positive heading into the next period.' if trend_direction11 == 'improving' else ''}"
+        )
+
+    default_recs11 = [
+        "Run more agents to boost the agent-activity component of your productivity score.",
+        "Focus on completing open tasks to raise the task-completion component.",
+        "Connect messaging integrations to improve the message-volume component.",
+    ]
+    while len(recommendations11) < 3:
+        recommendations11.append(default_recs11[len(recommendations11) % 3])
+
+    return {
+        "weekly_scores": weekly_scores11,
+        "current_score": current_score11,
+        "avg_score": avg_score11,
+        "trend_direction": trend_direction11,
+        "score_delta": score_delta11,
+        "peak_week": peak_week11,
+        "productivity_narrative": productivity_narrative11,
+        "recommendations": recommendations11,
+        "generated_at": now11.isoformat() + "Z",
+    }

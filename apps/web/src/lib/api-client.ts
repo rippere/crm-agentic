@@ -8300,5 +8300,45 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getWorkspaceProductivityScore(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      // Deterministic 12-week arc: improving from ~28 → ~72
+      const BASE_SCORES = [28, 32, 35, 38, 42, 45, 50, 54, 58, 63, 68, 72]
+      const now = new Date()
+      // Compute last Monday
+      const monday = new Date(now)
+      monday.setUTCHours(0, 0, 0, 0)
+      monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7))
+      const weekly_scores = BASE_SCORES.map((score, i) => {
+        const d = new Date(monday)
+        d.setUTCDate(d.getUTCDate() - (11 - i) * 7)
+        return {
+          week_start: d.toISOString().slice(0, 10),
+          score,
+          agent_score: Math.min(25, Math.round(score * 0.25)),
+          deal_score: Math.min(25, Math.round(score * 0.25)),
+          task_score: Math.min(25, Math.round(score * 0.25)),
+          message_score: Math.min(25, Math.round(score * 0.25)),
+        }
+      })
+      return Promise.resolve({
+        weekly_scores,
+        current_score: 72,
+        avg_score: 49.6,
+        trend_direction: 'improving',
+        score_delta: 40.0,
+        peak_week: weekly_scores[11].week_start,
+        productivity_narrative: 'Workspace productivity has risen steadily over the past 12 weeks, with strong gains in agent usage and task completions. The current score of 72/100 reflects a healthy mix of automated intelligence and team engagement.',
+        recommendations: [
+          'Maintain the upward momentum by scheduling daily agent runs for lead scoring and enrichment.',
+          'Close out the remaining open tasks this sprint to push the task-completion component to its ceiling.',
+          'Add a second messaging connector to diversify message volume and reduce single-source dependency.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/workspace/productivity-score`, {}, token)
+  },
 }
 
