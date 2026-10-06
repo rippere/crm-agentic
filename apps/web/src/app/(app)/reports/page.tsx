@@ -994,6 +994,12 @@ export default function ReportsPage() {
   const [agentWowLoading, setAgentWowLoading] = useState(false);
   const [agentWowOpen, setAgentWowOpen] = useState(true);
 
+  type ActivityMetric = { name: string; current_week: number; prior_week: number; delta: number; pct_change: number };
+  type WorkspaceActivitySummaryData = { metrics: ActivityMetric[]; total_current_week: number; total_prior_week: number; total_delta: number; total_pct_change: number; overall_trend: string; summary_narrative: string; recommendations: string[]; generated_at: string };
+  const [activitySummary, setActivitySummary] = useState<WorkspaceActivitySummaryData | null>(null);
+  const [activitySummaryLoading, setActivitySummaryLoading] = useState(false);
+  const [activitySummaryOpen, setActivitySummaryOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1232,6 +1238,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setActivitySummaryLoading(true);
+      apiClient.getWorkspaceActivitySummary("demo-workspace-1", "demo-token").then(setActivitySummary).catch(() => {}).finally(() => setActivitySummaryLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1469,6 +1477,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setActivitySummaryLoading(true);
+      apiClient.getWorkspaceActivitySummary(workspaceId, session.access_token).then(setActivitySummary).catch(() => {}).finally(() => setActivitySummaryLoading(false));
     });
   }, []);
 
@@ -3263,6 +3273,27 @@ export default function ReportsPage() {
         if (!session) { setAgentWowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentWowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateActivitySummary = () => {
+    setActivitySummaryLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getWorkspaceActivitySummary(wid, tok)
+        .then(setActivitySummary)
+        .catch(() => {})
+        .finally(() => setActivitySummaryLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setActivitySummaryLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setActivitySummaryLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14040,6 +14071,87 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the day-of-week distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20ag – Team Activity Summary */}
+      <Card className="border-zinc-700/50">
+        <div
+          className="flex items-center justify-between p-4 cursor-pointer select-none"
+          onClick={() => setActivitySummaryOpen(v => !v)}
+        >
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-indigo-400" />
+            <span className="text-sm font-medium text-zinc-200">Team Activity Summary</span>
+            {activitySummary && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${activitySummary.overall_trend === 'up' ? 'bg-emerald-900/40 text-emerald-300' : activitySummary.overall_trend === 'down' ? 'bg-rose-900/40 text-rose-300' : 'bg-zinc-800 text-zinc-400'}`}>
+                {activitySummary.total_pct_change >= 0 ? '+' : ''}{activitySummary.total_pct_change.toFixed(1)}% WoW
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateActivitySummary(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={activitySummaryLoading}>
+              {activitySummaryLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {activitySummaryOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {activitySummaryOpen && (
+          activitySummaryLoading && !activitySummary ? (
+            <div className="p-6"><div className="h-32 bg-zinc-800/50 rounded animate-pulse" /></div>
+          ) : activitySummary ? (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3 mb-2">
+                <div className="bg-zinc-800/40 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">This Week</p>
+                  <p className="text-xl font-bold text-zinc-200">{activitySummary.total_current_week}</p>
+                </div>
+                <div className="bg-zinc-800/40 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Last Week</p>
+                  <p className="text-xl font-bold text-zinc-400">{activitySummary.total_prior_week}</p>
+                </div>
+                <div className="bg-zinc-800/40 rounded p-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Change</p>
+                  <p className={`text-xl font-bold ${activitySummary.total_delta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {activitySummary.total_delta >= 0 ? '+' : ''}{activitySummary.total_delta}
+                  </p>
+                </div>
+              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-zinc-500">
+                    <th className="text-left pb-1">Metric</th>
+                    <th className="text-right pb-1">This Week</th>
+                    <th className="text-right pb-1">Last Week</th>
+                    <th className="text-right pb-1">Change</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activitySummary.metrics.map((m: ActivityMetric) => (
+                    <tr key={m.name} className="border-t border-zinc-800/60">
+                      <td className="py-1.5 text-zinc-300">{m.name}</td>
+                      <td className="py-1.5 text-right font-medium text-zinc-200">{m.current_week}</td>
+                      <td className="py-1.5 text-right text-zinc-500">{m.prior_week}</td>
+                      <td className="py-1.5 text-right">
+                        <span className={`font-medium ${m.delta > 0 ? 'text-emerald-400' : m.delta < 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
+                          {m.delta > 0 ? '+' : ''}{m.delta} <span className="text-zinc-600">({m.pct_change >= 0 ? '+' : ''}{m.pct_change.toFixed(1)}%)</span>
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-xs text-zinc-400 italic">{activitySummary.summary_narrative}</p>
+              <ul className="space-y-1">
+                {activitySummary.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300"><span className="text-indigo-400 mt-0.5">•</span><span>{r}</span></li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(activitySummary.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the activity summary.</div>
           )
         )}
       </Card>
