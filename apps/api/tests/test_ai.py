@@ -10634,3 +10634,76 @@ async def test_agent_wow_comparison_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/wow-comparison")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_note_creation_trend_returns_structured_response(app_client, monkeypatch):
+    import datetime as _dt
+    import uuid
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Two contact notes and three deal notes returned from the DB
+    cn_times = [
+        _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=5),
+        _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=40),
+    ]
+    dn_times = [
+        _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=3),
+        _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=10),
+        _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=35),
+    ]
+
+    call_count = [0]
+
+    class FakeScalarsResult:
+        def __init__(self_, data):
+            self_._data = data
+        def all(self_):
+            return self_._data
+
+    class FakeResult:
+        def __init__(self_, data):
+            self_._data = data
+        def scalars(self_):
+            return FakeScalarsResult(self_._data)
+
+    async def fake_execute(q, *args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResult(cn_times)
+        return FakeResult(dn_times)
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"note_narrative": "Notes up.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/notes/creation-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_notes"]) == 6
+    assert data["total_notes"] == 5  # 2 contact + 3 deal
+    assert data["contact_notes_total"] == 2
+    assert data["deal_notes_total"] == 3
+    assert data["trend_direction"] in ("growing", "stable", "declining")
+    assert data["note_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+    assert "avg_per_month" in data
+
+
+@pytest.mark.asyncio
+async def test_note_creation_trend_wrong_workspace_returns_403(app_client):
+    import uuid
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-ffff00002222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/notes/creation-trend")
+    assert resp.status_code == 403

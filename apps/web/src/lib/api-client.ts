@@ -8300,5 +8300,39 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getNoteCreationTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const months = ['May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026', 'Sep 2026', 'Oct 2026']
+      const contactCounts = [4, 6, 9, 12, 15, 18]
+      const dealCounts = [3, 5, 7, 10, 13, 16]
+      const monthly_notes = months.map((month_label, i) => ({
+        month_label,
+        contact_notes: contactCounts[i],
+        deal_notes: dealCounts[i],
+        total_notes: contactCounts[i] + dealCounts[i],
+      }))
+      const total_notes = monthly_notes.reduce((a, r) => a + r.total_notes, 0)
+      return Promise.resolve({
+        monthly_notes,
+        total_notes,
+        contact_notes_total: contactCounts.reduce((a, c) => a + c, 0),
+        deal_notes_total: dealCounts.reduce((a, c) => a + c, 0),
+        avg_per_month: Math.round(total_notes / 6 * 10) / 10,
+        growth_rate: 62.5,
+        trend_direction: 'growing',
+        peak_month: 'Oct 2026',
+        peak_count: 34,
+        note_narrative: 'Note creation has grown 62.5% over the past 6 months, reflecting deeper team engagement with deals and contacts. The consistent month-over-month increase suggests the team is building strong documentation habits.',
+        recommendations: [
+          'Continue the upward note-taking trend by setting a team goal of notes per closed deal.',
+          'Review the contact note proportion — equal coverage across deals and contacts ensures balanced insights.',
+          'Schedule a weekly note review to surface key themes and unresolved objections from the team.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/notes/creation-trend`, {}, token)
+  },
 }
 

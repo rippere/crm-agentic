@@ -23505,3 +23505,181 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/notes/creation-trend")
+@limiter.limit("5/minute")
+async def get_ai_note_creation_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now13 = datetime.datetime.now(timezone.utc)
+    six_months_ago13 = now13 - datetime.timedelta(days=183)
+
+    cn_rows13 = (await db.execute(
+        select(ContactNote.created_at)
+        .where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.created_at >= six_months_ago13,
+        )
+    )).scalars().all()
+
+    dn_rows13 = (await db.execute(
+        select(DealNote.created_at)
+        .where(
+            DealNote.workspace_id == workspace_id,
+            DealNote.created_at >= six_months_ago13,
+        )
+    )).scalars().all()
+
+    def _mk13(dt) -> str:
+        if dt is None:
+            return ""
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return f"{dt.year:04d}-{dt.month:02d}"
+
+    cur_year13, cur_month13 = now13.year, now13.month
+    month_keys13 = []
+    for offset13 in range(5, -1, -1):
+        m13 = cur_month13 - offset13
+        y13 = cur_year13
+        while m13 <= 0:
+            m13 += 12
+            y13 -= 1
+        month_keys13.append(f"{y13:04d}-{m13:02d}")
+
+    cn_buckets13: dict = {mk: 0 for mk in month_keys13}
+    dn_buckets13: dict = {mk: 0 for mk in month_keys13}
+
+    for ts13 in cn_rows13:
+        mk13 = _mk13(ts13)
+        if mk13 in cn_buckets13:
+            cn_buckets13[mk13] += 1
+
+    for ts13 in dn_rows13:
+        mk13 = _mk13(ts13)
+        if mk13 in dn_buckets13:
+            dn_buckets13[mk13] += 1
+
+    monthly_notes13 = []
+    for mk13 in month_keys13:
+        y13, m13 = int(mk13[:4]), int(mk13[5:])
+        label13 = datetime.date(y13, m13, 1).strftime("%b %Y")
+        cn13 = cn_buckets13[mk13]
+        dn13 = dn_buckets13[mk13]
+        monthly_notes13.append({
+            "month_label": label13,
+            "contact_notes": cn13,
+            "deal_notes": dn13,
+            "total_notes": cn13 + dn13,
+        })
+
+    total_notes13 = sum(r["total_notes"] for r in monthly_notes13)
+    contact_notes_total13 = sum(r["contact_notes"] for r in monthly_notes13)
+    deal_notes_total13 = sum(r["deal_notes"] for r in monthly_notes13)
+    avg_per_month13 = round(total_notes13 / 6, 1)
+
+    first_half13 = sum(r["total_notes"] for r in monthly_notes13[:3])
+    second_half13 = sum(r["total_notes"] for r in monthly_notes13[3:])
+    if first_half13 == 0:
+        growth_rate13 = 100.0 if second_half13 > 0 else 0.0
+    else:
+        growth_rate13 = round((second_half13 - first_half13) / first_half13 * 100, 1)
+
+    if growth_rate13 >= 10:
+        trend_direction13 = "growing"
+    elif growth_rate13 <= -10:
+        trend_direction13 = "declining"
+    else:
+        trend_direction13 = "stable"
+
+    peak_month13 = (
+        max(monthly_notes13, key=lambda r: r["total_notes"])["month_label"]
+        if total_notes13 > 0 else None
+    )
+    peak_count13 = max(r["total_notes"] for r in monthly_notes13) if total_notes13 > 0 else 0
+
+    if total_notes13 == 0:
+        return {
+            "monthly_notes": monthly_notes13,
+            "total_notes": 0,
+            "contact_notes_total": 0,
+            "deal_notes_total": 0,
+            "avg_per_month": 0.0,
+            "growth_rate": 0.0,
+            "trend_direction": "stable",
+            "peak_month": None,
+            "peak_count": 0,
+            "note_narrative": "No notes recorded in the past 6 months. Encourage your team to document deal and contact interactions with notes.",
+            "recommendations": [
+                "Add deal notes after every customer conversation to build institutional memory.",
+                "Use contact notes to track relationship milestones and key decisions.",
+                "Set a team goal of at least 3 notes per deal per week to improve deal visibility.",
+            ],
+            "generated_at": now13.isoformat() + "Z",
+        }
+
+    note_narrative13 = ""
+    recommendations13: list = []
+
+    try:
+        client13 = _mk_anthropic()
+        monthly_text13 = "\n".join(
+            f"  {r['month_label']}: {r['total_notes']} notes ({r['contact_notes']} contact + {r['deal_notes']} deal)"
+            for r in monthly_notes13
+        )
+        prompt13 = (
+            "Analyze this 6-month note creation trend for a CRM workspace.\n"
+            f"Monthly notes (contact + deal):\n{monthly_text13}\n"
+            f"Trend: {trend_direction13}, growth rate: {growth_rate13:+.1f}%, avg {avg_per_month13} notes/month.\n\n"
+            "Return JSON with exactly:\n"
+            '{"note_narrative": "2-sentence insight", "recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp13 = client13.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt13}],
+        )
+        raw13 = resp13.content[0].text.strip()
+        if "```" in raw13:
+            raw13 = raw13.split("```")[1]
+            if raw13.startswith("json"):
+                raw13 = raw13[4:]
+        parsed13 = loads_llm_json(raw13)
+        note_narrative13 = str(parsed13.get("note_narrative", "")).strip()
+        raw_recs13 = parsed13.get("recommendations", [])
+        recommendations13 = [str(r) for r in (raw_recs13 if isinstance(raw_recs13, list) else [])[:3]]
+    except Exception:
+        note_narrative13 = (
+            f"Note creation is {trend_direction13} over the past 6 months with a {growth_rate13:+.1f}% change. "
+            f"The team logged {total_notes13} total notes averaging {avg_per_month13} per month."
+        )
+
+    default_recs13 = [
+        "Establish a note-taking ritual after every customer meeting to capture key insights.",
+        "Review months with declining note activity and identify team capacity constraints.",
+        "Aim to maintain a consistent note-to-deal ratio to ensure pipeline visibility.",
+    ]
+    while len(recommendations13) < 3:
+        recommendations13.append(default_recs13[len(recommendations13) % 3])
+
+    return {
+        "monthly_notes": monthly_notes13,
+        "total_notes": total_notes13,
+        "contact_notes_total": contact_notes_total13,
+        "deal_notes_total": deal_notes_total13,
+        "avg_per_month": avg_per_month13,
+        "growth_rate": growth_rate13,
+        "trend_direction": trend_direction13,
+        "peak_month": peak_month13,
+        "peak_count": peak_count13,
+        "note_narrative": note_narrative13,
+        "recommendations": recommendations13,
+        "generated_at": now13.isoformat() + "Z",
+    }
