@@ -994,6 +994,12 @@ export default function ReportsPage() {
   const [agentWowLoading, setAgentWowLoading] = useState(false);
   const [agentWowOpen, setAgentWowOpen] = useState(true);
 
+  type CoverageMonth = { month_label: string; contacts_touched: number; total_contacts: number; engagement_pct: number };
+  type ContactTouchCoverageData = { monthly_coverage: CoverageMonth[]; total_contacts: number; avg_engagement_pct: number; growth_rate: number; trend_direction: string; peak_month: string | null; peak_pct: number; coverage_narrative: string; recommendations: string[]; generated_at: string };
+  const [contactTouchCoverage, setContactTouchCoverage] = useState<ContactTouchCoverageData | null>(null);
+  const [contactTouchCoverageLoading, setContactTouchCoverageLoading] = useState(false);
+  const [contactTouchCoverageOpen, setContactTouchCoverageOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1232,6 +1238,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setContactTouchCoverageLoading(true);
+      apiClient.getContactTouchCoverageTrend("demo-workspace-1", "demo-token").then(setContactTouchCoverage).catch(() => {}).finally(() => setContactTouchCoverageLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1469,6 +1477,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setContactTouchCoverageLoading(true);
+      apiClient.getContactTouchCoverageTrend(workspaceId, session.access_token).then(setContactTouchCoverage).catch(() => {}).finally(() => setContactTouchCoverageLoading(false));
     });
   }, []);
 
@@ -3263,6 +3273,27 @@ export default function ReportsPage() {
         if (!session) { setAgentWowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentWowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateContactTouchCoverage = () => {
+    setContactTouchCoverageLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getContactTouchCoverageTrend(wid, tok)
+        .then(setContactTouchCoverage)
+        .catch(() => {})
+        .finally(() => setContactTouchCoverageLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setContactTouchCoverageLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setContactTouchCoverageLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14040,6 +14071,87 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the day-of-week distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Contact Touch Coverage */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 cursor-pointer select-none" onClick={() => setContactTouchCoverageOpen(v => !v)}>
+          <div className="flex items-center gap-3">
+            <UserCheck className="h-4 w-4 text-teal-400" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Contact Touch Coverage</p>
+              <p className="text-xs text-zinc-500">Monthly % of contacts touched via messages or notes</p>
+            </div>
+            {contactTouchCoverage && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${contactTouchCoverage.trend_direction === 'improving' ? 'bg-teal-900/40 text-teal-300' : contactTouchCoverage.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' : 'bg-zinc-800 text-zinc-400'}`}>
+                {contactTouchCoverage.trend_direction}
+              </span>
+            )}
+            {contactTouchCoverage && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-zinc-800 text-zinc-400">
+                {contactTouchCoverage.growth_rate >= 0 ? '+' : ''}{contactTouchCoverage.growth_rate.toFixed(1)}% growth
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateContactTouchCoverage(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={contactTouchCoverageLoading}>
+              {contactTouchCoverageLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {contactTouchCoverageOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {contactTouchCoverageOpen && (
+          contactTouchCoverageLoading && !contactTouchCoverage ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading contact touch coverage…</div>
+          ) : contactTouchCoverage ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Engagement</p>
+                  <p className={`text-xl font-bold ${contactTouchCoverage.avg_engagement_pct >= 70 ? 'text-teal-300' : contactTouchCoverage.avg_engagement_pct >= 40 ? 'text-amber-300' : 'text-rose-300'}`}>{contactTouchCoverage.avg_engagement_pct.toFixed(1)}%</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Contacts</p>
+                  <p className="text-xl font-bold text-zinc-200">{contactTouchCoverage.total_contacts}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Peak Month</p>
+                  <p className="text-sm font-bold text-teal-300">{contactTouchCoverage.peak_month ?? '—'}</p>
+                  {contactTouchCoverage.peak_pct > 0 && <p className="text-xs text-zinc-500">{contactTouchCoverage.peak_pct.toFixed(1)}%</p>}
+                </div>
+              </div>
+              {contactTouchCoverage.monthly_coverage.length > 0 ? (
+                <div className="h-52">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={contactTouchCoverage.monthly_coverage} margin={{ top: 4, right: 36, bottom: 0, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                      <XAxis dataKey="month_label" tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <YAxis yAxisId="left" tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} width={32} />
+                      <YAxis yAxisId="right" orientation="right" tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} width={36} domain={[0, 100]} />
+                      <Tooltip contentStyle={{ background: '#18181B', border: '1px solid #3F3F46', borderRadius: 6, fontSize: 11 }} labelStyle={{ color: '#A1A1AA' }} itemStyle={{ color: '#E4E4E7' }} />
+                      <Bar yAxisId="left" dataKey="contacts_touched" name="Touched" fill="#14B8A6" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                      <Line yAxisId="right" type="monotone" dataKey="engagement_pct" name="Engagement %" stroke="#F59E0B" strokeWidth={2} dot={{ fill: '#F59E0B', r: 3 }} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center">No contact touch data in the last 6 months.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{contactTouchCoverage.coverage_narrative}</p>
+              <ul className="space-y-1">
+                {contactTouchCoverage.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(contactTouchCoverage.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the contact touch coverage analysis.</div>
           )
         )}
       </Card>

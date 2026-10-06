@@ -10634,3 +10634,79 @@ async def test_agent_wow_comparison_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/wow-comparison")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20ai – AI contact touch coverage trend
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_contact_touch_coverage_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    import datetime as _dt
+
+    call_count = {"n": 0}
+
+    class FakeScalarResult:
+        def scalar(self_):
+            return 5
+
+    class FakeRowsResult:
+        def __init__(self_, rows):
+            self_._rows = rows
+        def all(self_):
+            return self_._rows
+
+    now = _dt.datetime.utcnow()
+    contact_uuid = str(workspace_id)
+    msg_rows = [
+        (contact_uuid, now - _dt.timedelta(days=10)),
+        (contact_uuid, now - _dt.timedelta(days=40)),
+    ]
+    cn_rows = [
+        (contact_uuid, now - _dt.timedelta(days=5)),
+        (contact_uuid, now - _dt.timedelta(days=70)),
+    ]
+
+    async def fake_execute(stmt):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return FakeScalarResult()
+        elif call_count["n"] == 2:
+            return FakeRowsResult(msg_rows)
+        else:
+            return FakeRowsResult(cn_rows)
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"coverage_narrative": "Coverage is improving.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/touch-coverage-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_coverage"]) == 6
+    assert data["total_contacts"] == 5
+    assert data["avg_engagement_pct"] >= 0
+    assert data["trend_direction"] in ("improving", "stable", "declining")
+    assert data["coverage_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+    assert "growth_rate" in data
+    assert "peak_month" in data
+
+
+@pytest.mark.asyncio
+async def test_contact_touch_coverage_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-ffff00001111")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/touch-coverage-trend")
+    assert resp.status_code == 403
