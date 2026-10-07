@@ -8300,5 +8300,43 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getCrmEngagementTrend(workspaceId: string, token: string) {
+    if (isDemoMode()) {
+      const months = ['May 2026','Jun 2026','Jul 2026','Aug 2026','Sep 2026','Oct 2026']
+      const contacts = [4, 6, 8, 11, 14, 18]
+      const messages = [12, 18, 24, 31, 40, 52]
+      const tasks    = [5, 7, 9, 13, 17, 22]
+      const notes    = [3, 5, 7, 10, 13, 17]
+      const monthly_engagement = months.map((month_label, i) => ({
+        month_label,
+        contacts_created: contacts[i],
+        messages_received: messages[i],
+        tasks_created: tasks[i],
+        notes_written: notes[i],
+        total_activity: contacts[i] + messages[i] + tasks[i] + notes[i],
+      }))
+      const total_activity = monthly_engagement.reduce((s, m) => s + m.total_activity, 0)
+      return Promise.resolve({
+        monthly_engagement,
+        total_contacts: contacts.reduce((a,b)=>a+b,0),
+        total_messages: messages.reduce((a,b)=>a+b,0),
+        total_tasks:    tasks.reduce((a,b)=>a+b,0),
+        total_notes:    notes.reduce((a,b)=>a+b,0),
+        total_activity,
+        trend_direction: 'growing',
+        activity_delta: 59.2,
+        best_month: 'Oct 2026',
+        engagement_narrative: 'CRM engagement has grown 59% over the last 6 months, driven primarily by a surge in messaging and task creation. Contact acquisition is also accelerating, suggesting the pipeline funnel is expanding consistently.',
+        recommendations: [
+          'Maintain the message cadence growth by scheduling follow-up sequences for your newest contacts.',
+          'The rising note volume indicates strong rep engagement — consider templating top notes for reuse.',
+          'With 18 new contacts this month, ensure the lead scorer agent is running daily to keep scores current.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/crm-engagement-trend`, {}, token)
+  },
 }
 

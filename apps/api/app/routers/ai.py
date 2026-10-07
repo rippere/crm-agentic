@@ -23505,3 +23505,211 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20af – AI CRM engagement trend
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/crm-engagement-trend")
+@limiter.limit("5/minute")
+async def get_ai_crm_engagement_trend(
+    workspace_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now11 = datetime.datetime.utcnow()
+    cutoff11 = now11 - datetime.timedelta(days=183)
+
+    # Compute month-bucket label helper
+    def _month_label11(year: int, month: int) -> str:
+        return datetime.datetime(year, month, 1).strftime("%b %Y")
+
+    def _month_offset11(dt: datetime.datetime, base_year: int, base_month: int) -> int:
+        return (dt.year - base_year) * 12 + (dt.month - base_month)
+
+    # Build 6-month bucket keys (oldest → newest)
+    months11 = []
+    for i in range(5, -1, -1):
+        total_months = now11.month - 1 - i
+        yr = now11.year + total_months // 12
+        mo = (total_months % 12) + 1
+        months11.append((yr, mo, _month_label11(yr, mo)))
+
+    base_year11, base_month11 = months11[0][0], months11[0][1]
+    buckets11: dict = {(yr, mo): {"contacts_created": 0, "messages_received": 0, "tasks_created": 0, "notes_written": 0} for yr, mo, _ in months11}
+
+    # Query contacts
+    contact_rows11 = (await db.execute(
+        select(Contact.created_at).where(
+            Contact.workspace_id == workspace_id,
+            Contact.created_at >= cutoff11,
+        )
+    )).all()
+    for row11 in contact_rows11:
+        if row11.created_at:
+            key11 = (row11.created_at.year, row11.created_at.month)
+            if key11 in buckets11:
+                buckets11[key11]["contacts_created"] += 1
+
+    # Query messages
+    message_rows11 = (await db.execute(
+        select(Message.created_at).where(
+            Message.workspace_id == workspace_id,
+            Message.created_at >= cutoff11,
+        )
+    )).all()
+    for row11 in message_rows11:
+        if row11.created_at:
+            key11 = (row11.created_at.year, row11.created_at.month)
+            if key11 in buckets11:
+                buckets11[key11]["messages_received"] += 1
+
+    # Query tasks
+    task_rows11 = (await db.execute(
+        select(Task.created_at).where(
+            Task.workspace_id == workspace_id,
+            Task.created_at >= cutoff11,
+        )
+    )).all()
+    for row11 in task_rows11:
+        if row11.created_at:
+            key11 = (row11.created_at.year, row11.created_at.month)
+            if key11 in buckets11:
+                buckets11[key11]["tasks_created"] += 1
+
+    # Query contact notes
+    note_rows11 = (await db.execute(
+        select(ContactNote.created_at).where(
+            ContactNote.workspace_id == workspace_id,
+            ContactNote.created_at >= cutoff11,
+        )
+    )).all()
+    for row11 in note_rows11:
+        if row11.created_at:
+            key11 = (row11.created_at.year, row11.created_at.month)
+            if key11 in buckets11:
+                buckets11[key11]["notes_written"] += 1
+
+    monthly_engagement11 = []
+    for yr11, mo11, label11 in months11:
+        b11 = buckets11[(yr11, mo11)]
+        monthly_engagement11.append({
+            "month_label": label11,
+            "contacts_created": b11["contacts_created"],
+            "messages_received": b11["messages_received"],
+            "tasks_created": b11["tasks_created"],
+            "notes_written": b11["notes_written"],
+            "total_activity": b11["contacts_created"] + b11["messages_received"] + b11["tasks_created"] + b11["notes_written"],
+        })
+
+    total_contacts11 = sum(m["contacts_created"] for m in monthly_engagement11)
+    total_messages11 = sum(m["messages_received"] for m in monthly_engagement11)
+    total_tasks11 = sum(m["tasks_created"] for m in monthly_engagement11)
+    total_notes11 = sum(m["notes_written"] for m in monthly_engagement11)
+    total_activity11 = sum(m["total_activity"] for m in monthly_engagement11)
+
+    # Trend direction based on first-half vs second-half total activity
+    first_half11 = sum(m["total_activity"] for m in monthly_engagement11[:3])
+    second_half11 = sum(m["total_activity"] for m in monthly_engagement11[3:])
+    if first_half11 == 0:
+        trend_direction11 = "growing" if second_half11 > 0 else "stable"
+        activity_delta11 = 100.0 if second_half11 > 0 else 0.0
+    else:
+        activity_delta11 = round((second_half11 - first_half11) / first_half11 * 100, 1)
+        if activity_delta11 >= 10:
+            trend_direction11 = "growing"
+        elif activity_delta11 <= -10:
+            trend_direction11 = "declining"
+        else:
+            trend_direction11 = "stable"
+
+    best_month11 = max(monthly_engagement11, key=lambda m: m["total_activity"])["month_label"] if total_activity11 > 0 else None
+
+    engagement_narrative11 = ""
+    recommendations11: list = []
+
+    if total_activity11 == 0:
+        return {
+            "monthly_engagement": monthly_engagement11,
+            "total_contacts": 0,
+            "total_messages": 0,
+            "total_tasks": 0,
+            "total_notes": 0,
+            "total_activity": 0,
+            "trend_direction": "stable",
+            "activity_delta": 0.0,
+            "best_month": None,
+            "engagement_narrative": "No CRM activity recorded in the last 6 months.",
+            "recommendations": [
+                "Start adding contacts to build your CRM engagement baseline.",
+                "Connect Gmail or Slack to automatically import messages.",
+                "Create tasks to track follow-up actions with your contacts.",
+            ],
+            "generated_at": now11.isoformat() + "Z",
+        }
+
+    try:
+        client11 = _mk_anthropic()
+        monthly_summary11 = "; ".join(
+            f"{m['month_label']}: contacts={m['contacts_created']} msgs={m['messages_received']} tasks={m['tasks_created']} notes={m['notes_written']}"
+            for m in monthly_engagement11
+        )
+        prompt11 = (
+            "You are analyzing CRM engagement trends for a sales/PM workspace.\n"
+            f"Total 6-month activity: {total_activity11} events "
+            f"({total_contacts11} contacts, {total_messages11} messages, {total_tasks11} tasks, {total_notes11} notes).\n"
+            f"Trend: {trend_direction11} ({activity_delta11:+.1f}% first-half vs second-half).\n"
+            f"Monthly breakdown: {monthly_summary11}\n\n"
+            "Return JSON with exactly:\n"
+            '{"engagement_narrative": "2-sentence insight about CRM engagement health and trends", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp11 = client11.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt11}],
+        )
+        raw11 = resp11.content[0].text.strip()
+        if "```" in raw11:
+            raw11 = raw11.split("```")[1]
+            if raw11.startswith("json"):
+                raw11 = raw11[4:]
+        parsed11 = loads_llm_json(raw11)
+        engagement_narrative11 = str(parsed11.get("engagement_narrative", "")).strip()
+        raw_recs11 = parsed11.get("recommendations", [])
+        recommendations11 = [str(r) for r in (raw_recs11 if isinstance(raw_recs11, list) else [])[:3]]
+    except Exception:
+        direction_word11 = "growing" if trend_direction11 == "growing" else ("declining" if trend_direction11 == "declining" else "stable")
+        engagement_narrative11 = (
+            f"CRM engagement is {direction_word11} {abs(activity_delta11):.1f}% from the first half to the second half of the period. "
+            f"A total of {total_activity11} activities were recorded: {total_messages11} messages, {total_tasks11} tasks, "
+            f"{total_contacts11} contacts added, and {total_notes11} notes written."
+        )
+
+    default_recs11 = [
+        "Increase message cadence with contacts who have had no activity in the last 30 days.",
+        "Use task automation to ensure follow-ups are scheduled consistently after new contact creation.",
+        "Review months with low engagement to identify seasonal patterns or workflow gaps.",
+    ]
+    while len(recommendations11) < 3:
+        recommendations11.append(default_recs11[len(recommendations11) % 3])
+
+    return {
+        "monthly_engagement": monthly_engagement11,
+        "total_contacts": total_contacts11,
+        "total_messages": total_messages11,
+        "total_tasks": total_tasks11,
+        "total_notes": total_notes11,
+        "total_activity": total_activity11,
+        "trend_direction": trend_direction11,
+        "activity_delta": activity_delta11,
+        "best_month": best_month11,
+        "engagement_narrative": engagement_narrative11,
+        "recommendations": recommendations11,
+        "generated_at": now11.isoformat() + "Z",
+    }
