@@ -23505,3 +23505,162 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/avg-value-trend")
+@limiter.limit("5/minute")
+async def get_ai_deal_avg_value_trend(
+    workspace_id: uuid.UUID, request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now12 = datetime.datetime.utcnow()
+    cutoff12 = now12 - datetime.timedelta(days=183)
+
+    result12 = await db.execute(
+        select(Deal.value, Deal.created_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.created_at >= cutoff12)
+    )
+    deals12 = result12.all()
+
+    month_buckets12: list[dict] = []
+    for i12 in range(5, -1, -1):
+        target_month12 = now12.month - i12
+        target_year12 = now12.year
+        while target_month12 <= 0:
+            target_month12 += 12
+            target_year12 -= 1
+        month_buckets12.append({
+            "month_label": f"{target_year12}-{target_month12:02d}",
+            "deals_created": 0,
+            "total_value": 0.0,
+        })
+
+    for row12 in deals12:
+        ml12 = f"{row12.created_at.year}-{row12.created_at.month:02d}"
+        for bucket12 in month_buckets12:
+            if bucket12["month_label"] == ml12:
+                bucket12["deals_created"] += 1
+                bucket12["total_value"] += float(row12.value or 0)
+                break
+
+    monthly_avg_value12: list[dict] = []
+    for bucket12 in month_buckets12:
+        avg12 = round(bucket12["total_value"] / bucket12["deals_created"], 2) if bucket12["deals_created"] > 0 else 0.0
+        monthly_avg_value12.append({
+            "month_label": bucket12["month_label"],
+            "deals_created": bucket12["deals_created"],
+            "total_value": round(bucket12["total_value"], 2),
+            "avg_value": avg12,
+        })
+
+    total_deals12 = sum(m["deals_created"] for m in monthly_avg_value12)
+    total_value12 = sum(m["total_value"] for m in monthly_avg_value12)
+    overall_avg_value12 = round(total_value12 / total_deals12, 2) if total_deals12 > 0 else 0.0
+
+    if total_deals12 == 0:
+        return {
+            "monthly_avg_value": monthly_avg_value12,
+            "total_deals": 0,
+            "overall_avg_value": 0.0,
+            "trend_direction": "stable",
+            "value_delta": 0.0,
+            "peak_month": None,
+            "peak_avg_value": 0.0,
+            "avg_value_narrative": "No deal data available for the selected period.",
+            "recommendations": [
+                "Start creating deals to track average deal value trends.",
+                "Set deal values accurately to get meaningful insights.",
+                "Review your deal pipeline to ensure values are populated.",
+            ],
+            "generated_at": now12.isoformat() + "Z",
+        }
+
+    first_half12 = [m for m in monthly_avg_value12[:3] if m["deals_created"] > 0]
+    second_half12 = [m for m in monthly_avg_value12[3:] if m["deals_created"] > 0]
+    first_avg12 = sum(m["avg_value"] for m in first_half12) / len(first_half12) if first_half12 else 0.0
+    second_avg12 = sum(m["avg_value"] for m in second_half12) / len(second_half12) if second_half12 else 0.0
+
+    if first_avg12 > 0:
+        value_delta12 = round((second_avg12 / first_avg12 - 1) * 100, 1)
+    elif second_avg12 > 0:
+        value_delta12 = 100.0
+    else:
+        value_delta12 = 0.0
+
+    if value_delta12 > 10:
+        trend_direction12 = "growing_upmarket"
+    elif value_delta12 < -10:
+        trend_direction12 = "declining_downmarket"
+    else:
+        trend_direction12 = "stable"
+
+    peak12 = max(monthly_avg_value12, key=lambda m: m["avg_value"] if m["deals_created"] > 0 else -1.0)
+
+    avg_value_narrative12 = ""
+    recommendations12: list = []
+    try:
+        client12 = _mk_anthropic()
+        summary12 = "; ".join(
+            f"{m['month_label']}: {m['deals_created']} deals avg ${m['avg_value']:,.0f}"
+            for m in monthly_avg_value12
+        )
+        prompt12 = (
+            f"You are analyzing deal average value trends for a CRM workspace.\n"
+            f"Last 6 months: {summary12}\n"
+            f"Overall avg: ${overall_avg_value12:,.0f}. Trend: {trend_direction12}. Value delta: {value_delta12:+.1f}%.\n\n"
+            "Return JSON with exactly:\n"
+            '{"avg_value_narrative": "2-sentence insight about deal value trends", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp12 = client12.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt12}],
+        )
+        raw12 = resp12.content[0].text.strip()
+        if "```" in raw12:
+            raw12 = raw12.split("```")[1]
+            if raw12.startswith("json"):
+                raw12 = raw12[4:]
+        parsed12 = loads_llm_json(raw12)
+        avg_value_narrative12 = str(parsed12.get("avg_value_narrative", "")).strip()
+        raw_recs12 = parsed12.get("recommendations", [])
+        recommendations12 = [str(r) for r in (raw_recs12 if isinstance(raw_recs12, list) else [])[:3]]
+    except Exception:
+        direction_text12 = {
+            "growing_upmarket": "trending upmarket",
+            "declining_downmarket": "trending downmarket",
+            "stable": "stable",
+        }.get(trend_direction12, "stable")
+        avg_value_narrative12 = (
+            f"Average deal value is {direction_text12} at ${overall_avg_value12:,.0f} overall "
+            f"({value_delta12:+.1f}% change over the period). "
+            + (f"Peak month was {peak12['month_label']} at ${peak12['avg_value']:,.0f}."
+               if peak12["deals_created"] > 0 else "")
+        )
+
+    default_recs12 = [
+        "Focus on qualifying higher-value deals to improve average deal size.",
+        "Review declining deal values to identify if market conditions or targeting has shifted.",
+        "Set minimum deal value thresholds to maintain a healthy average deal size.",
+    ]
+    while len(recommendations12) < 3:
+        recommendations12.append(default_recs12[len(recommendations12) % 3])
+
+    return {
+        "monthly_avg_value": monthly_avg_value12,
+        "total_deals": total_deals12,
+        "overall_avg_value": overall_avg_value12,
+        "trend_direction": trend_direction12,
+        "value_delta": value_delta12,
+        "peak_month": peak12["month_label"] if peak12["deals_created"] > 0 else None,
+        "peak_avg_value": peak12["avg_value"] if peak12["deals_created"] > 0 else 0.0,
+        "avg_value_narrative": avg_value_narrative12,
+        "recommendations": recommendations12,
+        "generated_at": now12.isoformat() + "Z",
+    }

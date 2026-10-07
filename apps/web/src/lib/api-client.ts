@@ -8300,5 +8300,43 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getDealAvgValueTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const avgValues = [28000, 32000, 35000, 41000, 45000, 52000]
+      const dealsCreated = [3, 4, 5, 6, 7, 8]
+      const months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i))
+        return d.toISOString().slice(0, 7)
+      })
+      const monthly_avg_value = months.map((month_label, i) => ({
+        month_label,
+        deals_created: dealsCreated[i],
+        total_value: Math.round(dealsCreated[i] * avgValues[i]),
+        avg_value: avgValues[i],
+      }))
+      const totalDeals = dealsCreated.reduce((a, c) => a + c, 0)
+      const totalValue = monthly_avg_value.reduce((a, m) => a + m.total_value, 0)
+      const overallAvgValue = Math.round(totalValue / totalDeals)
+      const peak = monthly_avg_value.reduce((a, m) => m.avg_value > a.avg_value ? m : a, monthly_avg_value[0])
+      return Promise.resolve({
+        monthly_avg_value,
+        total_deals: totalDeals,
+        overall_avg_value: overallAvgValue,
+        trend_direction: 'growing_upmarket',
+        value_delta: 85.7,
+        peak_month: peak.month_label,
+        peak_avg_value: peak.avg_value,
+        avg_value_narrative: 'Average deal value has grown 85.7% over the last six months, rising from $28K to $52K, signaling a successful shift toward larger enterprise deals. This upmarket trend reflects better qualification and targeting of high-value prospects.',
+        recommendations: [
+          'Continue qualifying prospects against your ICP criteria to maintain the upmarket trajectory.',
+          'Review deals below $20K to determine whether to invest further or reallocate effort.',
+          'Set a deal value floor in your pipeline to filter out low-ROI opportunities early.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/avg-value-trend`, {}, token)
+  },
 }
 

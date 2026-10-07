@@ -994,6 +994,12 @@ export default function ReportsPage() {
   const [agentWowLoading, setAgentWowLoading] = useState(false);
   const [agentWowOpen, setAgentWowOpen] = useState(true);
 
+  type DealAvgValMonth = { month_label: string; deals_created: number; total_value: number; avg_value: number };
+  type DealAvgValueTrendData = { monthly_avg_value: DealAvgValMonth[]; total_deals: number; overall_avg_value: number; trend_direction: string; value_delta: number; peak_month: string | null; peak_avg_value: number; avg_value_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealAvgValueTrend, setDealAvgValueTrend] = useState<DealAvgValueTrendData | null>(null);
+  const [dealAvgValueTrendLoading, setDealAvgValueTrendLoading] = useState(false);
+  const [dealAvgValueTrendOpen, setDealAvgValueTrendOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1232,6 +1238,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setDealAvgValueTrendLoading(true);
+      apiClient.getDealAvgValueTrend("demo-workspace-1", "demo-token").then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1469,6 +1477,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setDealAvgValueTrendLoading(true);
+      apiClient.getDealAvgValueTrend(workspaceId, session.access_token).then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
     });
   }, []);
 
@@ -3284,6 +3294,27 @@ export default function ReportsPage() {
         if (!session) { setAgentDowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentDowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealAvgValueTrend = () => {
+    setDealAvgValueTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealAvgValueTrend(wid, tok)
+        .then(setDealAvgValueTrend)
+        .catch(() => {})
+        .finally(() => setDealAvgValueTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealAvgValueTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealAvgValueTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13873,6 +13904,90 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the hourly distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20ak – Deal Average Value Trend */}
+      <Card className="border-zinc-700/50">
+        <div
+          className="flex items-center justify-between p-4 cursor-pointer select-none"
+          onClick={() => setDealAvgValueTrendOpen(v => !v)}
+        >
+          <div className="flex items-center gap-3">
+            <BarChart2 className="h-4 w-4 text-indigo-400" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Deal Average Value Trend</p>
+              <p className="text-xs text-zinc-500">Average deal size over the last 6 months</p>
+            </div>
+            {dealAvgValueTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                dealAvgValueTrend.trend_direction === 'growing_upmarket' ? 'bg-emerald-900/40 text-emerald-300' :
+                dealAvgValueTrend.trend_direction === 'declining_downmarket' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-700/60 text-zinc-400'
+              }`}>
+                {dealAvgValueTrend.trend_direction === 'growing_upmarket' ? '↑ Upmarket' :
+                 dealAvgValueTrend.trend_direction === 'declining_downmarket' ? '↓ Downmarket' : '→ Stable'}
+                {' '}{dealAvgValueTrend.value_delta > 0 ? '+' : ''}{dealAvgValueTrend.value_delta.toFixed(1)}%
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateDealAvgValueTrend(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={dealAvgValueTrendLoading}>
+              {dealAvgValueTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {dealAvgValueTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {dealAvgValueTrendOpen && (
+          dealAvgValueTrendLoading && !dealAvgValueTrend ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading deal average value trend…</div>
+          ) : dealAvgValueTrend ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Overall Avg Value</p>
+                  <p className="text-sm font-bold text-indigo-300">${(dealAvgValueTrend.overall_avg_value / 1000).toFixed(0)}K</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Deals</p>
+                  <p className="text-xl font-bold text-zinc-200">{dealAvgValueTrend.total_deals}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Peak Month</p>
+                  <p className="text-xs font-bold text-indigo-300 truncate">{dealAvgValueTrend.peak_month ?? '—'}</p>
+                </div>
+              </div>
+              {dealAvgValueTrend.total_deals > 0 ? (
+                <ResponsiveContainer width="100%" height={140}>
+                  <LineChart data={dealAvgValueTrend.monthly_avg_value} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717a' }} tickLine={false} axisLine={false} />
+                    <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 10, fill: '#71717a' }} tickLine={false} axisLine={false} width={44} />
+                    <Tooltip
+                      formatter={(value: any) => [`$${Number(value ?? 0).toLocaleString()}`, 'Avg Value']}
+                      contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }}
+                      labelStyle={{ color: '#a1a1aa' }}
+                    />
+                    <ReferenceLine y={dealAvgValueTrend.overall_avg_value} stroke="#6366f1" strokeDasharray="3 3" strokeOpacity={0.5} />
+                    <Line type="monotone" dataKey="avg_value" stroke="#6366f1" strokeWidth={2} dot={{ r: 3, fill: '#6366f1' }} activeDot={{ r: 5 }} connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center">No deal data in the last 6 months.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{dealAvgValueTrend.avg_value_narrative}</p>
+              <ul className="space-y-1">
+                {dealAvgValueTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealAvgValueTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the deal average value trend.</div>
           )
         )}
       </Card>
