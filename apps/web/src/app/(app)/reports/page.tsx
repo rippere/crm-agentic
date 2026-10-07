@@ -994,6 +994,12 @@ export default function ReportsPage() {
   const [agentWowLoading, setAgentWowLoading] = useState(false);
   const [agentWowOpen, setAgentWowOpen] = useState(true);
 
+  type CrmEngMonth = { month_label: string; contacts_created: number; messages_received: number; tasks_created: number; notes_written: number; total_activity: number };
+  type CrmEngagementTrendData = { monthly_engagement: CrmEngMonth[]; total_contacts: number; total_messages: number; total_tasks: number; total_notes: number; total_activity: number; trend_direction: string; activity_delta: number; best_month: string | null; engagement_narrative: string; recommendations: string[]; generated_at: string };
+  const [crmEngagementTrend, setCrmEngagementTrend] = useState<CrmEngagementTrendData | null>(null);
+  const [crmEngagementTrendLoading, setCrmEngagementTrendLoading] = useState(false);
+  const [crmEngagementTrendOpen, setCrmEngagementTrendOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1232,6 +1238,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setCrmEngagementTrendLoading(true);
+      apiClient.getCrmEngagementTrend("demo-workspace-1", "demo-token").then(setCrmEngagementTrend).catch(() => {}).finally(() => setCrmEngagementTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1469,6 +1477,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setCrmEngagementTrendLoading(true);
+      apiClient.getCrmEngagementTrend(workspaceId, session.access_token).then(setCrmEngagementTrend).catch(() => {}).finally(() => setCrmEngagementTrendLoading(false));
     });
   }, []);
 
@@ -3263,6 +3273,27 @@ export default function ReportsPage() {
         if (!session) { setAgentWowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentWowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateCrmEngagementTrend = () => {
+    setCrmEngagementTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getCrmEngagementTrend(wid, tok)
+        .then(setCrmEngagementTrend)
+        .catch(() => {})
+        .finally(() => setCrmEngagementTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setCrmEngagementTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setCrmEngagementTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14040,6 +14071,79 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the day-of-week distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* CRM Engagement Trend — Phase 20af */}
+      <Card className="overflow-hidden">
+        <button
+          onClick={() => setCrmEngagementTrendOpen(v => !v)}
+          className="w-full flex items-center justify-between p-4 hover:bg-zinc-800/40 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-orange-400" />
+            <h3 className="text-sm font-semibold text-zinc-200">CRM Engagement Trend</h3>
+            {crmEngagementTrend && (
+              <Badge variant={crmEngagementTrend.trend_direction === 'growing' ? 'emerald' : crmEngagementTrend.trend_direction === 'declining' ? 'rose' : 'zinc'}>
+                {crmEngagementTrend.trend_direction} {crmEngagementTrend.activity_delta > 0 ? '+' : ''}{crmEngagementTrend.activity_delta.toFixed(1)}%
+              </Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={e => { e.stopPropagation(); regenerateCrmEngagementTrend(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={crmEngagementTrendLoading}>
+              {crmEngagementTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {crmEngagementTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </button>
+        {crmEngagementTrendOpen && (
+          crmEngagementTrendLoading && !crmEngagementTrend ? (
+            <div className="p-4 space-y-2 animate-pulse"><div className="h-32 bg-zinc-800 rounded" /><div className="h-4 bg-zinc-800 rounded w-3/4" /></div>
+          ) : crmEngagementTrend ? (
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Activity</p>
+                  <p className="text-xl font-bold text-orange-300">{crmEngagementTrend.total_activity}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Messages</p>
+                  <p className="text-xl font-bold text-indigo-300">{crmEngagementTrend.total_messages}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Best Month</p>
+                  <p className="text-sm font-bold text-zinc-200">{crmEngagementTrend.best_month ?? '—'}</p>
+                </div>
+              </div>
+              {crmEngagementTrend.monthly_engagement.length > 0 ? (
+                <LineChart width={560} height={160} data={crmEngagementTrend.monthly_engagement} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717a' }} />
+                  <YAxis tick={{ fontSize: 10, fill: '#71717a' }} />
+                  <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 11 }} />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Line type="monotone" dataKey="messages_received" name="Messages" stroke="#6366f1" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="tasks_created" name="Tasks" stroke="#f59e0b" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="contacts_created" name="Contacts" stroke="#10b981" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="notes_written" name="Notes" stroke="#8b5cf6" strokeWidth={2} dot={false} />
+                </LineChart>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center">No CRM engagement data in the last 6 months.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{crmEngagementTrend.engagement_narrative}</p>
+              <ul className="space-y-1">
+                {crmEngagementTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-orange-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(crmEngagementTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the CRM engagement trend.</div>
           )
         )}
       </Card>

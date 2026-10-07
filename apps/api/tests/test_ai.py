@@ -10634,3 +10634,81 @@ async def test_agent_wow_comparison_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/wow-comparison")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20af – AI CRM engagement trend
+# ---------------------------------------------------------------------------
+
+class FakeEngRow:
+    def __init__(self, created_at_delta_days: int):
+        import datetime
+        self.created_at = datetime.datetime.utcnow() - datetime.timedelta(days=created_at_delta_days)
+
+
+@pytest.mark.asyncio
+async def test_crm_engagement_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # 3 contacts (within last 183 days), 4 messages, 2 tasks, 3 notes
+    contact_rows = [FakeEngRow(5), FakeEngRow(30), FakeEngRow(60)]
+    message_rows = [FakeEngRow(10), FakeEngRow(25), FakeEngRow(45), FakeEngRow(80)]
+    task_rows = [FakeEngRow(15), FakeEngRow(50)]
+    note_rows = [FakeEngRow(20), FakeEngRow(35), FakeEngRow(70)]
+
+    call_count = [0]
+
+    async def fake_execute(stmt):
+        class FakeResult:
+            def __init__(self_, rows_):
+                self_._rows = rows_
+            def all(self_):
+                return self_._rows
+        idx = call_count[0]
+        call_count[0] += 1
+        if idx == 0:
+            return FakeResult(contact_rows)
+        elif idx == 1:
+            return FakeResult(message_rows)
+        elif idx == 2:
+            return FakeResult(task_rows)
+        else:
+            return FakeResult(note_rows)
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"engagement_narrative": "CRM is growing.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/crm-engagement-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_contacts"] == 3
+    assert data["total_messages"] == 4
+    assert data["total_tasks"] == 2
+    assert data["total_notes"] == 3
+    assert data["total_activity"] == 12
+    assert data["trend_direction"] in ("growing", "stable", "declining")
+    assert len(data["monthly_engagement"]) == 6
+    for m in data["monthly_engagement"]:
+        assert "month_label" in m
+        assert "total_activity" in m
+    assert data["engagement_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_crm_engagement_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("00001111-2222-3333-4444-555566667777")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/crm-engagement-trend")
+    assert resp.status_code == 403
