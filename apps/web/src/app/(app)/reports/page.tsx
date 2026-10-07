@@ -14085,7 +14085,7 @@ export default function ReportsPage() {
             <Activity className="h-4 w-4 text-orange-400" />
             <h3 className="text-sm font-semibold text-zinc-200">CRM Engagement Trend</h3>
             {crmEngagementTrend && (
-              <Badge variant={crmEngagementTrend.trend_direction === 'growing' ? 'success' : crmEngagementTrend.trend_direction === 'declining' ? 'error' : 'default'}>
+              <Badge variant={crmEngagementTrend.trend_direction === 'growing' ? 'emerald' : crmEngagementTrend.trend_direction === 'declining' ? 'rose' : 'zinc'}>
                 {crmEngagementTrend.trend_direction} {crmEngagementTrend.activity_delta > 0 ? '+' : ''}{crmEngagementTrend.activity_delta.toFixed(1)}%
               </Badge>
             )}

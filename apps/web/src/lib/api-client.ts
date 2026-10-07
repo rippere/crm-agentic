@@ -8302,7 +8302,7 @@ export const apiClient = {
   },
 
   async getCrmEngagementTrend(workspaceId: string, token: string) {
-    if (isDemoMode()) {
+    if (isDemoMode) {
       const months = ['May 2026','Jun 2026','Jul 2026','Aug 2026','Sep 2026','Oct 2026']
       const contacts = [4, 6, 8, 11, 14, 18]
       const messages = [12, 18, 24, 31, 40, 52]
