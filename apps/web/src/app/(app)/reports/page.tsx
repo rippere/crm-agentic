@@ -1000,6 +1000,12 @@ export default function ReportsPage() {
   const [agentCoRunLoading, setAgentCoRunLoading] = useState(false);
   const [agentCoRunOpen, setAgentCoRunOpen] = useState(true);
 
+  type AgentStreakEntry = { name: string; total_run_days: number; longest_streak: number; current_streak: number; last_run_date: string | null; is_active: boolean };
+  type AgentRunStreaksData = { agents: AgentStreakEntry[]; top_streak_agent: string | null; top_streak_days: number; total_agents: number; total_days_analyzed: number; streak_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentRunStreaks, setAgentRunStreaks] = useState<AgentRunStreaksData | null>(null);
+  const [agentRunStreaksLoading, setAgentRunStreaksLoading] = useState(false);
+  const [agentRunStreaksOpen, setAgentRunStreaksOpen] = useState(true);
+
   type DealAvgValMonth = { month_label: string; deals_created: number; total_value: number; avg_value: number };
   type DealAvgValueTrendData = { monthly_avg_value: DealAvgValMonth[]; total_deals: number; overall_avg_value: number; trend_direction: string; value_delta: number; peak_month: string | null; peak_avg_value: number; avg_value_narrative: string; recommendations: string[]; generated_at: string };
   const [dealAvgValueTrend, setDealAvgValueTrend] = useState<DealAvgValueTrendData | null>(null);
@@ -1246,6 +1252,8 @@ export default function ReportsPage() {
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
       setAgentCoRunLoading(true);
       apiClient.getAgentCoRunPatterns("demo-workspace-1", "demo-token").then(setAgentCoRun).catch(() => {}).finally(() => setAgentCoRunLoading(false));
+      setAgentRunStreaksLoading(true);
+      apiClient.getAgentRunStreaks("demo-workspace-1", "demo-token").then(setAgentRunStreaks).catch(() => {}).finally(() => setAgentRunStreaksLoading(false));
       setDealAvgValueTrendLoading(true);
       apiClient.getDealAvgValueTrend("demo-workspace-1", "demo-token").then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
       return;
@@ -1487,6 +1495,8 @@ export default function ReportsPage() {
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
       setAgentCoRunLoading(true);
       apiClient.getAgentCoRunPatterns(workspaceId, session.access_token).then(setAgentCoRun).catch(() => {}).finally(() => setAgentCoRunLoading(false));
+      setAgentRunStreaksLoading(true);
+      apiClient.getAgentRunStreaks(workspaceId, session.access_token).then(setAgentRunStreaks).catch(() => {}).finally(() => setAgentRunStreaksLoading(false));
       setDealAvgValueTrendLoading(true);
       apiClient.getDealAvgValueTrend(workspaceId, session.access_token).then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
     });
@@ -3304,6 +3314,27 @@ export default function ReportsPage() {
         if (!session) { setAgentCoRunLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentCoRunLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentRunStreaks = () => {
+    setAgentRunStreaksLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentRunStreaks(wid, tok)
+        .then(setAgentRunStreaks)
+        .catch(() => {})
+        .finally(() => setAgentRunStreaksLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentRunStreaksLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentRunStreaksLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14274,6 +14305,81 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load co-run patterns.</div>
+          )
+        )}
+      </Card>
+
+      {/* Agent Run Streaks */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div className="flex items-center gap-2 p-4 cursor-pointer hover:bg-zinc-800/30 transition-colors" onClick={() => setAgentRunStreaksOpen(o => !o)}>
+          <Flame className="h-4 w-4 text-teal-400" />
+          <span className="text-sm font-semibold text-zinc-200 flex-1">Agent Run Streaks</span>
+          {agentRunStreaks && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${agentRunStreaks.top_streak_days >= 14 ? 'bg-teal-900/40 text-teal-300' : agentRunStreaks.top_streak_days >= 7 ? 'bg-amber-900/40 text-amber-300' : 'bg-zinc-800 text-zinc-400'}`}>
+              {agentRunStreaks.top_streak_days}d top streak
+            </span>
+          )}
+          <button onClick={e => { e.stopPropagation(); regenerateAgentRunStreaks(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentRunStreaksLoading}>
+            {agentRunStreaksLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          </button>
+          {agentRunStreaksOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+        </div>
+        {agentRunStreaksOpen && (
+          agentRunStreaksLoading && !agentRunStreaks ? (
+            <div className="h-24 flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-zinc-600" /></div>
+          ) : agentRunStreaks ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/40 rounded-lg p-3">
+                  <p className="text-xs text-zinc-500 mb-1">Top Streak Agent</p>
+                  <p className="text-xs font-bold text-teal-300 truncate">{agentRunStreaks.top_streak_agent ?? '—'}</p>
+                </div>
+                <div className="bg-zinc-800/40 rounded-lg p-3">
+                  <p className="text-xs text-zinc-500 mb-1">Longest Streak</p>
+                  <p className="text-xl font-bold text-zinc-200">{agentRunStreaks.top_streak_days}<span className="text-xs text-zinc-500 ml-1">days</span></p>
+                </div>
+                <div className="bg-zinc-800/40 rounded-lg p-3">
+                  <p className="text-xs text-zinc-500 mb-1">Active Agents</p>
+                  <p className="text-xl font-bold text-zinc-200">{agentRunStreaks.agents.filter((a: AgentStreakEntry) => a.is_active).length}<span className="text-xs text-zinc-500 ml-1">/ {agentRunStreaks.total_agents}</span></p>
+                </div>
+              </div>
+              {agentRunStreaks.agents.length > 0 && (
+                <div className="space-y-2">
+                  {agentRunStreaks.agents.map((a: AgentStreakEntry) => {
+                    const maxStreak = agentRunStreaks.agents[0]?.longest_streak ?? 1;
+                    const barPct = maxStreak > 0 ? Math.round((a.longest_streak / maxStreak) * 100) : 0;
+                    return (
+                      <div key={a.name} className="flex items-center gap-2">
+                        <span className="text-xs text-zinc-300 w-36 truncate">{a.name}</span>
+                        <div className="flex-1 bg-zinc-800 rounded-full h-2 overflow-hidden">
+                          <div className={`h-full rounded-full ${a.is_active ? 'bg-teal-500' : 'bg-zinc-600'}`} style={{ width: `${barPct}%` }} />
+                        </div>
+                        <span className={`text-xs font-medium w-14 text-right ${a.is_active ? 'text-teal-300' : 'text-zinc-500'}`}>
+                          {a.longest_streak}d best
+                        </span>
+                        {a.current_streak > 0 ? (
+                          <span className="text-xs text-teal-400 w-16 text-right">🔥 {a.current_streak}d now</span>
+                        ) : (
+                          <span className="text-xs text-zinc-600 w-16 text-right">—</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{agentRunStreaks.streak_narrative}</p>
+              <ul className="space-y-1">
+                {agentRunStreaks.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-500 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentRunStreaks.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load agent run streaks.</div>
           )
         )}
       </Card>

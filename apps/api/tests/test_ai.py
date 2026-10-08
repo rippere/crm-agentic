@@ -10763,3 +10763,75 @@ async def test_agent_co_run_patterns_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/co-run-patterns")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20am: agent run-streaks
+# ---------------------------------------------------------------------------
+
+class FakeStreakRow14:
+    def __init__(self, agent_name: str, days_ago: int):
+        import datetime
+        self.agent_name = agent_name
+        self.created_at = datetime.datetime.utcnow() - datetime.timedelta(days=days_ago)
+
+
+@pytest.mark.asyncio
+async def test_agent_run_streaks_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    # Lead Scorer ran on days 0,1,2 (3-day streak); Email Composer ran on day 0 only
+    import datetime
+    today = datetime.datetime.utcnow().date()
+    fake_rows = [
+        FakeStreakRow14("Lead Scorer", 0),
+        FakeStreakRow14("Lead Scorer", 1),
+        FakeStreakRow14("Lead Scorer", 2),
+        FakeStreakRow14("Email Composer", 0),
+    ]
+
+    async def fake_execute(stmt):
+        class FakeResult:
+            def all(self_):
+                return fake_rows
+        return FakeResult()
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    import anthropic as _ant
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"streak_narrative": "Lead Scorer shows a strong streak.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/run-streaks")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_agents"] == 2
+    # distinct days: today, today-1, today-2 = 3 days
+    assert data["total_days_analyzed"] == 3
+    # Lead Scorer has longest streak of 3
+    assert data["top_streak_agent"] == "Lead Scorer"
+    assert data["top_streak_days"] == 3
+    agents_by_name = {a["name"]: a for a in data["agents"]}
+    assert agents_by_name["Lead Scorer"]["longest_streak"] == 3
+    assert agents_by_name["Lead Scorer"]["current_streak"] == 3
+    assert agents_by_name["Lead Scorer"]["is_active"] is True
+    assert agents_by_name["Email Composer"]["longest_streak"] == 1
+    assert agents_by_name["Email Composer"]["current_streak"] == 1
+    assert data["streak_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_agent_run_streaks_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ccccdddd-eeee-ffff-0000-111122223333")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/run-streaks")
+    assert resp.status_code == 403

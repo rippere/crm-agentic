@@ -23790,3 +23790,153 @@ async def get_agent_co_run_patterns(
         "recommendations": recommendations13,
         "generated_at": now13.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/run-streaks")
+@limiter.limit("5/minute")
+async def get_agent_run_streaks(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now14 = datetime.datetime.utcnow()
+    cutoff14 = now14 - datetime.timedelta(days=183)
+    today14 = now14.date()
+
+    stmt14 = select(ActivityEvent.agent_name, ActivityEvent.created_at).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.agent_name.isnot(None),
+        ActivityEvent.created_at >= cutoff14,
+    )
+    result14 = await db.execute(stmt14)
+    rows14 = result14.all()
+
+    if not rows14:
+        return {
+            "agents": [],
+            "top_streak_agent": None,
+            "top_streak_days": 0,
+            "total_agents": 0,
+            "total_days_analyzed": 0,
+            "streak_narrative": "No agent runs recorded in the last 6 months.",
+            "recommendations": [
+                "Configure and schedule AI agents to start building usage patterns.",
+                "Run agents daily to establish consistent streak data.",
+                "Enable agent automation to track long-term run consistency.",
+            ],
+            "generated_at": now14.isoformat() + "Z",
+        }
+
+    from collections import defaultdict as _defdict14
+
+    agent_days14 = _defdict14(set)
+    for row14 in rows14:
+        agent_days14[row14.agent_name].add(row14.created_at.date())
+
+    total_days_analyzed14 = len({row14.created_at.date() for row14 in rows14})
+
+    def _compute_streaks14(days_set):
+        if not days_set:
+            return 0, 0, None
+        sorted_days = sorted(days_set)
+        longest = 1
+        current_len = 1
+        for i in range(1, len(sorted_days)):
+            if (sorted_days[i] - sorted_days[i - 1]).days == 1:
+                current_len += 1
+                longest = max(longest, current_len)
+            else:
+                current_len = 1
+        last_day = sorted_days[-1]
+        days_since = (today14 - last_day).days
+        if days_since <= 1:
+            streak_end = sorted_days[-1]
+            cur = 1
+            for i in range(len(sorted_days) - 2, -1, -1):
+                if (streak_end - sorted_days[i]).days == len(sorted_days) - 1 - i:
+                    cur += 1
+                else:
+                    break
+            current_streak = cur
+        else:
+            current_streak = 0
+        return longest, current_streak, last_day
+
+    agent_stats14 = []
+    for agent14, days14 in agent_days14.items():
+        longest14, current14, last14 = _compute_streaks14(days14)
+        agent_stats14.append({
+            "name": agent14,
+            "total_run_days": len(days14),
+            "longest_streak": longest14,
+            "current_streak": current14,
+            "last_run_date": last14.isoformat() if last14 else None,
+            "is_active": current14 > 0,
+        })
+
+    agent_stats14.sort(key=lambda x: (-x["longest_streak"], -x["total_run_days"]))
+
+    top_streak_agent14 = agent_stats14[0]["name"] if agent_stats14 else None
+    top_streak_days14 = agent_stats14[0]["longest_streak"] if agent_stats14 else 0
+    total_agents14 = len(agent_stats14)
+
+    streak_narrative14 = ""
+    recommendations14 = []
+    try:
+        import anthropic as _anthropic14
+        client14 = _anthropic14.Anthropic()
+        top_summary14 = "; ".join(
+            f"{a['name']} (longest={a['longest_streak']}d, current={a['current_streak']}d)"
+            for a in agent_stats14[:5]
+        )
+        prompt14 = (
+            f"You are analyzing AI agent run streaks for a CRM workspace.\n"
+            f"Over the last 6 months, {total_agents14} agents ran on {total_days_analyzed14} distinct days. "
+            f"Top streaks: {top_summary14 or 'none'}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"streak_narrative": "2-sentence insight about agent run consistency and streak patterns", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp14 = client14.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt14}],
+        )
+        raw14 = resp14.content[0].text.strip()
+        if "```" in raw14:
+            raw14 = raw14.split("```")[1]
+            if raw14.startswith("json"):
+                raw14 = raw14[4:]
+        parsed14 = loads_llm_json(raw14)
+        streak_narrative14 = str(parsed14.get("streak_narrative", "")).strip()
+        raw_recs14 = parsed14.get("recommendations", [])
+        recommendations14 = [str(r) for r in (raw_recs14 if isinstance(raw_recs14, list) else [])[:3]]
+    except Exception:
+        top_name14 = top_streak_agent14 or "No agent"
+        streak_narrative14 = (
+            f"{top_name14} leads with a {top_streak_days14}-day consecutive run streak, demonstrating strong operational consistency. "
+            f"Across {total_agents14} active agents, maintaining daily run streaks indicates reliable automation health."
+        )
+
+    default_recs14 = [
+        "Reward high-streak agents by ensuring they have fresh data pipelines to maximize their effectiveness.",
+        "Investigate agents with zero current streaks — they may need trigger configuration fixes.",
+        "Set streak targets (e.g. 30-day goal) to encourage consistent agent scheduling across your workspace.",
+    ]
+    while len(recommendations14) < 3:
+        recommendations14.append(default_recs14[len(recommendations14) % 3])
+
+    return {
+        "agents": agent_stats14,
+        "top_streak_agent": top_streak_agent14,
+        "top_streak_days": top_streak_days14,
+        "total_agents": total_agents14,
+        "total_days_analyzed": total_days_analyzed14,
+        "streak_narrative": streak_narrative14,
+        "recommendations": recommendations14,
+        "generated_at": now14.isoformat() + "Z",
+    }

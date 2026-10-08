@@ -8365,5 +8365,31 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/co-run-patterns`, {}, token)
   },
+
+  async getAgentRunStreaks(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        agents: [
+          { name: 'Lead Scorer', total_run_days: 52, longest_streak: 18, current_streak: 7, last_run_date: new Date().toISOString().slice(0, 10), is_active: true },
+          { name: 'Email Composer', total_run_days: 47, longest_streak: 14, current_streak: 5, last_run_date: new Date().toISOString().slice(0, 10), is_active: true },
+          { name: 'Pipeline Optimizer', total_run_days: 41, longest_streak: 11, current_streak: 3, last_run_date: new Date().toISOString().slice(0, 10), is_active: true },
+          { name: 'Sentiment Analyzer', total_run_days: 33, longest_streak: 9, current_streak: 0, last_run_date: new Date(Date.now() - 4 * 86400000).toISOString().slice(0, 10), is_active: false },
+          { name: 'Call Summarizer', total_run_days: 28, longest_streak: 7, current_streak: 0, last_run_date: new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10), is_active: false },
+        ],
+        top_streak_agent: 'Lead Scorer',
+        top_streak_days: 18,
+        total_agents: 5,
+        total_days_analyzed: 72,
+        streak_narrative: 'Lead Scorer leads with an 18-day consecutive run streak, demonstrating exceptional scheduling consistency. Three of five agents maintain active streaks today, indicating a healthy and reliable automation cadence.',
+        recommendations: [
+          'Lead Scorer\'s 18-day streak suggests excellent scheduling — replicate its trigger configuration for underperforming agents.',
+          'Sentiment Analyzer and Call Summarizer have broken streaks — check their trigger conditions and ensure data pipelines are healthy.',
+          'Set a workspace goal of 30-day streaks for all agents to ensure consistent AI intelligence generation.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/run-streaks`, {}, token)
+  },
 }
 
