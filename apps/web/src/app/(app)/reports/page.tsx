@@ -14579,7 +14579,7 @@ export default function ReportsPage() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                     <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} />
                     <YAxis tick={{ fill: '#71717a', fontSize: 10 }} unit="d" />
-                    <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '6px' }} labelStyle={{ color: '#a1a1aa' }} formatter={(v: number | null | undefined) => v != null ? [`${v.toFixed(1)}d`, 'Avg Days'] : ['—', 'Avg Days']} />
+                    <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '6px' }} labelStyle={{ color: '#a1a1aa' }} formatter={(v: unknown) => typeof v === 'number' ? [`${v.toFixed(1)}d`, 'Avg Days'] : ['—', 'Avg Days']} />
                     <ReferenceLine y={dealVelocityTrend.avg_days_to_close} stroke="#38bdf8" strokeDasharray="4 4" strokeOpacity={0.5} label={{ value: 'Avg', fill: '#38bdf8', fontSize: 10 }} />
                     <Line type="monotone" dataKey="avg_days_to_close" stroke="#38bdf8" strokeWidth={2} dot={{ fill: '#38bdf8', r: 3 }} connectNulls />
                   </LineChart>
