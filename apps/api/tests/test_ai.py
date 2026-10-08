@@ -9388,7 +9388,13 @@ async def test_revenue_forecast_returns_forecast(app_client, monkeypatch):
     fastapi_app, mock_db, workspace_id = app_client
 
     now = datetime.datetime.utcnow()
-    last_q_start = now - datetime.timedelta(days=200)
+    # Anchor both closed-won rows in the middle of the previous calendar quarter so
+    # the test doesn't break when day-200 crosses a quarter boundary.
+    q_start_month = ((now.month - 1) // 3) * 3 + 1  # first month of current quarter
+    if q_start_month == 1:
+        prev_q_anchor = datetime.datetime(now.year - 1, 10, 15)
+    else:
+        prev_q_anchor = datetime.datetime(now.year, q_start_month - 3, 15)
 
     active_rows = [
         FakeRevenueForecastActiveDealRow(100000, 80, "proposal", "Big Deal"),
@@ -9396,8 +9402,8 @@ async def test_revenue_forecast_returns_forecast(app_client, monkeypatch):
         FakeRevenueForecastActiveDealRow(20000, 20, "discovery", "Small Deal"),
     ]
     closed_rows = [
-        FakeRevenueForecastClosedDealRow(80000, last_q_start),
-        FakeRevenueForecastClosedDealRow(40000, last_q_start + datetime.timedelta(days=10)),
+        FakeRevenueForecastClosedDealRow(80000, prev_q_anchor),
+        FakeRevenueForecastClosedDealRow(40000, prev_q_anchor + datetime.timedelta(days=10)),
     ]
 
     mock_db.execute = AsyncMock(side_effect=[
