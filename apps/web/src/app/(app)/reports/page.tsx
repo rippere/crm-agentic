@@ -14136,7 +14136,7 @@ export default function ReportsPage() {
                     <YAxis tick={{ fontSize: 10, fill: '#71717a' }} />
                     <Tooltip
                       contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 12 }}
-                      formatter={(value: number, name: string) => [value, name === 'contacts_added' ? 'Added' : name]}
+                      formatter={(value: unknown, name: unknown) => [value, name === 'contacts_added' ? 'Added' : String(name)]}
                     />
                     <ReferenceLine y={contactGrowthVelocity.avg_monthly_growth} stroke="#7c3aed" strokeDasharray="4 2" strokeOpacity={0.5} />
                     <Area type="monotone" dataKey="contacts_added" stroke="#7c3aed" fill="url(#cgvGrad)" strokeWidth={2} dot={false} name="contacts_added" />
