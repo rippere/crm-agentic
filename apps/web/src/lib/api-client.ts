@@ -8300,5 +8300,37 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getContactGrowthVelocity(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const now = new Date()
+      const monthlyGrowth = Array.from({ length: 12 }, (_, i) => {
+        const d = new Date(now.getFullYear(), now.getMonth() - 11 + i, 1)
+        const label = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        const added = [3, 2, 4, 3, 5, 4, 6, 7, 8, 9, 10, 12][i]
+        const cumulative = [3, 5, 9, 12, 17, 21, 27, 34, 42, 51, 61, 73].slice(0, i + 1).slice(-1)[0]
+        const prev = i > 0 ? [3, 2, 4, 3, 5, 4, 6, 7, 8, 9, 10][i - 1] : null
+        const growth_rate = prev && prev > 0 ? Math.round((added - prev) / prev * 1000) / 10 : null
+        return { month_label: label, contacts_added: added, cumulative_total: cumulative, growth_rate }
+      })
+      return Promise.resolve({
+        monthly_growth: monthlyGrowth,
+        total_new_contacts: 73,
+        avg_monthly_growth: 6.1,
+        velocity_trend: 'accelerating',
+        acceleration: 125.0,
+        forecast_next_month: 11,
+        peak_growth_month: monthlyGrowth[11].month_label,
+        growth_narrative: 'Contact acquisition has accelerated significantly over the last 12 months, with a 125% improvement in monthly additions between the first and last quarter. The pipeline is growing steadily with consistent month-over-month gains.',
+        recommendations: [
+          'Double down on the channels driving the recent acceleration — identify the top 2 sources.',
+          'Set a monthly target of 12+ new contacts to maintain the current growth trajectory.',
+          'Build nurture workflows to convert the growing contact base into qualified prospects faster.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/growth-velocity`, {}, token)
+  },
 }
 

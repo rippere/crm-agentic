@@ -994,6 +994,12 @@ export default function ReportsPage() {
   const [agentWowLoading, setAgentWowLoading] = useState(false);
   const [agentWowOpen, setAgentWowOpen] = useState(true);
 
+  type ContactGrowthMonth = { month_label: string; contacts_added: number; cumulative_total: number; growth_rate: number | null };
+  type ContactGrowthVelocityData = { monthly_growth: ContactGrowthMonth[]; total_new_contacts: number; avg_monthly_growth: number; velocity_trend: string; acceleration: number; forecast_next_month: number; peak_growth_month: string | null; growth_narrative: string; recommendations: string[]; generated_at: string };
+  const [contactGrowthVelocity, setContactGrowthVelocity] = useState<ContactGrowthVelocityData | null>(null);
+  const [contactGrowthVelocityLoading, setContactGrowthVelocityLoading] = useState(false);
+  const [contactGrowthVelocityOpen, setContactGrowthVelocityOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1232,6 +1238,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setContactGrowthVelocityLoading(true);
+      apiClient.getContactGrowthVelocity("demo-workspace-1", "demo-token").then(setContactGrowthVelocity).catch(() => {}).finally(() => setContactGrowthVelocityLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1469,6 +1477,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setContactGrowthVelocityLoading(true);
+      apiClient.getContactGrowthVelocity(workspaceId, session.access_token).then(setContactGrowthVelocity).catch(() => {}).finally(() => setContactGrowthVelocityLoading(false));
     });
   }, []);
 
@@ -3263,6 +3273,27 @@ export default function ReportsPage() {
         if (!session) { setAgentWowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentWowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateContactGrowthVelocity = () => {
+    setContactGrowthVelocityLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getContactGrowthVelocity(wid, tok)
+        .then(setContactGrowthVelocity)
+        .catch(() => {})
+        .finally(() => setContactGrowthVelocityLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setContactGrowthVelocityLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setContactGrowthVelocityLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14040,6 +14071,93 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the day-of-week distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Contact Growth Velocity */}
+      <Card className="overflow-hidden">
+        <div
+          className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-zinc-800/40 transition-colors"
+          onClick={() => setContactGrowthVelocityOpen(o => !o)}
+        >
+          <div className="flex items-center gap-2">
+            <UserPlus className="h-4 w-4 text-violet-400" />
+            <span className="text-sm font-semibold text-zinc-200">Contact Growth Velocity</span>
+            {contactGrowthVelocity && (
+              <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                contactGrowthVelocity.velocity_trend === 'accelerating' ? 'bg-emerald-900/40 text-emerald-300' :
+                contactGrowthVelocity.velocity_trend === 'growing' ? 'bg-teal-900/40 text-teal-300' :
+                contactGrowthVelocity.velocity_trend === 'declining' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-800 text-zinc-400'
+              }`}>{contactGrowthVelocity.velocity_trend}</span>
+            )}
+            {contactGrowthVelocity && (
+              <span className="text-xs text-zinc-500">{contactGrowthVelocity.acceleration >= 0 ? '+' : ''}{contactGrowthVelocity.acceleration.toFixed(1)}% accel</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateContactGrowthVelocity(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={contactGrowthVelocityLoading}>
+              {contactGrowthVelocityLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {contactGrowthVelocityOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {contactGrowthVelocityOpen && (
+          contactGrowthVelocityLoading && !contactGrowthVelocity ? (
+            <div className="p-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-violet-400" /></div>
+          ) : contactGrowthVelocity ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">New (12 months)</p>
+                  <p className="text-xl font-bold text-violet-300">{contactGrowthVelocity.total_new_contacts}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg / Month</p>
+                  <p className="text-xl font-bold text-zinc-200">{contactGrowthVelocity.avg_monthly_growth}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Forecast Next Mo.</p>
+                  <p className="text-xl font-bold text-teal-300">{contactGrowthVelocity.forecast_next_month}</p>
+                </div>
+              </div>
+              {contactGrowthVelocity.monthly_growth.length > 0 && (
+                <ResponsiveContainer width="100%" height={140}>
+                  <AreaChart data={contactGrowthVelocity.monthly_growth} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="cgvGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#7c3aed" stopOpacity={0.04} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717a' }} tickFormatter={(v: string) => v.slice(5)} />
+                    <YAxis tick={{ fontSize: 10, fill: '#71717a' }} />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 12 }}
+                      formatter={(value: unknown, name: unknown) => [value as number, name === 'contacts_added' ? 'Added' : String(name)]}
+                    />
+                    <ReferenceLine y={contactGrowthVelocity.avg_monthly_growth} stroke="#7c3aed" strokeDasharray="4 2" strokeOpacity={0.5} />
+                    <Area type="monotone" dataKey="contacts_added" stroke="#7c3aed" fill="url(#cgvGrad)" strokeWidth={2} dot={false} name="contacts_added" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
+              {contactGrowthVelocity.growth_narrative && (
+                <p className="text-sm text-zinc-400 italic border-l-2 border-violet-800 pl-3">{contactGrowthVelocity.growth_narrative}</p>
+              )}
+              <ul className="space-y-1.5">
+                {contactGrowthVelocity.recommendations.map((rec, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-violet-400 flex-shrink-0" />
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(contactGrowthVelocity.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load contact growth velocity analysis.</div>
           )
         )}
       </Card>
