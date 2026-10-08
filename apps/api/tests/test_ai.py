@@ -10835,3 +10835,62 @@ async def test_agent_run_streaks_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/run-streaks")
     assert resp.status_code == 403
+
+
+class FakeHeatmapRow15:
+    def __init__(self, created_at):
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_activity_heatmap_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.datetime.utcnow()
+    # Put 5 events: 3 on Tuesday 10am, 2 on Wednesday 2pm
+    tuesday = now - datetime.timedelta(days=(now.weekday() - 1) % 7 + 7)
+    tuesday_10 = tuesday.replace(hour=10, minute=0, second=0, microsecond=0)
+    wednesday = tuesday + datetime.timedelta(days=1)
+    wednesday_14 = wednesday.replace(hour=14, minute=0, second=0, microsecond=0)
+
+    rows = [
+        FakeHeatmapRow15(tuesday_10),
+        FakeHeatmapRow15(tuesday_10 + datetime.timedelta(minutes=30)),
+        FakeHeatmapRow15(tuesday_10 + datetime.timedelta(minutes=50)),
+        FakeHeatmapRow15(wednesday_14),
+        FakeHeatmapRow15(wednesday_14 + datetime.timedelta(minutes=20)),
+    ]
+
+    mock_db.execute = AsyncMock(side_effect=[_make_execute_result(rows)])
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"activity_narrative": "Peak on Tuesday at 10am.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/activity/heatmap")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_events"] == 5
+    assert data["total_days_analyzed"] == 90
+    assert data["peak_hour"] == 10
+    assert data["peak_dow"] == 1  # Tuesday
+    assert data["peak_dow_name"] == "Tuesday"
+    assert data["peak_hour_label"] == "10am"
+    assert data["busiest_slot_count"] == 3
+    assert len(data["heatmap"]) == 168  # 7 days × 24 hours
+    assert data["activity_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_activity_heatmap_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("ddddeeee-ffff-0000-1111-222233334444")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/activity/heatmap")
+    assert resp.status_code == 403

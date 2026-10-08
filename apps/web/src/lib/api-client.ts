@@ -8391,5 +8391,38 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/run-streaks`, {}, token)
   },
+
+  async getActivityHeatmap(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const dow_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+      const peaks: Record<string, number> = { '1_10': 28, '1_11': 22, '2_10': 25, '2_14': 20, '3_10': 24, '3_15': 18, '4_9': 16, '0_9': 10, '5_11': 5, '6_10': 3 }
+      const heatmap = []
+      for (let dow = 0; dow < 7; dow++) {
+        for (let hour = 0; hour < 24; hour++) {
+          const base = peaks[`${dow}_${hour}`] || 0
+          const jitter = base > 0 ? Math.floor(Math.random() * 6) : (Math.random() < 0.05 ? 1 : 0)
+          heatmap.push({ dow, dow_name: dow_names[dow], hour, count: base + jitter })
+        }
+      }
+      return Promise.resolve({
+        heatmap,
+        peak_hour: 10,
+        peak_dow: 1,
+        peak_dow_name: 'Tuesday',
+        peak_hour_label: '10am',
+        busiest_slot_count: 28,
+        total_events: 1240,
+        total_days_analyzed: 90,
+        activity_narrative: 'Your workspace peaks on Tuesdays at 10am with 28 events in that slot over 90 days. Mid-week morning activity is the strongest pattern, suggesting your agents and team are most engaged early in the workday.',
+        recommendations: [
+          'Schedule your most data-intensive agents to run at 10am on Tuesday through Thursday to align with peak workspace activity.',
+          'Investigate low-activity weekends — if agents could run Saturday, you\'d get a head-start on Monday\'s pipeline.',
+          'Compare this quarter\'s heatmap with last quarter to track whether engagement is growing or shifting.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/activity/heatmap`, {}, token)
+  },
 }
 

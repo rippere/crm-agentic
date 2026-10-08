@@ -23940,3 +23940,142 @@ async def get_agent_run_streaks(
         "recommendations": recommendations14,
         "generated_at": now14.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/activity/heatmap")
+@limiter.limit("5/minute")
+async def get_ai_activity_heatmap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now15 = datetime.datetime.utcnow()
+    cutoff15 = now15 - datetime.timedelta(days=90)
+
+    stmt15 = select(ActivityEvent.created_at).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.created_at >= cutoff15,
+    )
+    result15 = await db.execute(stmt15)
+    rows15 = result15.all()
+
+    total_events15 = len(rows15)
+    total_days_analyzed15 = 90
+
+    if not rows15:
+        return {
+            "heatmap": [],
+            "peak_hour": None,
+            "peak_dow": None,
+            "peak_dow_name": None,
+            "peak_hour_label": None,
+            "busiest_slot_count": 0,
+            "total_events": 0,
+            "total_days_analyzed": total_days_analyzed15,
+            "activity_narrative": "No activity recorded in the last 90 days. Start using agents and logging events to see your workspace activity heatmap.",
+            "recommendations": [
+                "Run your first AI agent to begin generating activity data.",
+                "Connect your Gmail or Slack integration to automatically log activity events.",
+                "Set up scheduled agent runs to build a consistent activity pattern.",
+            ],
+            "generated_at": now15.isoformat() + "Z",
+        }
+
+    from collections import defaultdict as _defdict15
+
+    grid15 = _defdict15(int)
+    for row15 in rows15:
+        ts15 = row15.created_at
+        if ts15 is None:
+            continue
+        grid15[(ts15.weekday(), ts15.hour)] += 1
+
+    dow_names15 = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    heatmap15 = []
+    for dow15 in range(7):
+        for hr15 in range(24):
+            heatmap15.append({
+                "dow": dow15,
+                "dow_name": dow_names15[dow15],
+                "hour": hr15,
+                "count": grid15.get((dow15, hr15), 0),
+            })
+
+    peak_slot15 = max(heatmap15, key=lambda x: x["count"])
+    peak_dow15 = peak_slot15["dow"]
+    peak_hour15 = peak_slot15["hour"]
+    peak_dow_name15 = dow_names15[peak_dow15]
+    ampm15 = "am" if peak_hour15 < 12 else "pm"
+    display_hour15 = peak_hour15 % 12 or 12
+    peak_hour_label15 = f"{display_hour15}{ampm15}"
+    busiest_slot_count15 = peak_slot15["count"]
+
+    hour_totals15 = {hr15: sum(grid15.get((d, hr15), 0) for d in range(7)) for hr15 in range(24)}
+    dow_totals15 = {d15: sum(grid15.get((d15, h), 0) for h in range(24)) for d15 in range(7)}
+    top_hours15 = sorted(hour_totals15, key=lambda x: -hour_totals15[x])[:3]
+    top_days15 = sorted(dow_totals15, key=lambda x: -dow_totals15[x])[:3]
+
+    activity_narrative15 = ""
+    recommendations15: list = []
+    try:
+        import anthropic as _anthropic15
+        client15 = _anthropic15.Anthropic()
+        top_hours_str15 = ", ".join(
+            f"{h % 12 or 12}{'am' if h < 12 else 'pm'}" for h in top_hours15
+        )
+        top_days_str15 = ", ".join(dow_names15[d] for d in top_days15)
+        prompt15 = (
+            f"You are analyzing workspace activity patterns for a CRM over the last 90 days.\n"
+            f"Total events: {total_events15}. Peak slot: {peak_dow_name15} at {peak_hour_label15} "
+            f"({busiest_slot_count15} events). Top active hours: {top_hours_str15}. "
+            f"Most active days: {top_days_str15}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"activity_narrative": "2-sentence insight about workspace activity patterns and peak times", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp15 = client15.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt15}],
+        )
+        raw15 = resp15.content[0].text.strip()
+        if "```" in raw15:
+            raw15 = raw15.split("```")[1]
+            if raw15.startswith("json"):
+                raw15 = raw15[4:]
+        parsed15 = loads_llm_json(raw15)
+        activity_narrative15 = str(parsed15.get("activity_narrative", "")).strip()
+        raw_recs15 = parsed15.get("recommendations", [])
+        recommendations15 = [str(r) for r in (raw_recs15 if isinstance(raw_recs15, list) else [])[:3]]
+    except Exception:
+        activity_narrative15 = (
+            f"Your workspace peaks on {peak_dow_name15}s at {peak_hour_label15}, "
+            f"with {busiest_slot_count15} events in that slot over 90 days. "
+            "Aligning agent schedules to these windows maximises processing efficiency."
+        )
+
+    default_recs15 = [
+        f"Schedule data-intensive agents to run during peak hours ({peak_hour_label15}) on {peak_dow_name15} for best throughput.",
+        "Investigate low-activity slots — gaps in the heatmap may indicate missed automation opportunities.",
+        "Compare your activity heatmap quarter-over-quarter to track whether workspace engagement is growing.",
+    ]
+    while len(recommendations15) < 3:
+        recommendations15.append(default_recs15[len(recommendations15) % 3])
+
+    return {
+        "heatmap": heatmap15,
+        "peak_hour": peak_hour15,
+        "peak_dow": peak_dow15,
+        "peak_dow_name": peak_dow_name15,
+        "peak_hour_label": peak_hour_label15,
+        "busiest_slot_count": busiest_slot_count15,
+        "total_events": total_events15,
+        "total_days_analyzed": total_days_analyzed15,
+        "activity_narrative": activity_narrative15,
+        "recommendations": recommendations15,
+        "generated_at": now15.isoformat() + "Z",
+    }
