@@ -1011,6 +1011,11 @@ export default function ReportsPage() {
   const [activityHeatmap, setActivityHeatmap] = useState<ActivityHeatmapData | null>(null);
   const [activityHeatmapLoading, setActivityHeatmapLoading] = useState(false);
   const [activityHeatmapOpen, setActivityHeatmapOpen] = useState(true);
+  type DealVelocityMonth = { month_label: string; deals_closed: number; avg_days_to_close: number | null };
+  type DealVelocityData = { monthly_velocity: DealVelocityMonth[]; total_deals: number; avg_days_to_close: number; trend_direction: string; velocity_delta: number; fastest_month: string | null; fastest_avg_days: number | null; velocity_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealVelocity, setDealVelocity] = useState<DealVelocityData | null>(null);
+  const [dealVelocityLoading, setDealVelocityLoading] = useState(false);
+  const [dealVelocityOpen, setDealVelocityOpen] = useState(true);
 
   type DealAvgValMonth = { month_label: string; deals_created: number; total_value: number; avg_value: number };
   type DealAvgValueTrendData = { monthly_avg_value: DealAvgValMonth[]; total_deals: number; overall_avg_value: number; trend_direction: string; value_delta: number; peak_month: string | null; peak_avg_value: number; avg_value_narrative: string; recommendations: string[]; generated_at: string };
@@ -1262,6 +1267,8 @@ export default function ReportsPage() {
       apiClient.getAgentRunStreaks("demo-workspace-1", "demo-token").then(setAgentRunStreaks).catch(() => {}).finally(() => setAgentRunStreaksLoading(false));
       setActivityHeatmapLoading(true);
       apiClient.getActivityHeatmap("demo-workspace-1", "demo-token").then(setActivityHeatmap).catch(() => {}).finally(() => setActivityHeatmapLoading(false));
+      setDealVelocityLoading(true);
+      apiClient.getDealVelocityTrend("demo-workspace-1", "demo-token").then(setDealVelocity).catch(() => {}).finally(() => setDealVelocityLoading(false));
       setDealAvgValueTrendLoading(true);
       apiClient.getDealAvgValueTrend("demo-workspace-1", "demo-token").then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
       return;
@@ -1507,6 +1514,8 @@ export default function ReportsPage() {
       apiClient.getAgentRunStreaks(workspaceId, session.access_token).then(setAgentRunStreaks).catch(() => {}).finally(() => setAgentRunStreaksLoading(false));
       setActivityHeatmapLoading(true);
       apiClient.getActivityHeatmap(workspaceId, session.access_token).then(setActivityHeatmap).catch(() => {}).finally(() => setActivityHeatmapLoading(false));
+      setDealVelocityLoading(true);
+      apiClient.getDealVelocityTrend(workspaceId, session.access_token).then(setDealVelocity).catch(() => {}).finally(() => setDealVelocityLoading(false));
       setDealAvgValueTrendLoading(true);
       apiClient.getDealAvgValueTrend(workspaceId, session.access_token).then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
     });
@@ -3366,6 +3375,27 @@ export default function ReportsPage() {
         if (!session) { setActivityHeatmapLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setActivityHeatmapLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealVelocity = () => {
+    setDealVelocityLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealVelocityTrend(wid, tok)
+        .then(setDealVelocity)
+        .catch(() => {})
+        .finally(() => setDealVelocityLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealVelocityLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealVelocityLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14500,6 +14530,74 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load activity heatmap.</div>
+          )
+        )}
+      </Card>
+
+      {/* Deal Velocity Trend */}
+      <Card className="border-sky-500/15">
+        <div className="flex items-center justify-between p-4 cursor-pointer select-none" onClick={() => setDealVelocityOpen(o => !o)}>
+          <div className="flex items-center gap-2">
+            <TrendingDown className="h-4 w-4 text-sky-400" />
+            <span className="text-sm font-semibold text-zinc-200">Deal Velocity Trend</span>
+            {dealVelocity && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealVelocity.trend_direction === 'accelerating' ? 'bg-emerald-900/40 text-emerald-300' : dealVelocity.trend_direction === 'slowing' ? 'bg-rose-900/40 text-rose-300' : 'bg-zinc-800 text-zinc-400'}`}>
+                {dealVelocity.trend_direction === 'accelerating' ? `Accelerating ${dealVelocity.velocity_delta.toFixed(1)}%` : dealVelocity.trend_direction === 'slowing' ? `Slowing +${dealVelocity.velocity_delta.toFixed(1)}%` : 'Stable'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateDealVelocity(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={dealVelocityLoading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${dealVelocityLoading ? 'animate-spin' : ''}`} />
+            </button>
+            {dealVelocityOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {dealVelocityOpen && (
+          dealVelocityLoading && !dealVelocity ? (
+            <div className="p-6 flex justify-center"><div className="h-5 w-5 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" /></div>
+          ) : dealVelocity ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Days to Close</p>
+                  <p className="text-lg font-bold text-sky-300">{dealVelocity.avg_days_to_close.toFixed(1)}d</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Deals Closed</p>
+                  <p className="text-lg font-bold text-zinc-200">{dealVelocity.total_deals}</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Fastest Month</p>
+                  <p className="text-sm font-bold text-emerald-300 truncate">{dealVelocity.fastest_month ?? '—'}</p>
+                  {dealVelocity.fastest_avg_days != null && <p className="text-xs text-zinc-500">{dealVelocity.fastest_avg_days.toFixed(0)}d avg</p>}
+                </div>
+              </div>
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={dealVelocity.monthly_velocity} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} />
+                    <YAxis tick={{ fill: '#71717a', fontSize: 10 }} unit="d" />
+                    <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '6px' }} labelStyle={{ color: '#a1a1aa' }} formatter={(v: number | null) => v != null ? [`${v.toFixed(1)}d`, 'Avg Days'] : ['—', 'Avg Days']} />
+                    <ReferenceLine y={dealVelocity.avg_days_to_close} stroke="#38bdf8" strokeDasharray="4 4" strokeOpacity={0.5} label={{ value: 'Avg', fill: '#38bdf8', fontSize: 10 }} />
+                    <Line type="monotone" dataKey="avg_days_to_close" stroke="#38bdf8" strokeWidth={2} dot={{ fill: '#38bdf8', r: 3 }} connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              {dealVelocity.velocity_narrative && <p className="text-sm text-zinc-400 italic">{dealVelocity.velocity_narrative}</p>}
+              <ul className="space-y-1.5">
+                {dealVelocity.recommendations.map((rec: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-sky-400 flex-shrink-0" />
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealVelocity.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load deal velocity trend.</div>
           )
         )}
       </Card>

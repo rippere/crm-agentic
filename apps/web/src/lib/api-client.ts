@@ -8424,5 +8424,39 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/activity/heatmap`, {}, token)
   },
+
+  async getDealVelocityTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const now = new Date()
+      const months = []
+      const avgDays = [38, 34, 31, 28, 24, 22]
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+        const label = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        months.push({
+          month_label: label,
+          deals_closed: 3 + (5 - i),
+          avg_days_to_close: avgDays[5 - i],
+        })
+      }
+      return Promise.resolve({
+        monthly_velocity: months,
+        total_deals: 51,
+        avg_days_to_close: 29.5,
+        trend_direction: 'accelerating',
+        velocity_delta: -42.1,
+        fastest_month: months[5].month_label,
+        fastest_avg_days: 22,
+        velocity_narrative: 'Your team has cut average deal close time from 38 days to 22 days over the last 6 months, a 42% acceleration driven by tighter qualification and faster follow-up. The most recent month is now your fastest on record.',
+        recommendations: [
+          'Document the outreach cadence used in your fastest months and roll it out as a playbook for all reps.',
+          'Flag any open deal past 30 days for immediate pipeline review to prevent velocity regression.',
+          'Segment velocity by deal size — if large deals are slower, create a separate fast-track process for SMB.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/velocity-trend`, {}, token)
+  },
 }
 

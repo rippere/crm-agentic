@@ -10900,3 +10900,68 @@ async def test_activity_heatmap_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/activity/heatmap")
     assert resp.status_code == 403
+
+
+# ── Phase 20ao: Deal Velocity Trend ──────────────────────────────────────────
+
+class FakeDealVelocityRow16:
+    def __init__(self, stage_changed_at, created_at):
+        self.stage_changed_at = stage_changed_at
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_deal_velocity_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.datetime.utcnow()
+    # Two deals closed this month: 10 days and 20 days to close
+    this_month = now.replace(day=max(1, now.day - 3), hour=12, minute=0, second=0, microsecond=0)
+    deal1 = FakeDealVelocityRow16(
+        stage_changed_at=this_month,
+        created_at=this_month - datetime.timedelta(days=10),
+    )
+    deal2 = FakeDealVelocityRow16(
+        stage_changed_at=this_month + datetime.timedelta(hours=2),
+        created_at=this_month + datetime.timedelta(hours=2) - datetime.timedelta(days=20),
+    )
+    # One deal closed last month: 30 days to close
+    last_month_day = now.replace(day=1) - datetime.timedelta(days=15)
+    last_month_day = last_month_day.replace(hour=12, minute=0, second=0, microsecond=0)
+    deal3 = FakeDealVelocityRow16(
+        stage_changed_at=last_month_day,
+        created_at=last_month_day - datetime.timedelta(days=30),
+    )
+
+    rows = [deal1, deal2, deal3]
+    mock_db.execute = AsyncMock(side_effect=[_make_execute_result(rows)])
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"velocity_narrative": "Deals close in 20 days on average.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/velocity-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_deals"] == 3
+    assert data["avg_days_to_close"] == pytest.approx(20.0, abs=1)
+    assert data["fastest_month"] is not None
+    assert len(data["monthly_velocity"]) == 6
+    assert data["velocity_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+    assert "trend_direction" in data
+    assert "velocity_delta" in data
+
+
+@pytest.mark.asyncio
+async def test_deal_velocity_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("eeeeffff-0000-1111-2222-333344445555")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/velocity-trend")
+    assert resp.status_code == 403

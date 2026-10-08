@@ -24079,3 +24079,173 @@ async def get_ai_activity_heatmap(
         "recommendations": recommendations15,
         "generated_at": now15.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/velocity-trend")
+@limiter.limit("5/minute")
+async def get_ai_deal_velocity_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now16 = datetime.datetime.utcnow()
+    cutoff16 = now16 - datetime.timedelta(days=183)
+
+    stmt16 = (
+        select(Deal.stage_changed_at, Deal.created_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(["closed_won", "closed_lost"]))
+        .where(Deal.stage_changed_at >= cutoff16)
+        .where(Deal.stage_changed_at.isnot(None))
+        .where(Deal.created_at.isnot(None))
+    )
+    result16 = await db.execute(stmt16)
+    rows16 = result16.all()
+
+    month_buckets16: list[dict] = []
+    for i16 in range(5, -1, -1):
+        target_month16 = now16.month - i16
+        target_year16 = now16.year
+        while target_month16 <= 0:
+            target_month16 += 12
+            target_year16 -= 1
+        month_buckets16.append({
+            "month_label": f"{target_year16}-{target_month16:02d}",
+            "deals_closed": 0,
+            "total_days": 0.0,
+        })
+
+    for row16 in rows16:
+        sa16 = row16.stage_changed_at
+        ca16 = row16.created_at
+        if sa16 is None or ca16 is None:
+            continue
+        if hasattr(sa16, "tzinfo") and sa16.tzinfo is not None:
+            import pytz as _pytz16
+            sa16 = sa16.astimezone(_pytz16.utc).replace(tzinfo=None)
+        if hasattr(ca16, "tzinfo") and ca16.tzinfo is not None:
+            import pytz as _pytz16b
+            ca16 = ca16.astimezone(_pytz16b.utc).replace(tzinfo=None)
+        days16 = max(0.0, (sa16 - ca16).total_seconds() / 86400.0)
+        ml16 = f"{sa16.year}-{sa16.month:02d}"
+        for bucket16 in month_buckets16:
+            if bucket16["month_label"] == ml16:
+                bucket16["deals_closed"] += 1
+                bucket16["total_days"] += days16
+                break
+
+    monthly_velocity16: list[dict] = []
+    for bucket16 in month_buckets16:
+        avg16 = round(bucket16["total_days"] / bucket16["deals_closed"], 1) if bucket16["deals_closed"] > 0 else None
+        monthly_velocity16.append({
+            "month_label": bucket16["month_label"],
+            "deals_closed": bucket16["deals_closed"],
+            "avg_days_to_close": avg16,
+        })
+
+    total_deals16 = sum(m["deals_closed"] for m in monthly_velocity16)
+    total_days16 = sum(bucket16["total_days"] for bucket16 in month_buckets16)
+    avg_days16 = round(total_days16 / total_deals16, 1) if total_deals16 > 0 else 0.0
+
+    if total_deals16 == 0:
+        return {
+            "monthly_velocity": monthly_velocity16,
+            "total_deals": 0,
+            "avg_days_to_close": 0.0,
+            "trend_direction": "stable",
+            "velocity_delta": 0.0,
+            "fastest_month": None,
+            "fastest_avg_days": 0.0,
+            "velocity_narrative": "No closed deals available for the selected period.",
+            "recommendations": [
+                "Close deals to start tracking velocity trends.",
+                "Set accurate creation and close dates on deals.",
+                "Review your sales process to identify stage bottlenecks.",
+            ],
+            "generated_at": now16.isoformat() + "Z",
+        }
+
+    active16 = [m for m in monthly_velocity16 if m["avg_days_to_close"] is not None]
+    fastest16 = min(active16, key=lambda m: m["avg_days_to_close"]) if active16 else monthly_velocity16[-1]
+
+    first_half16 = [m for m in monthly_velocity16[:3] if m["avg_days_to_close"] is not None]
+    second_half16 = [m for m in monthly_velocity16[3:] if m["avg_days_to_close"] is not None]
+    first_avg16 = sum(m["avg_days_to_close"] for m in first_half16) / len(first_half16) if first_half16 else 0.0
+    second_avg16 = sum(m["avg_days_to_close"] for m in second_half16) / len(second_half16) if second_half16 else 0.0
+
+    if first_avg16 > 0:
+        velocity_delta16 = round((second_avg16 / first_avg16 - 1) * 100, 1)
+    elif second_avg16 > 0:
+        velocity_delta16 = 100.0
+    else:
+        velocity_delta16 = 0.0
+
+    if velocity_delta16 < -10:
+        trend_direction16 = "accelerating"
+    elif velocity_delta16 > 10:
+        trend_direction16 = "slowing"
+    else:
+        trend_direction16 = "stable"
+
+    velocity_narrative16 = ""
+    recommendations16: list = []
+    try:
+        import anthropic as _anthropic16
+        client16 = _anthropic16.Anthropic()
+        months_str16 = ", ".join(
+            f"{m['month_label']} ({m['avg_days_to_close']:.0f}d)" for m in active16
+        )
+        prompt16 = (
+            f"You are analyzing deal velocity (average days to close) for a CRM over 6 months.\n"
+            f"Overall average: {avg_days16:.1f} days. Trend: {trend_direction16} ({velocity_delta16:+.1f}%). "
+            f"Fastest month: {fastest16['month_label']} ({fastest16['avg_days_to_close']:.0f} days). "
+            f"Monthly data: {months_str16}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"velocity_narrative": "2-sentence insight about deal velocity trends and what drives them", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp16 = client16.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt16}],
+        )
+        raw16 = resp16.content[0].text.strip()
+        if "```" in raw16:
+            raw16 = raw16.split("```")[1]
+            if raw16.startswith("json"):
+                raw16 = raw16[4:]
+        parsed16 = loads_llm_json(raw16)
+        velocity_narrative16 = str(parsed16.get("velocity_narrative", "")).strip()
+        raw_recs16 = parsed16.get("recommendations", [])
+        recommendations16 = [str(r) for r in (raw_recs16 if isinstance(raw_recs16, list) else [])[:3]]
+    except Exception:
+        velocity_narrative16 = (
+            f"Your team is closing deals in an average of {avg_days16:.1f} days, "
+            f"a {trend_direction16} trend over the last 6 months. "
+            f"The fastest month was {fastest16['month_label']} at {fastest16['avg_days_to_close']:.0f} days."
+        )
+
+    default_recs16 = [
+        f"Replicate the tactics used in {fastest16['month_label']} when deals closed in {fastest16['avg_days_to_close']:.0f} days on average.",
+        "Identify deals stalled beyond your average close time and escalate with targeted outreach.",
+        "Track which deal stages consume the most time to find your biggest velocity bottleneck.",
+    ]
+    while len(recommendations16) < 3:
+        recommendations16.append(default_recs16[len(recommendations16) % 3])
+
+    return {
+        "monthly_velocity": monthly_velocity16,
+        "total_deals": total_deals16,
+        "avg_days_to_close": avg_days16,
+        "trend_direction": trend_direction16,
+        "velocity_delta": velocity_delta16,
+        "fastest_month": fastest16["month_label"],
+        "fastest_avg_days": fastest16["avg_days_to_close"],
+        "velocity_narrative": velocity_narrative16,
+        "recommendations": recommendations16,
+        "generated_at": now16.isoformat() + "Z",
+    }
