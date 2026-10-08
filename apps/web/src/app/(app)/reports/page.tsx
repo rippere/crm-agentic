@@ -1006,6 +1006,12 @@ export default function ReportsPage() {
   const [agentRunStreaksLoading, setAgentRunStreaksLoading] = useState(false);
   const [agentRunStreaksOpen, setAgentRunStreaksOpen] = useState(true);
 
+  type ActivityHeatCell = { dow: number; dow_name: string; hour: number; count: number };
+  type ActivityHeatmapData = { heatmap: ActivityHeatCell[]; peak_hour: number | null; peak_dow: number | null; peak_dow_name: string | null; peak_hour_label: string | null; busiest_slot_count: number; total_events: number; total_days_analyzed: number; activity_narrative: string; recommendations: string[]; generated_at: string };
+  const [activityHeatmap, setActivityHeatmap] = useState<ActivityHeatmapData | null>(null);
+  const [activityHeatmapLoading, setActivityHeatmapLoading] = useState(false);
+  const [activityHeatmapOpen, setActivityHeatmapOpen] = useState(true);
+
   type DealAvgValMonth = { month_label: string; deals_created: number; total_value: number; avg_value: number };
   type DealAvgValueTrendData = { monthly_avg_value: DealAvgValMonth[]; total_deals: number; overall_avg_value: number; trend_direction: string; value_delta: number; peak_month: string | null; peak_avg_value: number; avg_value_narrative: string; recommendations: string[]; generated_at: string };
   const [dealAvgValueTrend, setDealAvgValueTrend] = useState<DealAvgValueTrendData | null>(null);
@@ -1254,6 +1260,8 @@ export default function ReportsPage() {
       apiClient.getAgentCoRunPatterns("demo-workspace-1", "demo-token").then(setAgentCoRun).catch(() => {}).finally(() => setAgentCoRunLoading(false));
       setAgentRunStreaksLoading(true);
       apiClient.getAgentRunStreaks("demo-workspace-1", "demo-token").then(setAgentRunStreaks).catch(() => {}).finally(() => setAgentRunStreaksLoading(false));
+      setActivityHeatmapLoading(true);
+      apiClient.getActivityHeatmap("demo-workspace-1", "demo-token").then(setActivityHeatmap).catch(() => {}).finally(() => setActivityHeatmapLoading(false));
       setDealAvgValueTrendLoading(true);
       apiClient.getDealAvgValueTrend("demo-workspace-1", "demo-token").then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
       return;
@@ -1497,6 +1505,8 @@ export default function ReportsPage() {
       apiClient.getAgentCoRunPatterns(workspaceId, session.access_token).then(setAgentCoRun).catch(() => {}).finally(() => setAgentCoRunLoading(false));
       setAgentRunStreaksLoading(true);
       apiClient.getAgentRunStreaks(workspaceId, session.access_token).then(setAgentRunStreaks).catch(() => {}).finally(() => setAgentRunStreaksLoading(false));
+      setActivityHeatmapLoading(true);
+      apiClient.getActivityHeatmap(workspaceId, session.access_token).then(setActivityHeatmap).catch(() => {}).finally(() => setActivityHeatmapLoading(false));
       setDealAvgValueTrendLoading(true);
       apiClient.getDealAvgValueTrend(workspaceId, session.access_token).then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
     });
@@ -3335,6 +3345,27 @@ export default function ReportsPage() {
         if (!session) { setAgentRunStreaksLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentRunStreaksLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateActivityHeatmap = () => {
+    setActivityHeatmapLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getActivityHeatmap(wid, tok)
+        .then(setActivityHeatmap)
+        .catch(() => {})
+        .finally(() => setActivityHeatmapLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setActivityHeatmapLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setActivityHeatmapLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14380,6 +14411,95 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load agent run streaks.</div>
+          )
+        )}
+      </Card>
+
+      {/* Activity Heatmap */}
+      <Card className="border-zinc-800">
+        <div className="flex items-center gap-2 p-4 cursor-pointer select-none" onClick={() => setActivityHeatmapOpen(o => !o)}>
+          <Activity className="h-4 w-4 text-orange-400 flex-shrink-0" />
+          <span className="text-sm font-semibold text-zinc-200 flex-1">Workspace Activity Heatmap</span>
+          {activityHeatmap && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${activityHeatmap.total_events >= 500 ? 'bg-orange-900/40 text-orange-300' : activityHeatmap.total_events >= 100 ? 'bg-amber-900/40 text-amber-300' : 'bg-zinc-800 text-zinc-400'}`}>
+              {activityHeatmap.total_events.toLocaleString()} events
+            </span>
+          )}
+          <button onClick={e => { e.stopPropagation(); regenerateActivityHeatmap(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={activityHeatmapLoading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${activityHeatmapLoading ? 'animate-spin' : ''}`} />
+          </button>
+          {activityHeatmapOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+        </div>
+        {activityHeatmapOpen && (
+          activityHeatmapLoading && !activityHeatmap ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analysing activity patterns…</div>
+          ) : activityHeatmap ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1">Peak Slot</p>
+                  <p className="text-sm font-bold text-orange-300 truncate">{activityHeatmap.peak_dow_name ?? '—'}</p>
+                  <p className="text-xs text-zinc-400">{activityHeatmap.peak_hour_label ?? '—'} · {activityHeatmap.busiest_slot_count} events</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1">Total Events</p>
+                  <p className="text-xl font-bold text-zinc-200">{activityHeatmap.total_events.toLocaleString()}</p>
+                  <p className="text-xs text-zinc-500">last 90 days</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1">Days Analyzed</p>
+                  <p className="text-xl font-bold text-zinc-200">{activityHeatmap.total_days_analyzed}</p>
+                  <p className="text-xs text-zinc-500">days</p>
+                </div>
+              </div>
+              {activityHeatmap.heatmap.length > 0 && (() => {
+                const maxCount = Math.max(...activityHeatmap.heatmap.map((c: ActivityHeatCell) => c.count), 1);
+                const dow_labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+                const hour_labels = ['12a','1a','2a','3a','4a','5a','6a','7a','8a','9a','10a','11a','12p','1p','2p','3p','4p','5p','6p','7p','8p','9p','10p','11p'];
+                const cellsBySlot: Record<string, number> = {};
+                activityHeatmap.heatmap.forEach((c: ActivityHeatCell) => { cellsBySlot[`${c.dow}_${c.hour}`] = c.count; });
+                return (
+                  <div className="overflow-x-auto">
+                    <div className="min-w-[340px]">
+                      <div className="flex gap-0.5 mb-0.5 ml-7">
+                        {dow_labels.map(d => (
+                          <div key={d} className="flex-1 text-center text-[9px] text-zinc-500">{d}</div>
+                        ))}
+                      </div>
+                      {Array.from({ length: 24 }, (_, hr) => (
+                        <div key={hr} className="flex items-center gap-0.5 mb-0.5">
+                          <span className="text-[9px] text-zinc-600 w-6 text-right pr-0.5">{hour_labels[hr]}</span>
+                          {Array.from({ length: 7 }, (_, dow) => {
+                            const count = cellsBySlot[`${dow}_${hr}`] ?? 0;
+                            const intensity = count === 0 ? 0 : Math.max(0.08, count / maxCount);
+                            return (
+                              <div
+                                key={dow}
+                                className="flex-1 h-3 rounded-sm"
+                                style={{ backgroundColor: count === 0 ? 'rgb(39,39,42)' : `rgba(251,146,60,${intensity})` }}
+                                title={`${dow_labels[dow]} ${hour_labels[hr]}: ${count} events`}
+                              />
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+              <p className="text-xs text-zinc-400 italic leading-relaxed">{activityHeatmap.activity_narrative}</p>
+              <ul className="space-y-1">
+                {activityHeatmap.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-orange-500 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(activityHeatmap.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load activity heatmap.</div>
           )
         )}
       </Card>
