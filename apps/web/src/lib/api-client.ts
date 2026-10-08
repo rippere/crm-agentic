@@ -8497,5 +8497,40 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/revenue/run-rate`, {}, token)
   },
+
+  async getFirstTouchToClose(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const now = new Date()
+      const buckets = [
+        { label: 'Fast (<30d)', count: 8, pct: 32.0 },
+        { label: 'Medium (30-90d)', count: 10, pct: 40.0 },
+        { label: 'Slow (90-180d)', count: 5, pct: 20.0 },
+        { label: 'Long (180d+)', count: 2, pct: 8.0 },
+      ]
+      const topFastest = [
+        { days: 6.2, deal_title: 'Pinnacle Systems — Enterprise License', value: 95000 },
+        { days: 11.5, deal_title: 'Apex Industries — Starter Pack', value: 22000 },
+        { days: 14.1, deal_title: 'Zephyr Corp — Team Plan', value: 38000 },
+        { days: 19.3, deal_title: 'Horizon Ltd — Annual Subscription', value: 55000 },
+        { days: 27.8, deal_title: 'Nova Technologies — Pro License', value: 42000 },
+      ]
+      return Promise.resolve({
+        total_contacts_analyzed: 47,
+        converted_contacts: 25,
+        avg_days_to_close: 61.4,
+        median_days_to_close: 48.0,
+        buckets,
+        top_fastest: topFastest,
+        narrative: 'Your average first-touch-to-close cycle is 61 days, with 32% of contacts converting in under 30 days. Faster-closing contacts tend to come from enterprise referrals with higher deal values.',
+        recommendations: [
+          'Study your top 5 fastest-closing contacts to identify what accelerates the sales cycle.',
+          'Set up automated nurture sequences for contacts in the 30-90 day medium band to prevent stalls.',
+          'Flag contacts beyond 90 days with a re-engagement workflow to revive at-risk pipeline.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/contacts/first-touch-to-close`, {}, token)
+  },
 }
 

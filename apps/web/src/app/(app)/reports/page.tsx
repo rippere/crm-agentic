@@ -1016,6 +1016,12 @@ export default function ReportsPage() {
   const [revenueRunRate, setRevenueRunRate] = useState<RevenueRunRateData | null>(null);
   const [revenueRunRateLoading, setRevenueRunRateLoading] = useState(false);
   const [revenueRunRateOpen, setRevenueRunRateOpen] = useState(true);
+  type FirstTouchBucket = { label: string; count: number; pct: number };
+  type FirstTouchFastest = { days: number; deal_title: string; value: number };
+  type FirstTouchToCloseData = { total_contacts_analyzed: number; converted_contacts: number; avg_days_to_close: number | null; median_days_to_close: number | null; buckets: FirstTouchBucket[]; top_fastest: FirstTouchFastest[]; narrative: string; recommendations: string[]; generated_at: string };
+  const [firstTouchToClose, setFirstTouchToClose] = useState<FirstTouchToCloseData | null>(null);
+  const [firstTouchToCloseLoading, setFirstTouchToCloseLoading] = useState(false);
+  const [firstTouchToCloseOpen, setFirstTouchToCloseOpen] = useState(true);
   type DealVelocityTrendMonth = { month_label: string; deals_closed: number; avg_days_to_close: number | null };
   type DealVelocityTrendData = { monthly_velocity: DealVelocityTrendMonth[]; total_deals: number; avg_days_to_close: number; trend_direction: string; velocity_delta: number; fastest_month: string | null; fastest_avg_days: number | null; velocity_narrative: string; recommendations: string[]; generated_at: string };
   const [dealVelocityTrend, setDealVelocityTrend] = useState<DealVelocityTrendData | null>(null);
@@ -1276,6 +1282,8 @@ export default function ReportsPage() {
       apiClient.getDealVelocityTrend("demo-workspace-1", "demo-token").then(setDealVelocityTrend).catch(() => {}).finally(() => setDealVelocityTrendLoading(false));
       setRevenueRunRateLoading(true);
       apiClient.getRevenueRunRate("demo-workspace-1", "demo-token").then(setRevenueRunRate).catch(() => {}).finally(() => setRevenueRunRateLoading(false));
+      setFirstTouchToCloseLoading(true);
+      apiClient.getFirstTouchToClose("demo-workspace-1", "demo-token").then(setFirstTouchToClose).catch(() => {}).finally(() => setFirstTouchToCloseLoading(false));
       setDealAvgValueTrendLoading(true);
       apiClient.getDealAvgValueTrend("demo-workspace-1", "demo-token").then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
       return;
@@ -1525,6 +1533,8 @@ export default function ReportsPage() {
       apiClient.getDealVelocityTrend(workspaceId, session.access_token).then(setDealVelocityTrend).catch(() => {}).finally(() => setDealVelocityTrendLoading(false));
       setRevenueRunRateLoading(true);
       apiClient.getRevenueRunRate(workspaceId, session.access_token).then(setRevenueRunRate).catch(() => {}).finally(() => setRevenueRunRateLoading(false));
+      setFirstTouchToCloseLoading(true);
+      apiClient.getFirstTouchToClose(workspaceId, session.access_token).then(setFirstTouchToClose).catch(() => {}).finally(() => setFirstTouchToCloseLoading(false));
       setDealAvgValueTrendLoading(true);
       apiClient.getDealAvgValueTrend(workspaceId, session.access_token).then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
     });
@@ -3447,6 +3457,27 @@ export default function ReportsPage() {
         if (!session) { setAgentDowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentDowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateFirstTouchToClose = () => {
+    setFirstTouchToCloseLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getFirstTouchToClose(wid, tok)
+        .then(setFirstTouchToClose)
+        .catch(() => {})
+        .finally(() => setFirstTouchToCloseLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setFirstTouchToCloseLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setFirstTouchToCloseLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14697,6 +14728,89 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load revenue run rate.</div>
+          )
+        )}
+      </Card>
+
+      {/* First Touch to Close */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <button onClick={() => setFirstTouchToCloseOpen(o => !o)} className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-zinc-800/40 transition-colors">
+          <div className="flex items-center gap-2">
+            <svg className="h-4 w-4 text-sky-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">First Touch to Close</span>
+            {firstTouchToClose && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-sky-900/40 text-sky-300">
+                {firstTouchToClose.avg_days_to_close != null ? `Avg ${firstTouchToClose.avg_days_to_close}d` : 'No data'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateFirstTouchToClose(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={firstTouchToCloseLoading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${firstTouchToCloseLoading ? 'animate-spin' : ''}`} />
+            </button>
+            {firstTouchToCloseOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </button>
+        {firstTouchToCloseOpen && (
+          firstTouchToCloseLoading && !firstTouchToClose ? (
+            <div className="h-32 flex items-center justify-center"><div className="h-5 w-5 rounded-full border-2 border-sky-500 border-t-transparent animate-spin" /></div>
+          ) : firstTouchToClose ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Days</p>
+                  <p className="text-lg font-bold text-sky-300">{firstTouchToClose.avg_days_to_close != null ? `${firstTouchToClose.avg_days_to_close}d` : '—'}</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Median Days</p>
+                  <p className="text-lg font-bold text-zinc-200">{firstTouchToClose.median_days_to_close != null ? `${firstTouchToClose.median_days_to_close}d` : '—'}</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Converted</p>
+                  <p className="text-lg font-bold text-emerald-300">{firstTouchToClose.converted_contacts}</p>
+                  <p className="text-xs text-zinc-500">of {firstTouchToClose.total_contacts_analyzed}</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {firstTouchToClose.buckets.map((b, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <span className="text-xs text-zinc-400 w-28 flex-shrink-0">{b.label}</span>
+                    <div className="flex-1 bg-zinc-800 rounded-full h-2 overflow-hidden">
+                      <div className={`h-full rounded-full ${i === 0 ? 'bg-emerald-500' : i === 1 ? 'bg-sky-500' : i === 2 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${b.pct}%` }} />
+                    </div>
+                    <span className="text-xs text-zinc-300 w-16 text-right">{b.count} ({b.pct}%)</span>
+                  </div>
+                ))}
+              </div>
+              {firstTouchToClose.top_fastest.length > 0 && (
+                <div>
+                  <p className="text-xs text-zinc-500 font-medium mb-2">Top Fastest Closes</p>
+                  <div className="space-y-1">
+                    {firstTouchToClose.top_fastest.map((f, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300 truncate max-w-xs">{f.deal_title}</span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-zinc-500">${(f.value / 1000).toFixed(0)}K</span>
+                          <span className="bg-sky-900/40 text-sky-300 px-1.5 py-0.5 rounded font-medium">{f.days}d</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {firstTouchToClose.narrative && <p className="text-sm text-zinc-400 italic border-l-2 border-sky-800 pl-3">{firstTouchToClose.narrative}</p>}
+              <ul className="space-y-1.5">
+                {firstTouchToClose.recommendations.map((rec, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-sky-400 flex-shrink-0" />
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(firstTouchToClose.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load first-touch-to-close analysis.</div>
           )
         )}
       </Card>

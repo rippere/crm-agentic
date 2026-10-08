@@ -24426,3 +24426,202 @@ async def get_ai_revenue_run_rate(
         "recommendations": recommendations17,
         "generated_at": now17.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/first-touch-to-close")
+@limiter.limit("5/minute")
+async def get_ai_first_touch_to_close(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now18 = datetime.datetime.utcnow()
+
+    stmt_contacts18 = (
+        select(Contact.id, Contact.created_at)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    result_contacts18 = await db.execute(stmt_contacts18)
+    contact_rows18 = result_contacts18.all()
+
+    if not contact_rows18:
+        return {
+            "total_contacts_analyzed": 0,
+            "converted_contacts": 0,
+            "avg_days_to_close": None,
+            "median_days_to_close": None,
+            "buckets": [
+                {"label": "Fast (<30d)", "count": 0, "pct": 0.0},
+                {"label": "Medium (30-90d)", "count": 0, "pct": 0.0},
+                {"label": "Slow (90-180d)", "count": 0, "pct": 0.0},
+                {"label": "Long (180d+)", "count": 0, "pct": 0.0},
+            ],
+            "top_fastest": [],
+            "narrative": "No contacts found in this workspace yet.",
+            "recommendations": [
+                "Start adding contacts and tracking deals to analyze your first-touch-to-close timeline.",
+                "Record contact creation dates accurately to get meaningful cycle-time data.",
+                "Link all deals to their associated contacts to enable attribution analysis.",
+            ],
+            "generated_at": now18.isoformat() + "Z",
+        }
+
+    contact_id_map18 = {str(row.id): row.created_at for row in contact_rows18}
+    contact_ids18 = list(contact_id_map18.keys())
+
+    stmt_deals18 = (
+        select(Deal.contact_id, Deal.stage_changed_at, Deal.value, Deal.title)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.stage_changed_at.isnot(None))
+        .where(Deal.contact_id.isnot(None))
+    )
+    result_deals18 = await db.execute(stmt_deals18)
+    deal_rows18 = result_deals18.all()
+
+    if not deal_rows18:
+        return {
+            "total_contacts_analyzed": len(contact_rows18),
+            "converted_contacts": 0,
+            "avg_days_to_close": None,
+            "median_days_to_close": None,
+            "buckets": [
+                {"label": "Fast (<30d)", "count": 0, "pct": 0.0},
+                {"label": "Medium (30-90d)", "count": 0, "pct": 0.0},
+                {"label": "Slow (90-180d)", "count": 0, "pct": 0.0},
+                {"label": "Long (180d+)", "count": 0, "pct": 0.0},
+            ],
+            "top_fastest": [],
+            "narrative": "No closed-won deals found yet. Start closing deals to see first-touch-to-close metrics.",
+            "recommendations": [
+                "Focus on converting your current prospects to generate first-touch-to-close data.",
+                "Ensure all deals are linked to contacts to enable accurate attribution.",
+                "Track deal stages diligently so cycle time calculations are accurate.",
+            ],
+            "generated_at": now18.isoformat() + "Z",
+        }
+
+    first_close18: dict = {}
+    for dr18 in deal_rows18:
+        cid18 = str(dr18.contact_id)
+        if cid18 not in contact_id_map18:
+            continue
+        sc18 = dr18.stage_changed_at
+        if sc18 is not None and getattr(sc18, "tzinfo", None) is not None:
+            import pytz as _pytz18
+            sc18 = sc18.astimezone(_pytz18.utc).replace(tzinfo=None)
+        if cid18 not in first_close18 or (sc18 is not None and sc18 < first_close18[cid18]["close_date"]):
+            created18 = contact_id_map18[cid18]
+            if created18 is not None and getattr(created18, "tzinfo", None) is not None:
+                import pytz as _pytz18
+                created18 = created18.astimezone(_pytz18.utc).replace(tzinfo=None)
+            first_close18[cid18] = {
+                "close_date": sc18,
+                "created_at": created18,
+                "title": dr18.title,
+                "value": dr18.value or 0,
+            }
+
+    days_list18: list[float] = []
+    top_fastest18: list[dict] = []
+    for cid18, info18 in first_close18.items():
+        if info18["created_at"] is None or info18["close_date"] is None:
+            continue
+        delta18 = (info18["close_date"] - info18["created_at"]).total_seconds() / 86400.0
+        if delta18 < 0:
+            delta18 = 0.0
+        days_list18.append(delta18)
+        top_fastest18.append({
+            "days": round(delta18, 1),
+            "deal_title": info18["title"],
+            "value": info18["value"],
+        })
+
+    if not days_list18:
+        avg_days18 = None
+        median_days18 = None
+    else:
+        avg_days18 = round(sum(days_list18) / len(days_list18), 1)
+        sorted_days18 = sorted(days_list18)
+        n18 = len(sorted_days18)
+        if n18 % 2 == 1:
+            median_days18 = round(sorted_days18[n18 // 2], 1)
+        else:
+            median_days18 = round((sorted_days18[n18 // 2 - 1] + sorted_days18[n18 // 2]) / 2, 1)
+
+    bucket_fast18 = sum(1 for d in days_list18 if d < 30)
+    bucket_medium18 = sum(1 for d in days_list18 if 30 <= d < 90)
+    bucket_slow18 = sum(1 for d in days_list18 if 90 <= d < 180)
+    bucket_long18 = sum(1 for d in days_list18 if d >= 180)
+    total_conv18 = len(days_list18)
+
+    def _pct18(n: int) -> float:
+        return round(n / total_conv18 * 100, 1) if total_conv18 > 0 else 0.0
+
+    buckets18 = [
+        {"label": "Fast (<30d)", "count": bucket_fast18, "pct": _pct18(bucket_fast18)},
+        {"label": "Medium (30-90d)", "count": bucket_medium18, "pct": _pct18(bucket_medium18)},
+        {"label": "Slow (90-180d)", "count": bucket_slow18, "pct": _pct18(bucket_slow18)},
+        {"label": "Long (180d+)", "count": bucket_long18, "pct": _pct18(bucket_long18)},
+    ]
+
+    top_fastest18 = sorted(top_fastest18, key=lambda x: x["days"])[:5]
+
+    narrative18 = ""
+    recommendations18: list = []
+    try:
+        import anthropic as _anthropic18
+        client18 = _anthropic18.Anthropic()
+        prompt18 = (
+            f"You are analyzing first-touch-to-close cycle times for a CRM workspace.\n"
+            f"Total contacts: {len(contact_rows18)}. Converted: {total_conv18}. "
+            f"Avg days to first close: {avg_days18}. Median: {median_days18}.\n"
+            f"Buckets: Fast <30d ({bucket_fast18}), Medium 30-90d ({bucket_medium18}), "
+            f"Slow 90-180d ({bucket_slow18}), Long 180d+ ({bucket_long18}).\n\n"
+            "Return JSON with exactly:\n"
+            '{"narrative": "2-sentence insight about the first-touch-to-close pattern", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp18 = client18.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt18}],
+        )
+        raw18 = resp18.content[0].text.strip()
+        if "```" in raw18:
+            raw18 = raw18.split("```")[1]
+            if raw18.startswith("json"):
+                raw18 = raw18[4:]
+        parsed18 = loads_llm_json(raw18)
+        narrative18 = str(parsed18.get("narrative", "")).strip()
+        raw_recs18 = parsed18.get("recommendations", [])
+        recommendations18 = [str(r) for r in (raw_recs18 if isinstance(raw_recs18, list) else [])[:3]]
+    except Exception:
+        narrative18 = (
+            f"Contacts take an average of {avg_days18} days from first touch to closed-won deal. "
+            f"{bucket_fast18} contacts ({_pct18(bucket_fast18):.0f}%) closed in under 30 days."
+        )
+
+    default_recs18 = [
+        "Invest more time nurturing slow-converting contacts with targeted content.",
+        "Study your fastest-closing contacts to identify repeatable engagement patterns.",
+        "Set stage-specific follow-up SLAs to compress the first-touch-to-close timeline.",
+    ]
+    while len(recommendations18) < 3:
+        recommendations18.append(default_recs18[len(recommendations18) % 3])
+
+    return {
+        "total_contacts_analyzed": len(contact_rows18),
+        "converted_contacts": total_conv18,
+        "avg_days_to_close": avg_days18,
+        "median_days_to_close": median_days18,
+        "buckets": buckets18,
+        "top_fastest": top_fastest18,
+        "narrative": narrative18,
+        "recommendations": recommendations18,
+        "generated_at": now18.isoformat() + "Z",
+    }

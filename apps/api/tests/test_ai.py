@@ -11019,3 +11019,78 @@ async def test_revenue_run_rate_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/revenue/run-rate")
     assert resp.status_code == 403
+
+
+class FakeFirstTouchRow18:
+    def __init__(self, id, created_at):
+        self.id = id
+        self.created_at = created_at
+
+
+class FakeDealFirstTouchRow18:
+    def __init__(self, contact_id, stage_changed_at, value, title):
+        self.contact_id = contact_id
+        self.stage_changed_at = stage_changed_at
+        self.value = value
+        self.title = title
+
+
+@pytest.mark.asyncio
+async def test_first_touch_to_close_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    import datetime as _dt18
+    now18 = _dt18.datetime.utcnow()
+    cid1 = uuid.uuid4()
+    cid2 = uuid.uuid4()
+    cid3 = uuid.uuid4()
+
+    call_count18 = [0]
+
+    def fake_execute18(stmt):
+        call_count18[0] += 1
+        if call_count18[0] == 1:
+            rows = [
+                FakeFirstTouchRow18(cid1, now18 - _dt18.timedelta(days=20)),
+                FakeFirstTouchRow18(cid2, now18 - _dt18.timedelta(days=80)),
+                FakeFirstTouchRow18(cid3, now18 - _dt18.timedelta(days=200)),
+            ]
+            return MagicMock(all=lambda: rows)
+        else:
+            rows = [
+                FakeDealFirstTouchRow18(cid1, now18 - _dt18.timedelta(days=5), 30000, "Deal A"),
+                FakeDealFirstTouchRow18(cid2, now18 - _dt18.timedelta(days=20), 50000, "Deal B"),
+                FakeDealFirstTouchRow18(cid3, now18 - _dt18.timedelta(days=50), 25000, "Deal C"),
+            ]
+            return MagicMock(all=lambda: rows)
+
+    mock_db.execute = AsyncMock(side_effect=fake_execute18)
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"narrative": "Fast conversion detected.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/first-touch-to-close")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_contacts_analyzed"] == 3
+    assert data["converted_contacts"] == 3
+    assert data["avg_days_to_close"] is not None
+    assert data["median_days_to_close"] is not None
+    assert len(data["buckets"]) == 4
+    assert len(data["top_fastest"]) <= 5
+    assert data["narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_first_touch_to_close_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("22223333-4444-5555-6666-777788889999")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/first-touch-to-close")
+    assert resp.status_code == 403
