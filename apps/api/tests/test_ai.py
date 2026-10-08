@@ -10634,3 +10634,55 @@ async def test_agent_wow_comparison_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/wow-comparison")
     assert resp.status_code == 403
+
+
+# ── Phase 20ar: Contact Growth Velocity ──────────────────────────────────────
+
+class FakeContactRow19:
+    def __init__(self, id_, created_at):
+        self.id = id_
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_contact_growth_velocity_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    now19 = datetime.datetime.utcnow()
+
+    rows19 = [
+        FakeContactRow19(uuid.uuid4(), now19 - datetime.timedelta(days=5)),
+        FakeContactRow19(uuid.uuid4(), now19 - datetime.timedelta(days=35)),
+        FakeContactRow19(uuid.uuid4(), now19 - datetime.timedelta(days=65)),
+    ]
+    mock_db.execute = AsyncMock(side_effect=lambda *a, **kw: MagicMock(all=lambda: rows19))
+
+    class FakeMsg19:
+        content = [type("C", (), {"text": '{"growth_narrative": "Growth is stable.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages19:
+        def create(self_, **kw): return FakeMsg19()
+    class FakeClient19:
+        messages = FakeMessages19()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient19())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/contacts/growth-velocity")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_new_contacts"] == 3
+    assert len(data["monthly_growth"]) == 12
+    assert data["avg_monthly_growth"] is not None
+    assert data["velocity_trend"] in ("accelerating", "growing", "stable", "declining")
+    assert data["forecast_next_month"] is not None
+    assert data["growth_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_contact_growth_velocity_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-ffff00001111")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/contacts/growth-velocity")
+    assert resp.status_code == 403

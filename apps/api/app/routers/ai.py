@@ -23505,3 +23505,180 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+
+# ── Phase 20ar: Contact Growth Velocity ──────────────────────────────────────
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/growth-velocity")
+@limiter.limit("5/minute")
+async def get_ai_contact_growth_velocity(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now19 = datetime.datetime.utcnow()
+    cutoff19 = now19 - datetime.timedelta(days=365)
+
+    # Build 12 calendar-month buckets (oldest first)
+    cur_year19, cur_month19 = now19.year, now19.month
+    buckets19: list[dict] = []
+    for offset19 in range(11, -1, -1):
+        m19 = cur_month19 - offset19
+        y19 = cur_year19
+        while m19 <= 0:
+            m19 += 12
+            y19 -= 1
+        label19 = f"{y19}-{m19:02d}"
+        buckets19.append({"year": y19, "month": m19, "month_label": label19, "contacts_added": 0})
+
+    stmt19 = select(Contact.id, Contact.created_at).where(
+        Contact.workspace_id == workspace_id,
+        Contact.created_at >= cutoff19,
+    )
+    result19 = await db.execute(stmt19)
+    rows19 = result19.all()
+
+    for row19 in rows19:
+        ca19 = row19.created_at
+        if ca19 is not None:
+            if getattr(ca19, "tzinfo", None) is not None:
+                import pytz as _pytz19
+                ca19 = ca19.astimezone(_pytz19.utc).replace(tzinfo=None)
+            mk19 = f"{ca19.year}-{ca19.month:02d}"
+            for b19 in buckets19:
+                if b19["month_label"] == mk19:
+                    b19["contacts_added"] += 1
+                    break
+
+    total_new19 = sum(b["contacts_added"] for b in buckets19)
+    avg_monthly19 = round(total_new19 / 12, 1)
+
+    running19 = 0
+    monthly_growth19: list[dict] = []
+    for i19, b19 in enumerate(buckets19):
+        running19 += b19["contacts_added"]
+        prev_count19 = buckets19[i19 - 1]["contacts_added"] if i19 > 0 else None
+        if prev_count19 is not None and prev_count19 > 0:
+            growth_rate19: float | None = round(
+                (b19["contacts_added"] - prev_count19) / prev_count19 * 100, 1
+            )
+        else:
+            growth_rate19 = None
+        monthly_growth19.append({
+            "month_label": b19["month_label"],
+            "contacts_added": b19["contacts_added"],
+            "cumulative_total": running19,
+            "growth_rate": growth_rate19,
+        })
+
+    # Velocity trend: compare first-half vs second-half 6-month averages
+    first_half19 = sum(b["contacts_added"] for b in buckets19[:6])
+    second_half19 = sum(b["contacts_added"] for b in buckets19[6:])
+    first_avg19 = first_half19 / 6
+    second_avg19 = second_half19 / 6
+
+    if first_avg19 == 0:
+        velocity_trend19 = "stable"
+    elif second_avg19 > first_avg19 * 1.2:
+        velocity_trend19 = "accelerating"
+    elif second_avg19 > first_avg19 * 1.05:
+        velocity_trend19 = "growing"
+    elif second_avg19 < first_avg19 * 0.8:
+        velocity_trend19 = "declining"
+    else:
+        velocity_trend19 = "stable"
+
+    # Acceleration: % change between last-3 and first-3 month averages
+    first3_avg19 = sum(b["contacts_added"] for b in buckets19[:3]) / 3
+    last3_avg19 = sum(b["contacts_added"] for b in buckets19[-3:]) / 3
+    if first3_avg19 > 0:
+        acceleration19 = round((last3_avg19 - first3_avg19) / first3_avg19 * 100, 1)
+    else:
+        acceleration19 = 0.0
+
+    # Forecast next month: average of last 3 months
+    last3_counts19 = [b["contacts_added"] for b in buckets19[-3:]]
+    forecast_next19 = round(sum(last3_counts19) / 3)
+
+    peak_entry19 = max(buckets19, key=lambda b: b["contacts_added"]) if buckets19 else None
+    peak_growth_month19 = peak_entry19["month_label"] if peak_entry19 else None
+
+    if total_new19 == 0:
+        return {
+            "monthly_growth": monthly_growth19,
+            "total_new_contacts": 0,
+            "avg_monthly_growth": 0.0,
+            "velocity_trend": "stable",
+            "acceleration": 0.0,
+            "forecast_next_month": 0,
+            "peak_growth_month": None,
+            "growth_narrative": "No new contacts were added in the last 12 months.",
+            "recommendations": [
+                "Start tracking contact acquisition to identify growth patterns.",
+                "Set a monthly target for new contact additions.",
+                "Connect your lead sources to the CRM to capture all new contacts.",
+            ],
+            "generated_at": now19.isoformat() + "Z",
+        }
+
+    growth_narrative19 = ""
+    recommendations19: list = []
+    try:
+        client19 = _mk_anthropic()
+        prompt19 = (
+            f"You are analyzing contact acquisition growth for a CRM workspace.\n"
+            f"Total new contacts in 12 months: {total_new19}. Avg per month: {avg_monthly19}.\n"
+            f"Velocity trend: {velocity_trend19}. Acceleration vs 3 months ago: {acceleration19:+.1f}%.\n"
+            f"Forecast next month: {forecast_next19} contacts. Peak month: {peak_growth_month19}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"growth_narrative": "2-sentence insight about contact growth velocity and trajectory", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp19 = client19.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt19}],
+        )
+        raw19 = resp19.content[0].text.strip()
+        if "```" in raw19:
+            raw19 = raw19.split("```")[1]
+            if raw19.startswith("json"):
+                raw19 = raw19[4:]
+        parsed19 = loads_llm_json(raw19)
+        growth_narrative19 = str(parsed19.get("growth_narrative", "")).strip()
+        raw_recs19 = parsed19.get("recommendations", [])
+        recommendations19 = [str(r) for r in (raw_recs19 if isinstance(raw_recs19, list) else [])[:3]]
+    except Exception:
+        direction19 = (
+            "accelerating" if velocity_trend19 in ("accelerating", "growing")
+            else ("declining" if velocity_trend19 == "declining" else "stable")
+        )
+        growth_narrative19 = (
+            f"Contact acquisition is {direction19} with {total_new19} new contacts over the last "
+            f"12 months (avg {avg_monthly19}/month). Forecast for next month: {forecast_next19} new contacts."
+        )
+
+    default_recs19 = [
+        "Identify your top acquisition channels and invest more in the highest-performing ones.",
+        "Set monthly contact growth targets and track progress weekly.",
+        "Analyse months with peak growth to identify what campaigns drove the spike.",
+    ]
+    while len(recommendations19) < 3:
+        recommendations19.append(default_recs19[len(recommendations19) % 3])
+
+    return {
+        "monthly_growth": monthly_growth19,
+        "total_new_contacts": total_new19,
+        "avg_monthly_growth": avg_monthly19,
+        "velocity_trend": velocity_trend19,
+        "acceleration": acceleration19,
+        "forecast_next_month": forecast_next19,
+        "peak_growth_month": peak_growth_month19,
+        "growth_narrative": growth_narrative19,
+        "recommendations": recommendations19,
+        "generated_at": now19.isoformat() + "Z",
+    }
