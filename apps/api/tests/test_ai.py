@@ -10965,3 +10965,57 @@ async def test_deal_velocity_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/velocity-trend")
     assert resp.status_code == 403
+
+
+# ── Phase 20ap: Revenue Run Rate ──────────────────────────────────────────────
+
+class FakeRevenueRunRateRow17:
+    def __init__(self, value, stage_changed_at):
+        self.value = value
+        self.stage_changed_at = stage_changed_at
+
+
+@pytest.mark.asyncio
+async def test_revenue_run_rate_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.datetime.utcnow()
+    this_month = now.replace(day=max(1, now.day - 2), hour=10, minute=0, second=0, microsecond=0)
+    row1 = FakeRevenueRunRateRow17(value=50000.0, stage_changed_at=this_month)
+    row2 = FakeRevenueRunRateRow17(value=60000.0, stage_changed_at=this_month + datetime.timedelta(hours=1))
+    row3 = FakeRevenueRunRateRow17(value=40000.0, stage_changed_at=this_month + datetime.timedelta(hours=2))
+
+    rows = [row1, row2, row3]
+    mock_db.execute = AsyncMock(side_effect=[_make_execute_result(rows)])
+
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"run_rate_narrative": "Revenue run rate is accelerating.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/revenue/run-rate")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_won"] == 3
+    assert data["total_revenue"] == pytest.approx(150000.0, abs=1)
+    assert data["monthly_run_rate"] > 0
+    assert data["annualized_run_rate"] == pytest.approx(data["monthly_run_rate"] * 12, abs=1)
+    assert len(data["monthly_revenue"]) == 6
+    assert data["best_month"] is not None
+    assert data["run_rate_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+    assert "trend_direction" in data
+    assert "growth_rate" in data
+
+
+@pytest.mark.asyncio
+async def test_revenue_run_rate_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("11112222-3333-4444-5555-666677778888")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/revenue/run-rate")
+    assert resp.status_code == 403

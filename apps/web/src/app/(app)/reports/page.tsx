@@ -1011,6 +1011,11 @@ export default function ReportsPage() {
   const [activityHeatmap, setActivityHeatmap] = useState<ActivityHeatmapData | null>(null);
   const [activityHeatmapLoading, setActivityHeatmapLoading] = useState(false);
   const [activityHeatmapOpen, setActivityHeatmapOpen] = useState(true);
+  type RevenueRunRateMonth = { month_label: string; won_count: number; revenue: number };
+  type RevenueRunRateData = { monthly_revenue: RevenueRunRateMonth[]; total_won: number; total_revenue: number; monthly_run_rate: number; annualized_run_rate: number; growth_rate: number; trend_direction: string; best_month: string | null; best_month_revenue: number; run_rate_narrative: string; recommendations: string[]; generated_at: string };
+  const [revenueRunRate, setRevenueRunRate] = useState<RevenueRunRateData | null>(null);
+  const [revenueRunRateLoading, setRevenueRunRateLoading] = useState(false);
+  const [revenueRunRateOpen, setRevenueRunRateOpen] = useState(true);
   type DealVelocityTrendMonth = { month_label: string; deals_closed: number; avg_days_to_close: number | null };
   type DealVelocityTrendData = { monthly_velocity: DealVelocityTrendMonth[]; total_deals: number; avg_days_to_close: number; trend_direction: string; velocity_delta: number; fastest_month: string | null; fastest_avg_days: number | null; velocity_narrative: string; recommendations: string[]; generated_at: string };
   const [dealVelocityTrend, setDealVelocityTrend] = useState<DealVelocityTrendData | null>(null);
@@ -1269,6 +1274,8 @@ export default function ReportsPage() {
       apiClient.getActivityHeatmap("demo-workspace-1", "demo-token").then(setActivityHeatmap).catch(() => {}).finally(() => setActivityHeatmapLoading(false));
       setDealVelocityTrendLoading(true);
       apiClient.getDealVelocityTrend("demo-workspace-1", "demo-token").then(setDealVelocityTrend).catch(() => {}).finally(() => setDealVelocityTrendLoading(false));
+      setRevenueRunRateLoading(true);
+      apiClient.getRevenueRunRate("demo-workspace-1", "demo-token").then(setRevenueRunRate).catch(() => {}).finally(() => setRevenueRunRateLoading(false));
       setDealAvgValueTrendLoading(true);
       apiClient.getDealAvgValueTrend("demo-workspace-1", "demo-token").then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
       return;
@@ -1516,6 +1523,8 @@ export default function ReportsPage() {
       apiClient.getActivityHeatmap(workspaceId, session.access_token).then(setActivityHeatmap).catch(() => {}).finally(() => setActivityHeatmapLoading(false));
       setDealVelocityTrendLoading(true);
       apiClient.getDealVelocityTrend(workspaceId, session.access_token).then(setDealVelocityTrend).catch(() => {}).finally(() => setDealVelocityTrendLoading(false));
+      setRevenueRunRateLoading(true);
+      apiClient.getRevenueRunRate(workspaceId, session.access_token).then(setRevenueRunRate).catch(() => {}).finally(() => setRevenueRunRateLoading(false));
       setDealAvgValueTrendLoading(true);
       apiClient.getDealAvgValueTrend(workspaceId, session.access_token).then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
     });
@@ -3396,6 +3405,27 @@ export default function ReportsPage() {
         if (!session) { setDealVelocityTrendLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setDealVelocityTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateRevenueRunRate = () => {
+    setRevenueRunRateLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getRevenueRunRate(wid, tok)
+        .then(setRevenueRunRate)
+        .catch(() => {})
+        .finally(() => setRevenueRunRateLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setRevenueRunRateLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setRevenueRunRateLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14598,6 +14628,75 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load deal velocity trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Revenue Run Rate */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800 cursor-pointer select-none" onClick={() => setRevenueRunRateOpen(o => !o)}>
+          <span className="text-emerald-400"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg></span>
+          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Revenue Run Rate</span>
+          {revenueRunRate && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${revenueRunRate.trend_direction === 'accelerating' ? 'bg-emerald-900/40 text-emerald-300' : revenueRunRate.trend_direction === 'growing' ? 'bg-teal-900/40 text-teal-300' : revenueRunRate.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' : 'bg-zinc-800 text-zinc-400'}`}>
+              {revenueRunRate.trend_direction === 'accelerating' ? `Accelerating +${revenueRunRate.growth_rate.toFixed(1)}%` : revenueRunRate.trend_direction === 'growing' ? `Growing +${revenueRunRate.growth_rate.toFixed(1)}%` : revenueRunRate.trend_direction === 'declining' ? `Declining ${revenueRunRate.growth_rate.toFixed(1)}%` : 'Stable'}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateRevenueRunRate(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={revenueRunRateLoading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${revenueRunRateLoading ? 'animate-spin' : ''}`} />
+            </button>
+            {revenueRunRateOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {revenueRunRateOpen && (
+          revenueRunRateLoading && !revenueRunRate ? (
+            <div className="p-6 animate-pulse space-y-3"><div className="h-4 bg-zinc-800 rounded w-3/4" /><div className="h-32 bg-zinc-800 rounded" /></div>
+          ) : revenueRunRate ? (
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-zinc-900 px-3 py-2">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Monthly Run Rate</p>
+                  <p className="text-lg font-bold text-emerald-300">${(revenueRunRate.monthly_run_rate / 1000).toFixed(0)}K</p>
+                </div>
+                <div className="rounded-lg bg-zinc-900 px-3 py-2">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Annualized</p>
+                  <p className="text-lg font-bold text-zinc-200">${(revenueRunRate.annualized_run_rate / 1000).toFixed(0)}K</p>
+                </div>
+                <div className="rounded-lg bg-zinc-900 px-3 py-2">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Best Month</p>
+                  <p className="text-sm font-bold text-amber-300 truncate">{revenueRunRate.best_month ?? '—'}</p>
+                  {revenueRunRate.best_month_revenue > 0 && <p className="text-xs text-zinc-500">${(revenueRunRate.best_month_revenue / 1000).toFixed(0)}K</p>}
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={120}>
+                <AreaChart data={revenueRunRate.monthly_revenue} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="rrGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#34d399" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="month_label" tick={{ fill: '#52525b', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis tickFormatter={(v: unknown) => typeof v === 'number' ? `$${(v / 1000).toFixed(0)}K` : ''} tick={{ fill: '#52525b', fontSize: 10 }} tickLine={false} axisLine={false} width={44} />
+                  <Tooltip formatter={(v: unknown) => typeof v === 'number' ? [`$${(v / 1000).toFixed(0)}K`, 'Revenue'] : ['—', 'Revenue']} contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 12 }} />
+                  <ReferenceLine y={revenueRunRate.monthly_run_rate} stroke="#34d399" strokeDasharray="4 4" strokeOpacity={0.5} label={{ value: 'Run Rate', fill: '#34d399', fontSize: 10 }} />
+                  <Area type="monotone" dataKey="revenue" stroke="#34d399" strokeWidth={2} fill="url(#rrGrad)" dot={false} connectNulls />
+                </AreaChart>
+              </ResponsiveContainer>
+              {revenueRunRate.run_rate_narrative && <p className="text-sm text-zinc-400 italic">{revenueRunRate.run_rate_narrative}</p>}
+              <ul className="space-y-1.5">
+                {revenueRunRate.recommendations.map((rec: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(revenueRunRate.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load revenue run rate.</div>
           )
         )}
       </Card>

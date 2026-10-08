@@ -24249,3 +24249,180 @@ async def get_ai_deal_velocity_trend(
         "recommendations": recommendations16,
         "generated_at": now16.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/revenue/run-rate")
+@limiter.limit("5/minute")
+async def get_ai_revenue_run_rate(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now17 = datetime.datetime.utcnow()
+    cutoff17 = now17 - datetime.timedelta(days=183)
+
+    stmt17 = (
+        select(Deal.value, Deal.stage_changed_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.stage_changed_at >= cutoff17)
+        .where(Deal.stage_changed_at.isnot(None))
+        .where(Deal.value.isnot(None))
+    )
+    result17 = await db.execute(stmt17)
+    rows17 = result17.all()
+
+    month_buckets17: list[dict] = []
+    for i17 in range(5, -1, -1):
+        target_month17 = now17.month - i17
+        target_year17 = now17.year
+        while target_month17 <= 0:
+            target_month17 += 12
+            target_year17 -= 1
+        month_buckets17.append({
+            "month_label": f"{target_year17}-{target_month17:02d}",
+            "won_count": 0,
+            "revenue": 0.0,
+        })
+
+    for row17 in rows17:
+        sa17 = row17.stage_changed_at
+        if sa17 is None:
+            continue
+        if hasattr(sa17, "tzinfo") and sa17.tzinfo is not None:
+            import pytz as _pytz17
+            sa17 = sa17.astimezone(_pytz17.utc).replace(tzinfo=None)
+        val17 = float(row17.value or 0)
+        ml17 = f"{sa17.year}-{sa17.month:02d}"
+        for bucket17 in month_buckets17:
+            if bucket17["month_label"] == ml17:
+                bucket17["won_count"] += 1
+                bucket17["revenue"] += val17
+                break
+
+    monthly_revenue17: list[dict] = [
+        {"month_label": b["month_label"], "won_count": b["won_count"], "revenue": round(b["revenue"], 2)}
+        for b in month_buckets17
+    ]
+
+    total_won17 = sum(m["won_count"] for m in monthly_revenue17)
+    total_revenue17 = round(sum(m["revenue"] for m in monthly_revenue17), 2)
+
+    if total_won17 == 0:
+        return {
+            "monthly_revenue": monthly_revenue17,
+            "total_won": 0,
+            "total_revenue": 0.0,
+            "monthly_run_rate": 0.0,
+            "annualized_run_rate": 0.0,
+            "growth_rate": 0.0,
+            "trend_direction": "stable",
+            "best_month": None,
+            "best_month_revenue": 0.0,
+            "run_rate_narrative": "No closed-won revenue recorded in the last 6 months.",
+            "recommendations": [
+                "Close deals to start tracking revenue run rate.",
+                "Set deal values before closing to ensure accurate revenue reporting.",
+                "Review your pipeline to identify deals close to the finish line.",
+            ],
+            "generated_at": now17.isoformat() + "Z",
+        }
+
+    last_three17 = month_buckets17[-3:]
+    run_rate_months17 = [b for b in last_three17 if b["revenue"] > 0]
+    if run_rate_months17:
+        monthly_run_rate17 = round(sum(b["revenue"] for b in run_rate_months17) / len(run_rate_months17), 2)
+    else:
+        monthly_run_rate17 = round(total_revenue17 / 6, 2)
+
+    annualized_run_rate17 = round(monthly_run_rate17 * 12, 2)
+
+    best_bucket17 = max(month_buckets17, key=lambda b: b["revenue"])
+    best_month17 = best_bucket17["month_label"] if best_bucket17["revenue"] > 0 else None
+    best_month_revenue17 = round(best_bucket17["revenue"], 2)
+
+    first_half17 = [b for b in month_buckets17[:3] if b["revenue"] > 0]
+    second_half17 = [b for b in month_buckets17[3:] if b["revenue"] > 0]
+    first_avg17 = sum(b["revenue"] for b in first_half17) / len(first_half17) if first_half17 else 0.0
+    second_avg17 = sum(b["revenue"] for b in second_half17) / len(second_half17) if second_half17 else 0.0
+
+    if first_avg17 > 0:
+        growth_rate17 = round((second_avg17 / first_avg17 - 1) * 100, 1)
+    elif second_avg17 > 0:
+        growth_rate17 = 100.0
+    else:
+        growth_rate17 = 0.0
+
+    if growth_rate17 > 10:
+        trend_direction17 = "accelerating"
+    elif growth_rate17 > 5:
+        trend_direction17 = "growing"
+    elif growth_rate17 < -5:
+        trend_direction17 = "declining"
+    else:
+        trend_direction17 = "stable"
+
+    run_rate_narrative17 = ""
+    recommendations17: list = []
+    try:
+        import anthropic as _anthropic17
+        client17 = _anthropic17.Anthropic()
+        months_str17 = ", ".join(
+            f"{m['month_label']} ${m['revenue']:,.0f}" for m in monthly_revenue17 if m["revenue"] > 0
+        )
+        prompt17 = (
+            f"You are analyzing revenue run rate for a CRM workspace over 6 months.\n"
+            f"Total revenue: ${total_revenue17:,.0f}. Monthly run rate: ${monthly_run_rate17:,.0f}. "
+            f"Annualized run rate: ${annualized_run_rate17:,.0f}. Trend: {trend_direction17} ({growth_rate17:+.1f}%). "
+            f"Best month: {best_month17} at ${best_month_revenue17:,.0f}. Monthly data: {months_str17}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"run_rate_narrative": "2-sentence insight about revenue run rate momentum and what drives it", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp17 = client17.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt17}],
+        )
+        raw17 = resp17.content[0].text.strip()
+        if "```" in raw17:
+            raw17 = raw17.split("```")[1]
+            if raw17.startswith("json"):
+                raw17 = raw17[4:]
+        parsed17 = loads_llm_json(raw17)
+        run_rate_narrative17 = str(parsed17.get("run_rate_narrative", "")).strip()
+        raw_recs17 = parsed17.get("recommendations", [])
+        recommendations17 = [str(r) for r in (raw_recs17 if isinstance(raw_recs17, list) else [])[:3]]
+    except Exception:
+        run_rate_narrative17 = (
+            f"Your monthly revenue run rate is ${monthly_run_rate17:,.0f}, "
+            f"projecting ${annualized_run_rate17:,.0f} annualized — a {trend_direction17} trajectory "
+            f"with {growth_rate17:+.1f}% growth over the last 6 months."
+        )
+
+    default_recs17 = [
+        f"Replicate deal patterns from {best_month17} when revenue reached ${best_month_revenue17:,.0f}.",
+        "Increase deal cadence in slower months to smooth revenue seasonality.",
+        "Track win rates alongside revenue run rate to distinguish volume from quality improvement.",
+    ]
+    while len(recommendations17) < 3:
+        recommendations17.append(default_recs17[len(recommendations17) % 3])
+
+    return {
+        "monthly_revenue": monthly_revenue17,
+        "total_won": total_won17,
+        "total_revenue": total_revenue17,
+        "monthly_run_rate": monthly_run_rate17,
+        "annualized_run_rate": annualized_run_rate17,
+        "growth_rate": growth_rate17,
+        "trend_direction": trend_direction17,
+        "best_month": best_month17,
+        "best_month_revenue": best_month_revenue17,
+        "run_rate_narrative": run_rate_narrative17,
+        "recommendations": recommendations17,
+        "generated_at": now17.isoformat() + "Z",
+    }

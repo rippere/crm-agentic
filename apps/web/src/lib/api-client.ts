@@ -8458,5 +8458,44 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/velocity-trend`, {}, token)
   },
+
+  async getRevenueRunRate(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const now = new Date()
+      const revenueSeries = [38000, 42000, 45000, 52000, 67000, 79000]
+      const months = []
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+        const label = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        months.push({
+          month_label: label,
+          won_count: 2 + (5 - i),
+          revenue: revenueSeries[5 - i],
+        })
+      }
+      const lastThree = months.slice(-3).filter(m => m.revenue > 0)
+      const monthlyRunRate = Math.round(lastThree.reduce((s, m) => s + m.revenue, 0) / lastThree.length)
+      const bestMonth = months.reduce((a, b) => (a.revenue > b.revenue ? a : b))
+      return Promise.resolve({
+        monthly_revenue: months,
+        total_won: 19,
+        total_revenue: 323000,
+        monthly_run_rate: monthlyRunRate,
+        annualized_run_rate: monthlyRunRate * 12,
+        growth_rate: 58.3,
+        trend_direction: 'accelerating',
+        best_month: bestMonth.month_label,
+        best_month_revenue: bestMonth.revenue,
+        run_rate_narrative: 'Your monthly revenue run rate has accelerated from $38K to $79K over 6 months, a 58% increase driven by larger average deal sizes and faster close rates. At the current trajectory, annualized revenue is on pace to exceed $950K by year-end.',
+        recommendations: [
+          'Document the sales tactics from your best month and standardise them across the team.',
+          'Focus pipeline development on high-value deals to sustain the upward run rate momentum.',
+          'Review slower months for patterns — seasonal dips may signal opportunities for targeted promotions.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/revenue/run-rate`, {}, token)
+  },
 }
 
