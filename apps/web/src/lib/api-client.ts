@@ -8300,5 +8300,96 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getDealAvgValueTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const avgValues = [28000, 32000, 35000, 41000, 45000, 52000]
+      const dealsCreated = [3, 4, 5, 6, 7, 8]
+      const months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i))
+        return d.toISOString().slice(0, 7)
+      })
+      const monthly_avg_value = months.map((month_label, i) => ({
+        month_label,
+        deals_created: dealsCreated[i],
+        total_value: Math.round(dealsCreated[i] * avgValues[i]),
+        avg_value: avgValues[i],
+      }))
+      const totalDeals = dealsCreated.reduce((a, c) => a + c, 0)
+      const totalValue = monthly_avg_value.reduce((a, m) => a + m.total_value, 0)
+      const overallAvgValue = Math.round(totalValue / totalDeals)
+      const peak = monthly_avg_value.reduce((a, m) => m.avg_value > a.avg_value ? m : a, monthly_avg_value[0])
+      return Promise.resolve({
+        monthly_avg_value,
+        total_deals: totalDeals,
+        overall_avg_value: overallAvgValue,
+        trend_direction: 'growing_upmarket',
+        value_delta: 85.7,
+        peak_month: peak.month_label,
+        peak_avg_value: peak.avg_value,
+        avg_value_narrative: 'Average deal value has grown 85.7% over the last six months, rising from $28K to $52K, signaling a successful shift toward larger enterprise deals. This upmarket trend reflects better qualification and targeting of high-value prospects.',
+        recommendations: [
+          'Continue qualifying prospects against your ICP criteria to maintain the upmarket trajectory.',
+          'Review deals below $20K to determine whether to invest further or reallocate effort.',
+          'Set a deal value floor in your pipeline to filter out low-ROI opportunities early.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/deals/avg-value-trend`, {}, token)
+  },
+
+  async getAgentCoRunPatterns(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        pairs: [
+          { agent_a: 'Email Composer', agent_b: 'Lead Scorer', co_run_days: 34 },
+          { agent_a: 'Lead Scorer', agent_b: 'Pipeline Optimizer', co_run_days: 27 },
+          { agent_a: 'Email Composer', agent_b: 'Sentiment Analyzer', co_run_days: 19 },
+          { agent_a: 'Call Summarizer', agent_b: 'Pipeline Optimizer', co_run_days: 14 },
+          { agent_a: 'Lead Scorer', agent_b: 'Sentiment Analyzer', co_run_days: 11 },
+        ],
+        total_days_analyzed: 72,
+        co_run_days: 48,
+        solo_days: 24,
+        pairing_rate: 66.7,
+        most_common_pair: 'Email Composer + Lead Scorer',
+        co_run_narrative: 'Agents co-ran on 48 of 72 active days (66.7% pairing rate), indicating a highly coordinated workflow. Email Composer and Lead Scorer are the most frequent pair, suggesting outreach is consistently tied to scoring events.',
+        recommendations: [
+          'Email Composer and Lead Scorer co-run frequently — consider chaining them so a high score triggers an immediate outreach draft.',
+          'Call Summarizer pairs least often with other agents — review whether call ingestion is triggering downstream analysis agents.',
+          'High pairing rate (66.7%) suggests good workflow integration; maintain trigger configs as the team scales.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/co-run-patterns`, {}, token)
+  },
+
+  async getAgentRunStreaks(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        agents: [
+          { name: 'Lead Scorer', total_run_days: 52, longest_streak: 18, current_streak: 7, last_run_date: new Date().toISOString().slice(0, 10), is_active: true },
+          { name: 'Email Composer', total_run_days: 47, longest_streak: 14, current_streak: 5, last_run_date: new Date().toISOString().slice(0, 10), is_active: true },
+          { name: 'Pipeline Optimizer', total_run_days: 41, longest_streak: 11, current_streak: 3, last_run_date: new Date().toISOString().slice(0, 10), is_active: true },
+          { name: 'Sentiment Analyzer', total_run_days: 33, longest_streak: 9, current_streak: 0, last_run_date: new Date(Date.now() - 4 * 86400000).toISOString().slice(0, 10), is_active: false },
+          { name: 'Call Summarizer', total_run_days: 28, longest_streak: 7, current_streak: 0, last_run_date: new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10), is_active: false },
+        ],
+        top_streak_agent: 'Lead Scorer',
+        top_streak_days: 18,
+        total_agents: 5,
+        total_days_analyzed: 72,
+        streak_narrative: 'Lead Scorer leads with an 18-day consecutive run streak, demonstrating exceptional scheduling consistency. Three of five agents maintain active streaks today, indicating a healthy and reliable automation cadence.',
+        recommendations: [
+          'Lead Scorer\'s 18-day streak suggests excellent scheduling — replicate its trigger configuration for underperforming agents.',
+          'Sentiment Analyzer and Call Summarizer have broken streaks — check their trigger conditions and ensure data pipelines are healthy.',
+          'Set a workspace goal of 30-day streaks for all agents to ensure consistent AI intelligence generation.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/run-streaks`, {}, token)
+  },
 }
 

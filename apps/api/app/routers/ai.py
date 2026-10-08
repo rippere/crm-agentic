@@ -23505,3 +23505,438 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/avg-value-trend")
+@limiter.limit("5/minute")
+async def get_ai_deal_avg_value_trend(
+    workspace_id: uuid.UUID, request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now12 = datetime.datetime.utcnow()
+    cutoff12 = now12 - datetime.timedelta(days=183)
+
+    result12 = await db.execute(
+        select(Deal.value, Deal.created_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.created_at >= cutoff12)
+    )
+    deals12 = result12.all()
+
+    month_buckets12: list[dict] = []
+    for i12 in range(5, -1, -1):
+        target_month12 = now12.month - i12
+        target_year12 = now12.year
+        while target_month12 <= 0:
+            target_month12 += 12
+            target_year12 -= 1
+        month_buckets12.append({
+            "month_label": f"{target_year12}-{target_month12:02d}",
+            "deals_created": 0,
+            "total_value": 0.0,
+        })
+
+    for row12 in deals12:
+        ml12 = f"{row12.created_at.year}-{row12.created_at.month:02d}"
+        for bucket12 in month_buckets12:
+            if bucket12["month_label"] == ml12:
+                bucket12["deals_created"] += 1
+                bucket12["total_value"] += float(row12.value or 0)
+                break
+
+    monthly_avg_value12: list[dict] = []
+    for bucket12 in month_buckets12:
+        avg12 = round(bucket12["total_value"] / bucket12["deals_created"], 2) if bucket12["deals_created"] > 0 else 0.0
+        monthly_avg_value12.append({
+            "month_label": bucket12["month_label"],
+            "deals_created": bucket12["deals_created"],
+            "total_value": round(bucket12["total_value"], 2),
+            "avg_value": avg12,
+        })
+
+    total_deals12 = sum(m["deals_created"] for m in monthly_avg_value12)
+    total_value12 = sum(m["total_value"] for m in monthly_avg_value12)
+    overall_avg_value12 = round(total_value12 / total_deals12, 2) if total_deals12 > 0 else 0.0
+
+    if total_deals12 == 0:
+        return {
+            "monthly_avg_value": monthly_avg_value12,
+            "total_deals": 0,
+            "overall_avg_value": 0.0,
+            "trend_direction": "stable",
+            "value_delta": 0.0,
+            "peak_month": None,
+            "peak_avg_value": 0.0,
+            "avg_value_narrative": "No deal data available for the selected period.",
+            "recommendations": [
+                "Start creating deals to track average deal value trends.",
+                "Set deal values accurately to get meaningful insights.",
+                "Review your deal pipeline to ensure values are populated.",
+            ],
+            "generated_at": now12.isoformat() + "Z",
+        }
+
+    first_half12 = [m for m in monthly_avg_value12[:3] if m["deals_created"] > 0]
+    second_half12 = [m for m in monthly_avg_value12[3:] if m["deals_created"] > 0]
+    first_avg12 = sum(m["avg_value"] for m in first_half12) / len(first_half12) if first_half12 else 0.0
+    second_avg12 = sum(m["avg_value"] for m in second_half12) / len(second_half12) if second_half12 else 0.0
+
+    if first_avg12 > 0:
+        value_delta12 = round((second_avg12 / first_avg12 - 1) * 100, 1)
+    elif second_avg12 > 0:
+        value_delta12 = 100.0
+    else:
+        value_delta12 = 0.0
+
+    if value_delta12 > 10:
+        trend_direction12 = "growing_upmarket"
+    elif value_delta12 < -10:
+        trend_direction12 = "declining_downmarket"
+    else:
+        trend_direction12 = "stable"
+
+    peak12 = max(monthly_avg_value12, key=lambda m: m["avg_value"] if m["deals_created"] > 0 else -1.0)
+
+    avg_value_narrative12 = ""
+    recommendations12: list = []
+    try:
+        client12 = _mk_anthropic()
+        summary12 = "; ".join(
+            f"{m['month_label']}: {m['deals_created']} deals avg ${m['avg_value']:,.0f}"
+            for m in monthly_avg_value12
+        )
+        prompt12 = (
+            f"You are analyzing deal average value trends for a CRM workspace.\n"
+            f"Last 6 months: {summary12}\n"
+            f"Overall avg: ${overall_avg_value12:,.0f}. Trend: {trend_direction12}. Value delta: {value_delta12:+.1f}%.\n\n"
+            "Return JSON with exactly:\n"
+            '{"avg_value_narrative": "2-sentence insight about deal value trends", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp12 = client12.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt12}],
+        )
+        raw12 = resp12.content[0].text.strip()
+        if "```" in raw12:
+            raw12 = raw12.split("```")[1]
+            if raw12.startswith("json"):
+                raw12 = raw12[4:]
+        parsed12 = loads_llm_json(raw12)
+        avg_value_narrative12 = str(parsed12.get("avg_value_narrative", "")).strip()
+        raw_recs12 = parsed12.get("recommendations", [])
+        recommendations12 = [str(r) for r in (raw_recs12 if isinstance(raw_recs12, list) else [])[:3]]
+    except Exception:
+        direction_text12 = {
+            "growing_upmarket": "trending upmarket",
+            "declining_downmarket": "trending downmarket",
+            "stable": "stable",
+        }.get(trend_direction12, "stable")
+        avg_value_narrative12 = (
+            f"Average deal value is {direction_text12} at ${overall_avg_value12:,.0f} overall "
+            f"({value_delta12:+.1f}% change over the period). "
+            + (f"Peak month was {peak12['month_label']} at ${peak12['avg_value']:,.0f}."
+               if peak12["deals_created"] > 0 else "")
+        )
+
+    default_recs12 = [
+        "Focus on qualifying higher-value deals to improve average deal size.",
+        "Review declining deal values to identify if market conditions or targeting has shifted.",
+        "Set minimum deal value thresholds to maintain a healthy average deal size.",
+    ]
+    while len(recommendations12) < 3:
+        recommendations12.append(default_recs12[len(recommendations12) % 3])
+
+    return {
+        "monthly_avg_value": monthly_avg_value12,
+        "total_deals": total_deals12,
+        "overall_avg_value": overall_avg_value12,
+        "trend_direction": trend_direction12,
+        "value_delta": value_delta12,
+        "peak_month": peak12["month_label"] if peak12["deals_created"] > 0 else None,
+        "peak_avg_value": peak12["avg_value"] if peak12["deals_created"] > 0 else 0.0,
+        "avg_value_narrative": avg_value_narrative12,
+        "recommendations": recommendations12,
+        "generated_at": now12.isoformat() + "Z",
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/co-run-patterns")
+async def get_agent_co_run_patterns(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now13 = datetime.datetime.utcnow()
+    cutoff13 = now13 - datetime.timedelta(days=183)
+
+    stmt13 = select(ActivityEvent.agent_name, ActivityEvent.created_at).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.agent_name.isnot(None),
+        ActivityEvent.created_at >= cutoff13,
+    )
+    result13 = await db.execute(stmt13)
+    rows13 = result13.all()
+
+    if not rows13:
+        return {
+            "pairs": [],
+            "total_days_analyzed": 0,
+            "co_run_days": 0,
+            "solo_days": 0,
+            "pairing_rate": 0.0,
+            "most_common_pair": None,
+            "co_run_narrative": "No agent run data found in the last 6 months.",
+            "recommendations": [
+                "Ensure agents are configured and triggered regularly to populate co-run data.",
+                "Review agent trigger settings to enable multi-agent workflows.",
+                "Consider scheduling complementary agents to run together for better insights.",
+            ],
+            "generated_at": now13.isoformat() + "Z",
+        }
+
+    from collections import defaultdict as _defdict13, Counter as _Counter13
+    from itertools import combinations as _combos13
+
+    days_agents13: dict = _defdict13(set)
+    for row13 in rows13:
+        day13 = row13.created_at.date()
+        days_agents13[day13].add(row13.agent_name)
+
+    total_days13 = len(days_agents13)
+    pair_counts13: _Counter13 = _Counter13()
+    co_run_days13 = 0
+    solo_days13 = 0
+
+    for _day13, agents13 in days_agents13.items():
+        if len(agents13) >= 2:
+            co_run_days13 += 1
+            for pair13 in _combos13(sorted(agents13), 2):
+                pair_counts13[pair13] += 1
+        else:
+            solo_days13 += 1
+
+    pairing_rate13 = round(co_run_days13 / total_days13 * 100, 1) if total_days13 > 0 else 0.0
+    top_pairs13 = [
+        {"agent_a": p[0], "agent_b": p[1], "co_run_days": c}
+        for p, c in pair_counts13.most_common(5)
+    ]
+    most_common_pair13 = (
+        f"{top_pairs13[0]['agent_a']} + {top_pairs13[0]['agent_b']}" if top_pairs13 else None
+    )
+
+    co_run_narrative13 = ""
+    recommendations13: list = []
+    try:
+        client13 = _mk_anthropic()
+        pair_summary13 = "; ".join(
+            f"{p['agent_a']}+{p['agent_b']}={p['co_run_days']}d"
+            for p in top_pairs13[:5]
+        )
+        prompt13 = (
+            f"You are analyzing AI agent co-run patterns for a CRM workspace.\n"
+            f"Over the last 6 months, {total_days13} days had agent runs. "
+            f"{co_run_days13} days had 2+ agents running ({pairing_rate13}% pairing rate). "
+            f"Top co-run pairs: {pair_summary13 or 'none'}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"co_run_narrative": "2-sentence insight about agent co-run patterns", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp13 = client13.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt13}],
+        )
+        raw13 = resp13.content[0].text.strip()
+        if "```" in raw13:
+            raw13 = raw13.split("```")[1]
+            if raw13.startswith("json"):
+                raw13 = raw13[4:]
+        parsed13 = loads_llm_json(raw13)
+        co_run_narrative13 = str(parsed13.get("co_run_narrative", "")).strip()
+        raw_recs13 = parsed13.get("recommendations", [])
+        recommendations13 = [str(r) for r in (raw_recs13 if isinstance(raw_recs13, list) else [])[:3]]
+    except Exception:
+        direction13 = "high" if pairing_rate13 >= 50 else "moderate" if pairing_rate13 >= 20 else "low"
+        co_run_narrative13 = (
+            f"Agents co-ran on {co_run_days13} of {total_days13} active days ({pairing_rate13}% pairing rate) — a {direction13} coordination level. "
+            f"{'Most common pair: ' + most_common_pair13 + '.' if most_common_pair13 else 'No recurring pairs detected yet.'}"
+        )
+
+    default_recs13 = [
+        "Schedule complementary agents (e.g. Lead Scorer + Email Composer) to run together for aligned outputs.",
+        "High pairing rates indicate coordinated workflows — review trigger configuration to ensure intentional ordering.",
+        "Agents that never co-run may benefit from combined triggers to improve cross-feature intelligence.",
+    ]
+    while len(recommendations13) < 3:
+        recommendations13.append(default_recs13[len(recommendations13) % 3])
+
+    return {
+        "pairs": top_pairs13,
+        "total_days_analyzed": total_days13,
+        "co_run_days": co_run_days13,
+        "solo_days": solo_days13,
+        "pairing_rate": pairing_rate13,
+        "most_common_pair": most_common_pair13,
+        "co_run_narrative": co_run_narrative13,
+        "recommendations": recommendations13,
+        "generated_at": now13.isoformat() + "Z",
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/run-streaks")
+@limiter.limit("5/minute")
+async def get_agent_run_streaks(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now14 = datetime.datetime.utcnow()
+    cutoff14 = now14 - datetime.timedelta(days=183)
+    today14 = now14.date()
+
+    stmt14 = select(ActivityEvent.agent_name, ActivityEvent.created_at).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.agent_name.isnot(None),
+        ActivityEvent.created_at >= cutoff14,
+    )
+    result14 = await db.execute(stmt14)
+    rows14 = result14.all()
+
+    if not rows14:
+        return {
+            "agents": [],
+            "top_streak_agent": None,
+            "top_streak_days": 0,
+            "total_agents": 0,
+            "total_days_analyzed": 0,
+            "streak_narrative": "No agent runs recorded in the last 6 months.",
+            "recommendations": [
+                "Configure and schedule AI agents to start building usage patterns.",
+                "Run agents daily to establish consistent streak data.",
+                "Enable agent automation to track long-term run consistency.",
+            ],
+            "generated_at": now14.isoformat() + "Z",
+        }
+
+    from collections import defaultdict as _defdict14
+
+    agent_days14 = _defdict14(set)
+    for row14 in rows14:
+        agent_days14[row14.agent_name].add(row14.created_at.date())
+
+    total_days_analyzed14 = len({row14.created_at.date() for row14 in rows14})
+
+    def _compute_streaks14(days_set):
+        if not days_set:
+            return 0, 0, None
+        sorted_days = sorted(days_set)
+        longest = 1
+        current_len = 1
+        for i in range(1, len(sorted_days)):
+            if (sorted_days[i] - sorted_days[i - 1]).days == 1:
+                current_len += 1
+                longest = max(longest, current_len)
+            else:
+                current_len = 1
+        last_day = sorted_days[-1]
+        days_since = (today14 - last_day).days
+        if days_since <= 1:
+            streak_end = sorted_days[-1]
+            cur = 1
+            for i in range(len(sorted_days) - 2, -1, -1):
+                if (streak_end - sorted_days[i]).days == len(sorted_days) - 1 - i:
+                    cur += 1
+                else:
+                    break
+            current_streak = cur
+        else:
+            current_streak = 0
+        return longest, current_streak, last_day
+
+    agent_stats14 = []
+    for agent14, days14 in agent_days14.items():
+        longest14, current14, last14 = _compute_streaks14(days14)
+        agent_stats14.append({
+            "name": agent14,
+            "total_run_days": len(days14),
+            "longest_streak": longest14,
+            "current_streak": current14,
+            "last_run_date": last14.isoformat() if last14 else None,
+            "is_active": current14 > 0,
+        })
+
+    agent_stats14.sort(key=lambda x: (-x["longest_streak"], -x["total_run_days"]))
+
+    top_streak_agent14 = agent_stats14[0]["name"] if agent_stats14 else None
+    top_streak_days14 = agent_stats14[0]["longest_streak"] if agent_stats14 else 0
+    total_agents14 = len(agent_stats14)
+
+    streak_narrative14 = ""
+    recommendations14 = []
+    try:
+        import anthropic as _anthropic14
+        client14 = _anthropic14.Anthropic()
+        top_summary14 = "; ".join(
+            f"{a['name']} (longest={a['longest_streak']}d, current={a['current_streak']}d)"
+            for a in agent_stats14[:5]
+        )
+        prompt14 = (
+            f"You are analyzing AI agent run streaks for a CRM workspace.\n"
+            f"Over the last 6 months, {total_agents14} agents ran on {total_days_analyzed14} distinct days. "
+            f"Top streaks: {top_summary14 or 'none'}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"streak_narrative": "2-sentence insight about agent run consistency and streak patterns", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp14 = client14.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt14}],
+        )
+        raw14 = resp14.content[0].text.strip()
+        if "```" in raw14:
+            raw14 = raw14.split("```")[1]
+            if raw14.startswith("json"):
+                raw14 = raw14[4:]
+        parsed14 = loads_llm_json(raw14)
+        streak_narrative14 = str(parsed14.get("streak_narrative", "")).strip()
+        raw_recs14 = parsed14.get("recommendations", [])
+        recommendations14 = [str(r) for r in (raw_recs14 if isinstance(raw_recs14, list) else [])[:3]]
+    except Exception:
+        top_name14 = top_streak_agent14 or "No agent"
+        streak_narrative14 = (
+            f"{top_name14} leads with a {top_streak_days14}-day consecutive run streak, demonstrating strong operational consistency. "
+            f"Across {total_agents14} active agents, maintaining daily run streaks indicates reliable automation health."
+        )
+
+    default_recs14 = [
+        "Reward high-streak agents by ensuring they have fresh data pipelines to maximize their effectiveness.",
+        "Investigate agents with zero current streaks — they may need trigger configuration fixes.",
+        "Set streak targets (e.g. 30-day goal) to encourage consistent agent scheduling across your workspace.",
+    ]
+    while len(recommendations14) < 3:
+        recommendations14.append(default_recs14[len(recommendations14) % 3])
+
+    return {
+        "agents": agent_stats14,
+        "top_streak_agent": top_streak_agent14,
+        "top_streak_days": top_streak_days14,
+        "total_agents": total_agents14,
+        "total_days_analyzed": total_days_analyzed14,
+        "streak_narrative": streak_narrative14,
+        "recommendations": recommendations14,
+        "generated_at": now14.isoformat() + "Z",
+    }
