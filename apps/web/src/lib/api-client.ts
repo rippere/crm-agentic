@@ -8338,5 +8338,32 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/deals/avg-value-trend`, {}, token)
   },
+
+  async getAgentCoRunPatterns(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      return Promise.resolve({
+        pairs: [
+          { agent_a: 'Email Composer', agent_b: 'Lead Scorer', co_run_days: 34 },
+          { agent_a: 'Lead Scorer', agent_b: 'Pipeline Optimizer', co_run_days: 27 },
+          { agent_a: 'Email Composer', agent_b: 'Sentiment Analyzer', co_run_days: 19 },
+          { agent_a: 'Call Summarizer', agent_b: 'Pipeline Optimizer', co_run_days: 14 },
+          { agent_a: 'Lead Scorer', agent_b: 'Sentiment Analyzer', co_run_days: 11 },
+        ],
+        total_days_analyzed: 72,
+        co_run_days: 48,
+        solo_days: 24,
+        pairing_rate: 66.7,
+        most_common_pair: 'Email Composer + Lead Scorer',
+        co_run_narrative: 'Agents co-ran on 48 of 72 active days (66.7% pairing rate), indicating a highly coordinated workflow. Email Composer and Lead Scorer are the most frequent pair, suggesting outreach is consistently tied to scoring events.',
+        recommendations: [
+          'Email Composer and Lead Scorer co-run frequently — consider chaining them so a high score triggers an immediate outreach draft.',
+          'Call Summarizer pairs least often with other agents — review whether call ingestion is triggering downstream analysis agents.',
+          'High pairing rate (66.7%) suggests good workflow integration; maintain trigger configs as the team scales.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/co-run-patterns`, {}, token)
+  },
 }
 

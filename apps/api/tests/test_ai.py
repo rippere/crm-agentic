@@ -10696,3 +10696,70 @@ async def test_deal_avg_value_trend_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/avg-value-trend")
     assert resp.status_code == 403
+
+
+class FakeCoRunRow13:
+    def __init__(self, agent_name: str, days_ago: int):
+        import datetime
+        self.agent_name = agent_name
+        self.created_at = datetime.datetime.utcnow() - datetime.timedelta(days=days_ago)
+
+
+@pytest.mark.asyncio
+async def test_agent_co_run_patterns_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Day 1 (days_ago=1): Lead Scorer + Email Composer → pair (Email Composer, Lead Scorer) ×1
+    # Day 2 (days_ago=2): Lead Scorer + Pipeline Optimizer → pair (Lead Scorer, Pipeline Optimizer) ×1
+    # Day 3 (days_ago=3): Lead Scorer only → solo
+    fake_rows = [
+        FakeCoRunRow13("Lead Scorer", 1),
+        FakeCoRunRow13("Email Composer", 1),
+        FakeCoRunRow13("Lead Scorer", 2),
+        FakeCoRunRow13("Pipeline Optimizer", 2),
+        FakeCoRunRow13("Lead Scorer", 3),
+    ]
+
+    async def fake_execute(stmt):
+        class FakeResult:
+            def all(self_):
+                return fake_rows
+        return FakeResult()
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    import anthropic as _ant
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"co_run_narrative": "Two days had co-runs.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/co-run-patterns")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_days_analyzed"] == 3
+    assert data["co_run_days"] == 2
+    assert data["solo_days"] == 1
+    assert data["pairing_rate"] == round(2 / 3 * 100, 1)
+    assert len(data["pairs"]) >= 2
+    first_pair = data["pairs"][0]
+    assert first_pair["agent_a"] in ("Email Composer", "Lead Scorer", "Pipeline Optimizer")
+    assert first_pair["co_run_days"] == 1
+    assert data["most_common_pair"] is not None
+    assert data["co_run_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_agent_co_run_patterns_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbcccc-dddd-eeee-ffff-000011112233")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/co-run-patterns")
+    assert resp.status_code == 403

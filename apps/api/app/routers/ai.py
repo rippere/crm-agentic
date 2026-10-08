@@ -23664,3 +23664,129 @@ async def get_ai_deal_avg_value_trend(
         "recommendations": recommendations12,
         "generated_at": now12.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/co-run-patterns")
+async def get_agent_co_run_patterns(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now13 = datetime.datetime.utcnow()
+    cutoff13 = now13 - datetime.timedelta(days=183)
+
+    stmt13 = select(ActivityEvent.agent_name, ActivityEvent.created_at).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.agent_name.isnot(None),
+        ActivityEvent.created_at >= cutoff13,
+    )
+    result13 = await db.execute(stmt13)
+    rows13 = result13.all()
+
+    if not rows13:
+        return {
+            "pairs": [],
+            "total_days_analyzed": 0,
+            "co_run_days": 0,
+            "solo_days": 0,
+            "pairing_rate": 0.0,
+            "most_common_pair": None,
+            "co_run_narrative": "No agent run data found in the last 6 months.",
+            "recommendations": [
+                "Ensure agents are configured and triggered regularly to populate co-run data.",
+                "Review agent trigger settings to enable multi-agent workflows.",
+                "Consider scheduling complementary agents to run together for better insights.",
+            ],
+            "generated_at": now13.isoformat() + "Z",
+        }
+
+    from collections import defaultdict as _defdict13, Counter as _Counter13
+    from itertools import combinations as _combos13
+
+    days_agents13: dict = _defdict13(set)
+    for row13 in rows13:
+        day13 = row13.created_at.date()
+        days_agents13[day13].add(row13.agent_name)
+
+    total_days13 = len(days_agents13)
+    pair_counts13: _Counter13 = _Counter13()
+    co_run_days13 = 0
+    solo_days13 = 0
+
+    for _day13, agents13 in days_agents13.items():
+        if len(agents13) >= 2:
+            co_run_days13 += 1
+            for pair13 in _combos13(sorted(agents13), 2):
+                pair_counts13[pair13] += 1
+        else:
+            solo_days13 += 1
+
+    pairing_rate13 = round(co_run_days13 / total_days13 * 100, 1) if total_days13 > 0 else 0.0
+    top_pairs13 = [
+        {"agent_a": p[0], "agent_b": p[1], "co_run_days": c}
+        for p, c in pair_counts13.most_common(5)
+    ]
+    most_common_pair13 = (
+        f"{top_pairs13[0]['agent_a']} + {top_pairs13[0]['agent_b']}" if top_pairs13 else None
+    )
+
+    co_run_narrative13 = ""
+    recommendations13: list = []
+    try:
+        client13 = _mk_anthropic()
+        pair_summary13 = "; ".join(
+            f"{p['agent_a']}+{p['agent_b']}={p['co_run_days']}d"
+            for p in top_pairs13[:5]
+        )
+        prompt13 = (
+            f"You are analyzing AI agent co-run patterns for a CRM workspace.\n"
+            f"Over the last 6 months, {total_days13} days had agent runs. "
+            f"{co_run_days13} days had 2+ agents running ({pairing_rate13}% pairing rate). "
+            f"Top co-run pairs: {pair_summary13 or 'none'}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"co_run_narrative": "2-sentence insight about agent co-run patterns", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp13 = client13.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt13}],
+        )
+        raw13 = resp13.content[0].text.strip()
+        if "```" in raw13:
+            raw13 = raw13.split("```")[1]
+            if raw13.startswith("json"):
+                raw13 = raw13[4:]
+        parsed13 = loads_llm_json(raw13)
+        co_run_narrative13 = str(parsed13.get("co_run_narrative", "")).strip()
+        raw_recs13 = parsed13.get("recommendations", [])
+        recommendations13 = [str(r) for r in (raw_recs13 if isinstance(raw_recs13, list) else [])[:3]]
+    except Exception:
+        direction13 = "high" if pairing_rate13 >= 50 else "moderate" if pairing_rate13 >= 20 else "low"
+        co_run_narrative13 = (
+            f"Agents co-ran on {co_run_days13} of {total_days13} active days ({pairing_rate13}% pairing rate) — a {direction13} coordination level. "
+            f"{'Most common pair: ' + most_common_pair13 + '.' if most_common_pair13 else 'No recurring pairs detected yet.'}"
+        )
+
+    default_recs13 = [
+        "Schedule complementary agents (e.g. Lead Scorer + Email Composer) to run together for aligned outputs.",
+        "High pairing rates indicate coordinated workflows — review trigger configuration to ensure intentional ordering.",
+        "Agents that never co-run may benefit from combined triggers to improve cross-feature intelligence.",
+    ]
+    while len(recommendations13) < 3:
+        recommendations13.append(default_recs13[len(recommendations13) % 3])
+
+    return {
+        "pairs": top_pairs13,
+        "total_days_analyzed": total_days13,
+        "co_run_days": co_run_days13,
+        "solo_days": solo_days13,
+        "pairing_rate": pairing_rate13,
+        "most_common_pair": most_common_pair13,
+        "co_run_narrative": co_run_narrative13,
+        "recommendations": recommendations13,
+        "generated_at": now13.isoformat() + "Z",
+    }
