@@ -9388,7 +9388,13 @@ async def test_revenue_forecast_returns_forecast(app_client, monkeypatch):
     fastapi_app, mock_db, workspace_id = app_client
 
     now = datetime.datetime.utcnow()
-    last_q_start = now - datetime.timedelta(days=200)
+    # Anchor both closed-won rows in the middle of the previous calendar quarter so
+    # the test doesn't break when day-200 crosses a quarter boundary.
+    q_start_month = ((now.month - 1) // 3) * 3 + 1  # first month of current quarter
+    if q_start_month == 1:
+        prev_q_anchor = datetime.datetime(now.year - 1, 10, 15)
+    else:
+        prev_q_anchor = datetime.datetime(now.year, q_start_month - 3, 15)
 
     active_rows = [
         FakeRevenueForecastActiveDealRow(100000, 80, "proposal", "Big Deal"),
@@ -9396,8 +9402,8 @@ async def test_revenue_forecast_returns_forecast(app_client, monkeypatch):
         FakeRevenueForecastActiveDealRow(20000, 20, "discovery", "Small Deal"),
     ]
     closed_rows = [
-        FakeRevenueForecastClosedDealRow(80000, last_q_start),
-        FakeRevenueForecastClosedDealRow(40000, last_q_start + datetime.timedelta(days=10)),
+        FakeRevenueForecastClosedDealRow(80000, prev_q_anchor),
+        FakeRevenueForecastClosedDealRow(40000, prev_q_anchor + datetime.timedelta(days=10)),
     ]
 
     mock_db.execute = AsyncMock(side_effect=[
@@ -10633,4 +10639,133 @@ async def test_agent_wow_comparison_wrong_workspace_returns_403(app_client):
     wrong_id = uuid.UUID("ffff0000-1111-2222-3333-444455556666")
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/wow-comparison")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20ak – Deal Average Value Trend
+# ---------------------------------------------------------------------------
+
+class FakeAvgValRow:
+    def __init__(self, value: float, days_ago: int):
+        import datetime
+        self.value = value
+        self.created_at = datetime.datetime.utcnow() - datetime.timedelta(days=days_ago)
+
+
+@pytest.mark.asyncio
+async def test_deal_avg_value_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # 3 deals: 2 created ~5 days ago (current month), 1 created ~35 days ago (prev month)
+    fake_rows = [
+        FakeAvgValRow(40000.0, 5),
+        FakeAvgValRow(60000.0, 10),
+        FakeAvgValRow(30000.0, 35),
+    ]
+
+    async def fake_execute(stmt):
+        class FakeResult:
+            def all(self_):
+                return fake_rows
+        return FakeResult()
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    import anthropic as _ant
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"avg_value_narrative": "Value up.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/deals/avg-value-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_deals"] == 3
+    assert len(data["monthly_avg_value"]) == 6
+    assert data["overall_avg_value"] == round((40000 + 60000 + 30000) / 3, 2)
+    assert data["peak_month"] is not None
+    assert data["avg_value_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_deal_avg_value_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-000011112222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/deals/avg-value-trend")
+    assert resp.status_code == 403
+
+
+class FakeCoRunRow13:
+    def __init__(self, agent_name: str, days_ago: int):
+        import datetime
+        self.agent_name = agent_name
+        self.created_at = datetime.datetime.utcnow() - datetime.timedelta(days=days_ago)
+
+
+@pytest.mark.asyncio
+async def test_agent_co_run_patterns_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    # Day 1 (days_ago=1): Lead Scorer + Email Composer → pair (Email Composer, Lead Scorer) ×1
+    # Day 2 (days_ago=2): Lead Scorer + Pipeline Optimizer → pair (Lead Scorer, Pipeline Optimizer) ×1
+    # Day 3 (days_ago=3): Lead Scorer only → solo
+    fake_rows = [
+        FakeCoRunRow13("Lead Scorer", 1),
+        FakeCoRunRow13("Email Composer", 1),
+        FakeCoRunRow13("Lead Scorer", 2),
+        FakeCoRunRow13("Pipeline Optimizer", 2),
+        FakeCoRunRow13("Lead Scorer", 3),
+    ]
+
+    async def fake_execute(stmt):
+        class FakeResult:
+            def all(self_):
+                return fake_rows
+        return FakeResult()
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    import anthropic as _ant
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"co_run_narrative": "Two days had co-runs.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/co-run-patterns")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_days_analyzed"] == 3
+    assert data["co_run_days"] == 2
+    assert data["solo_days"] == 1
+    assert data["pairing_rate"] == round(2 / 3 * 100, 1)
+    assert len(data["pairs"]) >= 2
+    first_pair = data["pairs"][0]
+    assert first_pair["agent_a"] in ("Email Composer", "Lead Scorer", "Pipeline Optimizer")
+    assert first_pair["co_run_days"] == 1
+    assert data["most_common_pair"] is not None
+    assert data["co_run_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_agent_co_run_patterns_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("bbbbcccc-dddd-eeee-ffff-000011112233")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/co-run-patterns")
     assert resp.status_code == 403
