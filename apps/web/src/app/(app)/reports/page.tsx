@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 import {
-  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, CalendarDays, MessageCircle, UserPlus, Building2, LayoutList, SplitSquareHorizontal, Loader2, UserCheck,
+  TrendingUp, TrendingDown, DollarSign, Target, BarChart2, AlertTriangle, Trophy, Clock, Timer, Filter, Bot, CalendarOff, Activity, MessageSquare, Sparkles, RefreshCw, ChevronDown, ChevronUp, Users, CheckSquare, CloudDownload, ArrowRight, UserX, ExternalLink, Zap, CheckCircle2, ShieldAlert, BookOpen, ClipboardList, Route, Shield, Percent, Flame, Star, Grid, Droplets, Layers, Calendar, CalendarDays, MessageCircle, UserPlus, Building2, LayoutList, SplitSquareHorizontal, Loader2, UserCheck, Share2,
 } from "lucide-react";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
@@ -994,6 +994,46 @@ export default function ReportsPage() {
   const [agentWowLoading, setAgentWowLoading] = useState(false);
   const [agentWowOpen, setAgentWowOpen] = useState(true);
 
+  type AgentCoRunPair = { agent_a: string; agent_b: string; co_run_days: number };
+  type AgentCoRunData = { pairs: AgentCoRunPair[]; total_days_analyzed: number; co_run_days: number; solo_days: number; pairing_rate: number; most_common_pair: string | null; co_run_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentCoRun, setAgentCoRun] = useState<AgentCoRunData | null>(null);
+  const [agentCoRunLoading, setAgentCoRunLoading] = useState(false);
+  const [agentCoRunOpen, setAgentCoRunOpen] = useState(true);
+
+  type AgentStreakEntry = { name: string; total_run_days: number; longest_streak: number; current_streak: number; last_run_date: string | null; is_active: boolean };
+  type AgentRunStreaksData = { agents: AgentStreakEntry[]; top_streak_agent: string | null; top_streak_days: number; total_agents: number; total_days_analyzed: number; streak_narrative: string; recommendations: string[]; generated_at: string };
+  const [agentRunStreaks, setAgentRunStreaks] = useState<AgentRunStreaksData | null>(null);
+  const [agentRunStreaksLoading, setAgentRunStreaksLoading] = useState(false);
+  const [agentRunStreaksOpen, setAgentRunStreaksOpen] = useState(true);
+
+  type ActivityHeatCell = { dow: number; dow_name: string; hour: number; count: number };
+  type ActivityHeatmapData = { heatmap: ActivityHeatCell[]; peak_hour: number | null; peak_dow: number | null; peak_dow_name: string | null; peak_hour_label: string | null; busiest_slot_count: number; total_events: number; total_days_analyzed: number; activity_narrative: string; recommendations: string[]; generated_at: string };
+  const [activityHeatmap, setActivityHeatmap] = useState<ActivityHeatmapData | null>(null);
+  const [activityHeatmapLoading, setActivityHeatmapLoading] = useState(false);
+  const [activityHeatmapOpen, setActivityHeatmapOpen] = useState(true);
+  type RevenueRunRateMonth = { month_label: string; won_count: number; revenue: number };
+  type RevenueRunRateData = { monthly_revenue: RevenueRunRateMonth[]; total_won: number; total_revenue: number; monthly_run_rate: number; annualized_run_rate: number; growth_rate: number; trend_direction: string; best_month: string | null; best_month_revenue: number; run_rate_narrative: string; recommendations: string[]; generated_at: string };
+  const [revenueRunRate, setRevenueRunRate] = useState<RevenueRunRateData | null>(null);
+  const [revenueRunRateLoading, setRevenueRunRateLoading] = useState(false);
+  const [revenueRunRateOpen, setRevenueRunRateOpen] = useState(true);
+  type FirstTouchBucket = { label: string; count: number; pct: number };
+  type FirstTouchFastest = { days: number; deal_title: string; value: number };
+  type FirstTouchToCloseData = { total_contacts_analyzed: number; converted_contacts: number; avg_days_to_close: number | null; median_days_to_close: number | null; buckets: FirstTouchBucket[]; top_fastest: FirstTouchFastest[]; narrative: string; recommendations: string[]; generated_at: string };
+  const [firstTouchToClose, setFirstTouchToClose] = useState<FirstTouchToCloseData | null>(null);
+  const [firstTouchToCloseLoading, setFirstTouchToCloseLoading] = useState(false);
+  const [firstTouchToCloseOpen, setFirstTouchToCloseOpen] = useState(true);
+  type DealVelocityTrendMonth = { month_label: string; deals_closed: number; avg_days_to_close: number | null };
+  type DealVelocityTrendData = { monthly_velocity: DealVelocityTrendMonth[]; total_deals: number; avg_days_to_close: number; trend_direction: string; velocity_delta: number; fastest_month: string | null; fastest_avg_days: number | null; velocity_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealVelocityTrend, setDealVelocityTrend] = useState<DealVelocityTrendData | null>(null);
+  const [dealVelocityTrendLoading, setDealVelocityTrendLoading] = useState(false);
+  const [dealVelocityTrendOpen, setDealVelocityTrendOpen] = useState(true);
+
+  type DealAvgValMonth = { month_label: string; deals_created: number; total_value: number; avg_value: number };
+  type DealAvgValueTrendData = { monthly_avg_value: DealAvgValMonth[]; total_deals: number; overall_avg_value: number; trend_direction: string; value_delta: number; peak_month: string | null; peak_avg_value: number; avg_value_narrative: string; recommendations: string[]; generated_at: string };
+  const [dealAvgValueTrend, setDealAvgValueTrend] = useState<DealAvgValueTrendData | null>(null);
+  const [dealAvgValueTrendLoading, setDealAvgValueTrendLoading] = useState(false);
+  const [dealAvgValueTrendOpen, setDealAvgValueTrendOpen] = useState(true);
+
   type DealCreationMonth = { month_label: string; deals_created: number; deals_won: number; deals_lost: number; win_rate: number | null };
   type DealCreationTrendData = { monthly_deals: DealCreationMonth[]; total_created: number; total_won: number; total_lost: number; overall_win_rate: number | null; trend_direction: string; rate_delta: number; best_month: string | null; best_win_rate: number | null; deal_narrative: string; recommendations: string[]; generated_at: string };
   const [dealCreationTrend, setDealCreationTrend] = useState<DealCreationTrendData | null>(null);
@@ -1232,6 +1272,20 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setAgentCoRunLoading(true);
+      apiClient.getAgentCoRunPatterns("demo-workspace-1", "demo-token").then(setAgentCoRun).catch(() => {}).finally(() => setAgentCoRunLoading(false));
+      setAgentRunStreaksLoading(true);
+      apiClient.getAgentRunStreaks("demo-workspace-1", "demo-token").then(setAgentRunStreaks).catch(() => {}).finally(() => setAgentRunStreaksLoading(false));
+      setActivityHeatmapLoading(true);
+      apiClient.getActivityHeatmap("demo-workspace-1", "demo-token").then(setActivityHeatmap).catch(() => {}).finally(() => setActivityHeatmapLoading(false));
+      setDealVelocityTrendLoading(true);
+      apiClient.getDealVelocityTrend("demo-workspace-1", "demo-token").then(setDealVelocityTrend).catch(() => {}).finally(() => setDealVelocityTrendLoading(false));
+      setRevenueRunRateLoading(true);
+      apiClient.getRevenueRunRate("demo-workspace-1", "demo-token").then(setRevenueRunRate).catch(() => {}).finally(() => setRevenueRunRateLoading(false));
+      setFirstTouchToCloseLoading(true);
+      apiClient.getFirstTouchToClose("demo-workspace-1", "demo-token").then(setFirstTouchToClose).catch(() => {}).finally(() => setFirstTouchToCloseLoading(false));
+      setDealAvgValueTrendLoading(true);
+      apiClient.getDealAvgValueTrend("demo-workspace-1", "demo-token").then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1469,6 +1523,20 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setAgentCoRunLoading(true);
+      apiClient.getAgentCoRunPatterns(workspaceId, session.access_token).then(setAgentCoRun).catch(() => {}).finally(() => setAgentCoRunLoading(false));
+      setAgentRunStreaksLoading(true);
+      apiClient.getAgentRunStreaks(workspaceId, session.access_token).then(setAgentRunStreaks).catch(() => {}).finally(() => setAgentRunStreaksLoading(false));
+      setActivityHeatmapLoading(true);
+      apiClient.getActivityHeatmap(workspaceId, session.access_token).then(setActivityHeatmap).catch(() => {}).finally(() => setActivityHeatmapLoading(false));
+      setDealVelocityTrendLoading(true);
+      apiClient.getDealVelocityTrend(workspaceId, session.access_token).then(setDealVelocityTrend).catch(() => {}).finally(() => setDealVelocityTrendLoading(false));
+      setRevenueRunRateLoading(true);
+      apiClient.getRevenueRunRate(workspaceId, session.access_token).then(setRevenueRunRate).catch(() => {}).finally(() => setRevenueRunRateLoading(false));
+      setFirstTouchToCloseLoading(true);
+      apiClient.getFirstTouchToClose(workspaceId, session.access_token).then(setFirstTouchToClose).catch(() => {}).finally(() => setFirstTouchToCloseLoading(false));
+      setDealAvgValueTrendLoading(true);
+      apiClient.getDealAvgValueTrend(workspaceId, session.access_token).then(setDealAvgValueTrend).catch(() => {}).finally(() => setDealAvgValueTrendLoading(false));
     });
   }, []);
 
@@ -3268,6 +3336,111 @@ export default function ReportsPage() {
     }
   };
 
+  const regenerateAgentCoRun = () => {
+    setAgentCoRunLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentCoRunPatterns(wid, tok)
+        .then(setAgentCoRun)
+        .catch(() => {})
+        .finally(() => setAgentCoRunLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentCoRunLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentCoRunLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentRunStreaks = () => {
+    setAgentRunStreaksLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentRunStreaks(wid, tok)
+        .then(setAgentRunStreaks)
+        .catch(() => {})
+        .finally(() => setAgentRunStreaksLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentRunStreaksLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentRunStreaksLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateActivityHeatmap = () => {
+    setActivityHeatmapLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getActivityHeatmap(wid, tok)
+        .then(setActivityHeatmap)
+        .catch(() => {})
+        .finally(() => setActivityHeatmapLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setActivityHeatmapLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setActivityHeatmapLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealVelocityTrend = () => {
+    setDealVelocityTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealVelocityTrend(wid, tok)
+        .then(setDealVelocityTrend)
+        .catch(() => {})
+        .finally(() => setDealVelocityTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealVelocityTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealVelocityTrendLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateRevenueRunRate = () => {
+    setRevenueRunRateLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getRevenueRunRate(wid, tok)
+        .then(setRevenueRunRate)
+        .catch(() => {})
+        .finally(() => setRevenueRunRateLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setRevenueRunRateLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setRevenueRunRateLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
   const regenerateAgentDow = () => {
     setAgentDowLoading(true);
     const doFetch = (wid: string, tok: string) => {
@@ -3284,6 +3457,48 @@ export default function ReportsPage() {
         if (!session) { setAgentDowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentDowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateFirstTouchToClose = () => {
+    setFirstTouchToCloseLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getFirstTouchToClose(wid, tok)
+        .then(setFirstTouchToClose)
+        .catch(() => {})
+        .finally(() => setFirstTouchToCloseLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setFirstTouchToCloseLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setFirstTouchToCloseLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateDealAvgValueTrend = () => {
+    setDealAvgValueTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getDealAvgValueTrend(wid, tok)
+        .then(setDealAvgValueTrend)
+        .catch(() => {})
+        .finally(() => setDealAvgValueTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setDealAvgValueTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setDealAvgValueTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -13877,6 +14092,90 @@ export default function ReportsPage() {
         )}
       </Card>
 
+      {/* Phase 20ak – Deal Average Value Trend */}
+      <Card className="border-zinc-700/50">
+        <div
+          className="flex items-center justify-between p-4 cursor-pointer select-none"
+          onClick={() => setDealAvgValueTrendOpen(v => !v)}
+        >
+          <div className="flex items-center gap-3">
+            <BarChart2 className="h-4 w-4 text-indigo-400" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Deal Average Value Trend</p>
+              <p className="text-xs text-zinc-500">Average deal size over the last 6 months</p>
+            </div>
+            {dealAvgValueTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                dealAvgValueTrend.trend_direction === 'growing_upmarket' ? 'bg-emerald-900/40 text-emerald-300' :
+                dealAvgValueTrend.trend_direction === 'declining_downmarket' ? 'bg-rose-900/40 text-rose-300' :
+                'bg-zinc-700/60 text-zinc-400'
+              }`}>
+                {dealAvgValueTrend.trend_direction === 'growing_upmarket' ? '↑ Upmarket' :
+                 dealAvgValueTrend.trend_direction === 'declining_downmarket' ? '↓ Downmarket' : '→ Stable'}
+                {' '}{dealAvgValueTrend.value_delta > 0 ? '+' : ''}{dealAvgValueTrend.value_delta.toFixed(1)}%
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateDealAvgValueTrend(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={dealAvgValueTrendLoading}>
+              {dealAvgValueTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {dealAvgValueTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {dealAvgValueTrendOpen && (
+          dealAvgValueTrendLoading && !dealAvgValueTrend ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading deal average value trend…</div>
+          ) : dealAvgValueTrend ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Overall Avg Value</p>
+                  <p className="text-sm font-bold text-indigo-300">${(dealAvgValueTrend.overall_avg_value / 1000).toFixed(0)}K</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Deals</p>
+                  <p className="text-xl font-bold text-zinc-200">{dealAvgValueTrend.total_deals}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Peak Month</p>
+                  <p className="text-xs font-bold text-indigo-300 truncate">{dealAvgValueTrend.peak_month ?? '—'}</p>
+                </div>
+              </div>
+              {dealAvgValueTrend.total_deals > 0 ? (
+                <ResponsiveContainer width="100%" height={140}>
+                  <LineChart data={dealAvgValueTrend.monthly_avg_value} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717a' }} tickLine={false} axisLine={false} />
+                    <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 10, fill: '#71717a' }} tickLine={false} axisLine={false} width={44} />
+                    <Tooltip
+                      formatter={(value: any) => [`$${Number(value ?? 0).toLocaleString()}`, 'Avg Value']}
+                      contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 11 }}
+                      labelStyle={{ color: '#a1a1aa' }}
+                    />
+                    <ReferenceLine y={dealAvgValueTrend.overall_avg_value} stroke="#6366f1" strokeDasharray="3 3" strokeOpacity={0.5} />
+                    <Line type="monotone" dataKey="avg_value" stroke="#6366f1" strokeWidth={2} dot={{ r: 3, fill: '#6366f1' }} activeDot={{ r: 5 }} connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center">No deal data in the last 6 months.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{dealAvgValueTrend.avg_value_narrative}</p>
+              <ul className="space-y-1">
+                {dealAvgValueTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealAvgValueTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the deal average value trend.</div>
+          )
+        )}
+      </Card>
+
       {/* Phase 20ae – Agent Week-over-Week Comparison */}
       <Card className="border-zinc-700/50">
         <div
@@ -14040,6 +14339,478 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the day-of-week distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20al – Agent Co-Run Pattern Analysis */}
+      <Card className="border-zinc-700/50">
+        <div
+          className="flex items-center justify-between p-4 cursor-pointer select-none"
+          onClick={() => setAgentCoRunOpen(v => !v)}
+        >
+          <div className="flex items-center gap-3">
+            <Share2 className="h-4 w-4 text-violet-400" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Agent Co-Run Patterns</p>
+              <p className="text-xs text-zinc-500">Which agents run together most often (last 6 months)</p>
+            </div>
+            {agentCoRun && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${agentCoRun.pairing_rate >= 50 ? 'bg-violet-900/40 text-violet-300' : agentCoRun.pairing_rate >= 20 ? 'bg-amber-900/40 text-amber-300' : 'bg-zinc-800 text-zinc-400'}`}>
+                {agentCoRun.pairing_rate.toFixed(1)}% pairing
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateAgentCoRun(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentCoRunLoading}>
+              {agentCoRunLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {agentCoRunOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {agentCoRunOpen && (
+          agentCoRunLoading && !agentCoRun ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading co-run patterns…</div>
+          ) : agentCoRun ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Most Common Pair</p>
+                  <p className="text-xs font-bold text-violet-300 truncate">{agentCoRun.most_common_pair ?? '—'}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Co-Run Days</p>
+                  <p className={`text-xl font-bold ${agentCoRun.pairing_rate >= 50 ? 'text-violet-300' : agentCoRun.pairing_rate >= 20 ? 'text-amber-300' : 'text-zinc-400'}`}>{agentCoRun.co_run_days}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Days</p>
+                  <p className="text-xl font-bold text-zinc-200">{agentCoRun.total_days_analyzed}</p>
+                </div>
+              </div>
+              {agentCoRun.pairs.length > 0 ? (
+                <div className="space-y-1.5">
+                  {agentCoRun.pairs.map((p: AgentCoRunPair, i: number) => {
+                    const maxDays = agentCoRun.pairs[0]?.co_run_days ?? 1;
+                    return (
+                      <div key={i} className="flex items-center gap-2">
+                        <span className="text-xs text-zinc-500 w-4 text-right">{i + 1}.</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className="text-xs text-zinc-300 truncate">{p.agent_a} <span className="text-zinc-600">+</span> {p.agent_b}</span>
+                            <span className="text-xs text-zinc-500 shrink-0 ml-2">{p.co_run_days}d</span>
+                          </div>
+                          <div className="bg-zinc-800 rounded-full h-1.5">
+                            <div
+                              className="h-1.5 rounded-full bg-violet-500"
+                              style={{ width: `${Math.round(p.co_run_days / maxDays * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <p className="text-xs text-zinc-600 pt-1">Days where both agents ran in the same calendar day</p>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500 text-center">No co-run data found in the last 6 months.</p>
+              )}
+              <p className="text-xs text-zinc-400 italic">{agentCoRun.co_run_narrative}</p>
+              <ul className="space-y-1">
+                {agentCoRun.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-violet-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentCoRun.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load co-run patterns.</div>
+          )
+        )}
+      </Card>
+
+      {/* Agent Run Streaks */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div className="flex items-center gap-2 p-4 cursor-pointer hover:bg-zinc-800/30 transition-colors" onClick={() => setAgentRunStreaksOpen(o => !o)}>
+          <Flame className="h-4 w-4 text-teal-400" />
+          <span className="text-sm font-semibold text-zinc-200 flex-1">Agent Run Streaks</span>
+          {agentRunStreaks && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${agentRunStreaks.top_streak_days >= 14 ? 'bg-teal-900/40 text-teal-300' : agentRunStreaks.top_streak_days >= 7 ? 'bg-amber-900/40 text-amber-300' : 'bg-zinc-800 text-zinc-400'}`}>
+              {agentRunStreaks.top_streak_days}d top streak
+            </span>
+          )}
+          <button onClick={e => { e.stopPropagation(); regenerateAgentRunStreaks(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={agentRunStreaksLoading}>
+            {agentRunStreaksLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          </button>
+          {agentRunStreaksOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+        </div>
+        {agentRunStreaksOpen && (
+          agentRunStreaksLoading && !agentRunStreaks ? (
+            <div className="h-24 flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-zinc-600" /></div>
+          ) : agentRunStreaks ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/40 rounded-lg p-3">
+                  <p className="text-xs text-zinc-500 mb-1">Top Streak Agent</p>
+                  <p className="text-xs font-bold text-teal-300 truncate">{agentRunStreaks.top_streak_agent ?? '—'}</p>
+                </div>
+                <div className="bg-zinc-800/40 rounded-lg p-3">
+                  <p className="text-xs text-zinc-500 mb-1">Longest Streak</p>
+                  <p className="text-xl font-bold text-zinc-200">{agentRunStreaks.top_streak_days}<span className="text-xs text-zinc-500 ml-1">days</span></p>
+                </div>
+                <div className="bg-zinc-800/40 rounded-lg p-3">
+                  <p className="text-xs text-zinc-500 mb-1">Active Agents</p>
+                  <p className="text-xl font-bold text-zinc-200">{agentRunStreaks.agents.filter((a: AgentStreakEntry) => a.is_active).length}<span className="text-xs text-zinc-500 ml-1">/ {agentRunStreaks.total_agents}</span></p>
+                </div>
+              </div>
+              {agentRunStreaks.agents.length > 0 && (
+                <div className="space-y-2">
+                  {agentRunStreaks.agents.map((a: AgentStreakEntry) => {
+                    const maxStreak = agentRunStreaks.agents[0]?.longest_streak ?? 1;
+                    const barPct = maxStreak > 0 ? Math.round((a.longest_streak / maxStreak) * 100) : 0;
+                    return (
+                      <div key={a.name} className="flex items-center gap-2">
+                        <span className="text-xs text-zinc-300 w-36 truncate">{a.name}</span>
+                        <div className="flex-1 bg-zinc-800 rounded-full h-2 overflow-hidden">
+                          <div className={`h-full rounded-full ${a.is_active ? 'bg-teal-500' : 'bg-zinc-600'}`} style={{ width: `${barPct}%` }} />
+                        </div>
+                        <span className={`text-xs font-medium w-14 text-right ${a.is_active ? 'text-teal-300' : 'text-zinc-500'}`}>
+                          {a.longest_streak}d best
+                        </span>
+                        {a.current_streak > 0 ? (
+                          <span className="text-xs text-teal-400 w-16 text-right">🔥 {a.current_streak}d now</span>
+                        ) : (
+                          <span className="text-xs text-zinc-600 w-16 text-right">—</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{agentRunStreaks.streak_narrative}</p>
+              <ul className="space-y-1">
+                {agentRunStreaks.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-500 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentRunStreaks.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load agent run streaks.</div>
+          )
+        )}
+      </Card>
+
+      {/* Activity Heatmap */}
+      <Card className="border-zinc-800">
+        <div className="flex items-center gap-2 p-4 cursor-pointer select-none" onClick={() => setActivityHeatmapOpen(o => !o)}>
+          <Activity className="h-4 w-4 text-orange-400 flex-shrink-0" />
+          <span className="text-sm font-semibold text-zinc-200 flex-1">Workspace Activity Heatmap</span>
+          {activityHeatmap && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${activityHeatmap.total_events >= 500 ? 'bg-orange-900/40 text-orange-300' : activityHeatmap.total_events >= 100 ? 'bg-amber-900/40 text-amber-300' : 'bg-zinc-800 text-zinc-400'}`}>
+              {activityHeatmap.total_events.toLocaleString()} events
+            </span>
+          )}
+          <button onClick={e => { e.stopPropagation(); regenerateActivityHeatmap(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={activityHeatmapLoading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${activityHeatmapLoading ? 'animate-spin' : ''}`} />
+          </button>
+          {activityHeatmapOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+        </div>
+        {activityHeatmapOpen && (
+          activityHeatmapLoading && !activityHeatmap ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analysing activity patterns…</div>
+          ) : activityHeatmap ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1">Peak Slot</p>
+                  <p className="text-sm font-bold text-orange-300 truncate">{activityHeatmap.peak_dow_name ?? '—'}</p>
+                  <p className="text-xs text-zinc-400">{activityHeatmap.peak_hour_label ?? '—'} · {activityHeatmap.busiest_slot_count} events</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1">Total Events</p>
+                  <p className="text-xl font-bold text-zinc-200">{activityHeatmap.total_events.toLocaleString()}</p>
+                  <p className="text-xs text-zinc-500">last 90 days</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1">Days Analyzed</p>
+                  <p className="text-xl font-bold text-zinc-200">{activityHeatmap.total_days_analyzed}</p>
+                  <p className="text-xs text-zinc-500">days</p>
+                </div>
+              </div>
+              {activityHeatmap.heatmap.length > 0 && (() => {
+                const maxCount = Math.max(...activityHeatmap.heatmap.map((c: ActivityHeatCell) => c.count), 1);
+                const dow_labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+                const hour_labels = ['12a','1a','2a','3a','4a','5a','6a','7a','8a','9a','10a','11a','12p','1p','2p','3p','4p','5p','6p','7p','8p','9p','10p','11p'];
+                const cellsBySlot: Record<string, number> = {};
+                activityHeatmap.heatmap.forEach((c: ActivityHeatCell) => { cellsBySlot[`${c.dow}_${c.hour}`] = c.count; });
+                return (
+                  <div className="overflow-x-auto">
+                    <div className="min-w-[340px]">
+                      <div className="flex gap-0.5 mb-0.5 ml-7">
+                        {dow_labels.map(d => (
+                          <div key={d} className="flex-1 text-center text-[9px] text-zinc-500">{d}</div>
+                        ))}
+                      </div>
+                      {Array.from({ length: 24 }, (_, hr) => (
+                        <div key={hr} className="flex items-center gap-0.5 mb-0.5">
+                          <span className="text-[9px] text-zinc-600 w-6 text-right pr-0.5">{hour_labels[hr]}</span>
+                          {Array.from({ length: 7 }, (_, dow) => {
+                            const count = cellsBySlot[`${dow}_${hr}`] ?? 0;
+                            const intensity = count === 0 ? 0 : Math.max(0.08, count / maxCount);
+                            return (
+                              <div
+                                key={dow}
+                                className="flex-1 h-3 rounded-sm"
+                                style={{ backgroundColor: count === 0 ? 'rgb(39,39,42)' : `rgba(251,146,60,${intensity})` }}
+                                title={`${dow_labels[dow]} ${hour_labels[hr]}: ${count} events`}
+                              />
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+              <p className="text-xs text-zinc-400 italic leading-relaxed">{activityHeatmap.activity_narrative}</p>
+              <ul className="space-y-1">
+                {activityHeatmap.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-orange-500 flex-shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(activityHeatmap.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load activity heatmap.</div>
+          )
+        )}
+      </Card>
+
+      {/* Deal Velocity Trend */}
+      <Card className="border-sky-500/15">
+        <div className="flex items-center justify-between p-4 cursor-pointer select-none" onClick={() => setDealVelocityTrendOpen(o => !o)}>
+          <div className="flex items-center gap-2">
+            <TrendingDown className="h-4 w-4 text-sky-400" />
+            <span className="text-sm font-semibold text-zinc-200">Deal Velocity Trend</span>
+            {dealVelocityTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealVelocityTrend.trend_direction === 'accelerating' ? 'bg-emerald-900/40 text-emerald-300' : dealVelocityTrend.trend_direction === 'slowing' ? 'bg-rose-900/40 text-rose-300' : 'bg-zinc-800 text-zinc-400'}`}>
+                {dealVelocityTrend.trend_direction === 'accelerating' ? `Accelerating ${dealVelocityTrend.velocity_delta.toFixed(1)}%` : dealVelocityTrend.trend_direction === 'slowing' ? `Slowing +${dealVelocityTrend.velocity_delta.toFixed(1)}%` : 'Stable'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateDealVelocityTrend(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={dealVelocityTrendLoading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${dealVelocityTrendLoading ? 'animate-spin' : ''}`} />
+            </button>
+            {dealVelocityTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {dealVelocityTrendOpen && (
+          dealVelocityTrendLoading && !dealVelocityTrend ? (
+            <div className="p-6 flex justify-center"><div className="h-5 w-5 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" /></div>
+          ) : dealVelocityTrend ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Days to Close</p>
+                  <p className="text-lg font-bold text-sky-300">{dealVelocityTrend.avg_days_to_close.toFixed(1)}d</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Deals Closed</p>
+                  <p className="text-lg font-bold text-zinc-200">{dealVelocityTrend.total_deals}</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Fastest Month</p>
+                  <p className="text-sm font-bold text-emerald-300 truncate">{dealVelocityTrend.fastest_month ?? '—'}</p>
+                  {dealVelocityTrend.fastest_avg_days != null && <p className="text-xs text-zinc-500">{dealVelocityTrend.fastest_avg_days.toFixed(0)}d avg</p>}
+                </div>
+              </div>
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={dealVelocityTrend.monthly_velocity} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <XAxis dataKey="month_label" tick={{ fill: '#71717a', fontSize: 10 }} />
+                    <YAxis tick={{ fill: '#71717a', fontSize: 10 }} unit="d" />
+                    <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '6px' }} labelStyle={{ color: '#a1a1aa' }} formatter={(v: unknown) => typeof v === 'number' ? [`${v.toFixed(1)}d`, 'Avg Days'] : ['—', 'Avg Days']} />
+                    <ReferenceLine y={dealVelocityTrend.avg_days_to_close} stroke="#38bdf8" strokeDasharray="4 4" strokeOpacity={0.5} label={{ value: 'Avg', fill: '#38bdf8', fontSize: 10 }} />
+                    <Line type="monotone" dataKey="avg_days_to_close" stroke="#38bdf8" strokeWidth={2} dot={{ fill: '#38bdf8', r: 3 }} connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              {dealVelocityTrend.velocity_narrative && <p className="text-sm text-zinc-400 italic">{dealVelocityTrend.velocity_narrative}</p>}
+              <ul className="space-y-1.5">
+                {dealVelocityTrend.recommendations.map((rec: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-sky-400 flex-shrink-0" />
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(dealVelocityTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load deal velocity trend.</div>
+          )
+        )}
+      </Card>
+
+      {/* Revenue Run Rate */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800 cursor-pointer select-none" onClick={() => setRevenueRunRateOpen(o => !o)}>
+          <span className="text-emerald-400"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg></span>
+          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Revenue Run Rate</span>
+          {revenueRunRate && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${revenueRunRate.trend_direction === 'accelerating' ? 'bg-emerald-900/40 text-emerald-300' : revenueRunRate.trend_direction === 'growing' ? 'bg-teal-900/40 text-teal-300' : revenueRunRate.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' : 'bg-zinc-800 text-zinc-400'}`}>
+              {revenueRunRate.trend_direction === 'accelerating' ? `Accelerating +${revenueRunRate.growth_rate.toFixed(1)}%` : revenueRunRate.trend_direction === 'growing' ? `Growing +${revenueRunRate.growth_rate.toFixed(1)}%` : revenueRunRate.trend_direction === 'declining' ? `Declining ${revenueRunRate.growth_rate.toFixed(1)}%` : 'Stable'}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateRevenueRunRate(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={revenueRunRateLoading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${revenueRunRateLoading ? 'animate-spin' : ''}`} />
+            </button>
+            {revenueRunRateOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {revenueRunRateOpen && (
+          revenueRunRateLoading && !revenueRunRate ? (
+            <div className="p-6 animate-pulse space-y-3"><div className="h-4 bg-zinc-800 rounded w-3/4" /><div className="h-32 bg-zinc-800 rounded" /></div>
+          ) : revenueRunRate ? (
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-zinc-900 px-3 py-2">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Monthly Run Rate</p>
+                  <p className="text-lg font-bold text-emerald-300">${(revenueRunRate.monthly_run_rate / 1000).toFixed(0)}K</p>
+                </div>
+                <div className="rounded-lg bg-zinc-900 px-3 py-2">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Annualized</p>
+                  <p className="text-lg font-bold text-zinc-200">${(revenueRunRate.annualized_run_rate / 1000).toFixed(0)}K</p>
+                </div>
+                <div className="rounded-lg bg-zinc-900 px-3 py-2">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Best Month</p>
+                  <p className="text-sm font-bold text-amber-300 truncate">{revenueRunRate.best_month ?? '—'}</p>
+                  {revenueRunRate.best_month_revenue > 0 && <p className="text-xs text-zinc-500">${(revenueRunRate.best_month_revenue / 1000).toFixed(0)}K</p>}
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={120}>
+                <AreaChart data={revenueRunRate.monthly_revenue} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="rrGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#34d399" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="month_label" tick={{ fill: '#52525b', fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis tickFormatter={(v: unknown) => typeof v === 'number' ? `$${(v / 1000).toFixed(0)}K` : ''} tick={{ fill: '#52525b', fontSize: 10 }} tickLine={false} axisLine={false} width={44} />
+                  <Tooltip formatter={(v: unknown) => typeof v === 'number' ? [`$${(v / 1000).toFixed(0)}K`, 'Revenue'] : ['—', 'Revenue']} contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: 6, fontSize: 12 }} />
+                  <ReferenceLine y={revenueRunRate.monthly_run_rate} stroke="#34d399" strokeDasharray="4 4" strokeOpacity={0.5} label={{ value: 'Run Rate', fill: '#34d399', fontSize: 10 }} />
+                  <Area type="monotone" dataKey="revenue" stroke="#34d399" strokeWidth={2} fill="url(#rrGrad)" dot={false} connectNulls />
+                </AreaChart>
+              </ResponsiveContainer>
+              {revenueRunRate.run_rate_narrative && <p className="text-sm text-zinc-400 italic">{revenueRunRate.run_rate_narrative}</p>}
+              <ul className="space-y-1.5">
+                {revenueRunRate.recommendations.map((rec: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(revenueRunRate.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load revenue run rate.</div>
+          )
+        )}
+      </Card>
+
+      {/* First Touch to Close */}
+      <Card className="border-zinc-800 overflow-hidden">
+        <button onClick={() => setFirstTouchToCloseOpen(o => !o)} className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-zinc-800/40 transition-colors">
+          <div className="flex items-center gap-2">
+            <svg className="h-4 w-4 text-sky-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">First Touch to Close</span>
+            {firstTouchToClose && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-sky-900/40 text-sky-300">
+                {firstTouchToClose.avg_days_to_close != null ? `Avg ${firstTouchToClose.avg_days_to_close}d` : 'No data'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateFirstTouchToClose(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={firstTouchToCloseLoading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${firstTouchToCloseLoading ? 'animate-spin' : ''}`} />
+            </button>
+            {firstTouchToCloseOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </button>
+        {firstTouchToCloseOpen && (
+          firstTouchToCloseLoading && !firstTouchToClose ? (
+            <div className="h-32 flex items-center justify-center"><div className="h-5 w-5 rounded-full border-2 border-sky-500 border-t-transparent animate-spin" /></div>
+          ) : firstTouchToClose ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Avg Days</p>
+                  <p className="text-lg font-bold text-sky-300">{firstTouchToClose.avg_days_to_close != null ? `${firstTouchToClose.avg_days_to_close}d` : '—'}</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Median Days</p>
+                  <p className="text-lg font-bold text-zinc-200">{firstTouchToClose.median_days_to_close != null ? `${firstTouchToClose.median_days_to_close}d` : '—'}</p>
+                </div>
+                <div className="bg-zinc-900 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Converted</p>
+                  <p className="text-lg font-bold text-emerald-300">{firstTouchToClose.converted_contacts}</p>
+                  <p className="text-xs text-zinc-500">of {firstTouchToClose.total_contacts_analyzed}</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {firstTouchToClose.buckets.map((b, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <span className="text-xs text-zinc-400 w-28 flex-shrink-0">{b.label}</span>
+                    <div className="flex-1 bg-zinc-800 rounded-full h-2 overflow-hidden">
+                      <div className={`h-full rounded-full ${i === 0 ? 'bg-emerald-500' : i === 1 ? 'bg-sky-500' : i === 2 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${b.pct}%` }} />
+                    </div>
+                    <span className="text-xs text-zinc-300 w-16 text-right">{b.count} ({b.pct}%)</span>
+                  </div>
+                ))}
+              </div>
+              {firstTouchToClose.top_fastest.length > 0 && (
+                <div>
+                  <p className="text-xs text-zinc-500 font-medium mb-2">Top Fastest Closes</p>
+                  <div className="space-y-1">
+                    {firstTouchToClose.top_fastest.map((f, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300 truncate max-w-xs">{f.deal_title}</span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-zinc-500">${(f.value / 1000).toFixed(0)}K</span>
+                          <span className="bg-sky-900/40 text-sky-300 px-1.5 py-0.5 rounded font-medium">{f.days}d</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {firstTouchToClose.narrative && <p className="text-sm text-zinc-400 italic border-l-2 border-sky-800 pl-3">{firstTouchToClose.narrative}</p>}
+              <ul className="space-y-1.5">
+                {firstTouchToClose.recommendations.map((rec, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-zinc-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-sky-400 flex-shrink-0" />
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(firstTouchToClose.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load first-touch-to-close analysis.</div>
           )
         )}
       </Card>

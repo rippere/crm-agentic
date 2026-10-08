@@ -23505,3 +23505,1123 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/avg-value-trend")
+@limiter.limit("5/minute")
+async def get_ai_deal_avg_value_trend(
+    workspace_id: uuid.UUID, request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now12 = datetime.datetime.utcnow()
+    cutoff12 = now12 - datetime.timedelta(days=183)
+
+    result12 = await db.execute(
+        select(Deal.value, Deal.created_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.created_at >= cutoff12)
+    )
+    deals12 = result12.all()
+
+    month_buckets12: list[dict] = []
+    for i12 in range(5, -1, -1):
+        target_month12 = now12.month - i12
+        target_year12 = now12.year
+        while target_month12 <= 0:
+            target_month12 += 12
+            target_year12 -= 1
+        month_buckets12.append({
+            "month_label": f"{target_year12}-{target_month12:02d}",
+            "deals_created": 0,
+            "total_value": 0.0,
+        })
+
+    for row12 in deals12:
+        ml12 = f"{row12.created_at.year}-{row12.created_at.month:02d}"
+        for bucket12 in month_buckets12:
+            if bucket12["month_label"] == ml12:
+                bucket12["deals_created"] += 1
+                bucket12["total_value"] += float(row12.value or 0)
+                break
+
+    monthly_avg_value12: list[dict] = []
+    for bucket12 in month_buckets12:
+        avg12 = round(bucket12["total_value"] / bucket12["deals_created"], 2) if bucket12["deals_created"] > 0 else 0.0
+        monthly_avg_value12.append({
+            "month_label": bucket12["month_label"],
+            "deals_created": bucket12["deals_created"],
+            "total_value": round(bucket12["total_value"], 2),
+            "avg_value": avg12,
+        })
+
+    total_deals12 = sum(m["deals_created"] for m in monthly_avg_value12)
+    total_value12 = sum(m["total_value"] for m in monthly_avg_value12)
+    overall_avg_value12 = round(total_value12 / total_deals12, 2) if total_deals12 > 0 else 0.0
+
+    if total_deals12 == 0:
+        return {
+            "monthly_avg_value": monthly_avg_value12,
+            "total_deals": 0,
+            "overall_avg_value": 0.0,
+            "trend_direction": "stable",
+            "value_delta": 0.0,
+            "peak_month": None,
+            "peak_avg_value": 0.0,
+            "avg_value_narrative": "No deal data available for the selected period.",
+            "recommendations": [
+                "Start creating deals to track average deal value trends.",
+                "Set deal values accurately to get meaningful insights.",
+                "Review your deal pipeline to ensure values are populated.",
+            ],
+            "generated_at": now12.isoformat() + "Z",
+        }
+
+    first_half12 = [m for m in monthly_avg_value12[:3] if m["deals_created"] > 0]
+    second_half12 = [m for m in monthly_avg_value12[3:] if m["deals_created"] > 0]
+    first_avg12 = sum(m["avg_value"] for m in first_half12) / len(first_half12) if first_half12 else 0.0
+    second_avg12 = sum(m["avg_value"] for m in second_half12) / len(second_half12) if second_half12 else 0.0
+
+    if first_avg12 > 0:
+        value_delta12 = round((second_avg12 / first_avg12 - 1) * 100, 1)
+    elif second_avg12 > 0:
+        value_delta12 = 100.0
+    else:
+        value_delta12 = 0.0
+
+    if value_delta12 > 10:
+        trend_direction12 = "growing_upmarket"
+    elif value_delta12 < -10:
+        trend_direction12 = "declining_downmarket"
+    else:
+        trend_direction12 = "stable"
+
+    peak12 = max(monthly_avg_value12, key=lambda m: m["avg_value"] if m["deals_created"] > 0 else -1.0)
+
+    avg_value_narrative12 = ""
+    recommendations12: list = []
+    try:
+        client12 = _mk_anthropic()
+        summary12 = "; ".join(
+            f"{m['month_label']}: {m['deals_created']} deals avg ${m['avg_value']:,.0f}"
+            for m in monthly_avg_value12
+        )
+        prompt12 = (
+            f"You are analyzing deal average value trends for a CRM workspace.\n"
+            f"Last 6 months: {summary12}\n"
+            f"Overall avg: ${overall_avg_value12:,.0f}. Trend: {trend_direction12}. Value delta: {value_delta12:+.1f}%.\n\n"
+            "Return JSON with exactly:\n"
+            '{"avg_value_narrative": "2-sentence insight about deal value trends", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp12 = client12.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt12}],
+        )
+        raw12 = resp12.content[0].text.strip()
+        if "```" in raw12:
+            raw12 = raw12.split("```")[1]
+            if raw12.startswith("json"):
+                raw12 = raw12[4:]
+        parsed12 = loads_llm_json(raw12)
+        avg_value_narrative12 = str(parsed12.get("avg_value_narrative", "")).strip()
+        raw_recs12 = parsed12.get("recommendations", [])
+        recommendations12 = [str(r) for r in (raw_recs12 if isinstance(raw_recs12, list) else [])[:3]]
+    except Exception:
+        direction_text12 = {
+            "growing_upmarket": "trending upmarket",
+            "declining_downmarket": "trending downmarket",
+            "stable": "stable",
+        }.get(trend_direction12, "stable")
+        avg_value_narrative12 = (
+            f"Average deal value is {direction_text12} at ${overall_avg_value12:,.0f} overall "
+            f"({value_delta12:+.1f}% change over the period). "
+            + (f"Peak month was {peak12['month_label']} at ${peak12['avg_value']:,.0f}."
+               if peak12["deals_created"] > 0 else "")
+        )
+
+    default_recs12 = [
+        "Focus on qualifying higher-value deals to improve average deal size.",
+        "Review declining deal values to identify if market conditions or targeting has shifted.",
+        "Set minimum deal value thresholds to maintain a healthy average deal size.",
+    ]
+    while len(recommendations12) < 3:
+        recommendations12.append(default_recs12[len(recommendations12) % 3])
+
+    return {
+        "monthly_avg_value": monthly_avg_value12,
+        "total_deals": total_deals12,
+        "overall_avg_value": overall_avg_value12,
+        "trend_direction": trend_direction12,
+        "value_delta": value_delta12,
+        "peak_month": peak12["month_label"] if peak12["deals_created"] > 0 else None,
+        "peak_avg_value": peak12["avg_value"] if peak12["deals_created"] > 0 else 0.0,
+        "avg_value_narrative": avg_value_narrative12,
+        "recommendations": recommendations12,
+        "generated_at": now12.isoformat() + "Z",
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/co-run-patterns")
+async def get_agent_co_run_patterns(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now13 = datetime.datetime.utcnow()
+    cutoff13 = now13 - datetime.timedelta(days=183)
+
+    stmt13 = select(ActivityEvent.agent_name, ActivityEvent.created_at).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.agent_name.isnot(None),
+        ActivityEvent.created_at >= cutoff13,
+    )
+    result13 = await db.execute(stmt13)
+    rows13 = result13.all()
+
+    if not rows13:
+        return {
+            "pairs": [],
+            "total_days_analyzed": 0,
+            "co_run_days": 0,
+            "solo_days": 0,
+            "pairing_rate": 0.0,
+            "most_common_pair": None,
+            "co_run_narrative": "No agent run data found in the last 6 months.",
+            "recommendations": [
+                "Ensure agents are configured and triggered regularly to populate co-run data.",
+                "Review agent trigger settings to enable multi-agent workflows.",
+                "Consider scheduling complementary agents to run together for better insights.",
+            ],
+            "generated_at": now13.isoformat() + "Z",
+        }
+
+    from collections import defaultdict as _defdict13, Counter as _Counter13
+    from itertools import combinations as _combos13
+
+    days_agents13: dict = _defdict13(set)
+    for row13 in rows13:
+        day13 = row13.created_at.date()
+        days_agents13[day13].add(row13.agent_name)
+
+    total_days13 = len(days_agents13)
+    pair_counts13: _Counter13 = _Counter13()
+    co_run_days13 = 0
+    solo_days13 = 0
+
+    for _day13, agents13 in days_agents13.items():
+        if len(agents13) >= 2:
+            co_run_days13 += 1
+            for pair13 in _combos13(sorted(agents13), 2):
+                pair_counts13[pair13] += 1
+        else:
+            solo_days13 += 1
+
+    pairing_rate13 = round(co_run_days13 / total_days13 * 100, 1) if total_days13 > 0 else 0.0
+    top_pairs13 = [
+        {"agent_a": p[0], "agent_b": p[1], "co_run_days": c}
+        for p, c in pair_counts13.most_common(5)
+    ]
+    most_common_pair13 = (
+        f"{top_pairs13[0]['agent_a']} + {top_pairs13[0]['agent_b']}" if top_pairs13 else None
+    )
+
+    co_run_narrative13 = ""
+    recommendations13: list = []
+    try:
+        client13 = _mk_anthropic()
+        pair_summary13 = "; ".join(
+            f"{p['agent_a']}+{p['agent_b']}={p['co_run_days']}d"
+            for p in top_pairs13[:5]
+        )
+        prompt13 = (
+            f"You are analyzing AI agent co-run patterns for a CRM workspace.\n"
+            f"Over the last 6 months, {total_days13} days had agent runs. "
+            f"{co_run_days13} days had 2+ agents running ({pairing_rate13}% pairing rate). "
+            f"Top co-run pairs: {pair_summary13 or 'none'}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"co_run_narrative": "2-sentence insight about agent co-run patterns", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp13 = client13.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt13}],
+        )
+        raw13 = resp13.content[0].text.strip()
+        if "```" in raw13:
+            raw13 = raw13.split("```")[1]
+            if raw13.startswith("json"):
+                raw13 = raw13[4:]
+        parsed13 = loads_llm_json(raw13)
+        co_run_narrative13 = str(parsed13.get("co_run_narrative", "")).strip()
+        raw_recs13 = parsed13.get("recommendations", [])
+        recommendations13 = [str(r) for r in (raw_recs13 if isinstance(raw_recs13, list) else [])[:3]]
+    except Exception:
+        direction13 = "high" if pairing_rate13 >= 50 else "moderate" if pairing_rate13 >= 20 else "low"
+        co_run_narrative13 = (
+            f"Agents co-ran on {co_run_days13} of {total_days13} active days ({pairing_rate13}% pairing rate) — a {direction13} coordination level. "
+            f"{'Most common pair: ' + most_common_pair13 + '.' if most_common_pair13 else 'No recurring pairs detected yet.'}"
+        )
+
+    default_recs13 = [
+        "Schedule complementary agents (e.g. Lead Scorer + Email Composer) to run together for aligned outputs.",
+        "High pairing rates indicate coordinated workflows — review trigger configuration to ensure intentional ordering.",
+        "Agents that never co-run may benefit from combined triggers to improve cross-feature intelligence.",
+    ]
+    while len(recommendations13) < 3:
+        recommendations13.append(default_recs13[len(recommendations13) % 3])
+
+    return {
+        "pairs": top_pairs13,
+        "total_days_analyzed": total_days13,
+        "co_run_days": co_run_days13,
+        "solo_days": solo_days13,
+        "pairing_rate": pairing_rate13,
+        "most_common_pair": most_common_pair13,
+        "co_run_narrative": co_run_narrative13,
+        "recommendations": recommendations13,
+        "generated_at": now13.isoformat() + "Z",
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/agents/run-streaks")
+@limiter.limit("5/minute")
+async def get_agent_run_streaks(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now14 = datetime.datetime.utcnow()
+    cutoff14 = now14 - datetime.timedelta(days=183)
+    today14 = now14.date()
+
+    stmt14 = select(ActivityEvent.agent_name, ActivityEvent.created_at).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.agent_name.isnot(None),
+        ActivityEvent.created_at >= cutoff14,
+    )
+    result14 = await db.execute(stmt14)
+    rows14 = result14.all()
+
+    if not rows14:
+        return {
+            "agents": [],
+            "top_streak_agent": None,
+            "top_streak_days": 0,
+            "total_agents": 0,
+            "total_days_analyzed": 0,
+            "streak_narrative": "No agent runs recorded in the last 6 months.",
+            "recommendations": [
+                "Configure and schedule AI agents to start building usage patterns.",
+                "Run agents daily to establish consistent streak data.",
+                "Enable agent automation to track long-term run consistency.",
+            ],
+            "generated_at": now14.isoformat() + "Z",
+        }
+
+    from collections import defaultdict as _defdict14
+
+    agent_days14 = _defdict14(set)
+    for row14 in rows14:
+        agent_days14[row14.agent_name].add(row14.created_at.date())
+
+    total_days_analyzed14 = len({row14.created_at.date() for row14 in rows14})
+
+    def _compute_streaks14(days_set):
+        if not days_set:
+            return 0, 0, None
+        sorted_days = sorted(days_set)
+        longest = 1
+        current_len = 1
+        for i in range(1, len(sorted_days)):
+            if (sorted_days[i] - sorted_days[i - 1]).days == 1:
+                current_len += 1
+                longest = max(longest, current_len)
+            else:
+                current_len = 1
+        last_day = sorted_days[-1]
+        days_since = (today14 - last_day).days
+        if days_since <= 1:
+            streak_end = sorted_days[-1]
+            cur = 1
+            for i in range(len(sorted_days) - 2, -1, -1):
+                if (streak_end - sorted_days[i]).days == len(sorted_days) - 1 - i:
+                    cur += 1
+                else:
+                    break
+            current_streak = cur
+        else:
+            current_streak = 0
+        return longest, current_streak, last_day
+
+    agent_stats14 = []
+    for agent14, days14 in agent_days14.items():
+        longest14, current14, last14 = _compute_streaks14(days14)
+        agent_stats14.append({
+            "name": agent14,
+            "total_run_days": len(days14),
+            "longest_streak": longest14,
+            "current_streak": current14,
+            "last_run_date": last14.isoformat() if last14 else None,
+            "is_active": current14 > 0,
+        })
+
+    agent_stats14.sort(key=lambda x: (-x["longest_streak"], -x["total_run_days"]))
+
+    top_streak_agent14 = agent_stats14[0]["name"] if agent_stats14 else None
+    top_streak_days14 = agent_stats14[0]["longest_streak"] if agent_stats14 else 0
+    total_agents14 = len(agent_stats14)
+
+    streak_narrative14 = ""
+    recommendations14 = []
+    try:
+        import anthropic as _anthropic14
+        client14 = _anthropic14.Anthropic()
+        top_summary14 = "; ".join(
+            f"{a['name']} (longest={a['longest_streak']}d, current={a['current_streak']}d)"
+            for a in agent_stats14[:5]
+        )
+        prompt14 = (
+            f"You are analyzing AI agent run streaks for a CRM workspace.\n"
+            f"Over the last 6 months, {total_agents14} agents ran on {total_days_analyzed14} distinct days. "
+            f"Top streaks: {top_summary14 or 'none'}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"streak_narrative": "2-sentence insight about agent run consistency and streak patterns", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp14 = client14.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt14}],
+        )
+        raw14 = resp14.content[0].text.strip()
+        if "```" in raw14:
+            raw14 = raw14.split("```")[1]
+            if raw14.startswith("json"):
+                raw14 = raw14[4:]
+        parsed14 = loads_llm_json(raw14)
+        streak_narrative14 = str(parsed14.get("streak_narrative", "")).strip()
+        raw_recs14 = parsed14.get("recommendations", [])
+        recommendations14 = [str(r) for r in (raw_recs14 if isinstance(raw_recs14, list) else [])[:3]]
+    except Exception:
+        top_name14 = top_streak_agent14 or "No agent"
+        streak_narrative14 = (
+            f"{top_name14} leads with a {top_streak_days14}-day consecutive run streak, demonstrating strong operational consistency. "
+            f"Across {total_agents14} active agents, maintaining daily run streaks indicates reliable automation health."
+        )
+
+    default_recs14 = [
+        "Reward high-streak agents by ensuring they have fresh data pipelines to maximize their effectiveness.",
+        "Investigate agents with zero current streaks — they may need trigger configuration fixes.",
+        "Set streak targets (e.g. 30-day goal) to encourage consistent agent scheduling across your workspace.",
+    ]
+    while len(recommendations14) < 3:
+        recommendations14.append(default_recs14[len(recommendations14) % 3])
+
+    return {
+        "agents": agent_stats14,
+        "top_streak_agent": top_streak_agent14,
+        "top_streak_days": top_streak_days14,
+        "total_agents": total_agents14,
+        "total_days_analyzed": total_days_analyzed14,
+        "streak_narrative": streak_narrative14,
+        "recommendations": recommendations14,
+        "generated_at": now14.isoformat() + "Z",
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/activity/heatmap")
+@limiter.limit("5/minute")
+async def get_ai_activity_heatmap(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now15 = datetime.datetime.utcnow()
+    cutoff15 = now15 - datetime.timedelta(days=90)
+
+    stmt15 = select(ActivityEvent.created_at).where(
+        ActivityEvent.workspace_id == workspace_id,
+        ActivityEvent.created_at >= cutoff15,
+    )
+    result15 = await db.execute(stmt15)
+    rows15 = result15.all()
+
+    total_events15 = len(rows15)
+    total_days_analyzed15 = 90
+
+    if not rows15:
+        return {
+            "heatmap": [],
+            "peak_hour": None,
+            "peak_dow": None,
+            "peak_dow_name": None,
+            "peak_hour_label": None,
+            "busiest_slot_count": 0,
+            "total_events": 0,
+            "total_days_analyzed": total_days_analyzed15,
+            "activity_narrative": "No activity recorded in the last 90 days. Start using agents and logging events to see your workspace activity heatmap.",
+            "recommendations": [
+                "Run your first AI agent to begin generating activity data.",
+                "Connect your Gmail or Slack integration to automatically log activity events.",
+                "Set up scheduled agent runs to build a consistent activity pattern.",
+            ],
+            "generated_at": now15.isoformat() + "Z",
+        }
+
+    from collections import defaultdict as _defdict15
+
+    grid15 = _defdict15(int)
+    for row15 in rows15:
+        ts15 = row15.created_at
+        if ts15 is None:
+            continue
+        grid15[(ts15.weekday(), ts15.hour)] += 1
+
+    dow_names15 = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    heatmap15 = []
+    for dow15 in range(7):
+        for hr15 in range(24):
+            heatmap15.append({
+                "dow": dow15,
+                "dow_name": dow_names15[dow15],
+                "hour": hr15,
+                "count": grid15.get((dow15, hr15), 0),
+            })
+
+    peak_slot15 = max(heatmap15, key=lambda x: x["count"])
+    peak_dow15 = peak_slot15["dow"]
+    peak_hour15 = peak_slot15["hour"]
+    peak_dow_name15 = dow_names15[peak_dow15]
+    ampm15 = "am" if peak_hour15 < 12 else "pm"
+    display_hour15 = peak_hour15 % 12 or 12
+    peak_hour_label15 = f"{display_hour15}{ampm15}"
+    busiest_slot_count15 = peak_slot15["count"]
+
+    hour_totals15 = {hr15: sum(grid15.get((d, hr15), 0) for d in range(7)) for hr15 in range(24)}
+    dow_totals15 = {d15: sum(grid15.get((d15, h), 0) for h in range(24)) for d15 in range(7)}
+    top_hours15 = sorted(hour_totals15, key=lambda x: -hour_totals15[x])[:3]
+    top_days15 = sorted(dow_totals15, key=lambda x: -dow_totals15[x])[:3]
+
+    activity_narrative15 = ""
+    recommendations15: list = []
+    try:
+        import anthropic as _anthropic15
+        client15 = _anthropic15.Anthropic()
+        top_hours_str15 = ", ".join(
+            f"{h % 12 or 12}{'am' if h < 12 else 'pm'}" for h in top_hours15
+        )
+        top_days_str15 = ", ".join(dow_names15[d] for d in top_days15)
+        prompt15 = (
+            f"You are analyzing workspace activity patterns for a CRM over the last 90 days.\n"
+            f"Total events: {total_events15}. Peak slot: {peak_dow_name15} at {peak_hour_label15} "
+            f"({busiest_slot_count15} events). Top active hours: {top_hours_str15}. "
+            f"Most active days: {top_days_str15}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"activity_narrative": "2-sentence insight about workspace activity patterns and peak times", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp15 = client15.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt15}],
+        )
+        raw15 = resp15.content[0].text.strip()
+        if "```" in raw15:
+            raw15 = raw15.split("```")[1]
+            if raw15.startswith("json"):
+                raw15 = raw15[4:]
+        parsed15 = loads_llm_json(raw15)
+        activity_narrative15 = str(parsed15.get("activity_narrative", "")).strip()
+        raw_recs15 = parsed15.get("recommendations", [])
+        recommendations15 = [str(r) for r in (raw_recs15 if isinstance(raw_recs15, list) else [])[:3]]
+    except Exception:
+        activity_narrative15 = (
+            f"Your workspace peaks on {peak_dow_name15}s at {peak_hour_label15}, "
+            f"with {busiest_slot_count15} events in that slot over 90 days. "
+            "Aligning agent schedules to these windows maximises processing efficiency."
+        )
+
+    default_recs15 = [
+        f"Schedule data-intensive agents to run during peak hours ({peak_hour_label15}) on {peak_dow_name15} for best throughput.",
+        "Investigate low-activity slots — gaps in the heatmap may indicate missed automation opportunities.",
+        "Compare your activity heatmap quarter-over-quarter to track whether workspace engagement is growing.",
+    ]
+    while len(recommendations15) < 3:
+        recommendations15.append(default_recs15[len(recommendations15) % 3])
+
+    return {
+        "heatmap": heatmap15,
+        "peak_hour": peak_hour15,
+        "peak_dow": peak_dow15,
+        "peak_dow_name": peak_dow_name15,
+        "peak_hour_label": peak_hour_label15,
+        "busiest_slot_count": busiest_slot_count15,
+        "total_events": total_events15,
+        "total_days_analyzed": total_days_analyzed15,
+        "activity_narrative": activity_narrative15,
+        "recommendations": recommendations15,
+        "generated_at": now15.isoformat() + "Z",
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/deals/velocity-trend")
+@limiter.limit("5/minute")
+async def get_ai_deal_velocity_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now16 = datetime.datetime.utcnow()
+    cutoff16 = now16 - datetime.timedelta(days=183)
+
+    stmt16 = (
+        select(Deal.stage_changed_at, Deal.created_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage.in_(["closed_won", "closed_lost"]))
+        .where(Deal.stage_changed_at >= cutoff16)
+        .where(Deal.stage_changed_at.isnot(None))
+        .where(Deal.created_at.isnot(None))
+    )
+    result16 = await db.execute(stmt16)
+    rows16 = result16.all()
+
+    month_buckets16: list[dict] = []
+    for i16 in range(5, -1, -1):
+        target_month16 = now16.month - i16
+        target_year16 = now16.year
+        while target_month16 <= 0:
+            target_month16 += 12
+            target_year16 -= 1
+        month_buckets16.append({
+            "month_label": f"{target_year16}-{target_month16:02d}",
+            "deals_closed": 0,
+            "total_days": 0.0,
+        })
+
+    for row16 in rows16:
+        sa16 = row16.stage_changed_at
+        ca16 = row16.created_at
+        if sa16 is None or ca16 is None:
+            continue
+        if hasattr(sa16, "tzinfo") and sa16.tzinfo is not None:
+            import pytz as _pytz16
+            sa16 = sa16.astimezone(_pytz16.utc).replace(tzinfo=None)
+        if hasattr(ca16, "tzinfo") and ca16.tzinfo is not None:
+            import pytz as _pytz16b
+            ca16 = ca16.astimezone(_pytz16b.utc).replace(tzinfo=None)
+        days16 = max(0.0, (sa16 - ca16).total_seconds() / 86400.0)
+        ml16 = f"{sa16.year}-{sa16.month:02d}"
+        for bucket16 in month_buckets16:
+            if bucket16["month_label"] == ml16:
+                bucket16["deals_closed"] += 1
+                bucket16["total_days"] += days16
+                break
+
+    monthly_velocity16: list[dict] = []
+    for bucket16 in month_buckets16:
+        avg16 = round(bucket16["total_days"] / bucket16["deals_closed"], 1) if bucket16["deals_closed"] > 0 else None
+        monthly_velocity16.append({
+            "month_label": bucket16["month_label"],
+            "deals_closed": bucket16["deals_closed"],
+            "avg_days_to_close": avg16,
+        })
+
+    total_deals16 = sum(m["deals_closed"] for m in monthly_velocity16)
+    total_days16 = sum(bucket16["total_days"] for bucket16 in month_buckets16)
+    avg_days16 = round(total_days16 / total_deals16, 1) if total_deals16 > 0 else 0.0
+
+    if total_deals16 == 0:
+        return {
+            "monthly_velocity": monthly_velocity16,
+            "total_deals": 0,
+            "avg_days_to_close": 0.0,
+            "trend_direction": "stable",
+            "velocity_delta": 0.0,
+            "fastest_month": None,
+            "fastest_avg_days": 0.0,
+            "velocity_narrative": "No closed deals available for the selected period.",
+            "recommendations": [
+                "Close deals to start tracking velocity trends.",
+                "Set accurate creation and close dates on deals.",
+                "Review your sales process to identify stage bottlenecks.",
+            ],
+            "generated_at": now16.isoformat() + "Z",
+        }
+
+    active16 = [m for m in monthly_velocity16 if m["avg_days_to_close"] is not None]
+    fastest16 = min(active16, key=lambda m: m["avg_days_to_close"]) if active16 else monthly_velocity16[-1]
+
+    first_half16 = [m for m in monthly_velocity16[:3] if m["avg_days_to_close"] is not None]
+    second_half16 = [m for m in monthly_velocity16[3:] if m["avg_days_to_close"] is not None]
+    first_avg16 = sum(m["avg_days_to_close"] for m in first_half16) / len(first_half16) if first_half16 else 0.0
+    second_avg16 = sum(m["avg_days_to_close"] for m in second_half16) / len(second_half16) if second_half16 else 0.0
+
+    if first_avg16 > 0:
+        velocity_delta16 = round((second_avg16 / first_avg16 - 1) * 100, 1)
+    elif second_avg16 > 0:
+        velocity_delta16 = 100.0
+    else:
+        velocity_delta16 = 0.0
+
+    if velocity_delta16 < -10:
+        trend_direction16 = "accelerating"
+    elif velocity_delta16 > 10:
+        trend_direction16 = "slowing"
+    else:
+        trend_direction16 = "stable"
+
+    velocity_narrative16 = ""
+    recommendations16: list = []
+    try:
+        import anthropic as _anthropic16
+        client16 = _anthropic16.Anthropic()
+        months_str16 = ", ".join(
+            f"{m['month_label']} ({m['avg_days_to_close']:.0f}d)" for m in active16
+        )
+        prompt16 = (
+            f"You are analyzing deal velocity (average days to close) for a CRM over 6 months.\n"
+            f"Overall average: {avg_days16:.1f} days. Trend: {trend_direction16} ({velocity_delta16:+.1f}%). "
+            f"Fastest month: {fastest16['month_label']} ({fastest16['avg_days_to_close']:.0f} days). "
+            f"Monthly data: {months_str16}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"velocity_narrative": "2-sentence insight about deal velocity trends and what drives them", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp16 = client16.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt16}],
+        )
+        raw16 = resp16.content[0].text.strip()
+        if "```" in raw16:
+            raw16 = raw16.split("```")[1]
+            if raw16.startswith("json"):
+                raw16 = raw16[4:]
+        parsed16 = loads_llm_json(raw16)
+        velocity_narrative16 = str(parsed16.get("velocity_narrative", "")).strip()
+        raw_recs16 = parsed16.get("recommendations", [])
+        recommendations16 = [str(r) for r in (raw_recs16 if isinstance(raw_recs16, list) else [])[:3]]
+    except Exception:
+        velocity_narrative16 = (
+            f"Your team is closing deals in an average of {avg_days16:.1f} days, "
+            f"a {trend_direction16} trend over the last 6 months. "
+            f"The fastest month was {fastest16['month_label']} at {fastest16['avg_days_to_close']:.0f} days."
+        )
+
+    default_recs16 = [
+        f"Replicate the tactics used in {fastest16['month_label']} when deals closed in {fastest16['avg_days_to_close']:.0f} days on average.",
+        "Identify deals stalled beyond your average close time and escalate with targeted outreach.",
+        "Track which deal stages consume the most time to find your biggest velocity bottleneck.",
+    ]
+    while len(recommendations16) < 3:
+        recommendations16.append(default_recs16[len(recommendations16) % 3])
+
+    return {
+        "monthly_velocity": monthly_velocity16,
+        "total_deals": total_deals16,
+        "avg_days_to_close": avg_days16,
+        "trend_direction": trend_direction16,
+        "velocity_delta": velocity_delta16,
+        "fastest_month": fastest16["month_label"],
+        "fastest_avg_days": fastest16["avg_days_to_close"],
+        "velocity_narrative": velocity_narrative16,
+        "recommendations": recommendations16,
+        "generated_at": now16.isoformat() + "Z",
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/revenue/run-rate")
+@limiter.limit("5/minute")
+async def get_ai_revenue_run_rate(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now17 = datetime.datetime.utcnow()
+    cutoff17 = now17 - datetime.timedelta(days=183)
+
+    stmt17 = (
+        select(Deal.value, Deal.stage_changed_at)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.stage_changed_at >= cutoff17)
+        .where(Deal.stage_changed_at.isnot(None))
+        .where(Deal.value.isnot(None))
+    )
+    result17 = await db.execute(stmt17)
+    rows17 = result17.all()
+
+    month_buckets17: list[dict] = []
+    for i17 in range(5, -1, -1):
+        target_month17 = now17.month - i17
+        target_year17 = now17.year
+        while target_month17 <= 0:
+            target_month17 += 12
+            target_year17 -= 1
+        month_buckets17.append({
+            "month_label": f"{target_year17}-{target_month17:02d}",
+            "won_count": 0,
+            "revenue": 0.0,
+        })
+
+    for row17 in rows17:
+        sa17 = row17.stage_changed_at
+        if sa17 is None:
+            continue
+        if hasattr(sa17, "tzinfo") and sa17.tzinfo is not None:
+            import pytz as _pytz17
+            sa17 = sa17.astimezone(_pytz17.utc).replace(tzinfo=None)
+        val17 = float(row17.value or 0)
+        ml17 = f"{sa17.year}-{sa17.month:02d}"
+        for bucket17 in month_buckets17:
+            if bucket17["month_label"] == ml17:
+                bucket17["won_count"] += 1
+                bucket17["revenue"] += val17
+                break
+
+    monthly_revenue17: list[dict] = [
+        {"month_label": b["month_label"], "won_count": b["won_count"], "revenue": round(b["revenue"], 2)}
+        for b in month_buckets17
+    ]
+
+    total_won17 = sum(m["won_count"] for m in monthly_revenue17)
+    total_revenue17 = round(sum(m["revenue"] for m in monthly_revenue17), 2)
+
+    if total_won17 == 0:
+        return {
+            "monthly_revenue": monthly_revenue17,
+            "total_won": 0,
+            "total_revenue": 0.0,
+            "monthly_run_rate": 0.0,
+            "annualized_run_rate": 0.0,
+            "growth_rate": 0.0,
+            "trend_direction": "stable",
+            "best_month": None,
+            "best_month_revenue": 0.0,
+            "run_rate_narrative": "No closed-won revenue recorded in the last 6 months.",
+            "recommendations": [
+                "Close deals to start tracking revenue run rate.",
+                "Set deal values before closing to ensure accurate revenue reporting.",
+                "Review your pipeline to identify deals close to the finish line.",
+            ],
+            "generated_at": now17.isoformat() + "Z",
+        }
+
+    last_three17 = month_buckets17[-3:]
+    run_rate_months17 = [b for b in last_three17 if b["revenue"] > 0]
+    if run_rate_months17:
+        monthly_run_rate17 = round(sum(b["revenue"] for b in run_rate_months17) / len(run_rate_months17), 2)
+    else:
+        monthly_run_rate17 = round(total_revenue17 / 6, 2)
+
+    annualized_run_rate17 = round(monthly_run_rate17 * 12, 2)
+
+    best_bucket17 = max(month_buckets17, key=lambda b: b["revenue"])
+    best_month17 = best_bucket17["month_label"] if best_bucket17["revenue"] > 0 else None
+    best_month_revenue17 = round(best_bucket17["revenue"], 2)
+
+    first_half17 = [b for b in month_buckets17[:3] if b["revenue"] > 0]
+    second_half17 = [b for b in month_buckets17[3:] if b["revenue"] > 0]
+    first_avg17 = sum(b["revenue"] for b in first_half17) / len(first_half17) if first_half17 else 0.0
+    second_avg17 = sum(b["revenue"] for b in second_half17) / len(second_half17) if second_half17 else 0.0
+
+    if first_avg17 > 0:
+        growth_rate17 = round((second_avg17 / first_avg17 - 1) * 100, 1)
+    elif second_avg17 > 0:
+        growth_rate17 = 100.0
+    else:
+        growth_rate17 = 0.0
+
+    if growth_rate17 > 10:
+        trend_direction17 = "accelerating"
+    elif growth_rate17 > 5:
+        trend_direction17 = "growing"
+    elif growth_rate17 < -5:
+        trend_direction17 = "declining"
+    else:
+        trend_direction17 = "stable"
+
+    run_rate_narrative17 = ""
+    recommendations17: list = []
+    try:
+        import anthropic as _anthropic17
+        client17 = _anthropic17.Anthropic()
+        months_str17 = ", ".join(
+            f"{m['month_label']} ${m['revenue']:,.0f}" for m in monthly_revenue17 if m["revenue"] > 0
+        )
+        prompt17 = (
+            f"You are analyzing revenue run rate for a CRM workspace over 6 months.\n"
+            f"Total revenue: ${total_revenue17:,.0f}. Monthly run rate: ${monthly_run_rate17:,.0f}. "
+            f"Annualized run rate: ${annualized_run_rate17:,.0f}. Trend: {trend_direction17} ({growth_rate17:+.1f}%). "
+            f"Best month: {best_month17} at ${best_month_revenue17:,.0f}. Monthly data: {months_str17}.\n\n"
+            "Return JSON with exactly:\n"
+            '{"run_rate_narrative": "2-sentence insight about revenue run rate momentum and what drives it", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp17 = client17.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt17}],
+        )
+        raw17 = resp17.content[0].text.strip()
+        if "```" in raw17:
+            raw17 = raw17.split("```")[1]
+            if raw17.startswith("json"):
+                raw17 = raw17[4:]
+        parsed17 = loads_llm_json(raw17)
+        run_rate_narrative17 = str(parsed17.get("run_rate_narrative", "")).strip()
+        raw_recs17 = parsed17.get("recommendations", [])
+        recommendations17 = [str(r) for r in (raw_recs17 if isinstance(raw_recs17, list) else [])[:3]]
+    except Exception:
+        run_rate_narrative17 = (
+            f"Your monthly revenue run rate is ${monthly_run_rate17:,.0f}, "
+            f"projecting ${annualized_run_rate17:,.0f} annualized — a {trend_direction17} trajectory "
+            f"with {growth_rate17:+.1f}% growth over the last 6 months."
+        )
+
+    default_recs17 = [
+        f"Replicate deal patterns from {best_month17} when revenue reached ${best_month_revenue17:,.0f}.",
+        "Increase deal cadence in slower months to smooth revenue seasonality.",
+        "Track win rates alongside revenue run rate to distinguish volume from quality improvement.",
+    ]
+    while len(recommendations17) < 3:
+        recommendations17.append(default_recs17[len(recommendations17) % 3])
+
+    return {
+        "monthly_revenue": monthly_revenue17,
+        "total_won": total_won17,
+        "total_revenue": total_revenue17,
+        "monthly_run_rate": monthly_run_rate17,
+        "annualized_run_rate": annualized_run_rate17,
+        "growth_rate": growth_rate17,
+        "trend_direction": trend_direction17,
+        "best_month": best_month17,
+        "best_month_revenue": best_month_revenue17,
+        "run_rate_narrative": run_rate_narrative17,
+        "recommendations": recommendations17,
+        "generated_at": now17.isoformat() + "Z",
+    }
+
+
+@router.get("/workspaces/{workspace_id}/ai/contacts/first-touch-to-close")
+@limiter.limit("5/minute")
+async def get_ai_first_touch_to_close(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now18 = datetime.datetime.utcnow()
+
+    stmt_contacts18 = (
+        select(Contact.id, Contact.created_at)
+        .where(Contact.workspace_id == workspace_id)
+    )
+    result_contacts18 = await db.execute(stmt_contacts18)
+    contact_rows18 = result_contacts18.all()
+
+    if not contact_rows18:
+        return {
+            "total_contacts_analyzed": 0,
+            "converted_contacts": 0,
+            "avg_days_to_close": None,
+            "median_days_to_close": None,
+            "buckets": [
+                {"label": "Fast (<30d)", "count": 0, "pct": 0.0},
+                {"label": "Medium (30-90d)", "count": 0, "pct": 0.0},
+                {"label": "Slow (90-180d)", "count": 0, "pct": 0.0},
+                {"label": "Long (180d+)", "count": 0, "pct": 0.0},
+            ],
+            "top_fastest": [],
+            "narrative": "No contacts found in this workspace yet.",
+            "recommendations": [
+                "Start adding contacts and tracking deals to analyze your first-touch-to-close timeline.",
+                "Record contact creation dates accurately to get meaningful cycle-time data.",
+                "Link all deals to their associated contacts to enable attribution analysis.",
+            ],
+            "generated_at": now18.isoformat() + "Z",
+        }
+
+    contact_id_map18 = {str(row.id): row.created_at for row in contact_rows18}
+    contact_ids18 = list(contact_id_map18.keys())
+
+    stmt_deals18 = (
+        select(Deal.contact_id, Deal.stage_changed_at, Deal.value, Deal.title)
+        .where(Deal.workspace_id == workspace_id)
+        .where(Deal.stage == "closed_won")
+        .where(Deal.stage_changed_at.isnot(None))
+        .where(Deal.contact_id.isnot(None))
+    )
+    result_deals18 = await db.execute(stmt_deals18)
+    deal_rows18 = result_deals18.all()
+
+    if not deal_rows18:
+        return {
+            "total_contacts_analyzed": len(contact_rows18),
+            "converted_contacts": 0,
+            "avg_days_to_close": None,
+            "median_days_to_close": None,
+            "buckets": [
+                {"label": "Fast (<30d)", "count": 0, "pct": 0.0},
+                {"label": "Medium (30-90d)", "count": 0, "pct": 0.0},
+                {"label": "Slow (90-180d)", "count": 0, "pct": 0.0},
+                {"label": "Long (180d+)", "count": 0, "pct": 0.0},
+            ],
+            "top_fastest": [],
+            "narrative": "No closed-won deals found yet. Start closing deals to see first-touch-to-close metrics.",
+            "recommendations": [
+                "Focus on converting your current prospects to generate first-touch-to-close data.",
+                "Ensure all deals are linked to contacts to enable accurate attribution.",
+                "Track deal stages diligently so cycle time calculations are accurate.",
+            ],
+            "generated_at": now18.isoformat() + "Z",
+        }
+
+    first_close18: dict = {}
+    for dr18 in deal_rows18:
+        cid18 = str(dr18.contact_id)
+        if cid18 not in contact_id_map18:
+            continue
+        sc18 = dr18.stage_changed_at
+        if sc18 is not None and getattr(sc18, "tzinfo", None) is not None:
+            import pytz as _pytz18
+            sc18 = sc18.astimezone(_pytz18.utc).replace(tzinfo=None)
+        if cid18 not in first_close18 or (sc18 is not None and sc18 < first_close18[cid18]["close_date"]):
+            created18 = contact_id_map18[cid18]
+            if created18 is not None and getattr(created18, "tzinfo", None) is not None:
+                import pytz as _pytz18
+                created18 = created18.astimezone(_pytz18.utc).replace(tzinfo=None)
+            first_close18[cid18] = {
+                "close_date": sc18,
+                "created_at": created18,
+                "title": dr18.title,
+                "value": dr18.value or 0,
+            }
+
+    days_list18: list[float] = []
+    top_fastest18: list[dict] = []
+    for cid18, info18 in first_close18.items():
+        if info18["created_at"] is None or info18["close_date"] is None:
+            continue
+        delta18 = (info18["close_date"] - info18["created_at"]).total_seconds() / 86400.0
+        if delta18 < 0:
+            delta18 = 0.0
+        days_list18.append(delta18)
+        top_fastest18.append({
+            "days": round(delta18, 1),
+            "deal_title": info18["title"],
+            "value": info18["value"],
+        })
+
+    if not days_list18:
+        avg_days18 = None
+        median_days18 = None
+    else:
+        avg_days18 = round(sum(days_list18) / len(days_list18), 1)
+        sorted_days18 = sorted(days_list18)
+        n18 = len(sorted_days18)
+        if n18 % 2 == 1:
+            median_days18 = round(sorted_days18[n18 // 2], 1)
+        else:
+            median_days18 = round((sorted_days18[n18 // 2 - 1] + sorted_days18[n18 // 2]) / 2, 1)
+
+    bucket_fast18 = sum(1 for d in days_list18 if d < 30)
+    bucket_medium18 = sum(1 for d in days_list18 if 30 <= d < 90)
+    bucket_slow18 = sum(1 for d in days_list18 if 90 <= d < 180)
+    bucket_long18 = sum(1 for d in days_list18 if d >= 180)
+    total_conv18 = len(days_list18)
+
+    def _pct18(n: int) -> float:
+        return round(n / total_conv18 * 100, 1) if total_conv18 > 0 else 0.0
+
+    buckets18 = [
+        {"label": "Fast (<30d)", "count": bucket_fast18, "pct": _pct18(bucket_fast18)},
+        {"label": "Medium (30-90d)", "count": bucket_medium18, "pct": _pct18(bucket_medium18)},
+        {"label": "Slow (90-180d)", "count": bucket_slow18, "pct": _pct18(bucket_slow18)},
+        {"label": "Long (180d+)", "count": bucket_long18, "pct": _pct18(bucket_long18)},
+    ]
+
+    top_fastest18 = sorted(top_fastest18, key=lambda x: x["days"])[:5]
+
+    narrative18 = ""
+    recommendations18: list = []
+    try:
+        import anthropic as _anthropic18
+        client18 = _anthropic18.Anthropic()
+        prompt18 = (
+            f"You are analyzing first-touch-to-close cycle times for a CRM workspace.\n"
+            f"Total contacts: {len(contact_rows18)}. Converted: {total_conv18}. "
+            f"Avg days to first close: {avg_days18}. Median: {median_days18}.\n"
+            f"Buckets: Fast <30d ({bucket_fast18}), Medium 30-90d ({bucket_medium18}), "
+            f"Slow 90-180d ({bucket_slow18}), Long 180d+ ({bucket_long18}).\n\n"
+            "Return JSON with exactly:\n"
+            '{"narrative": "2-sentence insight about the first-touch-to-close pattern", '
+            '"recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp18 = client18.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt18}],
+        )
+        raw18 = resp18.content[0].text.strip()
+        if "```" in raw18:
+            raw18 = raw18.split("```")[1]
+            if raw18.startswith("json"):
+                raw18 = raw18[4:]
+        parsed18 = loads_llm_json(raw18)
+        narrative18 = str(parsed18.get("narrative", "")).strip()
+        raw_recs18 = parsed18.get("recommendations", [])
+        recommendations18 = [str(r) for r in (raw_recs18 if isinstance(raw_recs18, list) else [])[:3]]
+    except Exception:
+        narrative18 = (
+            f"Contacts take an average of {avg_days18} days from first touch to closed-won deal. "
+            f"{bucket_fast18} contacts ({_pct18(bucket_fast18):.0f}%) closed in under 30 days."
+        )
+
+    default_recs18 = [
+        "Invest more time nurturing slow-converting contacts with targeted content.",
+        "Study your fastest-closing contacts to identify repeatable engagement patterns.",
+        "Set stage-specific follow-up SLAs to compress the first-touch-to-close timeline.",
+    ]
+    while len(recommendations18) < 3:
+        recommendations18.append(default_recs18[len(recommendations18) % 3])
+
+    return {
+        "total_contacts_analyzed": len(contact_rows18),
+        "converted_contacts": total_conv18,
+        "avg_days_to_close": avg_days18,
+        "median_days_to_close": median_days18,
+        "buckets": buckets18,
+        "top_fastest": top_fastest18,
+        "narrative": narrative18,
+        "recommendations": recommendations18,
+        "generated_at": now18.isoformat() + "Z",
+    }
