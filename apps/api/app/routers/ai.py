@@ -23505,3 +23505,157 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+
+@router.get("/workspaces/{workspace_id}/ai/tasks/creation-volume-trend")
+@limiter.limit("5/minute")
+async def get_ai_task_creation_volume_trend(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now12 = datetime.datetime.now(timezone.utc)
+    six_months_ago12 = now12 - datetime.timedelta(days=183)
+
+    result12 = await db.execute(
+        select(Task.status, Task.created_at)
+        .where(
+            Task.workspace_id == workspace_id,
+            Task.created_at >= six_months_ago12,
+        )
+    )
+    rows12 = result12.all()
+
+    cur_year12, cur_month12 = now12.year, now12.month
+    month_keys12 = []
+    for offset12 in range(5, -1, -1):
+        m12 = cur_month12 - offset12
+        y12 = cur_year12
+        while m12 <= 0:
+            m12 += 12
+            y12 -= 1
+        month_keys12.append(f"{y12:04d}-{m12:02d}")
+
+    buckets12: dict = {
+        mk12: {"month_label": mk12, "tasks_created": 0, "done_count": 0, "open_count": 0, "in_progress_count": 0, "cancelled_count": 0}
+        for mk12 in month_keys12
+    }
+
+    for row12 in rows12:
+        ts12 = row12.created_at
+        if ts12 is None:
+            continue
+        if ts12.tzinfo is None:
+            ts12 = ts12.replace(tzinfo=timezone.utc)
+        mk12 = ts12.strftime("%Y-%m")
+        if mk12 not in buckets12:
+            continue
+        buckets12[mk12]["tasks_created"] += 1
+        s12 = row12.status
+        if s12 == "done":
+            buckets12[mk12]["done_count"] += 1
+        elif s12 == "in_progress":
+            buckets12[mk12]["in_progress_count"] += 1
+        elif s12 == "cancelled":
+            buckets12[mk12]["cancelled_count"] += 1
+        else:
+            buckets12[mk12]["open_count"] += 1
+
+    monthly12 = [buckets12[mk12] for mk12 in month_keys12]
+    total12 = sum(m12["tasks_created"] for m12 in monthly12)
+
+    if total12 == 0:
+        return {
+            "monthly_tasks": monthly12,
+            "total_tasks": 0,
+            "peak_month": None,
+            "peak_count": 0,
+            "trend_direction": "stable",
+            "volume_delta_pct": 0.0,
+            "volume_narrative": "No tasks created in the last 6 months — start creating tasks to track your team workload.",
+            "recommendations": [
+                "Set up recurring task templates to build a consistent tracking habit.",
+                "Connect deals and contacts to tasks so workload is visible across the pipeline.",
+                "Establish a weekly task review ritual to keep creation and completion in sync.",
+            ],
+            "generated_at": now12.isoformat() + "Z",
+        }
+
+    peak12 = max(monthly12, key=lambda m12i: m12i["tasks_created"])
+    peak_month12 = peak12["month_label"]
+    peak_count12 = peak12["tasks_created"]
+
+    counts12 = [m12i["tasks_created"] for m12i in monthly12]
+    avg_first12 = sum(counts12[:3]) / 3.0
+    avg_second12 = sum(counts12[3:]) / 3.0
+    if avg_first12 > 0:
+        volume_delta_pct12 = round((avg_second12 - avg_first12) / avg_first12 * 100, 1)
+    else:
+        volume_delta_pct12 = 0.0
+    if volume_delta_pct12 >= 10:
+        trend_direction12 = "growing"
+    elif volume_delta_pct12 <= -10:
+        trend_direction12 = "declining"
+    else:
+        trend_direction12 = "stable"
+
+    breakdown12 = ", ".join(f"{m12i['month_label']}={m12i['tasks_created']}" for m12i in monthly12)
+    prompt12 = (
+        f"You are a CRM analytics assistant. A workspace created {total12} tasks over the last 6 months. "
+        f"Monthly breakdown: {breakdown12}. "
+        f"Volume trend: {trend_direction12} ({volume_delta_pct12:+.1f}% first-half vs second-half avg). "
+        f"Peak month: {peak_month12} ({peak_count12} tasks). "
+        'Respond ONLY with JSON: '
+        '{"volume_narrative": "2-sentence insight about task creation patterns and what they suggest about team workload", '
+        '"recommendations": ["action 1", "action 2", "action 3"]}'
+    )
+
+    volume_narrative12 = ""
+    recommendations12: list = []
+    try:
+        client12 = _mk_anthropic()
+        msg12 = client12.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt12}],
+        )
+        raw12 = msg12.content[0].text.strip()
+        if raw12.startswith("```"):
+            raw12 = raw12.split("```")[1]
+            if raw12.startswith("json"):
+                raw12 = raw12[4:]
+        parsed12 = loads_llm_json(raw12)
+        volume_narrative12 = str(parsed12.get("volume_narrative", "")).strip()
+        raw_recs12 = parsed12.get("recommendations", [])
+        recommendations12 = [str(r) for r in (raw_recs12 if isinstance(raw_recs12, list) else [])[:3]]
+    except Exception:
+        dir_label12 = "growing" if trend_direction12 == "growing" else ("declining" if trend_direction12 == "declining" else "stable")
+        volume_narrative12 = (
+            f"Task creation is {dir_label12} {abs(volume_delta_pct12):.1f}% on average over the last 6 months "
+            f"({total12} total tasks created). "
+            f"Peak month was {peak_month12} with {peak_count12} tasks."
+        )
+
+    default_recs12 = [
+        "Investigate months with low task creation — teams may be underutilising task tracking.",
+        "A spike in task volume may indicate a project kick-off; ensure capacity is balanced.",
+        "Track the ratio of done vs open tasks monthly to gauge workload sustainability.",
+    ]
+    while len(recommendations12) < 3:
+        recommendations12.append(default_recs12[len(recommendations12) % 3])
+
+    return {
+        "monthly_tasks": monthly12,
+        "total_tasks": total12,
+        "peak_month": peak_month12,
+        "peak_count": peak_count12,
+        "trend_direction": trend_direction12,
+        "volume_delta_pct": volume_delta_pct12,
+        "volume_narrative": volume_narrative12,
+        "recommendations": recommendations12,
+        "generated_at": now12.isoformat() + "Z",
+    }

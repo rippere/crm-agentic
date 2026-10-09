@@ -10634,3 +10634,75 @@ async def test_agent_wow_comparison_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/wow-comparison")
     assert resp.status_code == 403
+
+
+class FakeTaskVolumeRow:
+    def __init__(self, status, created_at):
+        self.status = status
+        self.created_at = created_at
+
+
+@pytest.mark.asyncio
+async def test_task_creation_volume_trend_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    fake_rows = [
+        # 5 months ago (bucket 0)
+        FakeTaskVolumeRow("done", now - _dt.timedelta(days=155)),
+        FakeTaskVolumeRow("done", now - _dt.timedelta(days=153)),
+        FakeTaskVolumeRow("open", now - _dt.timedelta(days=150)),
+        # 4 months ago (bucket 1)
+        FakeTaskVolumeRow("done", now - _dt.timedelta(days=125)),
+        FakeTaskVolumeRow("in_progress", now - _dt.timedelta(days=122)),
+        FakeTaskVolumeRow("cancelled", now - _dt.timedelta(days=120)),
+        FakeTaskVolumeRow("open", now - _dt.timedelta(days=118)),
+        # 0-1 month ago (bucket 5)
+        FakeTaskVolumeRow("done", now - _dt.timedelta(days=10)),
+        FakeTaskVolumeRow("done", now - _dt.timedelta(days=8)),
+        FakeTaskVolumeRow("done", now - _dt.timedelta(days=5)),
+        FakeTaskVolumeRow("done", now - _dt.timedelta(days=3)),
+        FakeTaskVolumeRow("open", now - _dt.timedelta(days=2)),
+    ]
+
+    async def fake_execute(stmt):
+        class FakeResult:
+            def all(self_):
+                return fake_rows
+        return FakeResult()
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"volume_narrative": "Growing.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/tasks/creation-volume-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_tasks"] == 12
+    assert len(data["monthly_tasks"]) == 6
+    assert "trend_direction" in data
+    assert "volume_delta_pct" in data
+    assert "peak_month" in data
+    assert data["peak_count"] > 0
+    assert data["volume_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_task_creation_volume_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-ffff00001111")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/creation-volume-trend")
+    assert resp.status_code == 403
