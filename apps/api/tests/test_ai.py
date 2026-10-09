@@ -9397,7 +9397,7 @@ async def test_revenue_forecast_returns_forecast(app_client, monkeypatch):
     ]
     closed_rows = [
         FakeRevenueForecastClosedDealRow(80000, last_q_start),
-        FakeRevenueForecastClosedDealRow(40000, last_q_start + datetime.timedelta(days=10)),
+        FakeRevenueForecastClosedDealRow(40000, last_q_start + datetime.timedelta(days=1)),
     ]
 
     mock_db.execute = AsyncMock(side_effect=[
@@ -10633,4 +10633,65 @@ async def test_agent_wow_comparison_wrong_workspace_returns_403(app_client):
     wrong_id = uuid.UUID("ffff0000-1111-2222-3333-444455556666")
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/wow-comparison")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_task_completion_rate_trend_structured_response(app_client, monkeypatch):
+    """Phase 20af: endpoint returns 6 monthly buckets with correct overall rate."""
+    fastapi_app, mock_db, workspace_id = app_client
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    class FakeTask:
+        def __init__(self, status, months_ago):
+            d = now - datetime.timedelta(days=30 * months_ago)
+            self.status = status
+            self.created_at = d
+
+    fake_tasks = [
+        FakeTask("done", 0), FakeTask("done", 0), FakeTask("open", 0),
+        FakeTask("done", 1), FakeTask("cancelled", 1),
+        FakeTask("open", 2), FakeTask("done", 2), FakeTask("done", 2),
+    ]
+
+    async def fake_execute(stmt):
+        class FakeResult:
+            def all(self_):
+                return fake_tasks
+        return FakeResult()
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    import anthropic as _ant
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"completion_narrative": "Completion improved.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/tasks/completion-rate-trend")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["monthly_tasks"]) == 6
+    assert data["total_tasks"] == 8
+    total_done = sum(m["done_count"] for m in data["monthly_tasks"])
+    assert data["overall_completion_rate"] == round(total_done / 8 * 100, 1)
+    assert data["trend_direction"] in ("improving", "stable", "declining")
+    assert data["best_month"] is not None
+    assert data["completion_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_task_completion_rate_trend_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-1234-5678-9abc-def012345678")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/completion-rate-trend")
     assert resp.status_code == 403

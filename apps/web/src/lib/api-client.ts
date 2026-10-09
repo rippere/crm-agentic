@@ -8300,5 +8300,42 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getTaskCompletionRateTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date()
+        d.setMonth(d.getMonth() - (5 - i))
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      })
+      const rates = [42.0, 48.0, 55.0, 61.0, 68.0, 74.0]
+      const totals = [24, 27, 31, 28, 34, 38]
+      return Promise.resolve({
+        monthly_tasks: months.map((month_label, i) => ({
+          month_label,
+          total_tasks: totals[i],
+          done_count: Math.round(totals[i] * rates[i] / 100),
+          open_count: Math.round(totals[i] * 0.15),
+          in_progress_count: Math.round(totals[i] * 0.1),
+          cancelled_count: Math.round(totals[i] * (1 - rates[i] / 100 - 0.25)),
+          completion_rate: rates[i],
+        })),
+        total_tasks: totals.reduce((a, b) => a + b, 0),
+        overall_completion_rate: 58.2,
+        trend_direction: 'improving',
+        rate_delta: 26.0,
+        best_month: months[5],
+        best_rate: 74.0,
+        completion_narrative: 'Task completion has improved steadily over the last 6 months, rising from 42% to 74% — a strong signal that the team is closing the loop on open work. Focus now on maintaining this momentum as task volume grows.',
+        recommendations: [
+          'Celebrate the completion rate improvement with the team to reinforce the positive trend.',
+          'Investigate cancelled tasks each month — a high cancellation rate may mask unresolved work.',
+          'Set weekly completion targets to sustain the upward momentum heading into next quarter.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/tasks/completion-rate-trend`, {}, token)
+  },
 }
 
