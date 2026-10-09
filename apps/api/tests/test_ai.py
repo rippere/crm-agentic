@@ -9397,7 +9397,7 @@ async def test_revenue_forecast_returns_forecast(app_client, monkeypatch):
     ]
     closed_rows = [
         FakeRevenueForecastClosedDealRow(80000, last_q_start),
-        FakeRevenueForecastClosedDealRow(40000, last_q_start + datetime.timedelta(days=10)),
+        FakeRevenueForecastClosedDealRow(40000, last_q_start + datetime.timedelta(days=1)),
     ]
 
     mock_db.execute = AsyncMock(side_effect=[
