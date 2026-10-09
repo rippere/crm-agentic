@@ -8300,5 +8300,41 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getTaskOverdueRisk(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const today = new Date()
+      const fmt = (d: Date) => d.toISOString().slice(0, 10)
+      const daysAgo = (n: number) => { const d = new Date(today); d.setDate(d.getDate() - n); return fmt(d) }
+      const daysAhead = (n: number) => { const d = new Date(today); d.setDate(d.getDate() + n); return fmt(d) }
+      const overdueTasksDemo = [
+        { task_id: 't-001', title: 'Follow up with Acme Corp', status: 'open', due_date: daysAgo(8), days_remaining: -8, days_overdue: 8 },
+        { task_id: 't-002', title: 'Send proposal to Beta Inc', status: 'in_progress', due_date: daysAgo(4), days_remaining: -4, days_overdue: 4 },
+        { task_id: 't-003', title: 'Schedule demo with Gamma Ltd', status: 'open', due_date: daysAgo(1), days_remaining: -1, days_overdue: 1 },
+      ]
+      const dueSoonTasksDemo = [
+        { task_id: 't-004', title: 'Review contract terms', status: 'open', due_date: daysAhead(2), days_remaining: 2 },
+        { task_id: 't-005', title: 'Prepare pitch deck', status: 'in_progress', due_date: daysAhead(5), days_remaining: 5 },
+      ]
+      return Promise.resolve({
+        overdue_tasks: overdueTasksDemo,
+        due_soon_tasks: dueSoonTasksDemo,
+        overdue_count: 3,
+        due_soon_count: 2,
+        on_track_count: 8,
+        no_due_date_count: 5,
+        total_open_tasks: 18,
+        overdue_rate: 23.1,
+        overdue_narrative: '3 open tasks are overdue with the oldest now 8 days past its deadline, indicating follow-up discipline needs attention. 2 additional tasks are due within 7 days and should be prioritised this week to prevent further slippage.',
+        recommendations: [
+          'Address the 3 overdue tasks today — reassign or close any that are no longer relevant.',
+          'Block time this week to complete the 2 tasks due within 7 days before they slip.',
+          'Add due dates to the 5 tasks currently unscheduled to keep the team aligned on priorities.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/tasks/overdue-risk`, {}, token)
+  },
 }
 

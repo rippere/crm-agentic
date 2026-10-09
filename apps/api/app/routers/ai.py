@@ -23505,3 +23505,139 @@ async def get_ai_agent_wow_comparison(
         "recommendations": recommendations10,
         "generated_at": now10.isoformat() + "Z",
     }
+
+@router.get("/workspaces/{workspace_id}/ai/tasks/overdue-risk")
+@limiter.limit("5/minute")
+async def get_ai_task_overdue_risk(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.workspace_id != workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    from app.models.task import Task as Task13
+    today13 = datetime.date.today()
+    due_soon_cutoff13 = today13 + datetime.timedelta(days=7)
+
+    result13 = await db.execute(
+        select(Task13.id, Task13.title, Task13.status, Task13.due_date)
+        .where(
+            Task13.workspace_id == workspace_id,
+            Task13.status.in_(["open", "in_progress"]),
+        )
+    )
+    rows13 = result13.all()
+
+    overdue13: list = []
+    due_soon13: list = []
+    on_track13: list = []
+    no_due_date_count13 = 0
+
+    for row13 in rows13:
+        dd13 = row13.due_date
+        if dd13 is None:
+            no_due_date_count13 += 1
+            continue
+        days_remaining13 = (dd13 - today13).days
+        entry13 = {
+            "task_id": str(row13.id),
+            "title": row13.title,
+            "status": row13.status,
+            "due_date": dd13.isoformat(),
+            "days_remaining": days_remaining13,
+        }
+        if days_remaining13 < 0:
+            entry13["days_overdue"] = -days_remaining13
+            overdue13.append(entry13)
+        elif days_remaining13 <= 7:
+            due_soon13.append(entry13)
+        else:
+            on_track13.append(entry13)
+
+    overdue13.sort(key=lambda x13: x13["days_overdue"], reverse=True)
+    due_soon13.sort(key=lambda x13: x13["days_remaining"])
+
+    total_with_due_date13 = len(overdue13) + len(due_soon13) + len(on_track13)
+    total_open13 = len(rows13)
+    overdue_rate13 = round(len(overdue13) / total_with_due_date13 * 100, 1) if total_with_due_date13 > 0 else 0.0
+
+    if total_open13 == 0:
+        return {
+            "overdue_tasks": [],
+            "due_soon_tasks": [],
+            "overdue_count": 0,
+            "due_soon_count": 0,
+            "on_track_count": 0,
+            "no_due_date_count": 0,
+            "total_open_tasks": 0,
+            "overdue_rate": 0.0,
+            "overdue_narrative": "No open tasks found in this workspace.",
+            "recommendations": [
+                "Create tasks with due dates to enable deadline tracking.",
+                "Use due dates on all tasks to surface overdue risk early.",
+                "Consider setting up automated reminders for approaching deadlines.",
+            ],
+            "generated_at": datetime.datetime.now(timezone.utc).isoformat() + "Z",
+        }
+
+    overdue_narrative13 = ""
+    recommendations13: list = []
+    try:
+        summary13 = (
+            f"Workspace has {len(overdue13)} overdue tasks (overdue rate {overdue_rate13}%), "
+            f"{len(due_soon13)} due within 7 days, {len(on_track13)} on track, "
+            f"{no_due_date_count13} tasks with no due date out of {total_open13} total open tasks."
+        )
+        top_overdue13 = ", ".join(
+            f"{t['title']} ({t['days_overdue']}d overdue)" for t in overdue13[:3]
+        )
+        prompt13 = (
+            f"You are a project management analyst. {summary13} "
+            f"Top overdue: {top_overdue13 if top_overdue13 else 'none'}. "
+            "Provide a concise 2-sentence narrative about the task deadline risk and "
+            "3 actionable recommendations to reduce overdue tasks. "
+            'Respond with JSON only: {"overdue_narrative": "...", "recommendations": ["...", "...", "..."]}'
+        )
+        client13 = _mk_anthropic()
+        msg13 = client13.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt13}],
+        )
+        raw13 = msg13.content[0].text.strip()
+        if raw13.startswith("```"):
+            raw13 = raw13.split("```")[1]
+            if raw13.startswith("json"):
+                raw13 = raw13[4:]
+        parsed13 = json.loads(raw13)
+        overdue_narrative13 = parsed13.get("overdue_narrative", "")
+        recommendations13 = parsed13.get("recommendations", [])
+    except Exception:
+        overdue_narrative13 = (
+            f"There are {len(overdue13)} overdue tasks representing a {overdue_rate13}% overdue rate. "
+            f"Additionally {len(due_soon13)} tasks are due within the next 7 days."
+        )
+
+    default_recs13 = [
+        "Triage overdue tasks immediately — reassign or reschedule those that can't be completed today.",
+        "Add due dates to all open tasks so deadline risk is visible across the team.",
+        "Review tasks due in the next 7 days in your next team standup to prevent further slippage.",
+    ]
+    while len(recommendations13) < 3:
+        recommendations13.append(default_recs13[len(recommendations13) % 3])
+
+    return {
+        "overdue_tasks": overdue13,
+        "due_soon_tasks": due_soon13,
+        "overdue_count": len(overdue13),
+        "due_soon_count": len(due_soon13),
+        "on_track_count": len(on_track13),
+        "no_due_date_count": no_due_date_count13,
+        "total_open_tasks": total_open13,
+        "overdue_rate": overdue_rate13,
+        "overdue_narrative": overdue_narrative13,
+        "recommendations": recommendations13,
+        "generated_at": datetime.datetime.now(timezone.utc).isoformat() + "Z",
+    }

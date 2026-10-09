@@ -1000,6 +1000,12 @@ export default function ReportsPage() {
   const [dealCreationTrendLoading, setDealCreationTrendLoading] = useState(false);
   const [dealCreationTrendOpen, setDealCreationTrendOpen] = useState(true);
 
+  type TaskOverdueTask = { task_id: string; title: string; status: string; due_date: string; days_remaining: number; days_overdue?: number };
+  type TaskOverdueRiskData = { overdue_tasks: TaskOverdueTask[]; due_soon_tasks: TaskOverdueTask[]; overdue_count: number; due_soon_count: number; on_track_count: number; no_due_date_count: number; total_open_tasks: number; overdue_rate: number; overdue_narrative: string; recommendations: string[]; generated_at: string };
+  const [taskOverdueRisk, setTaskOverdueRisk] = useState<TaskOverdueRiskData | null>(null);
+  const [taskOverdueRiskLoading, setTaskOverdueRiskLoading] = useState(false);
+  const [taskOverdueRiskOpen, setTaskOverdueRiskOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1232,6 +1238,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setTaskOverdueRiskLoading(true);
+      apiClient.getTaskOverdueRisk("demo-workspace-1", "demo-token").then(setTaskOverdueRisk).catch(() => {}).finally(() => setTaskOverdueRiskLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1469,6 +1477,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setTaskOverdueRiskLoading(true);
+      apiClient.getTaskOverdueRisk(workspaceId, session.access_token).then(setTaskOverdueRisk).catch(() => {}).finally(() => setTaskOverdueRiskLoading(false));
     });
   }, []);
 
@@ -3284,6 +3294,27 @@ export default function ReportsPage() {
         if (!session) { setAgentDowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentDowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateTaskOverdueRisk = () => {
+    setTaskOverdueRiskLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getTaskOverdueRisk(wid, tok)
+        .then(setTaskOverdueRisk)
+        .catch(() => {})
+        .finally(() => setTaskOverdueRiskLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setTaskOverdueRiskLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setTaskOverdueRiskLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14040,6 +14071,111 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the day-of-week distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20au: Task Overdue Risk */}
+      <Card className="border-zinc-800/60 overflow-hidden">
+        <div
+          className="flex items-center gap-2 p-4 cursor-pointer select-none"
+          onClick={() => setTaskOverdueRiskOpen((o) => !o)}
+        >
+          <AlertTriangle className="h-4 w-4 text-rose-400" />
+          <span className="font-semibold text-sm text-zinc-100">Task Overdue Risk</span>
+          {taskOverdueRisk && (
+            <span className={cn(
+              "ml-1 rounded-full px-2 py-0.5 text-xs font-medium",
+              taskOverdueRisk.overdue_rate >= 30 ? "bg-rose-500/20 text-rose-300" :
+              taskOverdueRisk.overdue_rate >= 15 ? "bg-amber-500/20 text-amber-300" :
+              "bg-emerald-500/20 text-emerald-300"
+            )}>
+              {taskOverdueRisk.overdue_rate}% overdue rate
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {taskOverdueRisk && (
+              <span className="text-xs text-zinc-500">{taskOverdueRisk.total_open_tasks} open tasks</span>
+            )}
+            <button
+              className="rounded-md px-2 py-1 text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors flex items-center gap-1"
+              onClick={(e) => { e.stopPropagation(); regenerateTaskOverdueRisk(); }}
+              disabled={taskOverdueRiskLoading}
+            >
+              <RefreshCw className={cn("h-3 w-3", taskOverdueRiskLoading && "animate-spin")} />
+              Regenerate
+            </button>
+            {taskOverdueRiskOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {taskOverdueRiskOpen && (
+          taskOverdueRiskLoading && !taskOverdueRisk ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analysing task deadline risk…</div>
+          ) : taskOverdueRisk ? (
+            <div className={cn("p-4 space-y-4", taskOverdueRiskLoading && "opacity-40")}>
+              {/* 4-stat grid */}
+              <div className="grid grid-cols-4 gap-3">
+                <div className="rounded-lg bg-rose-500/10 border border-rose-500/20 p-3 text-center">
+                  <p className="text-xs text-zinc-400 mb-1">Overdue</p>
+                  <p className="text-xl font-bold text-rose-300">{taskOverdueRisk.overdue_count}</p>
+                </div>
+                <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-3 text-center">
+                  <p className="text-xs text-zinc-400 mb-1">Due Soon</p>
+                  <p className="text-xl font-bold text-amber-300">{taskOverdueRisk.due_soon_count}</p>
+                </div>
+                <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-3 text-center">
+                  <p className="text-xs text-zinc-400 mb-1">On Track</p>
+                  <p className="text-xl font-bold text-emerald-300">{taskOverdueRisk.on_track_count}</p>
+                </div>
+                <div className="rounded-lg bg-zinc-800/60 border border-zinc-700/40 p-3 text-center">
+                  <p className="text-xs text-zinc-400 mb-1">No Date</p>
+                  <p className="text-xl font-bold text-zinc-300">{taskOverdueRisk.no_due_date_count}</p>
+                </div>
+              </div>
+              {/* Overdue tasks list */}
+              {taskOverdueRisk.overdue_tasks.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-rose-400 uppercase tracking-wide">Overdue Tasks</p>
+                  {taskOverdueRisk.overdue_tasks.map((t) => (
+                    <div key={t.task_id} className="flex items-center justify-between rounded-lg bg-rose-500/5 border border-rose-500/15 px-3 py-2">
+                      <span className="text-sm text-zinc-200 truncate flex-1">{t.title}</span>
+                      <span className={cn(
+                        "ml-2 shrink-0 rounded-full px-2 py-0.5 text-xs font-medium",
+                        (t.days_overdue ?? 0) >= 7 ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/20 text-amber-300"
+                      )}>
+                        {t.days_overdue}d overdue
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Due soon tasks list */}
+              {taskOverdueRisk.due_soon_tasks.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-amber-400 uppercase tracking-wide">Due Within 7 Days</p>
+                  {taskOverdueRisk.due_soon_tasks.map((t) => (
+                    <div key={t.task_id} className="flex items-center justify-between rounded-lg bg-amber-500/5 border border-amber-500/15 px-3 py-2">
+                      <span className="text-sm text-zinc-200 truncate flex-1">{t.title}</span>
+                      <span className="ml-2 shrink-0 rounded-full px-2 py-0.5 text-xs font-medium bg-amber-500/20 text-amber-300">
+                        {t.days_remaining}d left
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{taskOverdueRisk.overdue_narrative}</p>
+              <ul className="space-y-1">
+                {taskOverdueRisk.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-rose-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(taskOverdueRisk.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load task overdue risk analysis.</div>
           )
         )}
       </Card>
