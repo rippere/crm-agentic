@@ -1000,6 +1000,12 @@ export default function ReportsPage() {
   const [dealCreationTrendLoading, setDealCreationTrendLoading] = useState(false);
   const [dealCreationTrendOpen, setDealCreationTrendOpen] = useState(true);
 
+  type TaskCreationVolumeMonth = { month_label: string; tasks_created: number; done_count: number; open_count: number; in_progress_count: number; cancelled_count: number };
+  type TaskCreationVolumeTrendData = { monthly_tasks: TaskCreationVolumeMonth[]; total_tasks: number; peak_month: string | null; peak_count: number; trend_direction: string; volume_delta_pct: number; volume_narrative: string; recommendations: string[]; generated_at: string };
+  const [taskCreationVolumeTrend, setTaskCreationVolumeTrend] = useState<TaskCreationVolumeTrendData | null>(null);
+  const [taskCreationVolumeTrendLoading, setTaskCreationVolumeTrendLoading] = useState(false);
+  const [taskCreationVolumeTrendOpen, setTaskCreationVolumeTrendOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1232,6 +1238,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution("demo-workspace-1", "demo-token").then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setTaskCreationVolumeTrendLoading(true);
+      apiClient.getTaskCreationVolumeTrend("demo-workspace-1", "demo-token").then(setTaskCreationVolumeTrend).catch(() => {}).finally(() => setTaskCreationVolumeTrendLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1469,6 +1477,8 @@ export default function ReportsPage() {
       apiClient.getAgentDowDistribution(workspaceId, session.access_token).then(setAgentDow).catch(() => {}).finally(() => setAgentDowLoading(false));
       setAgentWowLoading(true);
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
+      setTaskCreationVolumeTrendLoading(true);
+      apiClient.getTaskCreationVolumeTrend(workspaceId, session.access_token).then(setTaskCreationVolumeTrend).catch(() => {}).finally(() => setTaskCreationVolumeTrendLoading(false));
     });
   }, []);
 
@@ -3284,6 +3294,27 @@ export default function ReportsPage() {
         if (!session) { setAgentDowLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setAgentDowLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateTaskCreationVolumeTrend = () => {
+    setTaskCreationVolumeTrendLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getTaskCreationVolumeTrend(wid, tok)
+        .then(setTaskCreationVolumeTrend)
+        .catch(() => {})
+        .finally(() => setTaskCreationVolumeTrendLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setTaskCreationVolumeTrendLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setTaskCreationVolumeTrendLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14040,6 +14071,83 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the day-of-week distribution.</div>
+          )
+        )}
+      </Card>
+
+      {/* Phase 20at – Task Creation Volume Trend */}
+      <Card className="border-zinc-700/50">
+        <div
+          className="flex items-center justify-between p-4 cursor-pointer select-none"
+          onClick={() => setTaskCreationVolumeTrendOpen(v => !v)}
+        >
+          <div className="flex items-center gap-3">
+            <LayoutList className="h-4 w-4 text-indigo-400" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Task Creation Volume Trend</p>
+              <p className="text-xs text-zinc-500">Monthly task creation breakdown over the last 6 months</p>
+            </div>
+            {taskCreationVolumeTrend && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${taskCreationVolumeTrend.trend_direction === 'growing' ? 'bg-emerald-900/40 text-emerald-300' : taskCreationVolumeTrend.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-300' : 'bg-zinc-800 text-zinc-400'}`}>
+                {taskCreationVolumeTrend.trend_direction} {taskCreationVolumeTrend.volume_delta_pct > 0 ? '+' : ''}{taskCreationVolumeTrend.volume_delta_pct.toFixed(1)}%
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={e => { e.stopPropagation(); regenerateTaskCreationVolumeTrend(); }} className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors" disabled={taskCreationVolumeTrendLoading}>
+              {taskCreationVolumeTrendLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </button>
+            {taskCreationVolumeTrendOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </div>
+        </div>
+        {taskCreationVolumeTrendOpen && (
+          taskCreationVolumeTrendLoading && !taskCreationVolumeTrend ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Loading task creation volume trend…</div>
+          ) : taskCreationVolumeTrend ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Total Tasks</p>
+                  <p className="text-xl font-bold text-zinc-200">{taskCreationVolumeTrend.total_tasks}</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Peak Month</p>
+                  <p className="text-sm font-bold text-indigo-300">{taskCreationVolumeTrend.peak_month ?? '—'}</p>
+                  <p className="text-xs text-zinc-500">{taskCreationVolumeTrend.peak_count} tasks</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Trend</p>
+                  <p className={`text-sm font-bold ${taskCreationVolumeTrend.trend_direction === 'growing' ? 'text-emerald-300' : taskCreationVolumeTrend.trend_direction === 'declining' ? 'text-rose-300' : 'text-zinc-300'}`}>
+                    {taskCreationVolumeTrend.trend_direction.charAt(0).toUpperCase() + taskCreationVolumeTrend.trend_direction.slice(1)}
+                  </p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={taskCreationVolumeTrend.monthly_tasks} margin={{ top: 4, right: 12, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                  <XAxis dataKey="month_label" tick={{ fontSize: 10, fill: '#71717a' }} />
+                  <YAxis tick={{ fontSize: 10, fill: '#71717a' }} />
+                  <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 8, fontSize: 12 }} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="done_count" name="Done" stackId="a" fill="#10b981" />
+                  <Bar dataKey="in_progress_count" name="In Progress" stackId="a" fill="#6366f1" />
+                  <Bar dataKey="open_count" name="Open" stackId="a" fill="#71717a" />
+                  <Bar dataKey="cancelled_count" name="Cancelled" stackId="a" fill="#f43f5e" />
+                </BarChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-zinc-400 italic">{taskCreationVolumeTrend.volume_narrative}</p>
+              <ul className="space-y-1">
+                {taskCreationVolumeTrend.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                    <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(taskCreationVolumeTrend.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load the task creation volume trend.</div>
           )
         )}
       </Card>

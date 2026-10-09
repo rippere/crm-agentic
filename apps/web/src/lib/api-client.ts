@@ -8300,5 +8300,48 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/agents/wow-comparison`, {}, token)
   },
+
+  async getTaskCreationVolumeTrend(workspaceId: string, token: string) {
+    if (isDemoMode) {
+      const now = new Date()
+      const months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1)
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      })
+      const doneArr   = [15, 16, 18, 20, 22, 26]
+      const openArr   = [5,  5,  5,  5,  6,  6]
+      const inpArr    = [3,  4,  4,  4,  4,  5]
+      const canArr    = [1,  1,  1,  1,  1,  1]
+      const monthly = months.map((m, i) => ({
+        month_label: m,
+        tasks_created: doneArr[i] + openArr[i] + inpArr[i] + canArr[i],
+        done_count: doneArr[i],
+        open_count: openArr[i],
+        in_progress_count: inpArr[i],
+        cancelled_count: canArr[i],
+      }))
+      const total = monthly.reduce((s, m) => s + m.tasks_created, 0)
+      const avgFirst = (monthly[0].tasks_created + monthly[1].tasks_created + monthly[2].tasks_created) / 3
+      const avgSecond = (monthly[3].tasks_created + monthly[4].tasks_created + monthly[5].tasks_created) / 3
+      const volumeDeltaPct = Math.round((avgSecond - avgFirst) / avgFirst * 1000) / 10
+      const peak = monthly.reduce((a, b) => a.tasks_created >= b.tasks_created ? a : b)
+      return Promise.resolve({
+        monthly_tasks: monthly,
+        total_tasks: total,
+        peak_month: peak.month_label,
+        peak_count: peak.tasks_created,
+        trend_direction: 'growing',
+        volume_delta_pct: volumeDeltaPct,
+        volume_narrative: 'Task creation has grown steadily over the last 6 months, reflecting increased team adoption of task tracking. Peak activity typically aligns with deal pipeline activity — a healthy sign of CRM engagement.',
+        recommendations: [
+          'Ensure tasks are consistently linked to deals and contacts to maintain pipeline visibility.',
+          'Monitor months with low task creation — they may indicate team workload dips or disengagement.',
+          'Review the done-to-open ratio each month to catch workload imbalances before they compound.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/tasks/creation-volume-trend`, {}, token)
+  },
 }
 
