@@ -1000,9 +1000,9 @@ export default function ReportsPage() {
   const [dealCreationTrendLoading, setDealCreationTrendLoading] = useState(false);
   const [dealCreationTrendOpen, setDealCreationTrendOpen] = useState(true);
 
-  type TaskCompletionMonth = { month_label: string; total_tasks: number; done_count: number; open_count: number; in_progress_count: number; cancelled_count: number; completion_rate: number };
-  type TaskCompletionTrendData = { monthly_tasks: TaskCompletionMonth[]; total_tasks: number; overall_completion_rate: number; trend_direction: string; rate_delta: number; best_month: string | null; best_rate: number; completion_narrative: string; recommendations: string[]; generated_at: string };
-  const [taskCompletionTrend, setTaskCompletionTrend] = useState<TaskCompletionTrendData | null>(null);
+  type TaskCompletionRateMonth = { month_label: string; total_tasks: number; done_count: number; open_count: number; in_progress_count: number; cancelled_count: number; completion_rate: number };
+  type TaskCompletionRateTrendData = { monthly_tasks: TaskCompletionRateMonth[]; total_tasks: number; overall_completion_rate: number; trend_direction: string; rate_delta: number; best_month: string | null; best_rate: number; completion_narrative: string; recommendations: string[]; generated_at: string };
+  const [taskCompletionTrend, setTaskCompletionTrend] = useState<TaskCompletionRateTrendData | null>(null);
   const [taskCompletionTrendLoading, setTaskCompletionTrendLoading] = useState(false);
   const [taskCompletionTrendOpen, setTaskCompletionTrendOpen] = useState(true);
 
@@ -14082,7 +14082,7 @@ export default function ReportsPage() {
             <ClipboardList className="h-4 w-4 text-teal-400" />
             <span className="text-sm font-semibold text-zinc-200">Task Completion Rate Trend</span>
             {taskCompletionTrend && (
-              <Badge variant={taskCompletionTrend.trend_direction === 'improving' ? 'success' : taskCompletionTrend.trend_direction === 'declining' ? 'danger' : 'default'} className="text-xs">
+              <Badge variant={taskCompletionTrend.trend_direction === 'improving' ? 'emerald' : taskCompletionTrend.trend_direction === 'declining' ? 'rose' : undefined} className="text-xs">
                 {taskCompletionTrend.trend_direction} {taskCompletionTrend.rate_delta > 0 ? `+${taskCompletionTrend.rate_delta.toFixed(1)}pp` : taskCompletionTrend.rate_delta < 0 ? `${taskCompletionTrend.rate_delta.toFixed(1)}pp` : ''}
               </Badge>
             )}
@@ -14118,7 +14118,7 @@ export default function ReportsPage() {
                 <div className="h-40">
                   {(() => {
                     const { LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } = require('recharts');
-                    const chartData = taskCompletionTrend.monthly_tasks.map((m: TaskCompletionMonth) => ({
+                    const chartData = taskCompletionTrend.monthly_tasks.map((m: TaskCompletionRateMonth) => ({
                       month: m.month_label.slice(5),
                       rate: m.completion_rate,
                       total: m.total_tasks,

@@ -8302,7 +8302,7 @@ export const apiClient = {
   },
 
   async getTaskCompletionRateTrend(workspaceId: string, token: string) {
-    if (isDemoMode()) {
+    if (isDemoMode) {
       const months = Array.from({ length: 6 }, (_, i) => {
         const d = new Date()
         d.setMonth(d.getMonth() - (5 - i))
