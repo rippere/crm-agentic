@@ -9397,7 +9397,7 @@ async def test_revenue_forecast_returns_forecast(app_client, monkeypatch):
     ]
     closed_rows = [
         FakeRevenueForecastClosedDealRow(80000, last_q_start),
-        FakeRevenueForecastClosedDealRow(40000, last_q_start + datetime.timedelta(days=10)),
+        FakeRevenueForecastClosedDealRow(40000, last_q_start + datetime.timedelta(days=1)),
     ]
 
     mock_db.execute = AsyncMock(side_effect=[
@@ -10633,4 +10633,72 @@ async def test_agent_wow_comparison_wrong_workspace_returns_403(app_client):
     wrong_id = uuid.UUID("ffff0000-1111-2222-3333-444455556666")
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/wow-comparison")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 20au – Task Overdue Risk
+# ---------------------------------------------------------------------------
+
+class FakeTaskOverdueRow:
+    def __init__(self, task_id, title, status, due_date):
+        import uuid
+        self.id = uuid.uuid4() if task_id is None else task_id
+        self.title = title
+        self.status = status
+        self.due_date = due_date
+
+
+@pytest.mark.asyncio
+async def test_task_overdue_risk_returns_structured_response(app_client, monkeypatch):
+    import datetime
+    fastapi_app, mock_db, workspace_id = app_client
+    today = datetime.date.today()
+    rows = [
+        FakeTaskOverdueRow(None, "Overdue task A", "open", today - datetime.timedelta(days=5)),
+        FakeTaskOverdueRow(None, "Overdue task B", "in_progress", today - datetime.timedelta(days=2)),
+        FakeTaskOverdueRow(None, "Due soon task", "open", today + datetime.timedelta(days=3)),
+        FakeTaskOverdueRow(None, "On track task", "open", today + datetime.timedelta(days=14)),
+        FakeTaskOverdueRow(None, "No date task", "open", None),
+    ]
+
+    class FakeResult:
+        def all(self_):
+            return rows
+
+    async def fake_execute(stmt):
+        return FakeResult()
+
+    monkeypatch.setattr(mock_db, "execute", fake_execute)
+
+    class FakeMsg:
+        content = [type("C", (), {"text": '{"overdue_narrative": "2 tasks are overdue.", "recommendations": ["r1","r2","r3"]}'})()]
+    class FakeMessages:
+        def create(self_, **kw): return FakeMsg()
+    class FakeClient:
+        messages = FakeMessages()
+    monkeypatch.setattr("app.routers.ai._mk_anthropic", lambda: FakeClient())
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/tasks/overdue-risk")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["overdue_count"] == 2
+    assert data["due_soon_count"] == 1
+    assert data["on_track_count"] == 1
+    assert data["no_due_date_count"] == 1
+    assert data["total_open_tasks"] == 5
+    assert data["overdue_rate"] > 0
+    assert data["overdue_narrative"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_task_overdue_risk_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("aaaabbbb-cccc-dddd-eeee-ffff00002222")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/overdue-risk")
     assert resp.status_code == 403
