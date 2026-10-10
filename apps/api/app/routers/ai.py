@@ -23641,3 +23641,175 @@ async def get_ai_task_overdue_risk(
         "recommendations": recommendations13,
         "generated_at": datetime.datetime.now(timezone.utc).isoformat() + "Z",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 20av – GET /workspaces/{workspace_id}/ai/agents/monthly-summary
+# ---------------------------------------------------------------------------
+
+@router.get("/workspaces/{workspace_id}/ai/agents/monthly-summary")
+@limiter.limit("5/minute")
+async def get_agent_monthly_summary(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    import datetime as _dt14
+
+    wid14 = str(workspace_id)
+    uid14 = str(current_user.get("sub", ""))
+    stmt_check14 = select(Workspace).where(Workspace.id == workspace_id)
+    res_check14 = await db.execute(stmt_check14)
+    ws14 = res_check14.scalar_one_or_none()
+    if not ws14 or str(ws14.owner_id) != uid14:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    now14 = _dt14.datetime.utcnow()
+    current_start14 = now14 - _dt14.timedelta(days=30)
+    prior_start14 = now14 - _dt14.timedelta(days=60)
+
+    stmt_curr14 = (
+        select(ActivityEvent)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.agent_name.isnot(None),
+            ActivityEvent.created_at >= current_start14,
+        )
+    )
+    res_curr14 = await db.execute(stmt_curr14)
+    curr_rows14 = res_curr14.all()
+
+    stmt_prior14 = (
+        select(ActivityEvent)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.agent_name.isnot(None),
+            ActivityEvent.created_at >= prior_start14,
+            ActivityEvent.created_at < current_start14,
+        )
+    )
+    res_prior14 = await db.execute(stmt_prior14)
+    prior_rows14 = res_prior14.all()
+
+    if not curr_rows14:
+        return {
+            "agents": [],
+            "total_runs": 0,
+            "overall_success_rate": 0.0,
+            "most_used_agent": None,
+            "most_reliable_agent": None,
+            "least_reliable_agent": None,
+            "trend_direction": "stable",
+            "rate_delta": 0.0,
+            "monthly_summary": "No agent runs recorded in the past 30 days.",
+            "recommendations": [
+                "Schedule automated agent runs to leverage AI capabilities regularly.",
+                "Review agent configuration and ensure triggers are properly set.",
+                "Start with the lead scoring agent to surface high-priority opportunities.",
+            ],
+            "generated_at": now14.isoformat() + "Z",
+        }
+
+    curr_buckets14: dict = defaultdict(lambda: {"success": 0, "failure": 0})
+    for row14 in curr_rows14:
+        agent14 = row14.agent_name
+        sev14 = (row14.severity or "").lower()
+        if sev14 == "error":
+            curr_buckets14[agent14]["failure"] += 1
+        else:
+            curr_buckets14[agent14]["success"] += 1
+
+    agents14 = []
+    for agent_name14, counts14 in curr_buckets14.items():
+        total14 = counts14["success"] + counts14["failure"]
+        rate14 = round(counts14["success"] / total14 * 100, 1) if total14 > 0 else 0.0
+        agents14.append({
+            "agent_name": agent_name14,
+            "total_runs": total14,
+            "success_count": counts14["success"],
+            "failure_count": counts14["failure"],
+            "success_rate": rate14,
+        })
+    agents14.sort(key=lambda a: a["total_runs"], reverse=True)
+
+    total_runs14 = sum(a["total_runs"] for a in agents14)
+    total_success14 = sum(a["success_count"] for a in agents14)
+    overall_success_rate14 = round(total_success14 / total_runs14 * 100, 1) if total_runs14 > 0 else 0.0
+    most_used_agent14 = agents14[0]["agent_name"] if agents14 else None
+
+    eligible14 = [a for a in agents14 if a["total_runs"] >= 3]
+    most_reliable_agent14 = max(eligible14, key=lambda a: a["success_rate"])["agent_name"] if eligible14 else None
+    least_reliable_agent14 = min(eligible14, key=lambda a: a["success_rate"])["agent_name"] if eligible14 else None
+
+    prior_total14 = len(prior_rows14)
+    prior_success14 = sum(
+        1 for r in prior_rows14 if (r.severity or "").lower() != "error"
+    )
+    prior_rate14 = round(prior_success14 / prior_total14 * 100, 1) if prior_total14 > 0 else 0.0
+    rate_delta14 = round(overall_success_rate14 - prior_rate14, 1)
+    if rate_delta14 >= 3:
+        trend_direction14 = "improving"
+    elif rate_delta14 <= -3:
+        trend_direction14 = "declining"
+    else:
+        trend_direction14 = "stable"
+
+    monthly_summary14 = ""
+    recommendations14: list = []
+
+    try:
+        client14 = _mk_anthropic()
+        agents_text14 = "\n".join(
+            f"  {a['agent_name']}: {a['total_runs']} runs, {a['success_rate']}% success"
+            for a in agents14[:10]
+        )
+        prompt14 = (
+            "Summarize the monthly agent performance for a CRM workspace.\n"
+            f"Overall: {total_runs14} runs, {overall_success_rate14}% success rate, "
+            f"{rate_delta14:+.1f}pp vs prior 30d ({trend_direction14}).\n"
+            f"Agent breakdown:\n{agents_text14}\n\n"
+            "Return JSON with exactly:\n"
+            '{"monthly_summary": "2-sentence summary", "recommendations": ["action1", "action2", "action3"]}'
+        )
+        resp14 = client14.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt14}],
+        )
+        raw14 = resp14.content[0].text.strip()
+        if "```" in raw14:
+            raw14 = raw14.split("```")[1]
+            if raw14.startswith("json"):
+                raw14 = raw14[4:]
+        parsed14 = loads_llm_json(raw14)
+        monthly_summary14 = str(parsed14.get("monthly_summary", "")).strip()
+        raw_recs14 = parsed14.get("recommendations", [])
+        recommendations14 = [str(r) for r in (raw_recs14 if isinstance(raw_recs14, list) else [])[:3]]
+    except Exception:
+        monthly_summary14 = (
+            f"Agent runs are {trend_direction14} with an overall success rate of {overall_success_rate14}% "
+            f"across {total_runs14} runs this month ({rate_delta14:+.1f}pp vs prior period)."
+        )
+
+    default_recs14 = [
+        "Investigate the least reliable agent and tune its prompts or triggers.",
+        "Schedule the most-used agent to run during off-peak hours for faster results.",
+        "Add monitoring alerts for agents that drop below 80% success rate.",
+    ]
+    while len(recommendations14) < 3:
+        recommendations14.append(default_recs14[len(recommendations14) % 3])
+
+    return {
+        "agents": agents14,
+        "total_runs": total_runs14,
+        "overall_success_rate": overall_success_rate14,
+        "most_used_agent": most_used_agent14,
+        "most_reliable_agent": most_reliable_agent14,
+        "least_reliable_agent": least_reliable_agent14,
+        "trend_direction": trend_direction14,
+        "rate_delta": rate_delta14,
+        "monthly_summary": monthly_summary14,
+        "recommendations": recommendations14,
+        "generated_at": now14.isoformat() + "Z",
+    }

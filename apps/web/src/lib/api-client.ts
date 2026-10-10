@@ -8336,5 +8336,34 @@ export const apiClient = {
     }
     return apiFetch(`/workspaces/${workspaceId}/ai/tasks/overdue-risk`, {}, token)
   },
+
+  getAgentMonthlySummary(workspaceId: string, token: string) {
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === 'true') {
+      return Promise.resolve({
+        agents: [
+          { agent_name: 'Lead Scorer', total_runs: 72, success_count: 68, failure_count: 4, success_rate: 94.9 },
+          { agent_name: 'Email Composer', total_runs: 61, success_count: 56, failure_count: 5, success_rate: 91.9 },
+          { agent_name: 'Pipeline Optimizer', total_runs: 55, success_count: 50, failure_count: 5, success_rate: 91.1 },
+          { agent_name: 'Sentiment Analyzer', total_runs: 39, success_count: 33, failure_count: 6, success_rate: 84.6 },
+          { agent_name: 'Call Summarizer', total_runs: 25, success_count: 19, failure_count: 6, success_rate: 75.0 },
+        ],
+        total_runs: 252,
+        overall_success_rate: 90.1,
+        most_used_agent: 'Lead Scorer',
+        most_reliable_agent: 'Lead Scorer',
+        least_reliable_agent: 'Call Summarizer',
+        trend_direction: 'improving',
+        rate_delta: 4.2,
+        monthly_summary: 'Your AI agents completed 252 runs this month with a 90.1% overall success rate, up 4.2 percentage points from the prior period. Lead Scorer and Email Composer drove the most volume with strong reliability. Call Summarizer is the lowest performer and may benefit from prompt tuning.',
+        recommendations: [
+          'Investigate Call Summarizer failure patterns — 6 failures in 25 runs suggests a recurring edge case.',
+          'Expand Lead Scorer usage given its high reliability; consider routing more contacts through it.',
+          'Review Sentiment Analyzer inputs for the 6 failures — data quality issues are the most common root cause.',
+        ],
+        generated_at: new Date().toISOString(),
+      })
+    }
+    return apiFetch(`/workspaces/${workspaceId}/ai/agents/monthly-summary`, {}, token)
+  },
 }
 

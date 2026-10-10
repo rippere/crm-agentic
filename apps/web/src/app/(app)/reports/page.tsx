@@ -1006,6 +1006,12 @@ export default function ReportsPage() {
   const [taskOverdueRiskLoading, setTaskOverdueRiskLoading] = useState(false);
   const [taskOverdueRiskOpen, setTaskOverdueRiskOpen] = useState(true);
 
+  type AgentMonthlySummaryAgent = { agent_name: string; total_runs: number; success_count: number; failure_count: number; success_rate: number };
+  type AgentMonthlySummaryData = { agents: AgentMonthlySummaryAgent[]; total_runs: number; overall_success_rate: number; most_used_agent: string | null; most_reliable_agent: string | null; least_reliable_agent: string | null; trend_direction: string; rate_delta: number; monthly_summary: string; recommendations: string[]; generated_at: string };
+  const [agentMonthly, setAgentMonthly] = useState<AgentMonthlySummaryData | null>(null);
+  const [agentMonthlyLoading, setAgentMonthlyLoading] = useState(false);
+  const [agentMonthlyOpen, setAgentMonthlyOpen] = useState(true);
+
   useEffect(() => {
     if (DEMO_MODE) {
       apiClient.getDealVelocity("demo-workspace-1", "demo-token").then((data) => {
@@ -1240,6 +1246,8 @@ export default function ReportsPage() {
       apiClient.getAgentWowComparison("demo-workspace-1", "demo-token").then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
       setTaskOverdueRiskLoading(true);
       apiClient.getTaskOverdueRisk("demo-workspace-1", "demo-token").then(setTaskOverdueRisk).catch(() => {}).finally(() => setTaskOverdueRiskLoading(false));
+      setAgentMonthlyLoading(true);
+      apiClient.getAgentMonthlySummary("demo-workspace-1", "demo-token").then(setAgentMonthly).catch(() => {}).finally(() => setAgentMonthlyLoading(false));
       return;
     }
     const supabase = createBrowserClient();
@@ -1479,6 +1487,8 @@ export default function ReportsPage() {
       apiClient.getAgentWowComparison(workspaceId, session.access_token).then(setAgentWow).catch(() => {}).finally(() => setAgentWowLoading(false));
       setTaskOverdueRiskLoading(true);
       apiClient.getTaskOverdueRisk(workspaceId, session.access_token).then(setTaskOverdueRisk).catch(() => {}).finally(() => setTaskOverdueRiskLoading(false));
+      setAgentMonthlyLoading(true);
+      apiClient.getAgentMonthlySummary(workspaceId, session.access_token).then(setAgentMonthly).catch(() => {}).finally(() => setAgentMonthlyLoading(false));
     });
   }, []);
 
@@ -3315,6 +3325,27 @@ export default function ReportsPage() {
         if (!session) { setTaskOverdueRiskLoading(false); return; }
         const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
         if (!wid) { setTaskOverdueRiskLoading(false); return; }
+        doFetch(wid, session.access_token);
+      });
+    }
+  };
+
+  const regenerateAgentMonthly = () => {
+    setAgentMonthlyLoading(true);
+    const doFetch = (wid: string, tok: string) => {
+      apiClient.getAgentMonthlySummary(wid, tok)
+        .then(setAgentMonthly)
+        .catch(() => {})
+        .finally(() => setAgentMonthlyLoading(false));
+    };
+    if (DEMO_MODE) {
+      doFetch("demo-workspace-1", "demo-token");
+    } else {
+      const supabase = createBrowserClient();
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) { setAgentMonthlyLoading(false); return; }
+        const wid: string | undefined = session.user.app_metadata?.workspace_id ?? session.user.user_metadata?.workspace_id;
+        if (!wid) { setAgentMonthlyLoading(false); return; }
         doFetch(wid, session.access_token);
       });
     }
@@ -14176,6 +14207,89 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load task overdue risk analysis.</div>
+          )
+        )}
+      </Card>
+
+      {/* Agent Monthly Performance Summary */}
+      <Card className="space-y-0 overflow-hidden">
+        <button
+          className="w-full flex items-center justify-between p-4 hover:bg-zinc-800/30 transition-colors"
+          onClick={() => setAgentMonthlyOpen(o => !o)}
+        >
+          <div className="flex items-center gap-2">
+            <Star className="h-4 w-4 text-cyan-400" />
+            <span className="font-semibold text-zinc-100 text-sm">Agent Monthly Performance Summary</span>
+            {agentMonthly && (
+              <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${agentMonthly.trend_direction === 'improving' ? 'bg-emerald-900/40 text-emerald-400' : agentMonthly.trend_direction === 'declining' ? 'bg-rose-900/40 text-rose-400' : 'bg-zinc-700/60 text-zinc-400'}`}>
+                {agentMonthly.trend_direction}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="text-xs px-2 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors"
+              onClick={e => { e.stopPropagation(); regenerateAgentMonthly(); }}
+              disabled={agentMonthlyLoading}
+            >
+              {agentMonthlyLoading ? 'Loading…' : 'Regenerate'}
+            </button>
+            <ChevronDown className={`h-4 w-4 text-zinc-500 transition-transform ${agentMonthlyOpen ? '' : '-rotate-90'}`} />
+          </div>
+        </button>
+        {agentMonthlyOpen && (
+          agentMonthlyLoading ? (
+            <div className="p-6 text-center text-zinc-500 text-sm animate-pulse">Analyzing agent performance…</div>
+          ) : agentMonthly ? (
+            <div className="px-4 pb-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-zinc-100">{agentMonthly.total_runs}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Total Runs</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className={`text-2xl font-bold ${agentMonthly.overall_success_rate >= 90 ? 'text-emerald-400' : agentMonthly.overall_success_rate >= 70 ? 'text-amber-400' : 'text-rose-400'}`}>
+                    {agentMonthly.overall_success_rate.toFixed(1)}%
+                  </p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Success Rate</p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <p className={`text-2xl font-bold ${agentMonthly.rate_delta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {agentMonthly.rate_delta >= 0 ? '+' : ''}{agentMonthly.rate_delta.toFixed(1)}pp
+                  </p>
+                  <p className="text-xs text-zinc-500 mt-0.5">vs Prior 30d</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {agentMonthly.agents.map((a: AgentMonthlySummaryAgent) => (
+                  <div key={a.agent_name} className="space-y-0.5">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-zinc-300">{a.agent_name}</span>
+                      <span className="text-zinc-500">{a.total_runs} runs · <span className={a.success_rate >= 90 ? 'text-emerald-400' : a.success_rate >= 70 ? 'text-amber-400' : 'text-rose-400'}>{a.success_rate.toFixed(1)}%</span></span>
+                    </div>
+                    <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${a.success_rate >= 90 ? 'bg-emerald-500' : a.success_rate >= 70 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${a.success_rate}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {agentMonthly.most_used_agent && (
+                <div className="flex flex-wrap gap-3 text-xs">
+                  <span className="text-zinc-500">Most used: <span className="text-cyan-400">{agentMonthly.most_used_agent}</span></span>
+                  {agentMonthly.most_reliable_agent && <span className="text-zinc-500">Most reliable: <span className="text-emerald-400">{agentMonthly.most_reliable_agent}</span></span>}
+                  {agentMonthly.least_reliable_agent && <span className="text-zinc-500">Needs attention: <span className="text-rose-400">{agentMonthly.least_reliable_agent}</span></span>}
+                </div>
+              )}
+              <p className="text-xs text-zinc-400 italic">{agentMonthly.monthly_summary}</p>
+              <ul className="space-y-1">
+                {agentMonthly.recommendations.map((r: string, i: number) => (
+                  <li key={i} className="flex gap-2 text-xs text-zinc-300"><span className="text-cyan-400 mt-0.5">•</span><span>{r}</span></li>
+                ))}
+              </ul>
+              <p className="text-xs text-zinc-600">Generated {new Date(agentMonthly.generated_at).toLocaleString()} · Claude Haiku</p>
+            </div>
+          ) : (
+            <div className="p-6 text-center text-zinc-500 text-sm">Click Regenerate to load agent monthly performance.</div>
           )
         )}
       </Card>

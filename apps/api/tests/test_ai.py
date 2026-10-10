@@ -10702,3 +10702,60 @@ async def test_task_overdue_risk_wrong_workspace_returns_403(app_client):
     async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
         resp = await ac.get(f"/workspaces/{wrong_id}/ai/tasks/overdue-risk")
     assert resp.status_code == 403
+
+
+class FakeMonthlyRow19:
+    def __init__(self, agent_name, severity):
+        self.agent_name = agent_name
+        self.severity = severity
+
+
+@pytest.mark.asyncio
+async def test_agent_monthly_summary_returns_structured_response(app_client, monkeypatch):
+    fastapi_app, mock_db, workspace_id = app_client
+    import datetime as _dt19
+    now19 = _dt19.datetime.utcnow()
+    call_count19 = [0]
+    def fake_execute19(stmt):
+        call_count19[0] += 1
+        if call_count19[0] == 1:
+            rows = [
+                FakeMonthlyRow19("Lead Scorer", "info"),
+                FakeMonthlyRow19("Lead Scorer", "info"),
+                FakeMonthlyRow19("Lead Scorer", "info"),
+                FakeMonthlyRow19("Lead Scorer", "error"),
+                FakeMonthlyRow19("Email Composer", "info"),
+            ]
+            return MagicMock(all=lambda: rows)
+        else:
+            rows = [
+                FakeMonthlyRow19("Lead Scorer", "info"),
+                FakeMonthlyRow19("Lead Scorer", "error"),
+            ]
+            return MagicMock(all=lambda: rows)
+    mock_db.execute = AsyncMock(side_effect=fake_execute19)
+    mock_anthropic = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text='{"monthly_summary": "Good performance.", "recommendations": ["r1", "r2", "r3"]}')]
+    mock_anthropic.return_value.messages.create.return_value = mock_msg
+    monkeypatch.setattr("app.routers.ai._anthropic.Anthropic", mock_anthropic)
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{workspace_id}/ai/agents/monthly-summary")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_runs"] == 5
+    assert abs(data["overall_success_rate"] - 80.0) < 0.1
+    assert data["most_used_agent"] == "Lead Scorer"
+    assert len(data["agents"]) == 2
+    assert data["monthly_summary"] != ""
+    assert len(data["recommendations"]) == 3
+    assert "generated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_agent_monthly_summary_wrong_workspace_returns_403(app_client):
+    fastapi_app, mock_db, _ = app_client
+    wrong_id = uuid.UUID("11112222-3333-4444-5555-666677778888")
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as ac:
+        resp = await ac.get(f"/workspaces/{wrong_id}/ai/agents/monthly-summary")
+    assert resp.status_code == 403
